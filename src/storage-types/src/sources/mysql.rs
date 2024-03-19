@@ -140,13 +140,12 @@ impl MySqlSourceConnection {
         self,
         storage_configuration: &crate::configuration::StorageConfiguration,
     ) -> Result<timely::progress::Antichain<GtidPartition>, anyhow::Error> {
-        use mz_timely_util::antichain::AntichainExt;
-
         let config = self
             .connection
             .config(
-                &*storage_configuration.connection_context.secrets_reader,
+                &storage_configuration.connection_context.secrets_reader,
                 storage_configuration,
+                mz_ore::future::InTask::No,
             )
             .await?;
 

@@ -81,6 +81,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::watch::{channel, Sender};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::error::Elapsed;
 use tokio_stream::StreamMap;
 use tracing::{debug, info, warn};
 
@@ -2605,12 +2606,13 @@ where
         &self,
         source_ids: BTreeSet<GlobalId>,
         timeout: Duration,
-    ) -> Result<BoxFuture<'static, Result<Self::Timestamp, StorageError<Self::Timestamp>>>, StorageError<Self::Timestamp>> {
+    ) -> Result<
+        BoxFuture<'static, Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
+        StorageError<Self::Timestamp>,
+    > {
         use mz_storage_types::sources::GenericSourceConnection;
 
         let mut rtr_futures = BTreeMap::new();
-
-        let mut unavailable_ids = BTreeSet::new();
 
         // Only user sources can be read from w/ RTR.
         for id in source_ids.into_iter().filter(GlobalId::is_user) {
@@ -2626,14 +2628,12 @@ where
                     remap_collection_id,
                     ..
                 }) => match connection {
-                    // Today only Kafka supports RTR
-                    GenericSourceConnection::Kafka(_) => (connection.clone(), *remap_collection_id),
-                    // Eventually PG and MySQL will support RTR but today we
-                    // must error if they're queried with RTR.
-                    GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_) => {
-                        unavailable_ids.insert(id);
-                        continue;
+                    GenericSourceConnection::Kafka(_)
+                    | GenericSourceConnection::Postgres(_)
+                    | GenericSourceConnection::MySql(_) => {
+                        (connection.clone(), *remap_collection_id)
                     }
+
                     // These internal sources will never support RTR.
                     GenericSourceConnection::LoadGenerator(_) => continue,
                 },
@@ -2687,19 +2687,16 @@ where
             );
         }
 
-        if !unavailable_ids.is_empty() {
-            Err(StorageError::RtrUnavailable(unavailable_ids))
-        } else {
-            Ok(Box::pin(async move {
-                let (ids, futs): (Vec<_>, Vec<_>) = rtr_futures.into_iter().unzip();
-                ids.into_iter()
-                    .zip_eq(futures::future::join_all(futs).await)
-                    .try_fold(T::minimum(), |curr, (id, per_source_res)| {
-                        let new = per_source_res.map_err(|_| StorageError::RtrTimeout(id))??;
-                        Ok::<_, StorageError<Self::Timestamp>>(std::cmp::max(curr, new))
-                    })
-            }))
-        }
+        Ok(Box::pin(async move {
+            let (ids, futs): (Vec<_>, Vec<_>) = rtr_futures.into_iter().unzip();
+            ids.into_iter()
+                .zip_eq(futures::future::join_all(futs).await)
+                .try_fold(T::minimum(), |curr, (id, per_source_res)| {
+                    let new =
+                        per_source_res.map_err(|_e: Elapsed| StorageError::RtrTimeout(id))??;
+                    Ok::<_, StorageError<Self::Timestamp>>(std::cmp::max(curr, new))
+                })
+        }))
     }
 }
 
