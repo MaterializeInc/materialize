@@ -1671,7 +1671,6 @@ generate_extracted_config!(
     (SnapshotRounds, u64),
     (QuickRounds, u64),
     (ValueSize, u64),
-    (UpdateRate, Duration),
     (Seed, u64),
     (Partitions, u64),
     (BatchSize, u64)
@@ -1693,11 +1692,11 @@ impl LoadGeneratorOptionExtracted {
             ast::LoadGenerator::Datums => &[TickInterval],
             ast::LoadGenerator::Tpch => &[TickInterval, ScaleFactor],
             ast::LoadGenerator::KeyValue => &[
+                TickInterval,
                 Keys,
                 SnapshotRounds,
                 QuickRounds,
                 ValueSize,
-                UpdateRate,
                 Seed,
                 Partitions,
                 BatchSize,
@@ -1791,7 +1790,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 snapshot_rounds,
                 quick_rounds,
                 value_size,
-                update_rate,
+                tick_interval,
                 seed,
                 partitions,
                 batch_size,
@@ -1818,7 +1817,7 @@ pub(crate) fn load_generator_ast_to_generator(
                     .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires VALUE SIZE"))?,
                 partitions: partitions
                     .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires PARTITIONS"))?,
-                update_rate,
+                tick_interval,
                 batch_size: batch_size
                     .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires BATCH SIZE"))?,
                 seed: seed.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires SEED"))?,

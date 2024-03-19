@@ -487,7 +487,7 @@ pub struct KeyValueLoadGenerator {
     /// This lets users scale the snapshot size independent of the keyspace.
     pub snapshot_rounds: u64,
     /// The number of rounds to emit values for each key, after the snapshot, before
-    /// respecting the `update_rate`.
+    /// respecting the `tick_interval`.
     ///
     /// This lets us quickly produce updates, as opposed to a single-value per key during
     /// snapshotting.
@@ -499,7 +499,7 @@ pub struct KeyValueLoadGenerator {
     pub partitions: u64,
     /// If provided, the maximum rate at which new batches of updates, per-partition will be
     /// produced after the snapshot.
-    pub update_rate: Option<Duration>,
+    pub tick_interval: Option<Duration>,
     /// The number of keys in each update batch.
     pub batch_size: u64,
     /// A per-source seed.
@@ -516,7 +516,7 @@ impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
             quick_rounds: self.quick_rounds,
             value_size: self.value_size,
             partitions: self.partitions,
-            update_rate: self.update_rate.into_proto(),
+            tick_interval: self.tick_interval.into_proto(),
             batch_size: self.batch_size,
             seed: self.seed,
             include_offset: self.include_offset.clone(),
@@ -530,7 +530,7 @@ impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
             quick_rounds: proto.quick_rounds,
             value_size: proto.value_size,
             partitions: proto.partitions,
-            update_rate: proto.update_rate.into_rust()?,
+            tick_interval: proto.tick_interval.into_rust()?,
             batch_size: proto.batch_size,
             seed: proto.seed,
             include_offset: proto.include_offset,

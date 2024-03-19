@@ -133,7 +133,7 @@ up_quick     7 7 16 16 64 16
     SEED 123,
     VALUE SIZE 10,
     BATCH SIZE 2,
-    UPDATE RATE '1s'
+    TICK INTERVAL '1s'
   )
   ENVELOPE UPSERT
 

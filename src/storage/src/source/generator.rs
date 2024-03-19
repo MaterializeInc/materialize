@@ -96,7 +96,7 @@ impl GeneratorKind {
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
@@ -109,9 +109,9 @@ impl GeneratorKind {
             GeneratorKind::Simple {
                 tick_micros,
                 generator,
-            } => render_simple_generator(generator, tick_micros, scope, config, resume_uppers),
+            } => render_simple_generator(generator, tick_micros, scope, config, committed_uppers),
             GeneratorKind::KeyValue(kv) => {
-                key_value::render(kv, scope, config, resume_uppers, start_signal)
+                key_value::render(kv, scope, config, committed_uppers, start_signal)
             }
         }
     }
@@ -126,7 +126,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
@@ -136,7 +136,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         Vec<PressOnDropButton>,
     ) {
         let generator_kind = GeneratorKind::new(&self.load_generator, self.tick_micros);
-        generator_kind.render(scope, config, resume_uppers, start_signal)
+        generator_kind.render(scope, config, committed_uppers, start_signal)
     }
 }
 
@@ -145,7 +145,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     tick_micros: Option<u64>,
     scope: &mut G,
     config: RawSourceCreationConfig,
-    resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
 ) -> (
     Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
     Option<Stream<G, Infallible>>,
@@ -189,7 +189,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
         let tick = Duration::from_micros(tick_micros.unwrap_or(1_000_000));
 
-        let mut resume_uppers = std::pin::pin!(resume_uppers);
+        let mut committed_uppers = std::pin::pin!(committed_uppers);
 
         // If we are just starting up, report 0 as our `offset_committed`.
         let mut offset_committed = if resume_offset.offset == 0 {
@@ -233,7 +233,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                                 _ = &mut sleep => {
                                     break;
                                 }
-                                Some(frontier) = resume_uppers.next() => {
+                                Some(frontier) = committed_uppers.next() => {
                                     if let Some(offset) = frontier.as_option() {
                                         // Offset N means we have committed N offsets (offsets are
                                         // 0-indexed)

@@ -46,7 +46,7 @@ message ProtoKeyValueLoadGenerator {
     uint64 quick_rounds = 3;
     uint64 value_size= 4;
     uint64 partitions = 5;
-    optional mz_proto.ProtoDuration update_rate = 6;
+    optional mz_proto.ProtoDuration tick_interval = 6;
     uint64 batch_size = 7;
     uint64 seed = 8;
     optional string include_offset = 9;

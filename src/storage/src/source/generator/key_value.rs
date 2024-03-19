@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
 use std::convert::Infallible;
 
 use differential_dataflow::{AsCollection, Collection};
@@ -31,7 +30,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     key_value: KeyValueLoadGenerator,
     scope: &mut G,
     config: RawSourceCreationConfig,
-    resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
@@ -41,7 +40,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     Vec<PressOnDropButton>,
 ) {
     let (steady_state_stats_stream, stats_button) =
-        render_statistics_operator(scope, config.clone(), resume_uppers);
+        render_statistics_operator(scope, config.clone(), committed_uppers);
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
@@ -68,23 +67,12 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
         let snapshotting = resume_offset.offset == 0;
 
-        let mut local_partitions: BTreeMap<_, _> = (0..key_value.partitions)
+        let mut local_partitions: Vec<_> = (0..key_value.partitions)
             .into_iter()
             .filter_map(|p| {
-                config.responsible_for(p).then(|| {
-                    (
-                        p,
-                        SnapshotProducer::new(
-                            p,
-                            key_value.partitions,
-                            key_value.keys,
-                            key_value.snapshot_rounds,
-                            key_value.batch_size,
-                            key_value.seed,
-                            key_value.include_offset.is_some(),
-                        ),
-                    )
-                })
+                config
+                    .responsible_for(p)
+                    .then(|| SnapshotProducer::new(p, key_value.clone()))
             })
             .collect();
 
@@ -138,8 +126,8 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     },
                 )
                 .await;
-            while local_partitions.values().any(|si| !si.finished()) {
-                for sp in local_partitions.values_mut() {
+            while local_partitions.iter().any(|si| !si.finished()) {
+                for sp in local_partitions.iter_mut() {
                     updates_buffer.clear();
                     emitted += sp.produce_batch(&mut updates_buffer, &mut value_buffer);
                     data_output.give_container(&cap, &mut updates_buffer).await;
@@ -165,34 +153,21 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             resume_offset.offset
         };
 
-        let mut local_partitions: BTreeMap<_, _> = (0..key_value.partitions)
+        let mut local_partitions: Vec<_> = (0..key_value.partitions)
             .into_iter()
             .filter_map(|p| {
-                config.responsible_for(p).then(|| {
-                    (
-                        p,
-                        UpdateProducer::new(
-                            p,
-                            key_value.partitions,
-                            key_value.keys,
-                            key_value.snapshot_rounds,
-                            key_value.quick_rounds,
-                            key_value.batch_size,
-                            key_value.seed,
-                            upper_offset,
-                            key_value.include_offset.is_some(),
-                        ),
-                    )
-                })
+                config
+                    .responsible_for(p)
+                    .then(|| UpdateProducer::new(p, upper_offset, key_value.clone()))
             })
             .collect();
         if !local_partitions.is_empty()
-            && (key_value.update_rate.is_some() || key_value.quick_rounds > 0)
+            && (key_value.tick_interval.is_some() || key_value.quick_rounds > 0)
         {
-            let mut interval = key_value.update_rate.map(tokio::time::interval);
+            let mut interval = key_value.tick_interval.map(tokio::time::interval);
 
             loop {
-                if local_partitions.values().all(|si| si.finished_quick()) {
+                if local_partitions.iter().all(|si| si.finished_quick()) {
                     if let Some(interval) = &mut interval {
                         interval.tick().await;
                     } else {
@@ -200,7 +175,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     }
                 }
 
-                for up in local_partitions.values_mut() {
+                for up in local_partitions.iter_mut() {
                     updates_buffer.clear();
                     upper_offset = up.produce_batch(&mut updates_buffer, &mut value_buffer);
                     data_output.give_container(&cap, &mut updates_buffer).await;
@@ -233,13 +208,13 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
 /// An iterator that produces keys belonging to a partition.
 struct PartitionKeyIterator {
-    // The partition.
+    /// The partition.
     partition: u64,
-    // The number of partitions.
+    /// The number of partitions.
     partitions: u64,
-    // The key space.
+    /// The key space.
     keys: u64,
-    // The next key.
+    /// The next key.
     next: u64,
 }
 
@@ -265,38 +240,50 @@ impl Iterator for &mut PartitionKeyIterator {
     }
 }
 
+/// Create `StdRng` seeded so identical values can be produced during resumption (during
+/// snapshotting or after).
+fn create_consistent_rng(source_seed: u64, offset: u64, partition: u64) -> StdRng {
+    let mut seed = [0; 32];
+    seed[0..8].copy_from_slice(&source_seed.to_le_bytes());
+    seed[8..16].copy_from_slice(&offset.to_le_bytes());
+    seed[16..24].copy_from_slice(&partition.to_le_bytes());
+    StdRng::from_seed(seed)
+}
+
 /// A struct that produces batches of data for the snapshotting phase.
 struct SnapshotProducer {
-    // The key iterator for the partition.
+    /// The key iterator for the partition.
     pi: PartitionKeyIterator,
-    // The batch size.
+    /// The batch size.
     batch_size: u64,
-    // The number of batches produced in the current round.
+    /// The number of batches produced in the current round.
     produced_batches: u64,
-    // The expected number of batches per round.
+    /// The expected number of batches per round.
     expected_batches: u64,
-    // The current round of the offset
+    /// The current round of the offset
     round: u64,
-    // The total number of rounds.
+    /// The total number of rounds.
     snapshot_rounds: u64,
-    // The rng for the current round.
+    /// The rng for the current round.
     rng: Option<StdRng>,
-    // The source-level seed for the rng.
+    /// The source-level seed for the rng.
     seed: u64,
-    // Whether to include the offset or not.
+    /// Whether to include the offset or not.
     include_offset: bool,
 }
 
 impl SnapshotProducer {
-    fn new(
-        partition: u64,
-        partitions: u64,
-        keys: u64,
-        snapshot_rounds: u64,
-        batch_size: u64,
-        seed: u64,
-        include_offset: bool,
-    ) -> Self {
+    fn new(partition: u64, key_value: KeyValueLoadGenerator) -> Self {
+        let KeyValueLoadGenerator {
+            partitions,
+            keys,
+            snapshot_rounds,
+            batch_size,
+            seed,
+            include_offset,
+            ..
+        } = key_value;
+
         assert_eq!((keys / partitions) % batch_size, 0);
         let pi = PartitionKeyIterator::new(
             partition, partitions, keys, // The first start key is the partition.
@@ -311,7 +298,7 @@ impl SnapshotProducer {
             snapshot_rounds,
             rng: None,
             seed,
-            include_offset,
+            include_offset: include_offset.is_some(),
         }
     }
 
@@ -335,15 +322,9 @@ impl SnapshotProducer {
             return 0;
         }
 
-        let rng = self.rng.get_or_insert_with(|| {
-            // Consistently seeded with the source seed, the round (offset), and the
-            // partition.
-            let mut seed = [0; 32];
-            seed[0..8].copy_from_slice(&self.seed.to_le_bytes());
-            seed[8..16].copy_from_slice(&self.round.to_le_bytes());
-            seed[16..24].copy_from_slice(&self.pi.partition.to_le_bytes());
-            StdRng::from_seed(seed)
-        });
+        let rng = self
+            .rng
+            .get_or_insert_with(|| create_consistent_rng(self.seed, self.round, self.pi.partition));
 
         let partition = self.pi.partition;
         buffer.extend(self.pi.take(usize::cast_from(self.batch_size)).map(|key| {
@@ -375,32 +356,33 @@ impl SnapshotProducer {
 
 /// A struct that produces batches of data for the post-snapshotting phase.
 struct UpdateProducer {
-    // The key iterator for the partition.
+    /// The key iterator for the partition.
     pi: PartitionKeyIterator,
-    // The batch size.
+    /// The batch size.
     batch_size: u64,
-    // The next offset to produce updates at.
+    /// The next offset to produce updates at.
     next_offset: u64,
-    // The source-level seed for the rng.
+    /// The source-level seed for the rng.
     seed: u64,
-    // The number of offsets we expect to be part of the `quick_rounds`.
+    /// The number of offsets we expect to be part of the `quick_rounds`.
     expected_quick_offsets: u64,
-    // Whether to include the offset or not.
+    /// Whether to include the offset or not.
     include_offset: bool,
 }
 
 impl UpdateProducer {
-    fn new(
-        partition: u64,
-        partitions: u64,
-        keys: u64,
-        snapshot_rounds: u64,
-        quick_rounds: u64,
-        batch_size: u64,
-        seed: u64,
-        next_offset: u64,
-        include_offset: bool,
-    ) -> Self {
+    fn new(partition: u64, next_offset: u64, key_value: KeyValueLoadGenerator) -> Self {
+        let KeyValueLoadGenerator {
+            partitions,
+            keys,
+            snapshot_rounds,
+            quick_rounds,
+            batch_size,
+            seed,
+            include_offset,
+            ..
+        } = key_value;
+
         // Each snapshot _round_ is associated with an offset, starting at 0. Therefore
         // the `next_offset` - `snapshot_rounds` is the index of the next non-snapshot update
         // batches we must produce. The start key for the that batch is that index
@@ -422,7 +404,7 @@ impl UpdateProducer {
             next_offset,
             seed,
             expected_quick_offsets,
-            include_offset,
+            include_offset: include_offset.is_some(),
         }
     }
 
@@ -442,13 +424,7 @@ impl UpdateProducer {
         )>,
         value_buffer: &mut Vec<u8>,
     ) -> u64 {
-        // Consistently seeded with the source see, the offset, and the
-        // partition.
-        let mut seed = [0; 32];
-        seed[0..8].copy_from_slice(&self.seed.to_le_bytes());
-        seed[8..16].copy_from_slice(&self.next_offset.to_le_bytes());
-        seed[16..24].copy_from_slice(&self.pi.partition.to_le_bytes());
-        let mut rng = StdRng::from_seed(seed);
+        let mut rng = create_consistent_rng(self.seed, self.next_offset, self.pi.partition);
 
         let partition = self.pi.partition;
         buffer.extend(self.pi.take(usize::cast_from(self.batch_size)).map(|key| {
@@ -477,7 +453,7 @@ impl UpdateProducer {
 pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
     scope: &mut G,
     config: RawSourceCreationConfig,
-    resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
 ) -> (Stream<G, ProgressStatisticsUpdate>, PressOnDropButton) {
     let id = config.id;
     let mut builder =
@@ -504,9 +480,9 @@ pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
             return;
         }
 
-        tokio::pin!(resume_uppers);
+        tokio::pin!(committed_uppers);
         loop {
-            match resume_uppers.next().await {
+            match committed_uppers.next().await {
                 Some(frontier) => {
                     if let Some(offset) = frontier.as_option() {
                         stats_output
@@ -535,15 +511,19 @@ mod test {
     #[mz_ore::test]
     fn test_key_value_loadgen_resume_upper() {
         let up = UpdateProducer::new(
-            1,     // partition 1
-            3,     // of 3 partitions
-            126,   // 126 keys.
-            2,     // 2 snapshot rounds
-            0,     // not important
-            2,     // batch size 2
-            1234,  //seed
-            5,     // resume upper of 5
-            false, // not important
+            1, // partition 1
+            5, // resume upper of 5
+            KeyValueLoadGenerator {
+                keys: 126,
+                snapshot_rounds: 2,
+                quick_rounds: 0,
+                value_size: 1234,
+                partitions: 3,
+                tick_interval: None,
+                batch_size: 2,
+                seed: 1234,
+                include_offset: None,
+            },
         );
 
         // The first key 3 rounds after the 2 snapshot rounds would be the 7th key (3 rounds of 2
@@ -552,14 +532,18 @@ mod test {
 
         let up = UpdateProducer::new(
             1,           // partition 1
-            3,           // of 3 partitions
-            126,         // 126 keys.
-            2,           // 2 snapshot rounds
-            0,           // not important
-            2,           // batch size 2
-            1234,        //seed
             5 + 126 / 2, // resume upper of 5 after a full set of keys has been produced.
-            false,       // not important
+            KeyValueLoadGenerator {
+                keys: 126,
+                snapshot_rounds: 2,
+                quick_rounds: 0,
+                value_size: 1234,
+                partitions: 3,
+                tick_interval: None,
+                batch_size: 2,
+                seed: 1234,
+                include_offset: None,
+            },
         );
 
         assert_eq!(up.pi.next, 19);

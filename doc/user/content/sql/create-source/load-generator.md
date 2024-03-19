@@ -39,7 +39,6 @@ _src_name_  | The name for the source.
 **SNAPSHOT ROUNDS**   | Valid for [`KEY VALUE` generator](#key-value).
 **QUICK ROUNDS**      | Valid for [`KEY VALUE` generator](#key-value).
 **VALUE SIZE**        | Valid for [`KEY VALUE` generator](#key-value).
-**UPDATE RATE**       | Valid for [`KEY VALUE` generator](#key-value).
 **SEED**              | Valid for [`KEY VALUE` generator](#key-value).
 **PARTITIONS**        | Valid for [`KEY VALUE` generator](#key-value).
 **BATCH SIZE**        | Valid for [`KEY VALUE` generator](#key-value).
@@ -200,13 +199,13 @@ The following options are supported:
     as the source starts up. Can be used to scale the size of the snapshot without changing the number
     of keys.
 - `QUICK ROUNDS`: The number of rounds of data (1 update per key in each round) to produce after the snapshot, but
-    before considering `UPDATE RATE`.
+    before considering `TICK INTERVAL`.
 - `VALUE SIZE`: The number of bytes in each `value`.
-- `UPDATE RATE`: The _maximum_ rate (as an [`interval`]) to produce batches of data (within each partition) after snapshotting.
+- `TICK INTERVAL`: The _minimum interval_ (as an [`interval`]) to produce batches of data (within each partition) after snapshotting.
 - `SEED`: A per-source [`uint8`] seed for seeding the random data.
 - `PARTITIONS`: The number of partitions to spread the keys across. Can be used to scale concurrency independent of
     the replica size.
-- `BATCH SIZE`: The number of keys per partition to produce in each update (based on `UPDATE RATE`).
+- `BATCH SIZE`: The number of keys per partition to produce in each update (based on `TICK INTERVAL`).
 
 ### Monitoring source progress
 

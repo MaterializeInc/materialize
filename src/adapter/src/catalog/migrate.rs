@@ -204,11 +204,11 @@ fn ast_rewrite_create_source_loadgen_options_0_92_0(
                         LoadGenerator::Datums => &[TickInterval],
                         LoadGenerator::Tpch => &[TickInterval, ScaleFactor],
                         LoadGenerator::KeyValue => &[
+                            TickInterval,
                             Keys,
                             SnapshotRounds,
                             QuickRounds,
                             ValueSize,
-                            UpdateRate,
                             Seed,
                             Partitions,
                             BatchSize,

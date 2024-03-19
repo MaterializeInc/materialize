@@ -193,7 +193,6 @@ load_generator_option ::=
     | 'SNAPSHOT ROUNDS' snapshot_rounds
     | 'QUICK ROUNDS' quick_rounds
     | 'VALUE SIZE' value_size
-    | 'UPDATE RATE' update_rate
     | 'SEED' seed
     | 'PARTITIONS' partitions
     | 'BATCH SIZE' batch_size
