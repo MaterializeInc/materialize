@@ -51,6 +51,7 @@ use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 use url::Url;
 use uuid::Uuid;
 
@@ -366,12 +367,13 @@ async fn dump(
             retraction_count,
             entries,
         };
+        let name = T::name();
 
-        if consolidate {
-            assert_eq!(retraction_count, 0);
+        if consolidate && retraction_count != 0 {
+            error!("{name} catalog collection has corrupt entries, there should be no retractions in a consolidated catalog, but there are {retraction_count} retractions");
         }
 
-        data.insert(T::name(), dumped_col);
+        data.insert(name, dumped_col);
     }
 
     let mut data = BTreeMap::new();
