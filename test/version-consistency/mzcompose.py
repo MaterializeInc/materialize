@@ -91,6 +91,4 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         test_summary = test.run_output_consistency_tests(connection, args)
 
     if not test_summary.all_passed():
-        raise FailedTestExecutionError(
-            "At least one test failed", errors=test_summary.failures
-        )
+        raise FailedTestExecutionError(errors=test_summary.failures)
