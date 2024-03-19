@@ -410,16 +410,30 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<StateUpdate<T>>> PersistHandle<T,
         &mut self,
         updates: impl IntoIterator<Item = StateUpdate<T>>,
     ) -> Result<(), DurableCatalogError> {
-        for update in updates {
-            let StateUpdate { kind, ts, diff } = &update;
-            if *diff != 1 && *diff != -1 {
+        let mut updates: Vec<_> = updates
+            .into_iter()
+            .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
+            .collect();
+
+        // This helps guarantee that for a single key, there is at most a single retraction and a
+        // single insertion per timestamp. Otherwise, we would need to match the retractions and
+        // insertions up by value and manually figure out what the end value should be.
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+
+        // Updates must be applied in timestamp order. Within a timestamp retractions must be
+        // applied before insertions, or we might end up retracting the wrong value.
+        updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
+
+        for (kind, ts, diff) in updates {
+            if diff != 1 && diff != -1 {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
 
-            if let Some(StateUpdate { kind, ts, diff }) =
-                self.update_applier
-                    .apply_update(update, &mut self.epoch, &self.metrics)?
-            {
+            if let Some(StateUpdate { kind, ts, diff }) = self.update_applier.apply_update(
+                StateUpdate { kind, ts, diff },
+                &mut self.epoch,
+                &self.metrics,
+            )? {
                 self.snapshot.push((kind, ts, diff));
             }
         }
