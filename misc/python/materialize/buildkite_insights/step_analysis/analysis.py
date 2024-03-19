@@ -24,7 +24,7 @@ from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
     FetchMode,
 )
-from materialize.buildkite_insights.step_durations.build_step import (
+from materialize.buildkite_insights.steps.build_step import (
     BuildJobOutcome,
     BuildStepMatcher,
     extract_build_step_outcomes,
