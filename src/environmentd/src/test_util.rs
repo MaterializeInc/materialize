@@ -402,6 +402,11 @@ impl Listeners {
                     headers: http::HeaderMap::new(),
                     filter: EnvFilter::default().add_directive(Level::DEBUG.into()),
                     resource: opentelemetry_sdk::resource::Resource::default(),
+                    max_batch_queue_size: 2048,
+                    max_export_batch_size: 512,
+                    max_concurrent_exports: 1,
+                    batch_scheduled_delay: Duration::from_millis(5000),
+                    max_export_timeout: Duration::from_secs(30),
                 }),
                 #[cfg(feature = "tokio-console")]
                 tokio_console: None,
