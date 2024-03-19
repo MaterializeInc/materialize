@@ -108,10 +108,9 @@ def main(
     fetch_mode: FetchMode,
     max_fetches: int,
     branch: str | None,
-    build_state: str | None,
+    build_states: list[str],
     output_type: str,
 ) -> None:
-    build_states = [build_state] if build_state is not None else None
     builds_data = builds_cache.get_or_query_builds(
         pipeline_slug, fetch_mode, max_fetches, branch, build_states
     )
@@ -144,8 +143,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--build-state",
-        default=None,
-        type=str,
+        action="append",
+        default=[],
         choices=BUILDKITE_BUILD_STATES,
     )
     parser.add_argument(
