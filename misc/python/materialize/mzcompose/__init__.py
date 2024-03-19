@@ -56,7 +56,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # Others (ordered by name)
     "cluster_always_use_disk": "true",
     "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
-    "compute_hydration_concurrency": 4,
+    "compute_hydration_concurrency": 2,
     "default_arrangement_exert_proportionality": "16",
     "default_idle_arrangement_merge_effort": "0",
     "disk_cluster_replicas_default": "true",
