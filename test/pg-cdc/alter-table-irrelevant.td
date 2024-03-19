@@ -101,4 +101,4 @@ INSERT INTO irrelevant_table VALUES ('gh');
 1
 2
 
-> DROP SOURCE irrelevant_table;
+> DROP SOURCE irrelevant_table CASCADE;

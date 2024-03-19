@@ -118,7 +118,7 @@ class SubscribeParallelKafka(SubscribeParallel):
              > DROP CLUSTER IF EXISTS source_cluster CASCADE;
              > CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
-             > DROP SOURCE IF EXISTS s1;
+             > DROP SOURCE IF EXISTS s1 CASCADE;
 
              > CREATE SOURCE s1
                IN CLUSTER source_cluster

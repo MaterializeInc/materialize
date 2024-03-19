@@ -139,8 +139,8 @@ WHERE s.name IN ('bids') AND sch.name = 'subsources_cluster'
 
 > DROP SINK sink_size
 > DROP SINK sink_cluster
-> DROP SOURCE upsert_size
-> DROP SOURCE upsert_cluster
+> DROP SOURCE upsert_size CASCADE
+> DROP SOURCE upsert_cluster CASCADE
 > DROP SOURCE subsources_size.s
 > DROP SOURCE subsources_cluster.s
 

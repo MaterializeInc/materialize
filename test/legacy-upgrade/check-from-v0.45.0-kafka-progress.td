@@ -19,4 +19,4 @@ $ set-regex match=testdrive-upgrade-kafka-source-.*?' replacement=<TOPIC>'
 >[version<8100] SHOW CREATE SOURCE kafka_source
 materialize.public.kafka_source "CREATE SOURCE \"materialize\".\"public\".\"kafka_source\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = '<TOPIC>') FORMAT AVRO USING SCHEMA '{   \"type\": \"record\",   \"name\": \"cpx\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"long\"}   ] }' ENVELOPE NONE EXPOSE PROGRESS AS \"materialize\".\"public\".\"kafka_source_progress\""
 
-> DROP SOURCE kafka_source;
+> DROP SOURCE kafka_source CASCADE;

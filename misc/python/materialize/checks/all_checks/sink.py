@@ -194,11 +194,11 @@ class SinkUpsert(Check):
                 C I3 1000
                 C U3 1000
 
-                > DROP SOURCE sink_view1;
+                > DROP SOURCE sink_view1 CASCADE;
 
-                > DROP SOURCE sink_view2;
+                > DROP SOURCE sink_view2 CASCADE;
 
-                > DROP SOURCE sink_view3;
+                > DROP SOURCE sink_view3 CASCADE;
             """
             )
         )
@@ -545,11 +545,11 @@ class SinkNullDefaults(Check):
                 A <null> U3 1000
                 B <null> I2 1000
 
-                > DROP SOURCE sink_view_null1;
+                > DROP SOURCE sink_view_null1 CASCADE;
 
-                > DROP SOURCE sink_view_null2;
+                > DROP SOURCE sink_view_null2 CASCADE;
 
-                > DROP SOURCE sink_view_null3;
+                > DROP SOURCE sink_view_null3 CASCADE;
             """
             )
         )
@@ -820,11 +820,11 @@ class SinkComments(Check):
                 A <null> U3 1000
                 B <null> I2 1000
 
-                > DROP SOURCE sink_view_comments1;
+                > DROP SOURCE sink_view_comments1 CASCADE;
 
-                > DROP SOURCE sink_view_comments2;
+                > DROP SOURCE sink_view_comments2 CASCADE;
 
-                > DROP SOURCE sink_view_comments3;
+                > DROP SOURCE sink_view_comments3 CASCADE;
             """
             )
         )

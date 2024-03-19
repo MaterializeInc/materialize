@@ -35,4 +35,4 @@ $ set-arg-default single-replica-cluster=quickstart
   WHERE s.name IN ('counter')
 counter true true true true true true true true true true true true
 
-> DROP SOURCE counter
+> DROP SOURCE counter CASCADE

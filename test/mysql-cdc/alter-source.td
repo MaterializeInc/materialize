@@ -155,7 +155,7 @@ table_g               subsource
 # ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_too;
 # contains:SOURCE "mz_source_too" is not a subsource of "mz_source"
 #
-# > DROP SOURCE mz_source_too;
+# > DROP SOURCE mz_source_too CASCADE;
 #
 # ! ALTER SOURCE mz_source DROP SUBSOURCE dne;
 # contains:unknown catalog item 'dne'

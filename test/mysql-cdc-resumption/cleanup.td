@@ -10,4 +10,4 @@
 # Tests expect healthy sources at end of test.
 # TODO: Once we support ALTER SOURCE .. DROP SUBSOURCE for mysql, just
 # drop the unhealthy subsource rather than the whole source.
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;

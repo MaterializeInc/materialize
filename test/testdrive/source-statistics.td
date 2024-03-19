@@ -95,7 +95,7 @@ $ set-sql-timeout duration=2minutes
   ORDER BY s.name
 metrics_test_source true 2 2 2 true true
 
-> DROP SOURCE metrics_test_source
+> DROP SOURCE metrics_test_source CASCADE
 
 # Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
 # Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of
@@ -115,7 +115,7 @@ bids           true      false   true  true  false   true
 organizations  true      false   true  true  false   true
 users          true      false   true  true  false   true
 
-> DROP SOURCE auction_house
+> DROP SOURCE auction_house CASCADE
 
 # Test upsert
 
@@ -192,4 +192,4 @@ upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
   WHERE s.name IN ('upsert')
 upsert true 10 "${updates-committed}" "${updates-committed}" true true 2 true
 
-> DROP SOURCE upsert
+> DROP SOURCE upsert CASCADE

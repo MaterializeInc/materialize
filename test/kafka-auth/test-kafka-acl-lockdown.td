@@ -59,7 +59,7 @@ banana
   )
 true
 
-> DROP SOURCE broken
+> DROP SOURCE broken CASCADE
 
 # The default group ID prefix *is* writeable by the `materialize_lockdown` user.
 # Ensure that offsets are committed.
