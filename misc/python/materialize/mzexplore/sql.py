@@ -77,9 +77,10 @@ class Database:
         database: str | None = None,
         schema: str | None = None,
         name: str | None = None,
+        system: bool = False,
     ) -> DictGenerator:
-        # Warning: this is not sanitizing the input!
-        q = parse_query(resource_path("catalog/items.sql"))
+        p = resource_path("catalog/s_items.sql" if system else "catalog/u_items.sql")
+        q = parse_query(p)
         yield from self.query_all(
             q.format(
                 database="'%'" if database is None else literal(database),

@@ -78,7 +78,7 @@ def defs(
         # Extract materialized view definitions
         # -------------------------------------
 
-        for item in db.catalog_items(database, schema, name):
+        for item in db.catalog_items(database, schema, name, system=False):
             item_database = sql.identifier(item["database"])
             item_schema = sql.identifier(item["schema"])
             item_name = sql.identifier(item["name"])
@@ -134,6 +134,7 @@ def plans(
     explain_stages: set[ExplainStage],
     explain_format: ExplainFormat,
     suffix: str | None = None,
+    system: bool = False,
 ) -> None:
     """
     Extract EXPLAIN plans for selected catalog items.
@@ -160,11 +161,14 @@ def plans(
             require_ssl=db_require_ssl,
         )
     ) as db:
-        for item in db.catalog_items(database, schema, name):
+        for item in db.catalog_items(database, schema, name, system):
             item_database = sql.identifier(item["database"])
             item_schema = sql.identifier(item["schema"])
             item_name = sql.identifier(item["name"])
-            fqname = f"{item_database}.{item_schema}.{item_name}"
+            if item["database"] == "mz":  # don't prepend pseudo-database `mz`
+                fqname = f"{item_schema}.{item_name}"
+            else:
+                fqname = f"{item_database}.{item_schema}.{item_name}"
 
             try:
                 item_type = ItemType(item["type"])
@@ -195,7 +199,10 @@ def plans(
                             stage=stage,
                             ext=explain_format.ext(),
                         )
-                        info(f"Explaining {stage} for {explainee} in `{explain_file}`")
+                        info(
+                            f"Explaining {stage} for {item_type.sql()} "
+                            f"in `{explain_file}`"
+                        )
                         try:
                             plans[explain_file] = explain(
                                 db,
@@ -205,7 +212,10 @@ def plans(
                                 explain_format,
                             )
                         except DatabaseError as e:
-                            warn(f"Cannot explain {stage} for {explainee}: {e}")
+                            warn(
+                                f"Cannot explain {stage} for {item_type.sql()} {fqname}: "
+                                f"{e}"
+                            )
                             continue
 
             if ExplaineeType.CREATE_STATEMENT.contains(explainee_type):
@@ -243,7 +253,10 @@ def plans(
                         stage=stage,
                         ext=explain_format.ext(),
                     )
-                    info(f"Explaining {stage} for CREATE {fqname} in `{explain_file}`")
+                    info(
+                        f"Explaining {stage} for CREATE {item_type.sql()} "
+                        f"in `{explain_file}`"
+                    )
                     try:
                         plans[explain_file] = explain(
                             db,
@@ -253,7 +266,10 @@ def plans(
                             explain_format,
                         )
                     except DatabaseError as e:
-                        warn(f"Cannot explain {stage} for CREATE {fqname}: {e}")
+                        warn(
+                            f"Cannot explain {stage} for CREATE {item_type.sql()} {fqname}: "
+                            f"{e}"
+                        )
                         continue
 
             if ExplaineeType.REPLAN_ITEM.contains(explainee_type):
@@ -275,7 +291,10 @@ def plans(
                             stage=stage,
                             ext=explain_format.ext(),
                         )
-                        info(f"Explaining {stage} for {explainee} in `{explain_file}`")
+                        info(
+                            f"Explaining {stage} for REPLAN {item_type.sql()} "
+                            f"in `{explain_file}`"
+                        )
                         try:
                             plans[explain_file] = explain(
                                 db,
@@ -285,7 +304,10 @@ def plans(
                                 explain_format,
                             )
                         except DatabaseError as e:
-                            warn(f"Cannot explain {stage} for {explainee}: {e}")
+                            warn(
+                                f"Cannot explain {stage} for REPLAN {item_type.sql()} {fqname}: "
+                                f" {e}"
+                            )
                             continue
 
             for explain_file, plan in plans.items():
