@@ -232,6 +232,8 @@ impl CsrPurificationError {
 /// Logical errors detectable during purification for a MySQL SOURCE.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum MySqlSourcePurificationError {
+    #[error("User lacks required MySQL privileges")]
+    UserLacksPrivileges(Vec<(String, String)>),
     #[error("CREATE SOURCE specifies DETAILS option")]
     UserSpecifiedDetails,
     #[error("{0} is not a MYSQL CONNECTION")]
@@ -257,6 +259,15 @@ pub enum MySqlSourcePurificationError {
 impl MySqlSourcePurificationError {
     pub fn detail(&self) -> Option<String> {
         match self {
+            Self::UserLacksPrivileges(missing) => Some(format!(
+                "Missing MySQL privileges: {}",
+                itertools::join(
+                    missing
+                        .iter()
+                        .map(|(privilege, table)| format!("'{}' on '{}'", privilege, table)),
+                    ", "
+                )
+            )),
             Self::DanglingTextColumns { items } => Some(format!(
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
@@ -307,6 +318,11 @@ impl MySqlSourcePurificationError {
             Self::UnrecognizedTypes { cols: _ } => Some(
                 "Check the docs -- some types can be supported using the TEXT COLUMNS option to \
                 ingest their values as text, or ignored using IGNORE COLUMNS."
+                    .into(),
+            ),
+            Self::EmptyDatabase => Some(
+                "No tables were found to replicate. This could be because \
+                the user does not have privileges on the intended tables."
                     .into(),
             ),
             _ => None,

@@ -15,5 +15,4 @@ CREATE DATABASE public;
 USE public;
 
 CREATE USER materialize IDENTIFIED BY 'materialize';
-GRANT SELECT ON performance_schema.replication_connection_configuration TO materialize;
 GRANT ALL ON public.* TO materialize;

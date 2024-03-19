@@ -309,6 +309,7 @@ impl PlanError {
             Self::VarError(e) => e.detail(),
             Self::InternalFunctionCall => Some("This function is for the internal use of the database system and cannot be called directly.".into()),
             Self::PgSourcePurification(e) => e.detail(),
+            Self::MySqlSourcePurification(e) => e.detail(),
             Self::KafkaSourcePurification(e) => e.detail(),
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
             Self::CsrPurification(e) => e.detail(),
