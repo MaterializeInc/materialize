@@ -386,24 +386,27 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<StateUpdate<T>>> PersistHandle<T,
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
 
-            if let Ok(StateUpdateKind::Epoch(epoch)) = kind.clone().try_into() {
-                match self.epoch {
-                    FenceableEpoch::Unfenced(Some(current_epoch)) => {
-                        if epoch > current_epoch {
-                            soft_assert_eq_or_log!(*diff, 1);
-                            self.epoch = FenceableEpoch::Fenced {
-                                current_epoch,
-                                fence_epoch: epoch,
-                            };
-                            self.epoch.validate()?;
-                        } else if epoch < current_epoch {
-                            panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
+            if *diff == 1 {
+                // TODO(jkosh44) Try and avoid this unnecessary clone.
+                if let Ok(StateUpdateKind::Epoch(epoch)) = kind.clone().try_into() {
+                    match self.epoch {
+                        FenceableEpoch::Unfenced(Some(current_epoch)) => {
+                            if epoch > current_epoch {
+                                soft_assert_eq_or_log!(*diff, 1);
+                                self.epoch = FenceableEpoch::Fenced {
+                                    current_epoch,
+                                    fence_epoch: epoch,
+                                };
+                                self.epoch.validate()?;
+                            } else if epoch < current_epoch {
+                                panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
+                            }
                         }
+                        FenceableEpoch::Unfenced(None) => {
+                            self.epoch = FenceableEpoch::Unfenced(Some(epoch));
+                        }
+                        FenceableEpoch::Fenced { .. } => {}
                     }
-                    FenceableEpoch::Unfenced(None) => {
-                        self.epoch = FenceableEpoch::Unfenced(Some(epoch));
-                    }
-                    FenceableEpoch::Fenced { .. } => {}
                 }
             }
 
