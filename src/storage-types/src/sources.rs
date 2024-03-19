@@ -839,22 +839,25 @@ impl GenericSourceConnection {
         config: StorageConfiguration,
         remap_subscribe: Subscribe<SourceData, (), T, mz_repr::Diff>,
     ) -> Result<T, StorageError<T>> {
-        use mz_timely_util::antichain::AntichainExt;
-
-        // Currently only Kafka sources can support real-time recency. PG
-        // sources/subsources cannot because of the way we've handled
-        // subsource dependencies––they cannot easily "find" the remap
-        // shard/progress collection to which they're associated.
         match self {
             GenericSourceConnection::Kafka(kafka) => {
                 let external_frontier = kafka
                     .fetch_write_frontier(&config)
                     .await
                     .map_err(StorageError::Generic)?;
-                tracing::trace!(
-                    "real-time recency external frontier for {id}: {}",
-                    external_frontier.pretty()
-                );
+
+                GenericSourceConnection::decode_remap_data_until_geq_external_frontier(
+                    id,
+                    external_frontier,
+                    remap_subscribe,
+                )
+                .await
+            }
+            GenericSourceConnection::Postgres(pg) => {
+                let external_frontier = pg
+                    .fetch_write_frontier(&config)
+                    .await
+                    .map_err(StorageError::Generic)?;
 
                 GenericSourceConnection::decode_remap_data_until_geq_external_frontier(
                     id,
@@ -878,7 +881,14 @@ impl GenericSourceConnection {
         mut remap_subscribe: Subscribe<SourceData, (), T, mz_repr::Diff>,
     ) -> Result<T, StorageError<T>> {
         use mz_persist_client::read::ListenEvent;
+        use mz_timely_util::antichain::AntichainExt;
         use timely::progress::frontier::MutableAntichain;
+
+        tracing::debug!(
+            ?id,
+            "fetched real time recency frontier: {}",
+            external_frontier.pretty()
+        );
 
         let mut native_upper = MutableAntichain::new();
         let mut remap_updates = vec![];
