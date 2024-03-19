@@ -36,3 +36,34 @@ BUILDKITE_COMPLETED_BUILD_STATES = [
     "not_run",
     "finished",
 ]
+
+BUILDKITE_BUILD_STEP_STATES = [
+    "assigned",
+    "broken",
+    "canceled",
+    "failed",
+    "passed",
+    "running",
+    "scheduled",
+    "skipped",
+    "timed_out",
+    "unblocked",
+    "waiting",
+    "waiting_failed",
+]
+
+BUILDKITE_COMPLETED_BUILD_STEP_STATES = [
+    "broken",
+    "canceled",
+    "failed",
+    "passed",
+    "skipped",
+    "timed_out",
+    "waiting_failed",
+]
+
+BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES = [
+    "failed",
+    "passed",
+    "timed_out",
+]

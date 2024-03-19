@@ -13,6 +13,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
+    BUILDKITE_COMPLETED_BUILD_STEP_STATES,
+)
+
 
 @dataclass
 class BuildItemOutcomeBase:
@@ -71,17 +75,22 @@ class BuildStepMatcher:
 def extract_build_step_outcomes(
     builds_data: list[Any],
     selected_build_steps: list[BuildStepMatcher],
+    build_step_states: list[str],
 ) -> list[BuildStepOutcome]:
     result = []
     for build in builds_data:
-        step_infos = _extract_build_step_data_from_build(build, selected_build_steps)
+        step_infos = _extract_build_step_data_from_build(
+            build, selected_build_steps, build_step_states
+        )
         result.extend(step_infos)
 
     return result
 
 
 def _extract_build_step_data_from_build(
-    build_data: Any, selected_build_steps: list[BuildStepMatcher]
+    build_data: Any,
+    selected_build_steps: list[BuildStepMatcher],
+    build_step_states: list[str],
 ) -> list[BuildStepOutcome]:
     collected_steps = []
 
@@ -92,7 +101,9 @@ def _extract_build_step_data_from_build(
         if not _shall_include_build_step(job, selected_build_steps):
             continue
 
-        if job["state"] in ["canceled", "running"]:
+        build_job_state = job["state"]
+
+        if len(build_step_states) > 0 and build_job_state not in build_step_states:
             continue
 
         id = build_data["id"]
@@ -108,8 +119,8 @@ def _extract_build_step_data_from_build(
         else:
             duration_in_min = None
 
-        job_passed = job["state"] == "passed"
-        job_completed = job["state"] in ["passed", "broken", "failed"]
+        job_passed = build_job_state == "passed"
+        job_completed = build_job_state in BUILDKITE_COMPLETED_BUILD_STEP_STATES
         exit_status = job.get("exit_status")
         retry_count = job.get("retries_count") or 0
 

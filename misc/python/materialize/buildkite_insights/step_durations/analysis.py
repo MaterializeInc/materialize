@@ -16,6 +16,8 @@ import pandas as pd
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_BUILD_STATES,
+    BUILDKITE_BUILD_STEP_STATES,
+    BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
 )
 from materialize.buildkite_insights.cache import builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
@@ -108,16 +110,17 @@ def main(
     fetch_mode: FetchMode,
     max_fetches: int,
     branch: str | None,
-    build_state: str | None,
+    build_states: list[str],
+    build_step_states: list[str],
     output_type: str,
 ) -> None:
-    build_states = [build_state] if build_state is not None else None
     builds_data = builds_cache.get_or_query_builds(
         pipeline_slug, fetch_mode, max_fetches, branch, build_states
     )
     step_outcomes = extract_build_step_outcomes(
         builds_data=builds_data,
         selected_build_steps=build_steps,
+        build_step_states=build_step_states,
     )
     job_outcomes = step_outcomes_to_job_outcomes(step_outcomes)
     print_data(job_outcomes, build_steps, output_type)
@@ -144,9 +147,15 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--build-state",
-        default=None,
-        type=str,
+        action="append",
+        default=[],
         choices=BUILDKITE_BUILD_STATES,
+    )
+    parser.add_argument(
+        "--build-step-state",
+        action="append",
+        default=BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
+        choices=BUILDKITE_BUILD_STEP_STATES,
     )
     parser.add_argument(
         "--output-type",
@@ -166,5 +175,6 @@ if __name__ == "__main__":
         args.max_fetches,
         args.branch if args.branch != "*" else None,
         args.build_state,
+        args.build_step_state,
         args.output_type,
     )
