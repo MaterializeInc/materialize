@@ -570,31 +570,40 @@ impl<U: ApplyUpdate<StateUpdate<StateUpdateKindRaw>>> PersistHandle<StateUpdateK
             .await
             .expect("invalid usage");
         let mut epoch = FenceableEpoch::Unfenced(None);
-        for (kind, _, diff) in &snapshot {
+        // Sniff out most recent epoch.
+        for (kind, _, diff) in snapshot.iter().rev() {
             soft_assert_eq_or_log!(*diff, 1, "snapshot should be consolidated");
             if let Ok(kind) = <StateUpdateKindRaw as TryIntoStateUpdateKind>::try_into(kind.clone())
             {
                 match kind {
                     StateUpdateKind::Epoch(current_epoch) => {
                         epoch = FenceableEpoch::Unfenced(Some(current_epoch));
+                        break;
                     }
                     _ => {}
                 }
             }
         }
 
-        Ok(PersistHandle {
+        let mut handle = PersistHandle {
             since_handle,
             write_handle,
             listen,
             persist_client,
             shard_id: catalog_shard_id,
-            snapshot,
+            // Initialize empty in-memory state.
+            snapshot: Vec::new(),
             update_applier,
             upper,
             epoch,
             metrics,
-        })
+        };
+        let updates = snapshot
+            .into_iter()
+            .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
+        handle.apply_updates(updates)?;
+
+        Ok(handle)
     }
 }
 
