@@ -13,6 +13,10 @@ from textwrap import dedent
 import pytest
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.mzcompose.test_result import (
+    FailedTestExecutionError,
+    TestFailureDetails,
+)
 
 TD_TIMEOUT_SHORT = 45
 TD_TIMEOUT_FULL_RECOVERY = 600
@@ -174,8 +178,13 @@ def validate_state(
     end_time = time.time()
 
     if not validation_succeeded:
-        raise RuntimeError(
-            f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s!\nLast error message:\n{last_error_message}"
+        raise FailedTestExecutionError(
+            [
+                TestFailureDetails(
+                    message=f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s!",
+                    details=last_error_message,
+                )
+            ]
         )
 
     duration = round(end_time - start_time, 1)
