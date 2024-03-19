@@ -494,6 +494,7 @@ def corrupt_bin_log(c: Composition) -> None:
         cur.execute("FLUSH BINARY LOGS")
         time.sleep(2)
         cur.execute("PURGE BINARY LOGS BEFORE now()")
+        cur.execute("FLUSH BINARY LOGS")
 
         cur.execute("INSERT INTO public.t1 VALUES (2, 'text')")
 
