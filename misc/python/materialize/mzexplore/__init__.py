@@ -16,5 +16,7 @@ from materialize.mzexplore.common import (
     ExplaineeType,  # noqa: F401
     ExplainFlag,  # noqa: F401
     ExplainFormat,  # noqa: F401
+    ExplainOption, # noqa: F401
+    ExplainOptionType, # noqa: F401
     ExplainStage,  # noqa: F401
 )
