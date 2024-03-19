@@ -336,6 +336,9 @@ pub async fn run_ingest(
     let mut futs = FuturesUnordered::new();
 
     for iteration in start_iteration..(start_iteration + repeat) {
+        if iteration % 1_000_000 == 0 {
+            println!("...iteration {}", iteration);
+        }
         let iter = &mut cmd.input.iter().peekable();
 
         for row in iter {

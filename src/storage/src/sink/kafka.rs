@@ -280,6 +280,15 @@ impl TransactionalProducer {
         let task_name = format!("kafka_sink_producer:{sink_id}");
         let progress_key = ProgressKey::new(sink_id);
 
+        tracing::info!(
+            "timeout_config.socket_timeout {:?}",
+            timeout_config.socket_timeout
+        );
+        tracing::info!(
+            "timeout_config.transaction_timeout {:?}",
+            timeout_config.transaction_timeout
+        );
+
         let producer = Self {
             task_name,
             data_topic: connection.topic.clone(),
@@ -296,9 +305,11 @@ impl TransactionalProducer {
         };
 
         let timeout = timeout_config.socket_timeout;
+        tracing::info!("{}: initing txns", producer.task_name);
         producer
             .spawn_blocking(move |p| p.init_transactions(timeout))
             .await?;
+        tracing::info!("{}: inited txns", producer.task_name);
 
         Ok(producer)
     }
@@ -320,12 +331,19 @@ impl TransactionalProducer {
     }
 
     async fn fetch_metadata(&self) -> Result<Metadata, ContextCreationError> {
-        self.spawn_blocking(|p| p.client().fetch_metadata(None, Duration::from_secs(10)))
-            .await
+        tracing::info!("{}: fetch_metadata start", self.task_name);
+        let r = self
+            .spawn_blocking(|p| p.client().fetch_metadata(None, Duration::from_secs(10)))
+            .await;
+        tracing::info!("{}: fetch_metadata done", self.task_name);
+        r
     }
 
     async fn begin_transaction(&mut self) -> Result<(), ContextCreationError> {
-        self.spawn_blocking(|p| p.begin_transaction()).await
+        tracing::info!("{}: begin_transaction start", self.task_name);
+        let r = self.spawn_blocking(|p| p.begin_transaction()).await;
+        tracing::info!("{}: begin_transaction done", self.task_name);
+        r
     }
 
     /// Synchronously puts the provided message to librdkafka's send queue. This method only
@@ -366,14 +384,20 @@ impl TransactionalProducer {
             Ok(()) => Ok(()),
             Err((err, record)) => match err.rdkafka_error_code() {
                 Some(RDKafkaErrorCode::QueueFull) => {
+                    tracing::info!("{}: send txn queue full", self.task_name);
                     // If the internal rdkafka queue is full we have no other option than to flush
                     // TODO(petrosagg): remove this logic once we fix upgrade to librdkafka 2.3 and
                     // increase the queue limits
                     let timeout = self.transaction_timeout;
+                    tracing::info!("{}: send txn flushing", self.task_name);
                     self.spawn_blocking(move |p| p.flush(timeout)).await?;
+                    tracing::info!("{}: send txn flushed", self.task_name);
                     self.producer.send(record).map_err(|(err, _)| err.into())
                 }
-                _ => Err(err.into()),
+                e => {
+                    tracing::info!("{}: other error {:?}, {:?}", self.task_name, e, err);
+                    Err(err.into())
+                }
             },
         }
     }
@@ -395,11 +419,15 @@ impl TransactionalProducer {
             Ok(()) => {}
             Err((err, record)) => match err.rdkafka_error_code() {
                 Some(RDKafkaErrorCode::QueueFull) => {
+                    tracing::info!("{}: commit txn queue full", self.task_name);
                     // If the internal rdkafka queue is full we have no other option than to flush
                     // TODO(petrosagg): remove this logic once we fix the issue that cannot be
                     // named
                     let timeout = self.transaction_timeout;
+
+                    tracing::info!("{}: commit txn flushing", self.task_name);
                     self.spawn_blocking(move |p| p.flush(timeout)).await?;
+                    tracing::info!("{}: commit txn flushed", self.task_name);
                     self.producer.send(record).map_err(|(err, _)| err)?;
                 }
                 _ => return Err(err.into()),
@@ -407,11 +435,14 @@ impl TransactionalProducer {
         }
 
         let timeout = self.socket_timeout;
+
+        tracing::info!("{}: txn committing", self.task_name);
         match self
             .spawn_blocking(move |p| p.commit_transaction(timeout))
             .await
         {
             Ok(()) => {
+                tracing::info!("{}: txn committed ok", self.task_name);
                 self.statistics
                     .inc_messages_committed_by(self.staged_messages);
                 self.statistics.inc_bytes_committed_by(self.staged_bytes);
@@ -420,6 +451,7 @@ impl TransactionalProducer {
                 Ok(())
             }
             Err(ContextCreationError::KafkaError(KafkaError::Transaction(err))) => {
+                tracing::info!("{}: txn committed err", self.task_name);
                 // Make one attempt at aborting the transaction before letting the error percolate
                 // up and the process exit. Aborting allows the consumers of the topic to skip over
                 // any messages we've written in the transaction, so it's polite to do... but if it
@@ -427,8 +459,10 @@ impl TransactionalProducer {
                 // version of this producer or by the broker-side timeout.
                 if err.txn_requires_abort() {
                     let timeout = self.socket_timeout;
+                    tracing::info!("{}: txn aborting", self.task_name);
                     self.spawn_blocking(move |p| p.abort_transaction(timeout))
                         .await?;
+                    tracing::info!("{}: txn aborted", self.task_name);
                 }
                 Err(ContextCreationError::KafkaError(KafkaError::Transaction(
                     err,
@@ -599,13 +633,21 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             let Some(mut upper) = resume_upper.clone().into_option() else {
                 return Ok(());
             };
+
+            tracing::info!("{}: resume upper is {:?}", name, upper);
+
             let mut deferred_updates = vec![];
             let mut extra_updates = vec![];
             // We must wait until we have data to commit before starting a transaction because
             // Kafka doesn't have a heartbeating mechanism to keep a transaction open indefinitely.
             // This flag tracks whether we have started the transaction.
             let mut transaction_begun = false;
+            let mut seen_input = false;
             while let Some(event) = input.next().await {
+                if !seen_input {
+                    seen_input = true;
+                    tracing::info!("\n\n\n{}: seen first input", name);
+                }
                 match event {
                     Event::Data(_cap, batch) => {
                         for ((key, value), time, diff) in batch {
@@ -623,12 +665,27 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                                 Ordering::Less => deferred_updates.push(((key, value), time, diff)),
                                 Ordering::Equal => {
                                     if !transaction_begun {
+                                        tracing::info!(
+                                            "{}: beginning txn from data at {:?}",
+                                            name,
+                                            time
+                                        );
                                         producer.begin_transaction().await?;
                                         transaction_begun = true;
                                     }
-                                    producer
+                                    let r = producer
                                         .send(key.as_deref(), value.as_deref(), time, diff)
-                                        .await?;
+                                        .await;
+
+                                    if r.is_err() {
+                                        tracing::info!(
+                                            "{}: Event::Data error after flush {:?}",
+                                            name,
+                                            r
+                                        );
+                                    }
+
+                                    r?;
                                 }
                                 Ordering::Greater => continue,
                             }
@@ -662,6 +719,11 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                             continue;
                         }
                         if !transaction_begun {
+                            tracing::info!(
+                                "{}: beginning txn from progress at {:?}",
+                                name,
+                                progress
+                            );
                             producer.begin_transaction().await?;
                         }
                         extra_updates.extend(
@@ -670,9 +732,19 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                         );
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
                         for ((key, value), time, diff) in extra_updates.drain(..) {
-                            producer
+                            let r = producer
                                 .send(key.as_deref(), value.as_deref(), time, diff)
-                                .await?;
+                                .await;
+
+                            if r.is_err() {
+                                tracing::info!(
+                                    "{}: Event::Progress error after flush {:?}",
+                                    name,
+                                    r
+                                );
+                            }
+
+                            r?;
                         }
 
                         info!("{name}: committing transaction for {}", progress.pretty());
@@ -797,7 +869,12 @@ fn encode_collection<G: Scope>(
             // TODO(petrosagg): Make the fallible async operator safe
             *capset = CapabilitySet::new();
 
+            let mut seen_first_output = false;
             while let Some(event) = input.next().await {
+                if !seen_first_output {
+                    seen_first_output = true;
+                    tracing::info!("{}: seen first output in encoding\n\n\n", name);
+                }
                 if let Event::Data(cap, rows) = event {
                     for ((key, value), time, diff) in rows {
                         let key = key.map(|key| encoder.encode_key_unchecked(key));

@@ -155,6 +155,9 @@ pub async fn run_verify_data(
                 };
 
                 stream_messages_remaining -= 1;
+                if !topic_created {
+                    println!("Kafka topic created");
+                }
                 topic_created = true;
 
                 consumer
