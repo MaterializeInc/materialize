@@ -13,6 +13,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
+    BUILDKITE_COMPLETED_BUILD_STEP_STATES,
+)
+
 
 @dataclass
 class BuildItemOutcomeBase:
@@ -93,6 +97,7 @@ def _extract_build_step_data_from_build(
             continue
 
         if job["state"] in ["canceled", "running"]:
+        build_job_state = job["state"]
             continue
 
         id = build_data["id"]
@@ -108,8 +113,8 @@ def _extract_build_step_data_from_build(
         else:
             duration_in_min = None
 
-        job_passed = job["state"] == "passed"
-        job_completed = job["state"] in ["passed", "broken", "failed"]
+        job_passed = build_job_state == "passed"
+        job_completed = build_job_state in BUILDKITE_COMPLETED_BUILD_STEP_STATES
         exit_status = job.get("exit_status")
         retry_count = job.get("retries_count") or 0
 
