@@ -38,7 +38,6 @@ binary logging.
 1. Edit the new parameter group to set the parameters to the values specified in
    the below table.
 
-#### MySQL 8.x.x
 
    | Configuration parameter          | AWS Console                                 | Value | Details |
    |----------------------------------|---------------------------------------------|-------|---------|
@@ -48,21 +47,9 @@ binary logging.
    | `gtid_mode`                      | `gtid-mode`                                 | `ON`  | |
    | `enforce_gtid_consistency`       |                                             | `ON`  | |
    | `replica_preserve_commit_order`  |                                             | `ON`  | Only required when connecting Materialize to a read-replica for replication, rather than the primary server. |
-   | `binlog retention hours`         |                                             | 168   | In your MySQL Database, run `CALL mysql.rds_show_configuration;` to get the current value. If it is `NULL` or less than 168 run `call mysql.rds_set_configuration('binlog retention hours', 168);` [AWS Docs on rds_set_configuration](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-stored-proc-configuring.html#mysql_rds_show_configuration)|
-
-#### MySQL 5.5.x
-| Configuration parameter          | AWS Console                                 | Value | Details |
-|----------------------------------|---------------------------------------------|-------|---------|
-| `log_bin`                        | `log_bin_use_v1_row_events`                 | `ON`  | CANNOT LOCATE PARAMETER |
-| `binlog_format`                  |                                             | `ROW` | UNABLE TO MODIFY IN CONSOLE. "Non Modifiable"|
-| `binlog_row_image`               |                                             | `FULL`| CANNOT LOCATE PARAMETER |
-| `gtid_mode`                      | `gtid-mode`                                 | `ON`  | CANNOT LOCATE PARAMETER |
-| `enforce_gtid_consistency`       |                                             | `ON`  | CANNOT LOCATE PARAMETER |
-| `replica_preserve_commit_order`  |                                             | `ON`  | CANNOT LOCATE PARAMETER |
-| `binlog retention hours`         |                                             | 168   | |
 
 
-1. [Associate the RDS parameter group to your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Associating).
+4. [Associate the RDS parameter group to your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Associating).
 
     Use the **Apply Immediately** option. The database must be rebooted in order
     for the parameter group association to take effect. Keep in mind that
@@ -70,7 +57,14 @@ binary logging.
 
     Do not move on to the next step until the database **Status**
     is **Available** in the RDS Console.
-
+1. In your MySQL database, run the [stored procedure rds_set_configuration](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-stored-proc-configuring.html#mysql_rds_show_configuration) to get the current value of `binlog retention hours` value.
+```sql
+CALL mysql.rds_show_configuration;
+```
+If it is `NULL` or less than 168 (7 days) then run the following stored procedure:
+```sql
+call mysql.rds_set_configuration('binlog retention hours', 168);
+```
 1. Validate the parameters in your MySQL Database
 ```sql
 SHOW VARIABLES WHERE variable_name IN (
@@ -82,7 +76,6 @@ SHOW VARIABLES WHERE variable_name IN (
 	'replica_preserve_commit_order'
 	);
 ```
-
 
 ## Step 2. Create a user for replication
 
