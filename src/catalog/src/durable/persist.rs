@@ -159,7 +159,7 @@ impl FenceableEpoch {
         }
     }
 
-    /// TODO(jkosh44)
+    /// Returns `Err` if `epoch` fences out `self`, `Ok` otherwise.
     fn maybe_fence(&mut self, epoch: Epoch) -> Result<(), DurableCatalogError> {
         match self {
             FenceableEpoch::Unfenced(Some(current_epoch)) => {
@@ -197,7 +197,7 @@ pub trait ApplyUpdate<T> {
     ) -> Result<Option<T>, DurableCatalogError>;
 }
 
-/// TODO(jkosh44)
+/// A handle for interacting with the persist catalog shard.
 #[derive(Debug)]
 pub struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<StateUpdate<T>>> {
     /// Since handle to control compaction.
@@ -214,12 +214,11 @@ pub struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<StateUpdate<T
     ///
     /// We use a tuple instead of [`StateUpdate`] to make consolidation easier.
     pub(crate) snapshot: Vec<(T, Timestamp, Diff)>,
-    /// TODO(jkosh44)
+    /// Applies custom processing and filtering for each individual update.
     update_applier: U,
     /// The current upper of the persist shard.
     pub(crate) upper: Timestamp,
-    /// The epoch of the catalog, if one exists. This information is also included in `snapshot`,
-    /// but it's useful to have quick access to this field without parsing through all updates.
+    /// The epoch of the catalog, if one exists.
     epoch: FenceableEpoch,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
@@ -319,7 +318,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<StateUpdate<T>>> PersistHandle<T,
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
-    /// catalog state up to, and including, `as_of`.
+    /// catalog state.
     #[mz_ore::instrument]
     async fn snapshot_unconsolidated(&mut self) -> Vec<StateUpdate<StateUpdateKind>> {
         let current_upper = self.current_upper().await;
@@ -583,21 +582,20 @@ impl<U: ApplyUpdate<StateUpdate<StateUpdateKindRaw>>> PersistHandle<StateUpdateK
             .listen(Antichain::from_elem(as_of))
             .await
             .expect("invalid usage");
-        let mut epoch = FenceableEpoch::Unfenced(None);
         // Sniff out most recent epoch.
-        for (kind, _, diff) in snapshot.iter().rev() {
-            soft_assert_eq_or_log!(*diff, 1, "snapshot should be consolidated");
-            if let Ok(kind) = <StateUpdateKindRaw as TryIntoStateUpdateKind>::try_into(kind.clone())
-            {
-                match kind {
-                    StateUpdateKind::Epoch(current_epoch) => {
-                        epoch = FenceableEpoch::Unfenced(Some(current_epoch));
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-        }
+        let epoch = snapshot
+            .iter()
+            .rev()
+            .filter(|(_, _, diff)| *diff == 1)
+            .filter_map(|(kind, _, _)| {
+                <StateUpdateKindRaw as TryIntoStateUpdateKind>::try_into(kind.clone()).ok()
+            })
+            .filter_map(|kind| match kind {
+                StateUpdateKind::Epoch(epoch) => Some(epoch),
+                _ => None,
+            })
+            .next();
+        let epoch = FenceableEpoch::Unfenced(epoch);
 
         let mut handle = PersistHandle {
             since_handle,
@@ -726,6 +724,8 @@ impl<U: ApplyUpdate<StateUpdate<StateUpdateKind>>> PersistHandle<StateUpdateKind
     /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
     /// state.
     ///
+    /// The output is fetched directly from persist instead of the in-memory cache.
+    ///
     /// The output is consolidated and sorted by timestamp in ascending order.
     #[mz_ore::instrument(level = "debug")]
     async fn persist_snapshot(
@@ -733,41 +733,29 @@ impl<U: ApplyUpdate<StateUpdate<StateUpdateKind>>> PersistHandle<StateUpdateKind
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
         let mut read_handle = self.read_handle().await;
         let as_of = as_of(&read_handle, self.upper);
-        let snapshot = self.snapshot(&mut read_handle, as_of).await;
+        let snapshot = snapshot_binary(&mut read_handle, as_of, &self.metrics)
+            .await
+            .map(|update| update.try_into().expect("kind decoding error"));
         read_handle.expire().await;
         snapshot
-    }
-
-    /// TODO(jkosh44)
-    #[mz_ore::instrument(level = "debug")]
-    async fn snapshot(
-        &mut self,
-        read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
-        as_of: Timestamp,
-    ) -> impl Iterator<Item = StateUpdate<StateUpdateKind>> + DoubleEndedIterator {
-        snapshot_binary(read_handle, as_of, &self.metrics)
-            .await
-            .map(|update| update.try_into().expect("kind decoding error"))
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct ConfigsCache {
-    /// TODO(jkosh44)
-    /// The config collection of the catalog. This information is also included in `snapshot`,
-    /// but it's useful to have quick access to these fields without parsing through all updates.
+pub(crate) struct UnopenedCatalogUpdateApplier {
+    /// A cache of the config collection of the catalog.
     configs: BTreeMap<String, u64>,
 }
 
-impl ConfigsCache {
-    fn new() -> ConfigsCache {
-        ConfigsCache {
+impl UnopenedCatalogUpdateApplier {
+    fn new() -> UnopenedCatalogUpdateApplier {
+        UnopenedCatalogUpdateApplier {
             configs: BTreeMap::new(),
         }
     }
 }
 
-impl ApplyUpdate<StateUpdate<StateUpdateKindRaw>> for ConfigsCache {
+impl ApplyUpdate<StateUpdate<StateUpdateKindRaw>> for UnopenedCatalogUpdateApplier {
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKindRaw>,
@@ -815,8 +803,8 @@ impl ApplyUpdate<StateUpdate<StateUpdateKindRaw>> for ConfigsCache {
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 #[derive(Debug)]
 pub struct UnopenedPersistCatalogState {
-    /// TODO(jkosh44)
-    pub(crate) persist_handle: PersistHandle<StateUpdateKindRaw, ConfigsCache>,
+    /// A handle to the catalog persist shard.
+    pub(crate) persist_handle: PersistHandle<StateUpdateKindRaw, UnopenedCatalogUpdateApplier>,
     /// The organization ID of the environment.
     organization_id: Uuid,
 }
@@ -838,7 +826,7 @@ impl UnopenedPersistCatalogState {
             persist_client,
             organization_id.clone(),
             version,
-            ConfigsCache::new(),
+            UnopenedCatalogUpdateApplier::new(),
             metrics,
         )
         .await?;
@@ -925,7 +913,7 @@ impl UnopenedPersistCatalogState {
                 epoch: self.persist_handle.epoch,
                 // Initialize empty in-memory state.
                 snapshot: Vec::new(),
-                update_applier: LargeCollectionStartupCaches::new_open(),
+                update_applier: CatalogUpdateApplier::new(),
                 metrics: self.persist_handle.metrics,
             },
         };
@@ -1172,23 +1160,23 @@ impl<T: Ord> LargeCollectionStartupCache<T> {
 }
 
 #[derive(Debug)]
-struct LargeCollectionStartupCaches {
+struct CatalogUpdateApplier {
     /// A cache of audit logs that is only populated during startup.
     audit_logs: LargeCollectionStartupCache<proto::AuditLogKey>,
     /// A cache of storage usage events that is only populated during startup.
     storage_usage_events: LargeCollectionStartupCache<proto::StorageUsageKey>,
 }
 
-impl LargeCollectionStartupCaches {
-    fn new_open() -> LargeCollectionStartupCaches {
-        LargeCollectionStartupCaches {
+impl CatalogUpdateApplier {
+    fn new() -> CatalogUpdateApplier {
+        CatalogUpdateApplier {
             audit_logs: LargeCollectionStartupCache::new_open(),
             storage_usage_events: LargeCollectionStartupCache::new_open(),
         }
     }
 }
 
-impl ApplyUpdate<StateUpdate<StateUpdateKind>> for LargeCollectionStartupCaches {
+impl ApplyUpdate<StateUpdate<StateUpdateKind>> for CatalogUpdateApplier {
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKind>,
@@ -1229,8 +1217,8 @@ impl ApplyUpdate<StateUpdate<StateUpdateKind>> for LargeCollectionStartupCaches 
 pub struct PersistCatalogState {
     /// The [`Mode`] that this catalog was opened in.
     mode: Mode,
-    /// TODO(jkosh44)
-    persist_handle: PersistHandle<StateUpdateKind, LargeCollectionStartupCaches>,
+    /// A handle to the catalog persist shard.
+    persist_handle: PersistHandle<StateUpdateKind, CatalogUpdateApplier>,
 }
 
 #[async_trait]
@@ -1354,8 +1342,7 @@ impl DurableCatalogState for PersistCatalogState {
             catalog: &mut PersistCatalogState,
             txn_batch: TransactionBatch,
         ) -> Result<(), CatalogError> {
-            // If the transaction is empty then we don't error, even in read-only mode. This matches the
-            // semantics that the stash uses.
+            // If the transaction is empty then we don't error, even in read-only mode.
             if !txn_batch.is_empty() && catalog.is_read_only() {
                 return Err(DurableCatalogError::NotWritable(
                     "cannot commit a transaction in a read-only catalog".to_string(),
@@ -1487,7 +1474,7 @@ fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
 
 /// Returns the schema of the `Row`s/`SourceData`s stored in the persist
 /// shard backing the catalog.
-pub fn desc() -> RelationDesc {
+fn desc() -> RelationDesc {
     RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
 }
 
