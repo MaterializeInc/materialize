@@ -783,11 +783,12 @@ impl<T: Timestamp + Lattice> Spine<T> {
         if batch.is_empty() {
             if let Some(position) = self.merging.iter().position(|m| !m.is_vacant()) {
                 if self.merging[position].is_single() && self.merging[position].is_empty() {
-                    self.insert_at(Some(batch), position);
-                    let merged = self
-                        .complete_at(position, log)
-                        .expect("just-inserted batch");
-                    self.merging[position] = MergeState::Single(merged);
+                    self.insert_at(batch, position);
+                    // Since we just inserted a batch, we should always have work to complete...
+                    // but otherwise we just leave this layer vacant.
+                    if let Some(merged) = self.complete_at(position, log) {
+                        self.merging[position] = MergeState::Single(merged);
+                    }
                     return;
                 }
             }
@@ -892,7 +893,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         // Step 3. This insertion should be into an empty layer. It is a logical
         //         error otherwise, as we may be violating our invariant, from
         //         which all wonderment derives.
-        self.insert_at(Some(batch), batch_index);
+        self.insert_at(batch, batch_index);
 
         // Step 4. Tidy the largest layers.
         //
@@ -921,19 +922,23 @@ impl<T: Timestamp + Lattice> Spine<T> {
             // `index`.
             let mut merged = None;
             for i in 0..index {
-                self.insert_at(merged, i);
+                if let Some(merged) = merged.take() {
+                    self.insert_at(merged, i);
+                }
                 merged = self.complete_at(i, log);
             }
 
             // The merged results should be introduced at level `index`, which
             // should be ready to absorb them (possibly creating a new merge at
             // the time).
-            self.insert_at(merged, index);
+            if let Some(merged) = merged {
+                self.insert_at(merged, index);
+            }
 
             // If the insertion results in a merge, we should complete it to
             // ensure the upcoming insertion at `index` does not panic.
             if self.merging[index].is_double() {
-                let merged = self.complete_at(index, log);
+                let merged = self.complete_at(index, log).expect("double batch");
                 self.insert_at(merged, index + 1);
             }
         }
@@ -970,7 +975,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             // level, which is "guaranteed" to be complete at this point, by our
             // fueling discipline.
             if self.merging[index].is_complete() {
-                let complete = self.complete_at(index, log);
+                let complete = self.complete_at(index, log).expect("complete batch");
                 self.insert_at(complete, index + 1);
             }
         }
@@ -981,9 +986,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// This is a non-public internal method that can panic if we try and insert
     /// into a layer which already contains two batches (and is still in the
     /// process of merging).
-    fn insert_at(&mut self, batch: Option<SpineBatch<T>>, index: usize) {
-        let Some(batch) = batch else { return };
-
+    fn insert_at(&mut self, batch: SpineBatch<T>, index: usize) {
         // Ensure the spine is large enough.
         while self.merging.len() <= index {
             self.merging.push(MergeState::Vacant);
@@ -1004,7 +1007,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         };
     }
 
-    /// Completes and extracts what ever is at layer `index`.
+    /// Completes and extracts what ever is at layer `index`, leaving this layer vacant.
     fn complete_at(&mut self, index: usize, log: &mut SpineLog<'_, T>) -> Option<SpineBatch<T>> {
         self.merging[index].complete(log)
     }
@@ -1059,7 +1062,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
 
                             if smaller <= (1 << length) / 8 {
                                 self.merging.remove(length - 2);
-                                self.insert_at(Some(batch), length - 2);
+                                self.insert_at(batch, length - 2);
                             } else {
                                 self.merging[length - 2] = MergeState::Single(batch);
                             }
