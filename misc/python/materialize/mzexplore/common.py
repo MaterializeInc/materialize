@@ -183,14 +183,15 @@ class ExplainOptionType(click.ParamType):
 
 class ItemType(str, Enum):
     CONNECTION = "connection"
+    FUNCTION = "function"
     INDEX = "index"
     MATERIALIZED_VIEW = "materialized-view"
     SECRET = "secret"
     SINK = "sink"
     SOURCE = "source"
     TABLE = "table"
-    VIEW = "view"
     TYPE = "type"
+    VIEW = "view"
 
     def sql(self) -> str:
         """Return the SQL string corresponding to this item type."""
