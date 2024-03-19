@@ -124,7 +124,7 @@ pub(crate) enum Mode {
 
 /// Enum representing a potentially fenced epoch.
 #[derive(Debug)]
-enum FenceableEpoch {
+pub enum FenceableEpoch {
     /// The current epoch, if one exists, has not been fenced.
     Unfenced(Option<Epoch>),
     /// The current epoch has been fenced.
@@ -158,13 +158,43 @@ impl FenceableEpoch {
             } => Some(current_epoch.clone()),
         }
     }
+
+    /// TODO(jkosh44)
+    fn maybe_fence(&mut self, epoch: Epoch) -> Result<(), DurableCatalogError> {
+        match self {
+            FenceableEpoch::Unfenced(Some(current_epoch)) => {
+                if epoch > *current_epoch {
+                    *self = FenceableEpoch::Fenced {
+                        current_epoch: *current_epoch,
+                        fence_epoch: epoch,
+                    };
+                    self.validate()?;
+                } else if epoch < *current_epoch {
+                    panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
+                }
+            }
+            FenceableEpoch::Unfenced(None) => {
+                *self = FenceableEpoch::Unfenced(Some(epoch));
+            }
+            FenceableEpoch::Fenced { .. } => {
+                self.validate()?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 pub trait ApplyUpdate<T> {
     /// Process and apply `update`.
     ///
     /// Returns `Some` if `update` should be cached in memory and `None` otherwise.
-    fn apply_update(&mut self, update: T, metrics: &Arc<Metrics>) -> Option<T>;
+    fn apply_update(
+        &mut self,
+        update: T,
+        current_epoch: &mut FenceableEpoch,
+        metrics: &Arc<Metrics>,
+    ) -> Result<Option<T>, DurableCatalogError>;
 }
 
 /// TODO(jkosh44)
@@ -386,32 +416,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<StateUpdate<T>>> PersistHandle<T,
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
 
-            if *diff == 1 {
-                // TODO(jkosh44) Try and avoid this unnecessary clone.
-                if let Ok(StateUpdateKind::Epoch(epoch)) = kind.clone().try_into() {
-                    match self.epoch {
-                        FenceableEpoch::Unfenced(Some(current_epoch)) => {
-                            if epoch > current_epoch {
-                                soft_assert_eq_or_log!(*diff, 1);
-                                self.epoch = FenceableEpoch::Fenced {
-                                    current_epoch,
-                                    fence_epoch: epoch,
-                                };
-                                self.epoch.validate()?;
-                            } else if epoch < current_epoch {
-                                panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
-                            }
-                        }
-                        FenceableEpoch::Unfenced(None) => {
-                            self.epoch = FenceableEpoch::Unfenced(Some(epoch));
-                        }
-                        FenceableEpoch::Fenced { .. } => {}
-                    }
-                }
-            }
-
             if let Some(StateUpdate { kind, ts, diff }) =
-                self.update_applier.apply_update(update, &self.metrics)
+                self.update_applier
+                    .apply_update(update, &mut self.epoch, &self.metrics)?
             {
                 self.snapshot.push((kind, ts, diff));
             }
@@ -741,8 +748,9 @@ impl ApplyUpdate<StateUpdate<StateUpdateKindRaw>> for ConfigsCache {
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKindRaw>,
+        current_epoch: &mut FenceableEpoch,
         _metrics: &Arc<Metrics>,
-    ) -> Option<StateUpdate<StateUpdateKindRaw>> {
+    ) -> Result<Option<StateUpdate<StateUpdateKindRaw>>, DurableCatalogError> {
         if let Ok(kind) =
             <StateUpdateKindRaw as TryIntoStateUpdateKind>::try_into(update.kind.clone())
         {
@@ -763,11 +771,15 @@ impl ApplyUpdate<StateUpdate<StateUpdateKindRaw>> for ConfigsCache {
                         "retraction does not match existing value"
                     );
                 }
+                (StateUpdateKind::Epoch(epoch), 1) => {
+                    current_epoch.maybe_fence(epoch)?;
+                    return Ok(Some(update));
+                }
                 _ => {}
             }
         }
 
-        Some(update)
+        Ok(Some(update))
     }
 }
 
@@ -1157,8 +1169,9 @@ impl ApplyUpdate<StateUpdate<StateUpdateKind>> for LargeCollectionStartupCaches 
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKind>,
+        current_epoch: &mut FenceableEpoch,
         metrics: &Arc<Metrics>,
-    ) -> Option<StateUpdate<StateUpdateKind>> {
+    ) -> Result<Option<StateUpdate<StateUpdateKind>>, DurableCatalogError> {
         if let Some(collection_type) = update.kind.collection_type() {
             metrics
                 .collection_entries
@@ -1166,16 +1179,24 @@ impl ApplyUpdate<StateUpdate<StateUpdateKind>> for LargeCollectionStartupCaches 
                 .add(update.diff);
         }
 
-        match update.kind {
-            StateUpdateKind::AuditLog(key, ()) => {
+        match (update.kind, update.diff) {
+            (StateUpdateKind::AuditLog(key, ()), _) => {
                 self.audit_logs.push((key, update.diff));
-                None
+                Ok(None)
             }
-            StateUpdateKind::StorageUsage(key, ()) => {
+            (StateUpdateKind::StorageUsage(key, ()), _) => {
                 self.storage_usage_events.push((key, update.diff));
-                None
+                Ok(None)
             }
-            _ => Some(update),
+            (StateUpdateKind::Epoch(epoch), 1) => {
+                current_epoch.maybe_fence(epoch)?;
+                Ok(None)
+            }
+            (kind, diff) => Ok(Some(StateUpdate {
+                kind,
+                ts: update.ts,
+                diff,
+            })),
         }
     }
 }
