@@ -135,6 +135,37 @@ pub static MYSQL_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("transaction_id", ScalarType::UInt64.nullable(true))
 });
 
+impl MySqlSourceConnection {
+    pub async fn fetch_write_frontier(
+        self,
+        storage_configuration: &crate::configuration::StorageConfiguration,
+    ) -> Result<timely::progress::Antichain<GtidPartition>, anyhow::Error> {
+        use mz_timely_util::antichain::AntichainExt;
+
+        let config = self
+            .connection
+            .config(
+                &*storage_configuration.connection_context.secrets_reader,
+                storage_configuration,
+            )
+            .await?;
+
+        let mut conn = config
+            .connect(
+                "mysql fetch_write_frontier",
+                &storage_configuration.connection_context.ssh_tunnel_manager,
+            )
+            .await?;
+
+        let current_gtid_set =
+            mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
+
+        let current_upper = gtid_set_frontier(&current_gtid_set)?;
+
+        Ok(current_upper)
+    }
+}
+
 impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
     fn name(&self) -> &'static str {
         "mysql"

@@ -866,6 +866,19 @@ impl GenericSourceConnection {
                 )
                 .await
             }
+            GenericSourceConnection::MySql(my_sql) => {
+                let external_frontier = my_sql
+                    .fetch_write_frontier(&config)
+                    .await
+                    .map_err(StorageError::Generic)?;
+
+                GenericSourceConnection::decode_remap_data_until_geq_external_frontier(
+                    id,
+                    external_frontier,
+                    remap_subscribe,
+                )
+                .await
+            }
             _ => Err(StorageError::RtrUnavailable(BTreeSet::from_iter(
                 [id].into_iter(),
             ))),
