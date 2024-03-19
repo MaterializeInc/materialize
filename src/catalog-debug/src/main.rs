@@ -95,6 +95,9 @@ enum Action {
         /// Only dumps the statistics of each collection and not the contents.
         #[clap(long)]
         stats_only: bool,
+        /// Consolidates the catalog contents.
+        #[clap(long, short = 'c')]
+        consolidate: bool,
         /// Write output to specified path. Default stdout.
         target: Option<PathBuf>,
     },
@@ -190,6 +193,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             ignore_large_collections,
             ignore,
             stats_only,
+            consolidate,
             target,
         } => {
             let ignore: HashSet<_> = ignore.into_iter().collect();
@@ -203,6 +207,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 ignore_large_collections,
                 ignore,
                 stats_only,
+                consolidate,
                 target,
             )
             .await
@@ -317,6 +322,7 @@ async fn dump(
     ignore_large_collections: bool,
     ignore: HashSet<CollectionType>,
     stats_only: bool,
+    consolidate: bool,
     mut target: impl Write,
 ) -> Result<(), anyhow::Error> {
     fn dump_col<T: Collection>(
@@ -324,6 +330,7 @@ async fn dump(
         trace: CollectionTrace<T>,
         ignore: &HashSet<CollectionType>,
         stats_only: bool,
+        consolidate: bool,
     ) where
         T::Key: Serialize + Debug + 'static,
         T::Value: Serialize + Debug + 'static,
@@ -359,6 +366,11 @@ async fn dump(
             retraction_count,
             entries,
         };
+
+        if consolidate {
+            assert_eq!(retraction_count, 0);
+        }
+
         data.insert(T::name(), dumped_col);
     }
 
@@ -382,30 +394,70 @@ async fn dump(
         system_configurations,
         system_privileges,
         timestamps,
-    } = openable_state.trace().await?;
+    } = if consolidate {
+        openable_state.trace_consolidated().await?
+    } else {
+        openable_state.trace_unconsolidated().await?
+    };
 
     if !ignore_large_collections {
-        dump_col(&mut data, audit_log, &ignore, stats_only);
+        dump_col(&mut data, audit_log, &ignore, stats_only, consolidate);
     }
-    dump_col(&mut data, clusters, &ignore, stats_only);
-    dump_col(&mut data, introspection_sources, &ignore, stats_only);
-    dump_col(&mut data, cluster_replicas, &ignore, stats_only);
-    dump_col(&mut data, comments, &ignore, stats_only);
-    dump_col(&mut data, configs, &ignore, stats_only);
-    dump_col(&mut data, databases, &ignore, stats_only);
-    dump_col(&mut data, default_privileges, &ignore, stats_only);
-    dump_col(&mut data, id_allocator, &ignore, stats_only);
-    dump_col(&mut data, items, &ignore, stats_only);
-    dump_col(&mut data, roles, &ignore, stats_only);
-    dump_col(&mut data, schemas, &ignore, stats_only);
-    dump_col(&mut data, settings, &ignore, stats_only);
+    dump_col(&mut data, clusters, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        introspection_sources,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        cluster_replicas,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(&mut data, comments, &ignore, stats_only, consolidate);
+    dump_col(&mut data, configs, &ignore, stats_only, consolidate);
+    dump_col(&mut data, databases, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        default_privileges,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(&mut data, id_allocator, &ignore, stats_only, consolidate);
+    dump_col(&mut data, items, &ignore, stats_only, consolidate);
+    dump_col(&mut data, roles, &ignore, stats_only, consolidate);
+    dump_col(&mut data, schemas, &ignore, stats_only, consolidate);
+    dump_col(&mut data, settings, &ignore, stats_only, consolidate);
     if !ignore_large_collections {
-        dump_col(&mut data, storage_usage, &ignore, stats_only);
+        dump_col(&mut data, storage_usage, &ignore, stats_only, consolidate);
     }
-    dump_col(&mut data, system_configurations, &ignore, stats_only);
-    dump_col(&mut data, system_object_mappings, &ignore, stats_only);
-    dump_col(&mut data, system_privileges, &ignore, stats_only);
-    dump_col(&mut data, timestamps, &ignore, stats_only);
+    dump_col(
+        &mut data,
+        system_configurations,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        system_object_mappings,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        system_privileges,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(&mut data, timestamps, &ignore, stats_only, consolidate);
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())
