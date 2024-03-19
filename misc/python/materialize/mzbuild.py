@@ -20,6 +20,7 @@ import base64
 import collections
 import hashlib
 import json
+import multiprocessing
 import os
 import re
 import shlex
@@ -328,6 +329,10 @@ class CargoBuild(CargoPreImage):
         if rd.sanitizer != Sanitizer.none:
             # ASan doesn't work with jemalloc
             cargo_build.append("--no-default-features")
+            # Uses more memory, so reduce the number of jobs
+            cargo_build.extend(
+                ["--jobs", str(round(multiprocessing.cpu_count() * 2 / 3))]
+            )
 
         return cargo_build
 

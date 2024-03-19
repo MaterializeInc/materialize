@@ -68,28 +68,24 @@ sanitizer = {
         "-Ctarget-feature=+tagged-globals",
         "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
-        "-Clink-arg=-fsanitize=hwaddress",
         "-Clinker=clang++",
     ],
     Sanitizer.cfi: [
         "-Zsanitizer=cfi",
         "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
-        "-Clink-arg=-fsanitize=cfi",
         "-Clinker=clang++",
     ],
     Sanitizer.thread: [
         "-Zsanitizer=thread",
         "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
-        "-Clink-arg=-fsanitize=thread",
         "-Clinker=clang++",
     ],
     Sanitizer.leak: [
         "-Zsanitizer=leak",
         "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
-        "-Clink-arg=-fsanitize=leak",
         "-Clinker=clang++",
     ],
     Sanitizer.undefined: [],
