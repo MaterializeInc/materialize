@@ -108,6 +108,7 @@ impl<'a> DirectiveArgs<'a> {
                     encoded_size_bytes: 0,
                     key_lower: vec![],
                     stats: None,
+                    ts_rewrite: None,
                 })
                 .collect(),
             runs: vec![],

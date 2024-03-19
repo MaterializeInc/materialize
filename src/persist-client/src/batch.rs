@@ -769,8 +769,8 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     isolated_runtime: Arc<IsolatedRuntime>,
-    writing_parts: VecDeque<JoinHandle<HollowBatchPart>>,
-    finished_parts: Vec<HollowBatchPart>,
+    writing_parts: VecDeque<JoinHandle<HollowBatchPart<T>>>,
+    finished_parts: Vec<HollowBatchPart<T>>,
     batch_metrics: BatchWriteMetrics,
 }
 
@@ -904,6 +904,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     encoded_size_bytes: payload_len,
                     key_lower,
                     stats,
+                    ts_rewrite: None,
                 }
             }
             .instrument(write_span),
@@ -925,7 +926,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<HollowBatchPart> {
+    pub(crate) async fn finish(self) -> Vec<HollowBatchPart<T>> {
         let mut parts = self.finished_parts;
         for handle in self.writing_parts {
             let part = handle.wait_and_assert_finished().await;

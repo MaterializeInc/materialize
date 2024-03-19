@@ -352,6 +352,7 @@ pub async fn blob_batch_part(
         encoded_size_bytes: 0,
         key_lower: vec![],
         stats: None,
+        ts_rewrite: None,
     };
     let encoded_part = EncodedPart::new(parsed.desc.clone(), &part, parsed);
     let mut out = BatchPartOutput {

@@ -551,7 +551,7 @@ where
         cfg: &CompactConfig,
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
-    ) -> Vec<(Vec<(&'a Description<T>, &'a [HollowBatchPart])>, usize)> {
+    ) -> Vec<(Vec<(&'a Description<T>, &'a [HollowBatchPart<T>])>, usize)> {
         let ordered_runs = Self::order_runs(req);
         let mut ordered_runs = ordered_runs.iter().peekable();
 
@@ -623,7 +623,7 @@ where
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
     /// ```
-    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &[HollowBatchPart])> {
+    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &[HollowBatchPart<T>])> {
         let total_number_of_runs = req.inputs.iter().map(|x| x.runs.len() + 1).sum::<usize>();
 
         let mut batch_runs: VecDeque<_> = req
@@ -652,7 +652,7 @@ where
         cfg: &'a CompactConfig,
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
-        runs: Vec<(&'a Description<T>, &'a [HollowBatchPart])>,
+        runs: Vec<(&'a Description<T>, &'a [HollowBatchPart<T>])>,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,

@@ -66,7 +66,7 @@ pub(crate) enum FetchData<T> {
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: Arc<ShardMetrics>,
         part_desc: Description<T>,
-        part: HollowBatchPart,
+        part: HollowBatchPart<T>,
     },
     Leased {
         blob: Arc<dyn Blob + Send + Sync>,
@@ -286,11 +286,11 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: &Arc<ShardMetrics>,
         desc: &Description<T>,
-        parts: impl IntoIterator<Item = &'a HollowBatchPart>,
+        parts: impl IntoIterator<Item = &'a HollowBatchPart<T>>,
     ) {
         let run = parts
             .into_iter()
-            .map(|part: &HollowBatchPart| {
+            .map(|part: &HollowBatchPart<T>| {
                 let c_part = ConsolidationPart::Queued {
                     data: FetchData::Unleased {
                         shard_id,
@@ -971,6 +971,7 @@ mod tests {
                         encoded_size_bytes,
                         key_lower: vec![],
                         stats: None,
+                        ts_rewrite: None,
                     })
                     .collect();
                 consolidator.enqueue_run(

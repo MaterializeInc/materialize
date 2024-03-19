@@ -240,13 +240,13 @@ where
     )
 }
 
-pub(crate) async fn fetch_batch_part_blob(
+pub(crate) async fn fetch_batch_part_blob<T>(
     shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
-    part: &HollowBatchPart,
+    part: &HollowBatchPart<T>,
 ) -> Result<SegmentedBytes, BlobKey> {
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
@@ -272,7 +272,7 @@ pub(crate) fn decode_batch_part_blob<T>(
     metrics: &Metrics,
     read_metrics: &ReadMetrics,
     registered_desc: Description<T>,
-    part: &HollowBatchPart,
+    part: &HollowBatchPart<T>,
     buf: &SegmentedBytes,
 ) -> EncodedPart<T>
 where
@@ -303,7 +303,7 @@ pub(crate) async fn fetch_batch_part<T>(
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     registered_desc: &Description<T>,
-    part: &HollowBatchPart,
+    part: &HollowBatchPart<T>,
 ) -> Result<EncodedPart<T>, BlobKey>
 where
     T: Timestamp + Lattice + Codec64,
@@ -364,7 +364,7 @@ pub struct LeasedBatchPart<T> {
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) metadata: SerdeLeasedBatchPartMetadata,
     pub(crate) desc: Description<T>,
-    pub(crate) part: HollowBatchPart,
+    pub(crate) part: HollowBatchPart<T>,
     /// The `SeqNo` from which this part originated; we track this value as
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
@@ -399,6 +399,11 @@ where
             stats: self.part.stats.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit,
             key_lower: std::mem::take(&mut self.part.key_lower),
+            ts_rewrite: self
+                .part
+                .ts_rewrite
+                .as_ref()
+                .map(|x| x.iter().map(T::encode).collect()),
         };
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = self.leased_seqno.take();
@@ -459,7 +464,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     read_metrics: ReadMetrics,
     buf: SegmentedBytes,
     registered_desc: Description<T>,
-    part: HollowBatchPart,
+    part: HollowBatchPart<T>,
     schemas: Schemas<K, V>,
     metadata: SerdeLeasedBatchPartMetadata,
     filter_pushdown_audit: bool,
@@ -675,7 +680,7 @@ where
 {
     pub(crate) fn new(
         registered_desc: Description<T>,
-        part: &HollowBatchPart,
+        part: &HollowBatchPart<T>,
         parsed: BlobTraceBatchPart<T>,
     ) -> Self {
         // There are two types of batches in persist:
@@ -830,6 +835,7 @@ pub struct SerdeLeasedBatchPart {
     stats: Option<LazyPartStats>,
     filter_pushdown_audit: bool,
     key_lower: Vec<u8>,
+    ts_rewrite: Option<Vec<[u8; 8]>>,
 }
 
 impl SerdeLeasedBatchPart {
@@ -864,6 +870,9 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
                 encoded_size_bytes: x.encoded_size_bytes,
                 stats: x.stats,
                 key_lower: x.key_lower,
+                ts_rewrite: x
+                    .ts_rewrite
+                    .map(|x| Antichain::from_iter(x.into_iter().map(T::decode))),
             },
             leased_seqno: x.leased_seqno,
             reader_id: x.reader_id,

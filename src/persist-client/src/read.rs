@@ -753,7 +753,7 @@ where
     fn lease_batch_part(
         &mut self,
         desc: Description<T>,
-        part: HollowBatchPart,
+        part: HollowBatchPart<T>,
         metadata: SerdeLeasedBatchPartMetadata,
     ) -> LeasedBatchPart<T> {
         LeasedBatchPart {
