@@ -236,6 +236,7 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
         c.testdrive(args=["--no-reset"], input=x)
 
     insert_thread = threading.Thread(target=do_inserts, args=(c,))
+    print("--- Start many concurrent inserts")
     insert_thread.start()
 
     # Create the source.
@@ -252,6 +253,8 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
 
     # Ensure the source eventually sees the right number of records.
     insert_thread.join()
+
+    print("--- Validate concurrent inserts")
     c.testdrive(
         args=["--no-reset"],
         input=dedent(
