@@ -154,20 +154,25 @@ def _shall_include_build_step(
 def step_outcomes_to_job_outcomes(
     step_infos: list[BuildStepOutcome],
 ) -> list[BuildJobOutcome]:
-    """This merges sharded executions of the same build and step."""
-    outcomes_by_build_and_step_key: dict[str, list[BuildStepOutcome]] = dict()
+    """
+    This merges sharded executions of the same build and step.
+    This may still produce multiple entries per step key in case of retries.
+    """
+    outcomes_by_build_and_step_key_and_retry: dict[str, list[BuildStepOutcome]] = dict()
 
     for step_info in step_infos:
-        build_and_step_key = f"{step_info.build_number}.{step_info.step_key}"
-        outcomes_of_same_step = (
-            outcomes_by_build_and_step_key.get(build_and_step_key) or []
+        group_key = (
+            f"{step_info.build_number}.{step_info.step_key}.{step_info.retry_count}"
         )
-        outcomes_of_same_step.append(step_info)
-        outcomes_by_build_and_step_key[build_and_step_key] = outcomes_of_same_step
+        outcomes_to_merge = (
+            outcomes_by_build_and_step_key_and_retry.get(group_key) or []
+        )
+        outcomes_to_merge.append(step_info)
+        outcomes_by_build_and_step_key_and_retry[group_key] = outcomes_to_merge
 
     result = []
 
-    for _, outcomes_of_same_step in outcomes_by_build_and_step_key.items():
+    for _, outcomes_of_same_step in outcomes_by_build_and_step_key_and_retry.items():
         result.append(_step_outcomes_to_job_outcome(outcomes_of_same_step))
 
     return result
@@ -192,7 +197,7 @@ def _step_outcomes_to_job_outcome(
     sum_duration_in_min = sum(durations) if len(durations) > 0 else None
     all_passed = len([1 for s in outcomes_of_same_step if not s.passed]) == 0
     all_completed = len([1 for s in outcomes_of_same_step if not s.completed]) == 0
-    max_retry_count = max([s.retry_count for s in outcomes_of_same_step])
+    max_retry_count = any_execution.retry_count
     count_shards = len(outcomes_of_same_step)
     web_url_without_job_id = any_execution.web_url_to_build()
 
