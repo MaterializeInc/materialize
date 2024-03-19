@@ -107,13 +107,11 @@ class Opt:
         metavar="MODE",
     )
 
-    explain_flags: dict[str, Any] = dict(
-        type=click.Choice([v.name.lower() for v in list(api.ExplainFlag)]),
+    explain_options: dict[str, Any] = dict(
+        type=api.ExplainOptionType(),
         multiple=True,
-        default=["arity"],  # We should have at least arity for good measure.
-        callback=lambda ctx, param, vals: [api.ExplainFlag[v.upper()] for v in vals],  # type: ignore
-        help="WITH flag to pass to the EXPLAIN command.",
-        metavar="FLAG",
+        help="WITH key=val pairs to pass to the EXPLAIN command.",
+        metavar="KEY=VAL",
     )
 
     explain_stage: dict[str, Any] = dict(
@@ -210,7 +208,7 @@ def defs(
 @click.option("--db-pass", **Opt.db_pass)
 @click.option("--db-require-ssl", **Opt.db_require_ssl)
 @click.option("--explainee-type", "-t", **Opt.explainee_type)
-@click.option("--with", "-w", "explain_flags", **Opt.explain_flags)
+@click.option("--with", "-w", "explain_options", **Opt.explain_options)
 @click.option("--stage", "-s", "explain_stages", **Opt.explain_stage)
 @click.option("--format", "-f", "explain_format", **Opt.explain_format)
 @click.option("--suffix", **Opt.explain_suffix)
@@ -226,7 +224,7 @@ def plans(
     db_pass: str | None,
     db_require_ssl: bool,
     explainee_type: api.ExplaineeType,
-    explain_flags: list[api.ExplainFlag],
+    explain_options: list[api.ExplainOption],
     explain_stages: set[api.ExplainStage],
     explain_format: api.ExplainFormat,
     suffix: str | None = None,
@@ -243,7 +241,7 @@ def plans(
             db_pass,
             db_require_ssl,
             explainee_type,
-            explain_flags,
+            explain_options,
             explain_stages,
             explain_format,
             suffix,

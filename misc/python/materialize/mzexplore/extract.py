@@ -24,8 +24,8 @@ from materialize.mzexplore.common import (
     CreateFile,
     ExplaineeType,
     ExplainFile,
-    ExplainFlag,
     ExplainFormat,
+    ExplainOption,
     ExplainStage,
     ItemType,
     info,
@@ -130,7 +130,7 @@ def plans(
     db_pass: str | None,
     db_require_ssl: bool,
     explainee_type: ExplaineeType,
-    explain_flags: list[ExplainFlag],
+    explain_options: list[ExplainOption],
     explain_stages: set[ExplainStage],
     explain_format: ExplainFormat,
     suffix: str | None = None,
@@ -146,9 +146,9 @@ def plans(
     # actually a list) into a set explicitly.
     explain_stages = set(explain_stages)
 
-    if not explain_flags:
+    if not explain_options:
         # We should have at least arity for good measure.
-        explain_flags = [ExplainFlag.ARITY]
+        explain_options = [ExplainOption(key="arity")]
 
     with closing(
         sql.Database(
@@ -201,7 +201,7 @@ def plans(
                                 db,
                                 stage,
                                 explainee,
-                                explain_flags,
+                                explain_options,
                                 explain_format,
                             )
                         except DatabaseError as e:
@@ -249,7 +249,7 @@ def plans(
                             db,
                             stage,
                             explainee,
-                            explain_flags,
+                            explain_options,
                             explain_format,
                         )
                     except DatabaseError as e:
@@ -281,7 +281,7 @@ def plans(
                                 db,
                                 stage,
                                 explainee,
-                                explain_flags,
+                                explain_options,
                                 explain_format,
                             )
                         except DatabaseError as e:
@@ -305,14 +305,14 @@ def explain(
     db: sql.Database,
     explain_stage: ExplainStage,
     explainee: str,
-    explain_flags: list[ExplainFlag],
+    explain_options: list[ExplainOption],
     explain_format: ExplainFormat,
 ) -> str:
     explain_query = "\n".join(
         line
         for line in [
             f"EXPLAIN {explain_stage}",
-            f"WITH({', '.join(map(str, explain_flags))})" if explain_flags else "",
+            f"WITH({', '.join(map(str, explain_options))})" if explain_options else "",
             f"AS {explain_format} FOR",
             explainee,
         ]
@@ -336,9 +336,9 @@ def explain(
 def explain_item(item_type: ItemType, fqname: str, replan: bool) -> str | None:
     prefix = "REPLAN" if replan else ""
     if item_type == ItemType.MATERIALIZED_VIEW:
-        return " ".join((prefix, "MATERIALIZED VIEW", fqname))
+        return " ".join((prefix, "MATERIALIZED VIEW", fqname)).strip()
     if item_type == ItemType.INDEX:
-        return " ".join((prefix, "INDEX", fqname))
+        return " ".join((prefix, "INDEX", fqname)).strip()
     else:
         return None
 
