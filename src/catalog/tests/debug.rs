@@ -121,7 +121,7 @@ async fn test_debug(
     mut openable_state3: impl OpenableDurableCatalogState,
 ) {
     // Check initial empty trace.
-    let err = openable_state1.trace().await.unwrap_err();
+    let err = openable_state1.trace_unconsolidated().await.unwrap_err();
     assert_eq!(
         err.to_string(),
         CatalogError::Durable(DurableCatalogError::Uninitialized).to_string()
@@ -145,9 +145,9 @@ async fn test_debug(
     assert_eq!(Epoch::new(2).unwrap(), epoch);
 
     // Check opened trace.
-    let trace = openable_state2.trace().await.unwrap();
+    let unconsolidated_trace = openable_state2.trace_unconsolidated().await.unwrap();
     {
-        let test_trace = HiddenUserVersionTrace(&trace);
+        let test_trace = HiddenUserVersionTrace(&unconsolidated_trace);
         let ((user_version_key, user_version_value), user_version_ts, user_version_diff) =
             test_trace.user_version().unwrap();
         assert_eq!(user_version_key.key, USER_VERSION_KEY);
@@ -161,8 +161,8 @@ async fn test_debug(
     let mut debug_state = Box::new(openable_state2).open_debug().await.unwrap();
 
     assert_eq!(
-        openable_state3.trace().await.unwrap(),
-        trace,
+        openable_state3.trace_unconsolidated().await.unwrap(),
+        unconsolidated_trace,
         "opening a debug catalog should not modify the contents"
     );
 
@@ -179,8 +179,8 @@ async fn test_debug(
         .await
         .unwrap();
     assert_eq!(prev, None);
-    let trace = openable_state3.trace().await.unwrap();
-    let mut settings = trace.settings.values;
+    let unconsolidated_trace = openable_state3.trace_unconsolidated().await.unwrap();
+    let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
     assert_eq!(settings.len(), 1);
     let ((key, value), _ts, diff) = settings.into_element();
@@ -216,8 +216,8 @@ async fn test_debug(
             value: "initial".to_string(),
         })
     );
-    let trace = openable_state3.trace().await.unwrap();
-    let mut settings = trace.settings.values;
+    let unconsolidated_trace = openable_state3.trace_unconsolidated().await.unwrap();
+    let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
     assert_eq!(settings.len(), 1);
     let ((key, value), _ts, diff) = settings.into_element();
@@ -242,8 +242,12 @@ async fn test_debug(
         })
         .await
         .unwrap();
-    let trace = openable_state3.trace().await.unwrap();
-    let mut settings = trace.settings.values;
+    let unconsolidated_trace = openable_state3.trace_unconsolidated().await.unwrap();
+    let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
+    assert_eq!(settings.len(), 0);
+
+    let consolidated_trace = openable_state3.trace_consolidated().await.unwrap();
+    let settings = consolidated_trace.settings.values;
     assert_eq!(settings.len(), 0);
 }

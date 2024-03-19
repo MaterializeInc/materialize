@@ -733,10 +733,21 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     }
 
     #[mz_ore::instrument]
-    async fn trace(&mut self) -> Result<Trace, CatalogError> {
+    async fn trace_unconsolidated(&mut self) -> Result<Trace, CatalogError> {
         self.sync_to_current_upper().await?;
         if self.is_initialized_inner() {
             let snapshot = self.snapshot_unconsolidated().await;
+            Ok(Trace::from_snapshot(snapshot))
+        } else {
+            Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
+        }
+    }
+
+    #[mz_ore::instrument]
+    async fn trace_consolidated(&mut self) -> Result<Trace, CatalogError> {
+        self.sync_to_current_upper().await?;
+        if self.is_initialized_inner() {
+            let snapshot = self.current_snapshot().await?;
             Ok(Trace::from_snapshot(snapshot))
         } else {
             Err(CatalogError::Durable(DurableCatalogError::Uninitialized))

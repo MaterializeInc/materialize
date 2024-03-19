@@ -147,7 +147,10 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError>;
 
     /// Generate an unconsolidated [`Trace`] of catalog contents.
-    async fn trace(&mut self) -> Result<Trace, CatalogError>;
+    async fn trace_unconsolidated(&mut self) -> Result<Trace, CatalogError>;
+
+    /// Generate a consolidated [`Trace`] of catalog contents.
+    async fn trace_consolidated(&mut self) -> Result<Trace, CatalogError>;
 
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self: Box<Self>);
