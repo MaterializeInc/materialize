@@ -123,7 +123,7 @@ pub(crate) enum Mode {
 
 /// Enum representing a potentially fenced epoch.
 #[derive(Debug)]
-enum PreOpenEpoch {
+enum FenceableEpoch {
     /// The current epoch, if one exists, has not been fenced.
     Unfenced(Option<Epoch>),
     /// The current epoch has been fenced.
@@ -133,17 +133,28 @@ enum PreOpenEpoch {
     },
 }
 
-impl PreOpenEpoch {
+impl FenceableEpoch {
     /// Returns the current epoch if it is not fenced, otherwise returns an error.
     fn validate(&self) -> Result<Option<Epoch>, DurableCatalogError> {
         match self {
-            PreOpenEpoch::Unfenced(epoch) => Ok(epoch.clone()),
-            PreOpenEpoch::Fenced {
+            FenceableEpoch::Unfenced(epoch) => Ok(epoch.clone()),
+            FenceableEpoch::Fenced {
                 current_epoch,
                 fence_epoch,
             } => Err(DurableCatalogError::Fence(format!(
                 "current catalog epoch {current_epoch} fenced by new catalog epoch {fence_epoch}",
             ))),
+        }
+    }
+
+    /// Returns the current epoch.
+    fn epoch(&self) -> Option<Epoch> {
+        match self {
+            FenceableEpoch::Unfenced(epoch) => epoch.clone(),
+            FenceableEpoch::Fenced {
+                current_epoch,
+                fence_epoch: _,
+            } => Some(current_epoch.clone()),
         }
     }
 }
@@ -173,7 +184,7 @@ pub struct UnopenedPersistCatalogState {
     pub(crate) upper: Timestamp,
     /// The epoch of the catalog, if one exists. This information is also included in `snapshot`,
     /// but it's useful to have quick access to this field without parsing through all updates.
-    epoch: PreOpenEpoch,
+    epoch: FenceableEpoch,
     /// The config collection of the catalog. This information is also included in `snapshot`,
     /// but it's useful to have quick access to these fields without parsing through all updates.
     configs: BTreeMap<String, u64>,
@@ -267,14 +278,14 @@ impl UnopenedPersistCatalogState {
             .listen(Antichain::from_elem(as_of))
             .await
             .expect("invalid usage");
-        let mut epoch = PreOpenEpoch::Unfenced(None);
+        let mut epoch = FenceableEpoch::Unfenced(None);
         let mut configs = BTreeMap::new();
         for StateUpdate { kind, ts: _, diff } in &snapshot {
             soft_assert_eq_or_log!(*diff, 1, "snapshot should be consolidated");
             if let Ok(kind) = kind.clone().try_into() {
                 match kind {
                     StateUpdateKind::Epoch(current_epoch) => {
-                        epoch = PreOpenEpoch::Unfenced(Some(current_epoch));
+                        epoch = FenceableEpoch::Unfenced(Some(current_epoch));
                     }
                     StateUpdateKind::Config(key, value) => {
                         configs.insert(key.key, value.value);
@@ -356,6 +367,7 @@ impl UnopenedPersistCatalogState {
         }
         let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
         fence_updates.push((StateUpdateKind::Epoch(current_epoch), 1));
+        let current_epoch = FenceableEpoch::Unfenced(Some(current_epoch));
         debug!(
             ?self.upper,
             ?prev_epoch,
@@ -363,7 +375,7 @@ impl UnopenedPersistCatalogState {
             ?current_epoch,
             "fencing previous catalogs"
         );
-        self.epoch = PreOpenEpoch::Unfenced(Some(current_epoch));
+        self.epoch = current_epoch;
         if matches!(mode, Mode::Writable) {
             self.compare_and_append(fence_updates).await?;
         }
@@ -394,7 +406,7 @@ impl UnopenedPersistCatalogState {
             persist_client: self.persist_client,
             shard_id: self.shard_id,
             upper: self.upper,
-            epoch: current_epoch,
+            epoch: self.epoch,
             // Initialize empty in-memory state.
             snapshot: Vec::new(),
             audit_logs: LargeCollectionStartupCache::new_open(),
@@ -479,9 +491,9 @@ impl UnopenedPersistCatalogState {
             if let Ok(kind) = kind.clone().try_into() {
                 match (kind, diff) {
                     (StateUpdateKind::Epoch(epoch), 1) => match self.epoch {
-                        PreOpenEpoch::Unfenced(Some(current_epoch)) => {
+                        FenceableEpoch::Unfenced(Some(current_epoch)) => {
                             if epoch > current_epoch {
-                                self.epoch = PreOpenEpoch::Fenced {
+                                self.epoch = FenceableEpoch::Fenced {
                                     current_epoch,
                                     fence_epoch: epoch,
                                 };
@@ -490,10 +502,10 @@ impl UnopenedPersistCatalogState {
                                 panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
                             }
                         }
-                        PreOpenEpoch::Unfenced(None) => {
-                            self.epoch = PreOpenEpoch::Unfenced(Some(epoch));
+                        FenceableEpoch::Unfenced(None) => {
+                            self.epoch = FenceableEpoch::Unfenced(Some(epoch));
                         }
-                        PreOpenEpoch::Fenced { .. } => {}
+                        FenceableEpoch::Fenced { .. } => {}
                     },
                     (StateUpdateKind::Epoch(_), -1) => {
                         // Nothing to do, we're about to get fenced.
@@ -828,7 +840,7 @@ pub struct PersistCatalogState {
     /// The current upper of the persist shard.
     upper: Timestamp,
     /// The epoch of this catalog.
-    epoch: Epoch,
+    epoch: FenceableEpoch,
     /// A cache of the entire catalog state.
     ///
     /// We use a tuple instead of [`StateUpdate`] to make consolidation easier.
@@ -922,22 +934,14 @@ impl PersistCatalogState {
         snapshot
     }
 
+    /// Listen and apply all updates currently in the catalog.
+    ///
+    /// Returns an error if this instance has been fenced out.
     #[mz_ore::instrument(level = "debug")]
     async fn sync_to_current_upper(&mut self) -> Result<(), CatalogError> {
         let upper = self.current_upper().await;
-        if upper != self.upper {
-            if self.is_read_only() {
-                self.sync(upper).await?;
-            } else {
-                // non-read-only catalogs do not know how to deal with other writers.
-                return Err(DurableCatalogError::Fence(format!(
-                    "current catalog upper {:?} fenced by new catalog upper {:?}",
-                    self.upper, upper
-                ))
-                .into());
-            }
-        }
-
+        self.sync(upper).await?;
+        self.epoch.validate()?;
         Ok(())
     }
 
@@ -988,15 +992,24 @@ impl PersistCatalogState {
                 StateUpdateKind::AuditLog(key, ()) => {
                     self.audit_logs.push((key, diff));
                 }
-                StateUpdateKind::Epoch(epoch) => {
-                    if epoch > self.epoch {
-                        soft_assert_eq_or_log!(diff, 1);
-                        return Err(DurableCatalogError::Fence(format!(
-                            "current catalog epoch {} fenced by new catalog epoch {}",
-                            self.epoch, epoch
-                        )));
+                StateUpdateKind::Epoch(epoch) => match self.epoch {
+                    FenceableEpoch::Unfenced(Some(current_epoch)) => {
+                        if epoch > current_epoch {
+                            soft_assert_eq_or_log!(diff, 1);
+                            self.epoch = FenceableEpoch::Fenced {
+                                current_epoch,
+                                fence_epoch: epoch,
+                            };
+                            self.epoch.validate()?;
+                        } else if epoch < current_epoch {
+                            panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
+                        }
                     }
-                }
+                    FenceableEpoch::Unfenced(None) => {
+                        self.epoch = FenceableEpoch::Unfenced(Some(epoch));
+                    }
+                    FenceableEpoch::Fenced { .. } => {}
+                },
                 StateUpdateKind::StorageUsage(key, ()) => {
                     self.storage_usage_events.push((key, diff));
                 }
@@ -1160,6 +1173,8 @@ impl PersistCatalogState {
 impl ReadOnlyDurableCatalogState for PersistCatalogState {
     fn epoch(&self) -> Epoch {
         self.epoch
+            .epoch()
+            .expect("opened catalog state must have an epoch")
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1315,17 +1330,8 @@ impl DurableCatalogState for PersistCatalogState {
         if self.is_read_only() {
             return Ok(());
         }
-
-        let upper = self.current_upper().await;
-        if upper == self.upper {
-            Ok(())
-        } else {
-            Err(DurableCatalogError::Fence(format!(
-                "current catalog upper {:?} fenced by new catalog upper {:?}",
-                self.upper, upper
-            ))
-            .into())
-        }
+        self.sync_to_current_upper().await?;
+        Ok(())
     }
 
     // TODO(jkosh44) For most modifications we delegate to transactions to avoid duplicate code.
@@ -1721,6 +1727,9 @@ impl UnopenedPersistCatalogState {
             .map(|((k, v), _, _)| (T::update(k, v), -1))
             .collect();
         updates.push((T::update(key.clone(), value.clone()), 1));
+        // We must fence out all other catalogs since we are writing.
+        let fence_updates = self.increment_epoch()?;
+        updates.extend(fence_updates);
         self.compare_and_append(updates).await?;
         Ok(prev_value)
     }
@@ -1756,7 +1765,7 @@ impl UnopenedPersistCatalogState {
         let snapshot = self.current_snapshot().await?;
         let trace = Trace::from_snapshot(snapshot);
         let collection_trace = T::collection_trace(trace);
-        let retractions = collection_trace
+        let mut retractions: Vec<_> = collection_trace
             .values
             .into_iter()
             .filter(|((k, _), _, diff)| {
@@ -1765,6 +1774,9 @@ impl UnopenedPersistCatalogState {
             })
             .map(|((k, v), _, _)| (T::update(k, v), -1))
             .collect();
+        // We must fence out all other catalogs since we are writing.
+        let fence_updates = self.increment_epoch()?;
+        retractions.extend(fence_updates);
         self.compare_and_append(retractions).await?;
         Ok(())
     }
@@ -1783,6 +1795,23 @@ impl UnopenedPersistCatalogState {
             .iter()
             .cloned()
             .map(|update| update.try_into().expect("kind decoding error")))
+    }
+
+    /// Increment `self.epoch` and return the updates needed to make this change durable.
+    ///
+    /// The caller is expected to compare and append these updates promptly.
+    fn increment_epoch(&mut self) -> Result<[(StateUpdateKind, Diff); 2], DurableCatalogError> {
+        let current_epoch = self
+            .epoch
+            .validate()?
+            .expect("cannot edit/delete from unopened catalog");
+        let next_epoch =
+            Epoch::new(current_epoch.get() + 1).expect("non-zero epoch plus 1 is always non-zero");
+        self.epoch = FenceableEpoch::Unfenced(Some(next_epoch));
+        Ok([
+            (StateUpdateKind::Epoch(current_epoch), -1),
+            (StateUpdateKind::Epoch(next_epoch), 1),
+        ])
     }
 }
 

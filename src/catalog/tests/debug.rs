@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use mz_catalog::durable::debug::{CollectionTrace, ConfigCollection, SettingCollection, Trace};
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
@@ -102,23 +104,16 @@ async fn test_persist_debug() {
     let organization_id = Uuid::new_v4();
     let persist_openable_state1 =
         test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state3 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
 
-    test_debug(
-        persist_openable_state1,
-        persist_openable_state2,
-        persist_openable_state3,
-    )
+    test_debug(persist_openable_state1, move || {
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).boxed()
+    })
     .await;
 }
 
-async fn test_debug(
+async fn test_debug<'a, T: OpenableDurableCatalogState>(
     mut openable_state1: impl OpenableDurableCatalogState,
-    mut openable_state2: impl OpenableDurableCatalogState,
-    mut openable_state3: impl OpenableDurableCatalogState,
+    openable_state_generator: impl Fn() -> BoxFuture<'a, T>,
 ) {
     // Check initial empty trace.
     let err = openable_state1.trace_unconsolidated().await.unwrap_err();
@@ -141,6 +136,7 @@ async fn test_debug(
         .unwrap();
 
     // Check epoch
+    let mut openable_state2 = openable_state_generator().await;
     let epoch = openable_state2.epoch().await.unwrap();
     assert_eq!(Epoch::new(2).unwrap(), epoch);
 
@@ -160,8 +156,9 @@ async fn test_debug(
 
     let mut debug_state = Box::new(openable_state2).open_debug().await.unwrap();
 
+    let mut openable_state_reader = openable_state_generator().await;
     assert_eq!(
-        openable_state3.trace_unconsolidated().await.unwrap(),
+        openable_state_reader.trace_unconsolidated().await.unwrap(),
         unconsolidated_trace,
         "opening a debug catalog should not modify the contents"
     );
@@ -179,7 +176,8 @@ async fn test_debug(
         .await
         .unwrap();
     assert_eq!(prev, None);
-    let unconsolidated_trace = openable_state3.trace_unconsolidated().await.unwrap();
+    let mut openable_state_reader = openable_state_generator().await;
+    let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
     assert_eq!(settings.len(), 1);
@@ -216,7 +214,8 @@ async fn test_debug(
             value: "initial".to_string(),
         })
     );
-    let unconsolidated_trace = openable_state3.trace_unconsolidated().await.unwrap();
+    let mut openable_state_reader = openable_state_generator().await;
+    let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
     assert_eq!(settings.len(), 1);
@@ -242,12 +241,13 @@ async fn test_debug(
         })
         .await
         .unwrap();
-    let unconsolidated_trace = openable_state3.trace_unconsolidated().await.unwrap();
+    let mut openable_state_reader = openable_state_generator().await;
+    let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
     assert_eq!(settings.len(), 0);
 
-    let consolidated_trace = openable_state3.trace_consolidated().await.unwrap();
+    let consolidated_trace = openable_state_reader.trace_consolidated().await.unwrap();
     let settings = consolidated_trace.settings.values;
     assert_eq!(settings.len(), 0);
 }
