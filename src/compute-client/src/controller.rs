@@ -164,12 +164,6 @@ pub struct ComputeController<T> {
     maintenance_ticker: tokio::time::Interval,
     /// Whether maintenance work was scheduled.
     maintenance_scheduled: bool,
-
-    /// Whether to aggressively downgrade read holds for sink dataflows.
-    ///
-    /// This flag exists to derisk the rollout of the aggressive downgrading approach.
-    /// TODO(teskje): Remove this after a couple weeks.
-    enable_aggressive_readhold_downgrades: bool,
 }
 
 impl<T: Timestamp> ComputeController<T> {
@@ -201,7 +195,6 @@ impl<T: Timestamp> ComputeController<T> {
             introspection_tx,
             maintenance_ticker,
             maintenance_scheduled: false,
-            enable_aggressive_readhold_downgrades: true,
         }
     }
 
@@ -285,16 +278,6 @@ impl<T: Timestamp> ComputeController<T> {
         self.default_arrangement_exert_proportionality = value;
     }
 
-    /// TODO(#25239): Add documentation.
-    pub fn enable_aggressive_readhold_downgrades(&self) -> bool {
-        self.enable_aggressive_readhold_downgrades
-    }
-
-    /// TODO(#25239): Add documentation.
-    pub fn set_enable_aggressive_readhold_downgrades(&mut self, value: bool) {
-        self.enable_aggressive_readhold_downgrades = value;
-    }
-
     /// Returns the read and write frontiers for each collection.
     pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
         let collections = self.instances.values().flat_map(|i| i.collections_iter());
@@ -344,7 +327,6 @@ where
                 self.metrics.for_instance(id),
                 self.response_tx.clone(),
                 self.introspection_tx.clone(),
-                self.enable_aggressive_readhold_downgrades,
             ),
         );
 

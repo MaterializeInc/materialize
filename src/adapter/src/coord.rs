@@ -1395,7 +1395,6 @@ impl Coordinator {
         let scheduling_config = flags::orchestrator_scheduling_config(system_config);
         let merge_effort = system_config.default_idle_arrangement_merge_effort();
         let exert_prop = system_config.default_arrangement_exert_proportionality();
-        let aggressive_downgrades = system_config.enable_compute_aggressive_readhold_downgrades();
         self.controller.compute.update_configuration(compute_config);
         self.controller.storage.update_parameters(storage_config);
         self.controller
@@ -1404,8 +1403,6 @@ impl Coordinator {
             .set_default_idle_arrangement_merge_effort(merge_effort);
         self.controller
             .set_default_arrangement_exert_proportionality(exert_prop);
-        self.controller
-            .set_enable_compute_aggressive_readhold_downgrades(aggressive_downgrades);
 
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();
@@ -2679,18 +2676,9 @@ impl Coordinator {
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
     ) {
-        let export_ids = if self
-            .controller
-            .compute
-            .enable_aggressive_readhold_downgrades()
-        {
-            // We must only install read policies for indexes, not for sinks.
-            // Sinks are write-only compute collections that don't have read policies.
-            dataflow.exported_index_ids().collect()
-        } else {
-            // If aggressive downgrading is disabled, all compute collections expect a read policy.
-            dataflow.export_ids().collect()
-        };
+        // We must only install read policies for indexes, not for sinks.
+        // Sinks are write-only compute collections that don't have read policies.
+        let export_ids = dataflow.exported_index_ids().collect();
 
         self.controller
             .active_compute()

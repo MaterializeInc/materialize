@@ -728,19 +728,6 @@ impl Coordinator {
                 Some(sink) => sink,
             };
 
-            if !self
-                .controller
-                .compute
-                .enable_aggressive_readhold_downgrades()
-            {
-                // If aggressive downgrades are disabled, compute sinks have read policies that we
-                // must drop.
-                if !self.drop_compute_read_policy(&sink_id) {
-                    tracing::error!("Instructed to drop a compute sink that isn't one");
-                    continue;
-                }
-            }
-
             by_cluster
                 .entry(sink.cluster_id())
                 .or_default()
@@ -836,19 +823,6 @@ impl Coordinator {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();
         for (cluster_id, id) in mviews {
-            if !self
-                .controller
-                .compute
-                .enable_aggressive_readhold_downgrades()
-            {
-                // If aggressive downgrades are disabled, MV dataflows have read policies that we
-                // must drop.
-                if !self.drop_compute_read_policy(&id) {
-                    tracing::error!("Instructed to drop a materialized view that isn't one");
-                    continue;
-                }
-            }
-
             by_cluster.entry(cluster_id).or_default().push(id);
             source_ids.push(id);
         }
