@@ -90,18 +90,21 @@ def print_stats(
     print(
         f"Number of builds with job success: {number_of_builds_with_successful_step} ({100 * success_prop:.1f}%)"
     )
-    print(
-        f"Min duration with success: {dfs_with_success['duration_in_min'].min():.2f} min"
-    )
-    print(
-        f"Max duration with success: {dfs_with_success['duration_in_min'].max():.2f} min"
-    )
-    print(
-        f"Mean duration with success: {dfs_with_success['duration_in_min'].mean():.2f} min"
-    )
-    print(
-        f"Median duration with success: {dfs_with_success['duration_in_min'].median():.2f} min"
-    )
+
+    has_successful_builds = len(dfs_with_success.index) > 0
+    if has_successful_builds:
+        print(
+            f"Min duration with success: {dfs_with_success['duration_in_min'].min():.2f} min"
+        )
+        print(
+            f"Max duration with success: {dfs_with_success['duration_in_min'].max():.2f} min"
+        )
+        print(
+            f"Mean duration with success: {dfs_with_success['duration_in_min'].mean():.2f} min"
+        )
+        print(
+            f"Median duration with success: {dfs_with_success['duration_in_min'].median():.2f} min"
+        )
 
 
 def main(
@@ -154,7 +157,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--build-step-state",
         action="append",
-        default=BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
+        default=[],
         choices=BUILDKITE_BUILD_STEP_STATES,
     )
     parser.add_argument(
@@ -165,6 +168,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    selected_build_states = args.build_state
+    selected_build_step_states = (
+        args.build_step_state or BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES
+    )
+
     main(
         args.pipeline,
         [
@@ -174,7 +182,7 @@ if __name__ == "__main__":
         args.fetch,
         args.max_fetches,
         args.branch if args.branch != "*" else None,
-        args.build_state,
-        args.build_step_state,
+        selected_build_states,
+        selected_build_step_states,
         args.output_type,
     )
