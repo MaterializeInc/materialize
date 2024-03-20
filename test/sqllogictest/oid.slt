@@ -199,6 +199,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 1194  log10
 1199  age
 1215  obj_description
+1216  col_description
 1217  date_trunc
 1218  date_trunc
 1231  _numeric
