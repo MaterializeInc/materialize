@@ -292,7 +292,7 @@ where
         read_metrics.part_goodbytes.inc_by(u64::cast_from(
             parsed.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
         ));
-        EncodedPart::new(registered_desc, part, parsed)
+        EncodedPart::new(read_metrics.clone(), registered_desc, part, parsed)
     })
 }
 
@@ -309,7 +309,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     let buf =
-        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, &part).await?;
+        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
     let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
     Ok(part)
 }
@@ -584,9 +584,11 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
 /// logic.
 #[derive(Debug, Clone)]
 pub(crate) struct EncodedPart<T> {
+    metrics: ReadMetrics,
     registered_desc: Description<T>,
     part: Arc<BlobTraceBatchPart<T>>,
     needs_truncation: bool,
+    ts_rewrite: Option<Antichain<T>>,
 }
 
 impl<K, V, T, D> FetchedPart<K, V, T, D>
@@ -679,6 +681,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     pub(crate) fn new(
+        metrics: ReadMetrics,
         registered_desc: Description<T>,
         part: &HollowBatchPart<T>,
         parsed: BlobTraceBatchPart<T>,
@@ -705,13 +708,19 @@ where
                 inline_desc,
                 registered_desc
             );
-            assert!(
-                PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
-                "key={} inline={:?} registered={:?}",
-                part.key,
-                inline_desc,
-                registered_desc
-            );
+            if part.ts_rewrite.is_none() {
+                // The ts rewrite feature allows us to advance the registered
+                // upper of a batch that's already been staged (the inline
+                // upper), so if it's been used, then there's no useful
+                // invariant that we can assert here.
+                assert!(
+                    PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
+                    "key={} inline={:?} registered={:?}",
+                    part.key,
+                    inline_desc,
+                    registered_desc
+                );
+            }
             // As mentioned above, batches that needs truncation will always have a
             // since of the minimum timestamp. Technically we could truncate any
             // batch where the since is less_than the output_desc's lower, but we're
@@ -733,9 +742,11 @@ where
         }
 
         EncodedPart {
+            metrics,
             registered_desc,
             part: Arc::new(parsed),
             needs_truncation,
+            ts_rewrite: part.ts_rewrite.clone(),
         }
     }
 
@@ -762,7 +773,7 @@ impl Cursor {
     /// A cursor points to a particular update in the backing part data.
     /// If the update it points to is not valid, advance it to the next valid update
     /// if there is one, and return the pointed-to data.
-    pub fn peek<'a, T: Timestamp + Codec64>(
+    pub fn peek<'a, T: Timestamp + Lattice + Codec64>(
         &mut self,
         encoded: &'a EncodedPart<T>,
     ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
@@ -776,7 +787,16 @@ impl Cursor {
                 }
             };
 
-            let t = T::decode(t);
+            let mut t = T::decode(t);
+            // We assert on the write side that at most one of rewrite or
+            // truncation is used, so it shouldn't matter which is run first.
+            //
+            // That said, my (Dan's) intuition here is that rewrite goes first,
+            // though I don't particularly have a justification for it.
+            if let Some(ts_rewrite) = encoded.ts_rewrite.as_ref() {
+                t.advance_by(ts_rewrite.borrow());
+                encoded.metrics.ts_rewrite.inc();
+            }
 
             // This filtering is really subtle, see the comment above for
             // what's going on here.
@@ -794,7 +814,7 @@ impl Cursor {
     }
 
     /// Similar to peek, but advance the cursor just past the end of the most recent update.
-    pub fn pop<'a, T: Timestamp + Codec64>(
+    pub fn pop<'a, T: Timestamp + Lattice + Codec64>(
         &mut self,
         part: &'a EncodedPart<T>,
     ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {

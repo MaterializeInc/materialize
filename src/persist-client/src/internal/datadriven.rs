@@ -246,6 +246,7 @@ mod tests {
                                 machine_dd::register_leased_reader(&mut state, args).await
                             }
                             "restore-blob" => machine_dd::restore_blob(&mut state, args).await,
+                            "rewrite-ts" => machine_dd::rewrite_ts(&mut state, args).await,
                             "set-batch-parts-size" => {
                                 machine_dd::set_batch_parts_size(&mut state, args).await
                             }

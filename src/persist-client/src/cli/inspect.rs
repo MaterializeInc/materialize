@@ -354,7 +354,12 @@ pub async fn blob_batch_part(
         stats: None,
         ts_rewrite: None,
     };
-    let encoded_part = EncodedPart::new(parsed.desc.clone(), &part, parsed);
+    let encoded_part = EncodedPart::new(
+        metrics.read.snapshot.clone(),
+        parsed.desc.clone(),
+        &part,
+        parsed,
+    );
     let mut out = BatchPartOutput {
         desc,
         updates: Vec::new(),
@@ -401,7 +406,12 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
                 .expect("part exists");
             let parsed = BlobTraceBatchPart::<u64>::decode(&buf, &state_versions.metrics.columnar)
                 .expect("decodable");
-            let encoded_part = EncodedPart::new(batch.desc.clone(), part, parsed);
+            let encoded_part = EncodedPart::new(
+                state_versions.metrics.read.snapshot.clone(),
+                batch.desc.clone(),
+                part,
+                parsed,
+            );
             let mut cursor = Cursor::default();
             while let Some((k, v, mut t, d)) = cursor.pop(&encoded_part) {
                 t.advance_by(as_of);

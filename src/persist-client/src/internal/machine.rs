@@ -1636,7 +1636,7 @@ pub mod datadriven {
             .expect("unknown batch")
             .clone();
         let truncated_desc = Description::new(lower, upper, batch.desc.since().clone());
-        let () = validate_truncate_batch(&batch.desc, &truncated_desc)?;
+        let () = validate_truncate_batch(&batch, &truncated_desc, false)?;
         batch.desc = truncated_desc;
         datadriven.batches.insert(output.to_owned(), batch.clone());
         Ok(format!("parts={} len={}\n", batch.parts.len(), batch.len))
@@ -1751,6 +1751,21 @@ pub mod datadriven {
             writeln!(&mut out, "{key}");
         }
         Ok(out)
+    }
+
+    pub async fn rewrite_ts(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let input = args.expect_str("input");
+        let ts_rewrite = args.expect_antichain("frontier");
+        let upper = args.expect_antichain("upper");
+
+        let batch = datadriven.batches.get_mut(input).expect("unknown batch");
+        let () = batch
+            .rewrite_ts(&ts_rewrite, upper)
+            .map_err(|err| anyhow!("invalid rewrite: {}", err))?;
+        Ok("ok\n".into())
     }
 
     pub async fn gc(
@@ -2009,7 +2024,7 @@ pub mod datadriven {
         let () = writer
             .compare_and_append_batch(batch_refs.as_mut_slice(), expected_upper, new_upper)
             .await?
-            .expect("upper match");
+            .map_err(|err| anyhow!("upper mismatch: {:?}", err))?;
 
         writer.expire().await;
 

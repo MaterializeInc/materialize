@@ -294,6 +294,9 @@ impl StateVersions {
                     .batch_part_count
                     .set(u64::cast_from(size_metrics.batch_part_count));
                 shard_metrics
+                    .rewrite_part_count
+                    .set(u64::cast_from(size_metrics.rewrite_part_count));
+                shard_metrics
                     .update_count
                     .set(u64::cast_from(size_metrics.num_updates));
                 shard_metrics

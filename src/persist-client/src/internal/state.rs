@@ -183,7 +183,13 @@ pub struct HollowBatchPart<T> {
     /// Aggregate statistics about data contained in this part.
     #[serde(serialize_with = "serialize_part_stats")]
     pub stats: Option<LazyPartStats>,
-    /// WIP
+    /// A frontier to which timestamps in this part are advanced on read, if
+    /// set.
+    ///
+    /// A value of `Some([T::minimum()])` is functionally the same as `None`,
+    /// but we maintain the distinction between the two for some internal sanity
+    /// checking of invariants as well as metrics. If this ever becomes an
+    /// issue, everything still works with this as just `Antichain<T>`.
     pub ts_rewrite: Option<Antichain<T>>,
 }
 
@@ -332,6 +338,68 @@ impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
         }
 
         None
+    }
+}
+
+impl<T: Timestamp> HollowBatch<T> {
+    pub(crate) fn rewrite_ts(
+        &mut self,
+        frontier: &Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<(), String> {
+        if !PartialOrder::less_than(frontier, &new_upper) {
+            return Err(format!(
+                "rewrite frontier {:?} !< rewrite upper {:?}",
+                frontier.elements(),
+                new_upper.elements(),
+            ));
+        }
+        if PartialOrder::less_than(&new_upper, self.desc.upper()) {
+            return Err(format!(
+                "rewrite upper {:?} < batch upper {:?}",
+                new_upper.elements(),
+                self.desc.upper().elements(),
+            ));
+        }
+
+        // The following are things that it seems like we could support, but
+        // initially we don't because we don't have a use case for them.
+        if PartialOrder::less_than(frontier, self.desc.lower()) {
+            return Err(format!(
+                "rewrite frontier {:?} < batch lower {:?}",
+                frontier.elements(),
+                self.desc.lower().elements(),
+            ));
+        }
+        if self.desc.since() != &Antichain::from_elem(T::minimum()) {
+            return Err(format!(
+                "batch since {:?} != minimum antichain {:?}",
+                self.desc.since().elements(),
+                &[T::minimum()],
+            ));
+        }
+        for part in self.parts.iter() {
+            let Some(ts_rewrite) = part.ts_rewrite.as_ref() else {
+                continue;
+            };
+            if PartialOrder::less_than(frontier, ts_rewrite) {
+                return Err(format!(
+                    "rewrite frontier {:?} < batch rewrite {:?}",
+                    frontier.elements(),
+                    ts_rewrite.elements(),
+                ));
+            }
+        }
+
+        self.desc = Description::new(
+            self.desc.lower().clone(),
+            new_upper,
+            self.desc.since().clone(),
+        );
+        for part in &mut self.parts {
+            part.ts_rewrite = Some(frontier.clone());
+        }
+        Ok(())
     }
 }
 
@@ -1257,6 +1325,9 @@ where
                 let mut batch_size = 0;
                 for x in x.parts.iter() {
                     batch_size += x.encoded_size_bytes;
+                    if x.ts_rewrite.is_some() {
+                        ret.rewrite_part_count += 1;
+                    }
                 }
                 ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);
                 ret.state_batches_bytes += batch_size;
@@ -1515,6 +1586,7 @@ impl<T: Serialize> Serialize for State<T> {
 pub struct StateSizeMetrics {
     pub hollow_batch_count: usize,
     pub batch_part_count: usize,
+    pub rewrite_part_count: usize,
     pub num_updates: usize,
     pub largest_batch_bytes: usize,
     pub state_batches_bytes: usize,
