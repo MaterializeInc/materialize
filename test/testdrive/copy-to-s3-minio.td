@@ -113,6 +113,13 @@ contains:MAX FILE SIZE cannot be less than 16MB
     FORMAT = 'csv'
   );
 
+> COPY (SELECT * FROM generate_series(1, 1000000)) TO 's3://copytos3/test/4'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'csv'
+  );
+
 $ set-from-sql var=key-1
 SELECT 'test/1' || TO_CHAR(now(), 'YYYY-MM-DD')
 

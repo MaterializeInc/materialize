@@ -105,4 +105,11 @@ contains:MAX FILE SIZE cannot be less than 16MB
     FORMAT = 'csv'
   );
 
+> COPY (SELECT generate_series(1, 1000000)) TO 's3://${arg.s3-prefix}/4/'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'csv'
+  );
+
 > DROP CLUSTER c1 CASCADE;

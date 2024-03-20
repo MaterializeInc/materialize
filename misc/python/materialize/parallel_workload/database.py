@@ -1041,7 +1041,6 @@ class Database:
         exe.execute(
             "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
         )
-        print("Created connections")
 
         exe.execute("CREATE SECRET pgpass AS 'postgres'")
         exe.execute(
@@ -1052,6 +1051,13 @@ class Database:
         exe.execute(
             "CREATE CONNECTION mysql_conn FOR MYSQL HOST 'mysql', USER root, PASSWORD SECRET mypass"
         )
+
+        exe.execute("CREATE SECRET IF NOT EXISTS minio AS 'minioadmin'")
+        exe.execute(
+            "CREATE CONNECTION IF NOT EXISTS aws_conn TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)"
+        )
+
+        print("Created connections")
 
         for relation in self:
             relation.create(exe)

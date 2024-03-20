@@ -10,10 +10,6 @@
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use anyhow::bail;
-use aws_credential_types::Credentials;
-use aws_types::region::Region;
-use aws_types::sdk_config::SdkConfig;
-use aws_types::sdk_config::SharedCredentialsProvider;
 use std::str;
 
 pub async fn run_verify_data(

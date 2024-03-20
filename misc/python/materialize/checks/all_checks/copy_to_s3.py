@@ -10,23 +10,24 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 @externally_idempotent(False)
 class CopyToS3(Check):
     """Basic check on copy to s3"""
 
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.92.0")
+
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
                 """
-                $[version>=8000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_aws_connection = true
-                ALTER SYSTEM SET enable_connection_validation_syntax = true
-
                 > CREATE SECRET minio AS 'minioadmin'
-                > CREATE CONNECTION aws_conn TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio
-                > COPY (SELECT 1000) TO 's3://copytos3/test' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv');
+                > CREATE CONNECTION aws_conn1 TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)
+                > COPY (SELECT 1, 2, 3) TO 's3://copytos3/key1' WITH (AWS CONNECTION = aws_conn1, FORMAT = 'csv');
                 """
             )
         )
@@ -36,8 +37,15 @@ class CopyToS3(Check):
             Testdrive(dedent(s))
             for s in [
                 """
+                > CREATE CONNECTION aws_conn2 TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)
+                > COPY (SELECT 11, 12, 13) TO 's3://copytos3/key11' WITH (AWS CONNECTION = aws_conn1, FORMAT = 'csv');
+                > COPY (SELECT 11, 12, 13) TO 's3://copytos3/key12' WITH (AWS CONNECTION = aws_conn2, FORMAT = 'csv');
                 """,
                 """
+                > CREATE CONNECTION aws_conn3 TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)
+                > COPY (SELECT 21, 22, 23) TO 's3://copytos3/key21' WITH (AWS CONNECTION = aws_conn1, FORMAT = 'csv');
+                > COPY (SELECT 21, 22, 23) TO 's3://copytos3/key22' WITH (AWS CONNECTION = aws_conn2, FORMAT = 'csv');
+                > COPY (SELECT 21, 22, 23) TO 's3://copytos3/key23' WITH (AWS CONNECTION = aws_conn3, FORMAT = 'csv');
                 """,
             ]
         ]
@@ -46,6 +54,23 @@ class CopyToS3(Check):
         return Testdrive(
             dedent(
                 """
-            """
+                $ s3-verify-data bucket=copytos3 key=key1
+                1,2,3
+
+                $ s3-verify-data bucket=copytos3 key=key11
+                11,12,13
+
+                $ s3-verify-data bucket=copytos3 key=key12
+                11,12,13
+
+                $ s3-verify-data bucket=copytos3 key=key21
+                21,22,23
+
+                $ s3-verify-data bucket=copytos3 key=key22
+                21,22,23
+
+                $ s3-verify-data bucket=copytos3 key=key23
+                21,22,23
+                """
             )
         )

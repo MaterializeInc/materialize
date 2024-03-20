@@ -98,7 +98,7 @@ SERVICES = [
         volumes_extra=["secrets:/share/secrets"],
     ),
     TestdriveService(
-        default_timeout="5s",
+        default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
         materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
         no_reset=True,
         seed=1,
