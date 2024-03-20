@@ -22,7 +22,12 @@ ci_unimportant_heading "Upload log artifacts"
 # Run before potential "run down" in coverage
 docker ps --all --quiet | xargs --no-run-if-empty docker inspect > docker-inspect.log
 # services.log might already exist and contain logs from before composition was downed
-run logs --no-color >> services.log
+time=0
+if [ -f services.log ]; then
+    # Don't capture log lines we received already
+    time=$(date +%s -r services.log)
+fi
+run logs --no-color --since "$time" >> services.log
 # shellcheck disable=SC2024
 sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
 netstat -ant > netstat-ant.log
