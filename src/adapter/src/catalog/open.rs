@@ -42,7 +42,7 @@ use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::{is_cluster_size_v2, ClusterId};
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_pgrepr::oid::INVALID_OID;
@@ -94,6 +94,8 @@ pub struct BuiltinMigrationMetadata {
     pub migrated_system_object_mappings: BTreeMap<GlobalId, SystemObjectMapping>,
     pub user_drop_ops: Vec<GlobalId>,
     pub user_create_ops: Vec<(GlobalId, SchemaId, u32, String)>,
+    // Builtin objects that were removed from Materialize.
+    pub deleted_system_objects: BTreeSet<SystemObjectDescription>,
 }
 
 impl BuiltinMigrationMetadata {
@@ -108,6 +110,7 @@ impl BuiltinMigrationMetadata {
             migrated_system_object_mappings: BTreeMap::new(),
             user_drop_ops: Vec::new(),
             user_create_ops: Vec::new(),
+            deleted_system_objects: BTreeSet::new(),
         }
     }
 }
@@ -388,7 +391,7 @@ impl Catalog {
             Catalog::load_builtin_types(&mut state, &mut txn)?;
 
             let persisted_builtin_ids: BTreeMap<_, _> = txn
-                .get_system_items()
+                .get_system_object_mappings()
                 .map(|mapping| (mapping.description, mapping.unique_identifier))
                 .collect();
             let AllocatedBuiltinSystemIds {
@@ -1095,7 +1098,7 @@ impl Catalog {
     #[mz_ore::instrument]
     fn load_builtin_types(state: &mut CatalogState, txn: &mut Transaction) -> Result<(), Error> {
         let persisted_builtin_ids: BTreeMap<_, _> = txn
-            .get_system_items()
+            .get_system_object_mappings()
             .map(|mapping| (mapping.description, mapping.unique_identifier))
             .collect();
 
@@ -1349,6 +1352,20 @@ impl Catalog {
         migration_metadata.all_drop_ops.reverse();
         migration_metadata.user_drop_ops.reverse();
 
+        // Look up system objects that exist on disk but not in the known builtins.
+        let builtins: HashSet<_> = BUILTINS::iter()
+            .map(|builtin| SystemObjectDescription {
+                schema_name: builtin.schema().to_string(),
+                object_type: builtin.catalog_item_type(),
+                object_name: builtin.name().to_string(),
+            })
+            .collect();
+        migration_metadata.deleted_system_objects = txn
+            .get_system_object_mappings()
+            .filter(|system_item| !builtins.contains(&system_item.description))
+            .map(|system_item| system_item.description)
+            .collect();
+
         Ok(migration_metadata)
     }
 
@@ -1440,6 +1457,9 @@ impl Catalog {
                     )
                 }),
         )?;
+        txn.remove_system_object_mappings(std::mem::take(
+            &mut migration_metadata.deleted_system_objects,
+        ))?;
 
         Ok(())
     }
