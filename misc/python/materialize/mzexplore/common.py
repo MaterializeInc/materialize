@@ -277,6 +277,71 @@ def explain_diff(base: ExplainFile, diff_suffix: str) -> ExplainFile:
     return replace(base, explainee_type=ExplaineeType.REPLAN_ITEM, suffix=diff_suffix)
 
 
+@dataclass(frozen=True)
+class ClonedItem:
+    database: str
+    schema: str
+    name: str
+    id: str
+    item_type: ItemType
+
+    def name_old(self) -> str:
+        from materialize.mzexplore import sql
+
+        return f"{sql.identifier(self.name, True)}"
+
+    def name_new(self) -> str:
+        from materialize.mzexplore import sql
+
+        if self.item_type == ItemType.INDEX:
+            name = f"{self.name}_{self.id}"
+        else:
+            name = f"{self.database}_{self.schema}_{self.name}_{self.id}"
+
+        return f"{sql.identifier(name, True)}"
+
+    def fqname_old(self) -> str:
+        from materialize.mzexplore import sql
+
+        item_database = sql.identifier(self.database, True)
+        item_schema = sql.identifier(self.schema, True)
+        item_name = sql.identifier(self.name, True)
+        return f"{item_database}.{item_schema}.{item_name}"
+
+    def fqname_new(self, database: str, schema: str) -> str:
+        return f"{database}.{schema}.{self.name_new()}"
+
+    def create_name_old(self) -> str:
+        if self.item_type == ItemType.INDEX:
+            return self.name_old()
+        else:
+            return self.fqname_old()
+
+    def create_name_new(self, database: str, schema: str) -> str:
+        if self.item_type == ItemType.INDEX:
+            return self.name_new()
+        else:
+            return self.fqname_new(database, schema)
+
+    def aliased_ref_old(self) -> str:
+        return f"{self.fqname_old()} AS"
+
+    def aliased_ref_new(self, database: str, schema: str) -> str:
+        return f"{self.fqname_new(database, schema)} AS"
+
+    def index_on_ref_old(self) -> str:
+        return f"ON {self.fqname_old()}"
+
+    def index_on_ref_new(self, database: str, schema: str) -> str:
+        return f"ON {self.fqname_new(database, schema)}"
+
+    def simple_ref_old(self) -> str:
+        return self.fqname_old()
+
+    def simple_ref_new(self, database: str, schema: str) -> str:
+        return f"{self.fqname_new(database, schema)} AS {self.name_old()}"
+
+
 def resource_path(name: str) -> Path:
     # NOTE: we have to do this cast because pyright is not comfortable with the
     # Traversable protocol.
