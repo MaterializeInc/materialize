@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use futures::{Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
@@ -791,7 +791,7 @@ impl SessionClient {
         let mut typ = None;
         let application_name = session.application_name();
         let name_hint = ApplicationNameHint::from_str(application_name);
-        let (tx, mut rx) = oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         let conn_id = session.conn_id().clone();
         self.inner().send({
             let cmd = f(tx, session);
@@ -816,11 +816,17 @@ impl SessionClient {
             cmd
         });
 
+        // SPOOKY ZONE! See the doc comment on `SessionTerminateGuard` for why this exists.
+        //
+        // tl;dr this guard prevents a race where a `Session` is returned on `rx` but never placed
+        // back in `self` because the Future returned by this function is concurrently dropped.
+        let mut guard = SessionTerminateGuard { client: self, rx };
+
         let mut cancel_future = pin::pin!(cancel_future);
         let mut cancelled = false;
         loop {
             tokio::select! {
-                res = &mut rx => {
+                res = &mut guard => {
                     let res = res.expect("sender dropped");
                     let status = if res.result.is_ok() {
                         "success"
@@ -828,18 +834,19 @@ impl SessionClient {
                         "error"
                     };
                     if let Some(typ) = typ {
-                        self.inner()
+                        guard.client
+                            .inner()
                             .metrics
                             .commands
                             .with_label_values(&[typ, status, name_hint.as_str()])
                             .inc();
                     }
-                    self.session = Some(res.session);
+                    guard.client.session = Some(res.session);
                     return res.result
                 },
                 _err = &mut cancel_future, if !cancelled => {
                     cancelled = true;
-                    self.inner().send(Command::PrivilegedCancelRequest {
+                    guard.client.inner().send(Command::PrivilegedCancelRequest {
                         conn_id: conn_id.clone(),
                     });
                 }
@@ -1035,5 +1042,64 @@ impl RecordFirstRowStream {
                 .observe(self.execute_started.elapsed().as_secs_f64());
         }
         msg
+    }
+}
+
+/// ~~SPOOKY ZONE~~
+/// 
+/// There is a small race that can occur with [`tokio`], a [`SessionClient`], and the `Coordinator`
+/// that requires this Drop guard.
+/// 
+/// 1. A [`SessionClient`] can execute a command, sending it's owned [`Session`] to the
+///    Coordinator.
+/// 2. While processing this request, the user closes their connection to Materialize.
+/// 3. The Coordinator (which is run concurrently on a different thread and in a different task)
+///    finishes processing our request and is able to successfully send a response over the
+///    provided [`oneshot::Sender`].
+/// 4. [`tokio`] realizes the connection is closed and Drops the task which is awaiting the result
+///    from the [`oneshot::Receiver`].
+/// 
+///    !!Problem!! The Coordinator successfully responded to the request, so it doesn't need to
+///                terminate the [`Session`], but at the same time Future that is responsible for
+///                listening to the Receiver and putting the [`Session`] back into the
+///                [`SessionClient`] doesn't get polled, so the [`SessionClient`] never gets
+///                updated. Now neither the [`SessionClient`] nor the Coordinator believe they need
+///                (or can) terminate the [`Session`] so it effectively gets "leaked".
+///
+///    !!Solution!! This guard holds a mutable reference to the [`SessionClient`] and the
+///                 [`oneshot::Receiver`] that will return our [`Session`]. This way if we're ever
+///                 dropped mid-processing we can check for this race and re-assign the [`Session`]
+///                 to the [`SessionClient`] so it can properly terminate the session as part of
+///                 its Drop impl.
+pub struct SessionTerminateGuard<'a, T> {
+    client: &'a mut SessionClient,
+    rx: oneshot::Receiver<Response<T>>,
+}
+
+impl<'a, T> Future for SessionTerminateGuard<'a, T> {
+    type Output = Result<Response<T>, tokio::sync::oneshot::error::RecvError>;
+
+    fn poll(
+        mut self: pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        self.rx.poll_unpin(cx)
+    }
+}
+
+impl<'a, T> Drop for SessionTerminateGuard<'a, T> {
+    fn drop(&mut self) {
+        let SessionTerminateGuard { client, rx } = self;
+
+        // We need to explicitly close the channel to make sure if the Coordinator tries sending
+        // a response, it will fail. If the sending fails the Coordinator will then terminate the
+        // session for us.
+        rx.close();
+
+        // Now that the channel is guaranteed close, lets check if we ever received a message and
+        // if so give the SessionClient back the Session so it can properly terminate it.
+        if let Ok(msg) = rx.try_recv() {
+            client.session = Some(msg.session);
+        }
     }
 }
