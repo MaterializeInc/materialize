@@ -87,7 +87,7 @@ use crate::persist_handles::SnapshotStatsAsOf;
 use crate::rehydration::RehydratingStorageClient;
 mod collection_mgmt;
 mod collection_status;
-mod command_wals;
+pub mod command_wals;
 mod persist_handles;
 mod rehydration;
 mod statistics;
