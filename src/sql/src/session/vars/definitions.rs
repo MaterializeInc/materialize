@@ -2061,13 +2061,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_compute_aggressive_readhold_downgrades,
-        desc: "let the compute controller aggressively downgrade read holds for sink dataflows",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_session_timelines,
         desc: "strong session serializable isolation levels",
         default: false,

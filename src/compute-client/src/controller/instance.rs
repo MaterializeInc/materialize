@@ -184,11 +184,6 @@ pub(super) struct Instance<T> {
     replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
-    /// Whether to aggressively downgrade read holds for sink dataflows.
-    ///
-    /// This flag exists to derisk the rollout of the aggressive downgrading approach.
-    /// TODO(teskje): Remove this after a couple weeks.
-    enable_aggressive_readhold_downgrades: bool,
 }
 
 impl<T: Timestamp> Instance<T> {
@@ -246,7 +241,7 @@ impl<T: Timestamp> Instance<T> {
         let mut state =
             CollectionState::new(as_of.clone(), storage_dependencies, compute_dependencies);
         // If the collection is write-only, clear its read policy to reflect that.
-        if write_only && self.enable_aggressive_readhold_downgrades {
+        if write_only {
             state.read_policy = None;
         }
 
@@ -545,7 +540,6 @@ where
         metrics: InstanceMetrics,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        enable_aggressive_readhold_downgrades: bool,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -571,7 +565,6 @@ where
             envd_epoch,
             replica_epochs: Default::default(),
             metrics,
-            enable_aggressive_readhold_downgrades,
         };
 
         instance.send(ComputeCommand::CreateTimely {
