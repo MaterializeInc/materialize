@@ -160,6 +160,8 @@ macro_rules! for_collections {
         match $usage {
             Usage::Storage => {
                 $macro!(storage::METADATA_COLLECTION);
+                $macro!(storage::PERSIST_TXNS_SHARD);
+                $macro!(storage::command_wals::SHARD_FINALIZATION);
             }
         }
     };

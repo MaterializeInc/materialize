@@ -30,7 +30,7 @@ use crate::{
 };
 
 pub(super) type ProtoShardId = String;
-pub(super) static SHARD_FINALIZATION: TypedCollection<ProtoShardId, ()> =
+pub static SHARD_FINALIZATION: TypedCollection<ProtoShardId, ()> =
     TypedCollection::new("storage-shards-to-finalize");
 
 impl<T> Controller<T>
