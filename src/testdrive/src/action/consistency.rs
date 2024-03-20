@@ -111,7 +111,8 @@ async fn check_coordinator(state: &State) -> Result<(), anyhow::Error> {
         state.materialize_internal_http_addr
     ))
     .await?;
-    if !response.status().is_success() {
+    // We allow NOT_FOUND to support upgrade tests where this endpoint doesn't yet exist.
+    if !response.status().is_success() && response.status() != StatusCode::NOT_FOUND {
         bail!("Coordinator failed to dump state: {:?}", response);
     }
 
