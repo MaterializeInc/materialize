@@ -72,7 +72,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             .filter_map(|p| {
                 config
                     .responsible_for(p)
-                    .then(|| SnapshotProducer::new(p, key_value.clone()))
+                    .then(|| TransactionalSnapshotProducer::new(p, key_value.clone()))
             })
             .collect();
 
@@ -91,9 +91,10 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             return;
         }
 
-        let local_snapshot_size =
-            (u64::cast_from(local_partitions.len())) * key_value.keys * key_value.snapshot_rounds
-                / key_value.partitions;
+        let local_snapshot_size = (u64::cast_from(local_partitions.len()))
+            * key_value.keys
+            * key_value.transactional_snapshot_rounds()
+            / key_value.partitions;
 
         // Re-usable buffers.
         let mut value_buffer: Vec<u8> = vec![0; usize::cast_from(key_value.value_size)];
@@ -101,12 +102,14 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
         // snapshotting
         let mut upper_offset = if snapshotting {
+            let snapshot_rounds = key_value.transactional_snapshot_rounds();
+
             if stats_worker {
                 stats_output
                     .give(
                         &stats_cap,
                         ProgressStatisticsUpdate::SteadyState {
-                            offset_known: key_value.snapshot_rounds,
+                            offset_known: snapshot_rounds,
                             offset_committed: 0,
                         },
                     )
@@ -114,7 +117,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             };
 
             // Downgrade to the snapshot frontier.
-            progress_cap.downgrade(&MzOffset::from(key_value.snapshot_rounds));
+            progress_cap.downgrade(&MzOffset::from(snapshot_rounds));
 
             let mut emitted = 0;
             stats_output
@@ -145,8 +148,8 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 tokio::task::yield_now().await;
             }
 
-            cap.downgrade(&MzOffset::from(key_value.snapshot_rounds));
-            key_value.snapshot_rounds
+            cap.downgrade(&MzOffset::from(snapshot_rounds));
+            snapshot_rounds
         } else {
             cap.downgrade(&resume_offset);
             progress_cap.downgrade(&resume_offset);
@@ -162,7 +165,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             })
             .collect();
         if !local_partitions.is_empty()
-            && (key_value.tick_interval.is_some() || key_value.quick_rounds > 0)
+            && (key_value.tick_interval.is_some() || !key_value.transactional_snapshot)
         {
             let mut interval = key_value.tick_interval.map(tokio::time::interval);
 
@@ -251,7 +254,7 @@ fn create_consistent_rng(source_seed: u64, offset: u64, partition: u64) -> StdRn
 }
 
 /// A struct that produces batches of data for the snapshotting phase.
-struct SnapshotProducer {
+struct TransactionalSnapshotProducer {
     /// The key iterator for the partition.
     pi: PartitionKeyIterator,
     /// The batch size.
@@ -272,12 +275,13 @@ struct SnapshotProducer {
     include_offset: bool,
 }
 
-impl SnapshotProducer {
+impl TransactionalSnapshotProducer {
     fn new(partition: u64, key_value: KeyValueLoadGenerator) -> Self {
+        let snapshot_rounds = key_value.transactional_snapshot_rounds();
+
         let KeyValueLoadGenerator {
             partitions,
             keys,
-            snapshot_rounds,
             batch_size,
             seed,
             include_offset,
@@ -289,7 +293,7 @@ impl SnapshotProducer {
             partition, partitions, keys, // The first start key is the partition.
             partition,
         );
-        SnapshotProducer {
+        TransactionalSnapshotProducer {
             pi,
             batch_size,
             produced_batches: 0,
@@ -364,7 +368,7 @@ struct UpdateProducer {
     next_offset: u64,
     /// The source-level seed for the rng.
     seed: u64,
-    /// The number of offsets we expect to be part of the `quick_rounds`.
+    /// The number of offsets we expect to be part of the `transactional_snapshot`.
     expected_quick_offsets: u64,
     /// Whether to include the offset or not.
     include_offset: bool,
@@ -372,11 +376,11 @@ struct UpdateProducer {
 
 impl UpdateProducer {
     fn new(partition: u64, next_offset: u64, key_value: KeyValueLoadGenerator) -> Self {
+        let snapshot_rounds = key_value.transactional_snapshot_rounds();
+        let quick_rounds = key_value.non_transactional_snapshot_rounds();
         let KeyValueLoadGenerator {
             partitions,
             keys,
-            snapshot_rounds,
-            quick_rounds,
             batch_size,
             seed,
             include_offset,
@@ -516,7 +520,7 @@ mod test {
             KeyValueLoadGenerator {
                 keys: 126,
                 snapshot_rounds: 2,
-                quick_rounds: 0,
+                transactional_snapshot: true,
                 value_size: 1234,
                 partitions: 3,
                 tick_interval: None,
@@ -536,7 +540,7 @@ mod test {
             KeyValueLoadGenerator {
                 keys: 126,
                 snapshot_rounds: 2,
-                quick_rounds: 0,
+                transactional_snapshot: true,
                 value_size: 1234,
                 partitions: 3,
                 tick_interval: None,

@@ -485,13 +485,12 @@ pub struct KeyValueLoadGenerator {
     pub keys: u64,
     /// The number of rounds to emit values for each key in the snapshot.
     /// This lets users scale the snapshot size independent of the keyspace.
-    pub snapshot_rounds: u64,
-    /// The number of rounds to emit values for each key, after the snapshot, before
-    /// respecting the `tick_interval`.
     ///
-    /// This lets us quickly produce updates, as opposed to a single-value per key during
-    /// snapshotting.
-    pub quick_rounds: u64,
+    /// Please use `transactional_snapshot` and `non_transactional_snapshot_rounds`.
+    pub snapshot_rounds: u64,
+    /// When false, this lets us quickly produce updates, as opposed to a single-value
+    /// per key during a transactional snapshot
+    pub transactional_snapshot: bool,
     /// The number of random bytes for each value.
     pub value_size: u64,
     /// The number of partitions. The keyspace is spread evenly across the partitions.
@@ -508,12 +507,32 @@ pub struct KeyValueLoadGenerator {
     pub include_offset: Option<String>,
 }
 
+impl KeyValueLoadGenerator {
+    /// The number of transactional snapshot rounds.
+    pub fn transactional_snapshot_rounds(&self) -> u64 {
+        if self.transactional_snapshot {
+            self.snapshot_rounds
+        } else {
+            0
+        }
+    }
+
+    /// The number of non-transactional snapshot rounds.
+    pub fn non_transactional_snapshot_rounds(&self) -> u64 {
+        if self.transactional_snapshot {
+            0
+        } else {
+            self.snapshot_rounds
+        }
+    }
+}
+
 impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
     fn into_proto(&self) -> ProtoKeyValueLoadGenerator {
         ProtoKeyValueLoadGenerator {
             keys: self.keys,
             snapshot_rounds: self.snapshot_rounds,
-            quick_rounds: self.quick_rounds,
+            transactional_snapshot: self.transactional_snapshot,
             value_size: self.value_size,
             partitions: self.partitions,
             tick_interval: self.tick_interval.into_proto(),
@@ -527,7 +546,7 @@ impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
         Ok(Self {
             keys: proto.keys,
             snapshot_rounds: proto.snapshot_rounds,
-            quick_rounds: proto.quick_rounds,
+            transactional_snapshot: proto.transactional_snapshot,
             value_size: proto.value_size,
             partitions: proto.partitions,
             tick_interval: proto.tick_interval.into_rust()?,

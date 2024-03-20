@@ -35,13 +35,13 @@ _src_name_  | The name for the source.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
 **SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
 **MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
-**KEYS**              | Valid for [`KEY VALUE` generator](#key-value).
-**SNAPSHOT ROUNDS**   | Valid for [`KEY VALUE` generator](#key-value).
-**QUICK ROUNDS**      | Valid for [`KEY VALUE` generator](#key-value).
-**VALUE SIZE**        | Valid for [`KEY VALUE` generator](#key-value).
-**SEED**              | Valid for [`KEY VALUE` generator](#key-value).
-**PARTITIONS**        | Valid for [`KEY VALUE` generator](#key-value).
-**BATCH SIZE**        | Valid for [`KEY VALUE` generator](#key-value).
+**KEYS**                    | Valid for [`KEY VALUE` generator](#key-value).
+**SNAPSHOT ROUNDS**         | Valid for [`KEY VALUE` generator](#key-value).
+**TRANSACTIONAL SNAPSHOT**  | Valid for [`KEY VALUE` generator](#key-value).
+**VALUE SIZE**              | Valid for [`KEY VALUE` generator](#key-value).
+**SEED**                    | Valid for [`KEY VALUE` generator](#key-value).
+**PARTITIONS**              | Valid for [`KEY VALUE` generator](#key-value).
+**BATCH SIZE**              | Valid for [`KEY VALUE` generator](#key-value).
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 
@@ -198,8 +198,7 @@ The following options are supported:
 - `SNAPSHOT ROUNDS`: The number of rounds of data (1 update per key in each round) to produce
     as the source starts up. Can be used to scale the size of the snapshot without changing the number
     of keys.
-- `QUICK ROUNDS`: The number of rounds of data (1 update per key in each round) to produce after the snapshot, but
-    before considering `TICK INTERVAL`.
+- `TRANSACTIONAL SNAPSHOT`: Whether or not to emit the snapshot as a singular transaction.
 - `VALUE SIZE`: The number of bytes in each `value`.
 - `TICK INTERVAL`: The _minimum interval_ (as an [`interval`]) to produce batches of data (within each partition) after snapshotting.
 - `SEED`: A per-source [`uint8`] seed for seeding the random data.

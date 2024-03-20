@@ -207,7 +207,7 @@ fn ast_rewrite_create_source_loadgen_options_0_92_0(
                             TickInterval,
                             Keys,
                             SnapshotRounds,
-                            QuickRounds,
+                            TransactionalSnapshot,
                             ValueSize,
                             Seed,
                             Partitions,

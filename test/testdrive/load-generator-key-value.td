@@ -34,8 +34,8 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
   FROM LOAD GENERATOR KEY VALUE (
     KEYS 16,
     PARTITIONS 4,
-    SNAPSHOT ROUNDS 1,
-    QUICK ROUNDS 3,
+    SNAPSHOT ROUNDS 3,
+    TRANSACTIONAL SNAPSHOT false,
     SEED 123,
     VALUE SIZE 10,
     BATCH SIZE 2
@@ -56,9 +56,8 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 3   4
 
 # 48 values produced (3 snapshot rounds with 16 keys).
-# For the `QUICK ROUNDS` source, we produce a singular snapshot (16)
-# + 48 values from the quick rounds. We expect 1 snapshot offset,
-# and 6 quick round offsets (based on the batch size)
+# For the `TRANSACTIONAL SNAPSHOT = false` source, we produce 48 updates from the 3 rounds.
+# We expect and 6 quick round offsets (based on the batch size)
 > SELECT
     s.name,
     u.offset_known,
@@ -71,7 +70,7 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_no_update', 'up_quick')
 up_no_update 3 3 48 48 48 16
-up_quick     7 7 16 16 64 16
+up_quick     6 6  0  0 48 16
 
 $ set-from-sql var=pre-rehydration
 SELECT
@@ -118,7 +117,7 @@ true
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_no_update', 'up_quick')
 up_no_update 3 3 48 48 48 16
-up_quick     7 7 16 16 64 16
+up_quick     6 6  0  0 48 16
 
 > DROP SOURCE up_no_update
 > DROP SOURCE up_quick
@@ -192,7 +191,7 @@ true
     KEYS 16,
     PARTITIONS 4,
     SNAPSHOT ROUNDS 3,
-    QUICK ROUNDS 2,
+    TRANSACTIONAL SNAPSHOT false,
     SEED 123,
     VALUE SIZE 10,
     BATCH SIZE 2
@@ -200,10 +199,10 @@ true
   ENVELOPE NONE
 
 > SELECT partition, count(key) FROM kv_none GROUP BY partition
-0   20
-1   20
-2   20
-3   20
+0   12
+1   12
+2   12
+3   12
 
 # Test INCLUDE OFFSET
 > CREATE SOURCE kv_offset
@@ -212,7 +211,7 @@ true
     KEYS 16,
     PARTITIONS 4,
     SNAPSHOT ROUNDS 3,
-    QUICK ROUNDS 2,
+    TRANSACTIONAL SNAPSHOT false,
     SEED 123,
     VALUE SIZE 10,
     BATCH SIZE 2
@@ -221,10 +220,10 @@ true
   ENVELOPE NONE
 
 > SELECT partition, MAX("offset") FROM kv_offset GROUP BY partition
-0   6
-1   6
-2   6
-3   6
+0   5
+1   5
+2   5
+3   5
 
 > CREATE SOURCE kv_offset2
   IN CLUSTER lg_cluster
@@ -232,7 +231,7 @@ true
     KEYS 16,
     PARTITIONS 4,
     SNAPSHOT ROUNDS 3,
-    QUICK ROUNDS 2,
+    TRANSACTIONAL SNAPSHOT false,
     SEED 123,
     VALUE SIZE 10,
     BATCH SIZE 2
@@ -241,7 +240,7 @@ true
   ENVELOPE NONE
 
 > SELECT partition, MAX(something_else) FROM kv_offset2 GROUP BY partition
-0   6
-1   6
-2   6
-3   6
+0   5
+1   5
+2   5
+3   5

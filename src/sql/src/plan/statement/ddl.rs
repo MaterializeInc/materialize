@@ -1669,7 +1669,7 @@ generate_extracted_config!(
     (MaxCardinality, u64),
     (Keys, u64),
     (SnapshotRounds, u64),
-    (QuickRounds, u64),
+    (TransactionalSnapshot, bool),
     (ValueSize, u64),
     (Seed, u64),
     (Partitions, u64),
@@ -1695,7 +1695,7 @@ impl LoadGeneratorOptionExtracted {
                 TickInterval,
                 Keys,
                 SnapshotRounds,
-                QuickRounds,
+                TransactionalSnapshot,
                 ValueSize,
                 Seed,
                 Partitions,
@@ -1788,7 +1788,7 @@ pub(crate) fn load_generator_ast_to_generator(
             let LoadGeneratorOptionExtracted {
                 keys,
                 snapshot_rounds,
-                quick_rounds,
+                transactional_snapshot,
                 value_size,
                 tick_interval,
                 seed,
@@ -1812,7 +1812,8 @@ pub(crate) fn load_generator_ast_to_generator(
                 keys: keys.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires KEYS"))?,
                 snapshot_rounds: snapshot_rounds
                     .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires SNAPSHOT ROUNDS"))?,
-                quick_rounds: quick_rounds.unwrap_or(0),
+                // Defaults to true.
+                transactional_snapshot: transactional_snapshot.unwrap_or(true),
                 value_size: value_size
                     .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires VALUE SIZE"))?,
                 partitions: partitions
@@ -1844,6 +1845,10 @@ pub(crate) fn load_generator_ast_to_generator(
             // We can lift it later.
             if (lgkv.keys / lgkv.partitions) % lgkv.batch_size != 0 {
                 sql_bail!("PARTITIONS * BATCH SIZE must be a divisor of KEYS")
+            }
+
+            if lgkv.snapshot_rounds == 0 {
+                sql_bail!("SNAPSHOT ROUNDS must be larger than 0")
             }
 
             LoadGenerator::KeyValue(lgkv)

@@ -191,7 +191,7 @@ load_generator_option ::=
     | 'MAX CARDINALITY' max_cardinality
     | 'KEYS' keys
     | 'SNAPSHOT ROUNDS' snapshot_rounds
-    | 'QUICK ROUNDS' quick_rounds
+    | 'TRANSACTIONAL SNAPSHOT' transactional_snapshot
     | 'VALUE SIZE' value_size
     | 'SEED' seed
     | 'PARTITIONS' partitions

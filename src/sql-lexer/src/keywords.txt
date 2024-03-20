@@ -320,7 +320,6 @@ Protocol
 Publication
 Pushdown
 Query
-Quick
 Quote
 Raise
 Range
