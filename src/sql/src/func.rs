@@ -2276,7 +2276,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 "(SELECT description FROM pg_description
                   WHERE objoid = $1
                     AND classoid = (
-                      SELECT oid FROM pg_class WHERE relname = $2 AND relnamespace = '{}')
+                      SELECT oid FROM pg_class WHERE relname = $2 AND relnamespace = {})
                     AND objsubid = 0)",
                 oid::SCHEMA_PG_CATALOG_OID
             )) => String, 1215;
