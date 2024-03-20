@@ -53,7 +53,8 @@ use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
-    IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
+    GenericSourceConnection, IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope,
+    SourceExport, Timeline,
 };
 use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
@@ -623,16 +624,25 @@ impl Source {
     pub fn user_controllable_persist_shard_count(&self) -> i64 {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => {
-                // Ingestions with subsources only use persist shards for their
-                // subsources (i.e. not the primary source's persist shard);
-                // those without subsources use 1 (their primary source's
-                // persist shard).
-                std::cmp::max(1, i64::try_from(ingestion.source_exports.len().saturating_sub(1)).expect("fewer than i64::MAX persist shards"))
+                match &ingestion.desc.connection {
+                    GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_) => 0,
+                    GenericSourceConnection::LoadGenerator(lg) => {
+                        if lg.load_generator.views().is_empty() {
+                            // Load generator writes directly to its persist shard
+                            1
+                        } else {
+                            // Load generator has 1 persist shard per output,
+                            // which will be accounted for by `SourceExport`.
+                            0
+                        }
+                    }
+                    GenericSourceConnection::Kafka(_) => 1,
+                }
             }
             //  DataSourceDesc::Source represents subsources, which are
             //  accounted for in their primary source's ingestion. However,
             //  maybe we can fix this.
-            DataSourceDesc::SourceExport { .. } => 0,
+            DataSourceDesc::SourceExport { .. } => 1,
             DataSourceDesc::Webhook { .. } => 1,
             //  DataSourceDesc::Source represents subsources, which are accounted for in their
             //  primary source's ingestion.
