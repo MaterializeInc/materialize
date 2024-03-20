@@ -90,18 +90,21 @@ def print_stats(
     print(
         f"Number of builds with job success: {number_of_builds_with_successful_step} ({100 * success_prop:.1f}%)"
     )
-    print(
-        f"Min duration with success: {dfs_with_success['duration_in_min'].min():.2f} min"
-    )
-    print(
-        f"Max duration with success: {dfs_with_success['duration_in_min'].max():.2f} min"
-    )
-    print(
-        f"Mean duration with success: {dfs_with_success['duration_in_min'].mean():.2f} min"
-    )
-    print(
-        f"Median duration with success: {dfs_with_success['duration_in_min'].median():.2f} min"
-    )
+
+    has_successful_builds = len(dfs_with_success.index) > 0
+    if has_successful_builds:
+        print(
+            f"Min duration with success: {dfs_with_success['duration_in_min'].min():.2f} min"
+        )
+        print(
+            f"Max duration with success: {dfs_with_success['duration_in_min'].max():.2f} min"
+        )
+        print(
+            f"Mean duration with success: {dfs_with_success['duration_in_min'].mean():.2f} min"
+        )
+        print(
+            f"Median duration with success: {dfs_with_success['duration_in_min'].median():.2f} min"
+        )
 
 
 def main(
