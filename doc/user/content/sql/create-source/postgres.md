@@ -221,9 +221,6 @@ array type for each of the types):
 <li><code>numeric</code></li>
 <li><code>numrange</code></li>
 <li><code>oid</code></li>
-<li><code>regclass</code></li>
-<li><code>regproc</code></li>
-<li><code>regtype</code></li>
 <li><code>text</code></li>
 <li><code>time</code></li>
 <li><code>timestamp</code></li>
