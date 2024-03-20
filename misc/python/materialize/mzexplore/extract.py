@@ -357,19 +357,54 @@ def explain(
 
 def explain_item(item_type: ItemType, fqname: str, replan: bool) -> str | None:
     prefix = "REPLAN" if replan else ""
-    if item_type == ItemType.MATERIALIZED_VIEW:
-        return " ".join((prefix, "MATERIALIZED VIEW", fqname)).strip()
-    if item_type == ItemType.INDEX:
-        return " ".join((prefix, "INDEX", fqname)).strip()
+    if item_type in {ItemType.MATERIALIZED_VIEW, ItemType.VIEW, ItemType.INDEX}:
+        return " ".join((prefix, item_type.sql(), fqname)).strip()
     else:
         return None
 
 
 def supported_explain_stages(item_type: ItemType, optimize: bool) -> set[ExplainStage]:
-    if item_type in {ItemType.MATERIALIZED_VIEW, ItemType.INDEX}:
+    if item_type == ItemType.MATERIALIZED_VIEW:
         if optimize:
-            return set(ExplainStage)
+            return {
+                ExplainStage.RAW_PLAN,
+                ExplainStage.DECORRELATED_PLAN,
+                ExplainStage.LOCAL_PLAN,
+                ExplainStage.OPTIMIZED_PLAN,
+                ExplainStage.PHYSICAL_PLAN,
+                ExplainStage.OPTIMIZER_TRACE,
+            }
         else:
-            return set([ExplainStage.OPTIMIZED_PLAN, ExplainStage.PHYSICAL_PLAN])
+            return {
+                ExplainStage.RAW_PLAN,
+                ExplainStage.LOCAL_PLAN,
+                ExplainStage.OPTIMIZED_PLAN,
+                ExplainStage.PHYSICAL_PLAN,
+            }
+    elif item_type == ItemType.VIEW:
+        if optimize:
+            return {
+                ExplainStage.RAW_PLAN,
+                ExplainStage.DECORRELATED_PLAN,
+                ExplainStage.LOCAL_PLAN,
+                ExplainStage.OPTIMIZER_TRACE,
+            }
+        else:
+            return {
+                ExplainStage.RAW_PLAN,
+                ExplainStage.LOCAL_PLAN,
+            }
+    elif item_type == ItemType.INDEX:
+        if optimize:
+            return {
+                ExplainStage.OPTIMIZED_PLAN,
+                ExplainStage.PHYSICAL_PLAN,
+                ExplainStage.OPTIMIZER_TRACE,
+            }
+        else:
+            return {
+                ExplainStage.OPTIMIZED_PLAN,
+                ExplainStage.PHYSICAL_PLAN,
+            }
     else:
         return set()
