@@ -106,8 +106,8 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// rather than as [`ComputeParameters`].
     UpdateConfiguration(ComputeParameters),
 
-    /// `CreateDataflow` instructs the replica to create and start maintaining a dataflow according
-    /// to the given [`DataflowDescription`].
+    /// `CreateDataflow` instructs the replica to create a dataflow according to the given
+    /// [`DataflowDescription`].
     ///
     /// The [`DataflowDescription`] must have the following properties:
     ///
@@ -135,14 +135,28 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// replica must produce [`SubscribeResponse`]s that report the progress and results of the
     /// subscribes.
     ///
+    /// The replica may create the dataflow in a suspended state and defer starting the computation
+    /// until it receives a corresponding `Schedule` command. Thus, to ensure dataflow execution,
+    /// the compute controller should eventually send a `Schedule` command for each sent
+    /// `CreateDataflow` command.
+    ///
     /// [`objects_to_build`]: DataflowDescription::objects_to_build
     /// [`source_imports`]: DataflowDescription::source_imports
     /// [`index_imports`]: DataflowDescription::index_imports
     /// [`as_of`]: DataflowDescription::as_of
     /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
-    /// [Initialization Stage]: super#initialization-stage
     CreateDataflow(DataflowDescription<FlatPlan<T>, CollectionMetadata, T>),
+
+    /// `Schedule` allows the replica to start computation for a compute collection.
+    ///
+    /// It is invalid to send a `Schedule` command that references a collection that was not
+    /// created by a corresponding `CreateDataflow` command before. Doing so may cause the replica
+    /// to exhibit undefined behavior.
+    ///
+    /// It is also invalid to send a `Schedule` command that references a collection that has,
+    /// through an `AllowCompaction` command, been allowed to compact to the empty frontier before.
+    Schedule(GlobalId),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
     /// a compute collection exported by one of the replica’s dataflow.
@@ -249,6 +263,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     UpdateConfiguration(params.into_proto())
                 }
                 ComputeCommand::CreateDataflow(dataflow) => CreateDataflow(dataflow.into_proto()),
+                ComputeCommand::Schedule(id) => Schedule(id.into_proto()),
                 ComputeCommand::AllowCompaction { id, frontier } => {
                     AllowCompaction(ProtoCompaction {
                         id: Some(id.into_proto()),
@@ -279,6 +294,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             Some(CreateDataflow(dataflow)) => {
                 Ok(ComputeCommand::CreateDataflow(dataflow.into_rust()?))
             }
+            Some(Schedule(id)) => Ok(ComputeCommand::Schedule(id.into_rust()?)),
             Some(AllowCompaction(ProtoCompaction { id, frontier })) => {
                 Ok(ComputeCommand::AllowCompaction {
                     id: id.into_rust_if_some("ProtoAllowCompaction::id")?,
@@ -311,6 +327,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
             any::<DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp>>()
                 .prop_map(ComputeCommand::CreateDataflow)
                 .boxed(),
+            any::<GlobalId>().prop_map(ComputeCommand::Schedule).boxed(),
             (any::<GlobalId>(), any_antichain())
                 .prop_map(|(id, frontier)| ComputeCommand::AllowCompaction { id, frontier })
                 .boxed(),

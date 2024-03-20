@@ -86,6 +86,7 @@
 //! The compute controller may send any number of computation commands:
 //!
 //!   - [`CreateDataflow`]
+//!   - [`Schedule`]
 //!   - [`AllowCompaction`]
 //!   - [`Peek`]
 //!   - [`CancelPeek`]
@@ -103,6 +104,7 @@
 //! [`CreateInstance`]: self::command::ComputeCommand::CreateInstance
 //! [`InitializationComplete`]: self::command::ComputeCommand::InitializationComplete
 //! [`CreateDataflow`]: self::command::ComputeCommand::CreateDataflow
+//! [`Schedule`]: self::command::ComputeCommand::Schedule
 //! [`AllowCompaction`]: self::command::ComputeCommand::AllowCompaction
 //! [`Peek`]: self::command::ComputeCommand::Peek
 //! [`CancelPeek`]: self::command::ComputeCommand::CancelPeek
