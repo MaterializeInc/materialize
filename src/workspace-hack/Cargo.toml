@@ -125,7 +125,9 @@ tracing-core = { version = "0.1.30" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.20.1" }
 uncased = { version = "0.9.7" }
-url = { version = "2.3.1", features = ["serde"] }
+unicode-bidi = { version = "0.3.15" }
+unicode-normalization = { version = "0.1.23" }
+url = { version = "2.5.0", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
 zstd-sys = { version = "2.0.9", features = ["std"] }
@@ -244,7 +246,9 @@ tracing-core = { version = "0.1.30" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.20.1" }
 uncased = { version = "0.9.7" }
-url = { version = "2.3.1", features = ["serde"] }
+unicode-bidi = { version = "0.3.15" }
+unicode-normalization = { version = "0.1.23" }
+url = { version = "2.5.0", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
 zstd-sys = { version = "2.0.9", features = ["std"] }

@@ -114,6 +114,18 @@ def app_password(email: str) -> str:
     return password
 
 
+# Assert that contains is present in balancer metrics.
+def assert_metrics(c: Composition, contains: str):
+    result = c.exec(
+        "materialized",
+        "curl",
+        "http://balancerd:6878/metrics",
+        "-s",
+        capture=True,
+    )
+    assert contains in result.stdout
+
+
 def sql_cursor(c: Composition, service="balancerd", email="u1@example.com") -> Cursor:
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
@@ -154,6 +166,8 @@ def workflow_http(c: Composition) -> None:
         capture=True,
     )
     assert json.loads(result.stdout)["results"][0]["rows"][0][0] == "123"
+    # TODO: We can't assert metrics for `mz_balancer_tenant_connection_active{source="https"` here
+    # because there's no CNAME. Does docker-compose support this somehow?
 
 
 def workflow_wide_result(c: Composition) -> None:
@@ -323,6 +337,9 @@ def workflow_user(c: Composition) -> None:
 
     cursor.execute("SELECT current_user()")
     assert OTHER_USER in str(cursor.fetchall())
+
+    assert_metrics(c, 'mz_balancer_tenant_connection_active{source="pgwire"')
+    assert_metrics(c, 'mz_balancer_tenant_connection_rx{source="pgwire"')
 
 
 def workflow_many_connections(c: Composition) -> None:

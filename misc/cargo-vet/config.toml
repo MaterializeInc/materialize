@@ -130,10 +130,6 @@ criteria = "safe-to-deploy"
 version = "0.8.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.arrow2]]
-version = "0.16.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.askama_derive]]
 version = "0.11.2"
 criteria = "safe-to-deploy"
@@ -184,10 +180,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.base16ct]]
 version = "0.1.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.base64]]
-version = "0.13.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.base64]]
@@ -614,10 +606,6 @@ criteria = "safe-to-deploy"
 version = "0.26.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.h2]]
-version = "0.3.24"
-criteria = "safe-to-deploy"
-
 [[exemptions.half]]
 version = "1.6.0"
 criteria = "safe-to-deploy"
@@ -850,10 +838,6 @@ criteria = "safe-to-deploy"
 version = "0.6.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.mysql_async]]
-version = "0.33.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.mysql_common]]
 version = "0.31.0"
 criteria = "safe-to-deploy"
@@ -888,10 +872,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.numa_maps]]
 version = "0.1.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.number_prefix]]
-version = "0.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.object]]
@@ -930,16 +910,8 @@ criteria = "safe-to-deploy"
 version = "0.9.90"
 criteria = "safe-to-deploy"
 
-[[exemptions.opentelemetry_api]]
-version = "0.20.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.option-ext]]
 version = "0.2.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.ordered-float]]
-version = "3.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.os_info]]
@@ -1026,10 +998,6 @@ criteria = "safe-to-deploy"
 version = "1.0.12"
 criteria = "safe-to-deploy"
 
-[[exemptions.pin-project-lite]]
-version = "0.2.13"
-criteria = "safe-to-deploy"
-
 [[exemptions.pkg-config]]
 version = "0.3.20"
 criteria = "safe-to-deploy"
@@ -1047,10 +1015,6 @@ version = "0.3.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.plotters-svg]]
-version = "0.3.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.polonius-the-crab]]
 version = "0.3.1"
 criteria = "safe-to-deploy"
 
@@ -1343,10 +1307,6 @@ version = "4.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.serde-value]]
-version = "0.7.0@git:62c7e5f84ace6b7b5da48c46cb963be95d43aaab"
-criteria = "safe-to-deploy"
-
-[[exemptions.serde-value]]
 version = "0.7.0@git:a84c6b71825efaffb332c0d19f18c2bdf9ee7b40"
 criteria = "safe-to-deploy"
 
@@ -1446,10 +1406,6 @@ criteria = "safe-to-deploy"
 version = "0.1.15"
 criteria = "safe-to-deploy"
 
-[[exemptions.static_assertions]]
-version = "1.1.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.str_indices]]
 version = "0.4.1"
 criteria = "safe-to-deploy"
@@ -1460,10 +1416,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.strip-ansi-escapes]]
 version = "0.2.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.strsim]]
-version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.subprocess]]
@@ -1672,10 +1624,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.uncased]]
 version = "0.9.7"
-criteria = "safe-to-deploy"
-
-[[exemptions.unicode-bidi]]
-version = "0.3.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.untrusted]]

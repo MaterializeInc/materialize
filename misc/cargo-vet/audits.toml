@@ -45,6 +45,12 @@ who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.12.0@git:448e158aa9ff9f944eabb3a0a87d9801513251a6"
 
+[[audits.domain]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.9.3"
+notes = "File read of resolv.conf and TCP connections to resolvers appear to be limited to the crate's advertised features."
+
 [[audits.dynfmt]]
 who = "Sean Loiselle <sean@materialize.io>"
 criteria = "safe-to-deploy"
@@ -104,6 +110,11 @@ delta = "1.0.0 -> 1.0.0@git:df1440c8b93a192d50470d1b258615febe52f1f8"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.3.0"
+
+[[audits.octseq]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.2"
 
 [[audits.once_cell]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
