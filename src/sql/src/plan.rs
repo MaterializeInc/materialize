@@ -510,6 +510,7 @@ pub struct CreateClusterManagedPlan {
     pub compute: ComputeReplicaConfig,
     pub disk: bool,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
+    pub schedule: ClusterScheduleOptionValue,
 }
 
 #[derive(Debug)]

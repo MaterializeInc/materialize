@@ -31,6 +31,7 @@ use mz_sql::plan::{
 };
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
+use mz_sql_parser::ast::ClusterScheduleOptionValue;
 
 use crate::catalog::Op;
 use crate::coord::Coordinator;
@@ -108,6 +109,7 @@ impl Coordinator {
             size,
             disk,
             optimizer_feature_overrides: _,
+            schedule,
         }: CreateClusterManagedPlan,
         cluster_id: ClusterId,
         mut ops: Vec<catalog::Op>,
@@ -134,6 +136,10 @@ impl Coordinator {
             "cluster replica",
             MAX_REPLICAS_PER_CLUSTER.name(),
         )?;
+
+        if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
+            return Err(AdapterError::Unsupported("cluster schedules other than MANUAL"));
+        }
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
             let id = self.catalog_mut().allocate_user_replica_id().await?;
@@ -627,6 +633,15 @@ impl Coordinator {
                 match &options.replication_factor {
                     Set(rf) => *replication_factor = *rf,
                     Reset => *replication_factor = 1,
+                    Unchanged => {}
+                }
+                match &options.schedule {
+                    Set(schedule) => {
+                        if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
+                            return Err(AdapterError::Unsupported("cluster schedules other than MANUAL"));
+                        }
+                    }
+                    Reset => {}
                     Unchanged => {}
                 }
                 if !matches!(options.replicas, Unchanged) {
