@@ -11,6 +11,7 @@ steps:
   - id: build-aarch64
     label: Build aarch64
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+    depends_on: []
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-aarch64
@@ -21,21 +22,12 @@ steps:
     # will be released, and don't build our own version just for the tests.
     if: build.source == "ui" || build.source == "schedule" || build.source == "api"
 
-  - wait: ~
-
-  - command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.trim_pipeline release-qualification
-    timeout_in_minutes: 10
-    if: build.source == "ui"
-    agents:
-      queue: linux-aarch64-small
-
-  - wait: ~
-
   - group: Zippy
     key: zippy
     steps:
     - id: zippy-kafka-sources-large
       label: "Large Zippy Kafka Sources"
+      depends_on: build-aarch64
       # 48h
       timeout_in_minutes: 2880
       agents:
@@ -47,6 +39,7 @@ steps:
 
     - id: zippy-dataflows-large
       label: "Large Zippy w/ complex dataflows"
+      depends_on: build-aarch64
       # 48h
       timeout_in_minutes: 2880
       agents:
@@ -58,6 +51,7 @@ steps:
 
     - id: zippy-pg-cdc-large
       label: "Large Zippy PostgresCdc"
+      depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
@@ -68,6 +62,7 @@ steps:
 
     - id: zippy-mysql-cdc-large
       label: "Large Zippy MySqlCdc"
+      depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
@@ -78,6 +73,7 @@ steps:
 
     - id: zippy-cluster-replicas-long
       label: "Longer Zippy ClusterReplicas"
+      depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
@@ -89,6 +85,7 @@ steps:
 
     - id: zippy-user-tables-large
       label: "Large Zippy w/ user tables"
+      depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
@@ -99,6 +96,7 @@ steps:
 
     - id: zippy-debezium-postgres-long
       label: "Longer Zippy Debezium Postgres"
+      depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64
@@ -109,6 +107,7 @@ steps:
 
     - id: zippy-backup-and-restore-large
       label: "Large-scale backup+restore"
+      depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64
@@ -120,6 +119,7 @@ steps:
 
     - id: zippy-kafka-parallel-insert
       label: "Longer Zippy Kafka Parallel Insert"
+      depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
@@ -130,6 +130,7 @@ steps:
 
   - id: feature-benchmark-scale-plus-one
     label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
+    depends_on: build-aarch64
     timeout_in_minutes: 2880
     parallelism: 8
     agents:
@@ -144,6 +145,7 @@ steps:
     steps:
     - id: sqlsmith-long
       label: "Longer SQLsmith"
+      depends_on: build-aarch64
       timeout_in_minutes: 120
       agents:
         queue: linux-aarch64
@@ -154,6 +156,7 @@ steps:
 
     - id: sqlsmith-explain-long
       label: "Longer SQLsmith explain"
+      depends_on: build-aarch64
       timeout_in_minutes: 120
       agents:
         queue: linux-aarch64
@@ -164,6 +167,7 @@ steps:
 
   - id: tests-preflight-check-rollback
     label: Tests with preflight check and rollback
+    depends_on: []
     skip: "TODO(def-): Too complex to adapt for all mzcompose-based tests"
     trigger: tests
     async: false
@@ -174,6 +178,7 @@ steps:
 
   - id: nightlies-preflight-check-rollback
     label: Nightlies with preflight check and rollback
+    depends_on: []
     skip: "TODO(def-): Too complex to adapt for all mzcompose-based tests"
     trigger: nightlies
     async: false

@@ -66,29 +66,26 @@ sanitizer = {
     Sanitizer.hwaddress: [
         "-Zsanitizer=hwaddress",
         "-Ctarget-feature=+tagged-globals",
-        "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clinker=clang++",
     ],
     Sanitizer.cfi: [
         "-Zsanitizer=cfi",
-        "-Cdebug-assertions=off",
+        "-Clto",  # error: `-Zsanitizer=cfi` requires `-Clto` or `-Clinker-plugin-lto`
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clinker=clang++",
     ],
     Sanitizer.thread: [
         "-Zsanitizer=thread",
-        "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clinker=clang++",
     ],
     Sanitizer.leak: [
         "-Zsanitizer=leak",
-        "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clinker=clang++",
     ],
-    Sanitizer.undefined: [],
+    Sanitizer.undefined: ["-Clink-arg=-fsanitize=undefined", "-Clinker=clang++"],
 }
 
 sanitizer_cflags = {

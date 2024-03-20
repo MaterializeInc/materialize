@@ -14,6 +14,7 @@ steps:
       - id: build-x86_64
         label: Build x86_64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        depends_on: []
         timeout_in_minutes: 60
         # For releases we trigger nightly from the test job directly, no need to build again
         branches: "!v*.*"
@@ -23,21 +24,12 @@ steps:
       - id: build-aarch64
         label: Build aarch64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        depends_on: []
         timeout_in_minutes: 60
         # For releases we trigger nightly from the test job directly, no need to build again
         branches: "!v*.*"
         agents:
           queue: builder-linux-aarch64
-
-  - wait: ~
-
-  - command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.trim_pipeline nightly
-    timeout_in_minutes: 10
-    if: build.source == "ui"
-    agents:
-      queue: linux-aarch64-small
-
-  - wait: ~
 
   - group: Linters
     key: linters
@@ -46,6 +38,7 @@ steps:
         timeout_in_minutes: 10
         label: Detect references to already closed issues
         command: bin/ci-builder run stable bin/ci-closed-issues-detect
+        depends_on: []
         agents:
           queue: linux-aarch64-small
         branches: "!v*.*"
@@ -54,6 +47,7 @@ steps:
       - id: unused-deps
         label: Unused dependencies
         command: bin/ci-builder run nightly bin/unused-deps
+        depends_on: []
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64
@@ -61,6 +55,7 @@ steps:
 
   - id: miri-test
     label: Miri test (full)
+    depends_on: []
     timeout_in_minutes: 600
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
@@ -76,6 +71,7 @@ steps:
     steps:
       - id: feature-benchmark
         label: "Feature benchmark against merge base or 'latest' %N"
+        depends_on: build-aarch64
         timeout_in_minutes: 720
         parallelism: 8
         agents:
@@ -89,6 +85,7 @@ steps:
                 - common-ancestor
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: linux-aarch64
@@ -108,6 +105,7 @@ steps:
                 - "256"
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
+        depends_on: build-aarch64
         timeout_in_minutes: 1200
         agents:
           queue: linux-aarch64
@@ -131,6 +129,7 @@ steps:
                 - "64"
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: linux-aarch64-large
@@ -156,6 +155,7 @@ steps:
     steps:
       - id: kafka-matrix
         label: Kafka smoke test against previous Kafka versions
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-small
@@ -165,6 +165,7 @@ steps:
 
       - id: kafka-multi-broker
         label: Kafka multi-broker test
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
@@ -177,6 +178,7 @@ steps:
     steps:
       - id: redpanda-testdrive
         label: ":panda_face: :racing_car: testdrive"
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: linux-aarch64
@@ -188,6 +190,7 @@ steps:
 
       - id: redpanda-testdrive-aarch64
         label: ":panda_face: :racing_car: testdrive aarch64"
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: linux-aarch64
@@ -200,6 +203,7 @@ steps:
 
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: linux-aarch64
@@ -211,6 +215,7 @@ steps:
 
       - id: testdrive-replicas-4
         label: ":racing_car: testdrive 4 replicas"
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: linux-aarch64
@@ -222,6 +227,7 @@ steps:
 
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
+        depends_on: build-aarch64
         timeout_in_minutes: 360
         agents:
           queue: linux-aarch64-small
@@ -233,6 +239,7 @@ steps:
 
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: linux-aarch64
@@ -244,6 +251,7 @@ steps:
 
       - id: testdrive-in-cloudtest
         label: Full Testdrive in Cloudtest (K8s)
+        depends_on: build-aarch64
         timeout_in_minutes: 300
         agents:
           queue: linux-aarch64-large
@@ -255,6 +263,7 @@ steps:
 
       - id: persistence-testdrive
         label: ":racing_car: testdrive with --persistent-user-tables"
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
@@ -270,6 +279,7 @@ steps:
     steps:
       - id: limits
         label: "Product limits"
+        depends_on: build-aarch64
         agents:
           queue: linux-aarch64-large
         plugins:
@@ -280,6 +290,7 @@ steps:
 
       - id: limits-instance-size
         label: "Instance size limits"
+        depends_on: build-aarch64
         agents:
           # A larger instance is needed due to the
           # many containers that are being created
@@ -292,6 +303,7 @@ steps:
 
       - id: bounded-memory
         label: "Bounded Memory"
+        depends_on: build-aarch64
         timeout_in_minutes: 3600
         agents:
           queue: linux-aarch64
@@ -304,6 +316,7 @@ steps:
     steps:
       - id: upsert-compaction-enabled
         label: Upsert (compaction enabled)
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
@@ -313,6 +326,7 @@ steps:
 
       - id: upsert-compaction-disabled
         label: Upsert (compaction disabled)
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
@@ -323,6 +337,7 @@ steps:
 
   - id: ssh-connection-extended
     label: Extended SSH connection tests
+    depends_on: build-aarch64
     timeout_in_minutes: 45
     plugins:
       - ./ci/plugins/mzcompose:
@@ -336,6 +351,7 @@ steps:
     steps:
       - id: zippy-kafka-sources
         label: "Zippy Kafka Sources"
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: linux-aarch64
@@ -346,6 +362,7 @@ steps:
 
       - id: zippy-kafka-parallel-insert
         label: "Zippy Kafka Parallel Insert"
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: linux-aarch64
@@ -356,6 +373,7 @@ steps:
 
       - id: zippy-user-tables
         label: "Zippy User Tables"
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: linux-aarch64
@@ -366,6 +384,7 @@ steps:
 
       - id: zippy-user-tables-persist-txn
         label: "Zippy User Tables + toggle persist-txn"
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: linux-aarch64
@@ -376,6 +395,7 @@ steps:
 
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: linux-aarch64
@@ -386,6 +406,7 @@ steps:
 
       - id: zippy-mysql-cdc
         label: "Zippy MySQL CDC"
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: linux-aarch64
@@ -396,6 +417,7 @@ steps:
 
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: linux-aarch64
@@ -406,6 +428,7 @@ steps:
 
       - id: zippy-cluster-replicas
         label: "Zippy Cluster Replicas"
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: linux-aarch64
@@ -416,6 +439,7 @@ steps:
 
       - id: zippy-crdb-latest
         label: "Zippy w/ latest CRDB"
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: linux-aarch64
@@ -426,6 +450,7 @@ steps:
 
       - id: zippy-alter-connection
         label: "Zippy w/ alter connection"
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: linux-aarch64
@@ -439,6 +464,7 @@ steps:
     steps:
       - id: mysql-cdc-5_7_44
         label: "MySQL CDC tests w/ 5.7.44"
+        depends_on: build-x86_64
         timeout_in_minutes: 30
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
@@ -449,6 +475,7 @@ steps:
               args: [ "--mysql-version=5.7.44" ]
       - id: mysql-cdc-8_3_0
         label: "MySQL CDC tests w/ 8.3.0"
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
@@ -462,6 +489,7 @@ steps:
     steps:
       - id: aws-real
         label: AWS (Real)
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         retry:
           automatic:
@@ -476,6 +504,7 @@ steps:
 
       - id: aws-localstack
         label: AWS (Localstack)
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
@@ -485,6 +514,7 @@ steps:
 
       - id: secrets-local-file
         label: "Secrets Local File"
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
@@ -497,6 +527,7 @@ steps:
     steps:
       - id: checks-restart-cockroach
         label: "Checks + restart Cockroach"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           # A larger instance is needed due to frequent OOMs
@@ -508,6 +539,7 @@ steps:
 
       - id: checks-restart-entire-mz
         label: "Checks + restart of the entire Mz"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           # A larger instance is needed due to frequent OOMs
@@ -519,6 +551,7 @@ steps:
 
       - id: checks-backup-restore-before-manipulate
         label: "Checks backup + restore between the two manipulate()"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -529,6 +562,7 @@ steps:
 
       - id: checks-backup-restore-after-manipulate
         label: "Checks backup + restore after manipulate()"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -539,6 +573,7 @@ steps:
 
       - id: checks-backup-multi
         label: "Checks + multiple backups/restores"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -549,6 +584,7 @@ steps:
 
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -559,6 +595,7 @@ steps:
 
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica"
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
@@ -570,6 +607,7 @@ steps:
 
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd"
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
@@ -581,6 +619,7 @@ steps:
 
       - id: checks-parallel-restart-entire-mz
         label: "Checks parallel + restart of the entire Mz"
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
@@ -592,6 +631,7 @@ steps:
 
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd"
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
@@ -603,6 +643,7 @@ steps:
 
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd"
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
@@ -614,6 +655,7 @@ steps:
 
       - id: checks-parallel-restart-redpanda
         label: "Checks parallel + restart Redpanda & Debezium"
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
@@ -625,6 +667,7 @@ steps:
 
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -635,6 +678,7 @@ steps:
 
       - id: checks-preflight-check-continue
         label: "Checks preflight-check and continue upgrade"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -645,6 +689,7 @@ steps:
 
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -655,6 +700,7 @@ steps:
 
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -665,6 +711,7 @@ steps:
 
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions"
+        depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
           queue: linux-aarch64-large
@@ -675,6 +722,7 @@ steps:
 
       - id: checks-upgrade-clusterd-compute-first
         label: "Platform checks upgrade, restarting compute clusterd first"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -685,6 +733,7 @@ steps:
 
       - id: checks-upgrade-clusterd-compute-last
         label: "Platform checks upgrade, restarting compute clusterd last"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -695,6 +744,7 @@ steps:
 
       - id: checks-kill-clusterd-storage
         label: "Checks + kill storage clusterd"
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-large
@@ -705,6 +755,7 @@ steps:
 
       - id: checks-restart-source-postgres
         label: "Checks + restart source Postgres"
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-large
@@ -715,6 +766,7 @@ steps:
 
       - id: checks-restart-clusterd-compute
         label: "Checks + restart clusterd compute"
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-large
@@ -725,6 +777,7 @@ steps:
 
       - id: checks-drop-create-default-replica
         label: "Checks + DROP/CREATE replica"
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           # Seems to require more memory on aarch64
@@ -736,6 +789,7 @@ steps:
 
       - id: checks-persist-txn-toggle
         label: "Checks + Toggle persist_txn"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           # Seems to require more memory on aarch64
@@ -747,6 +801,7 @@ steps:
 
       - id: checks-persist-txn-fencing
         label: "Checks + persist_txn fencing"
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-large
@@ -757,6 +812,7 @@ steps:
 
       - id: checks-migrate-x86-64-aarch64
         label: "Checks migrate from x86-64 to aarch64"
+        depends_on: build-x86_64
         timeout_in_minutes: 180
         agents:
           queue: builder-linux-x86_64
@@ -768,6 +824,7 @@ steps:
 
       - id: checks-migrate-aarch64-x86-64
         label: "Checks migrate from aarch64 to x86-64"
+        depends_on: build-x86_64
         timeout_in_minutes: 120
         agents:
           # On x86-64 because of 24794
@@ -780,6 +837,7 @@ steps:
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-large
@@ -794,6 +852,7 @@ steps:
     steps:
       - id: k8s-node-recovery-storage-on-failing
         label: "K8s recovery: storage on failing node"
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         # TODO: #25108 (k8s node recovery tests flaky)
         retry:
@@ -816,6 +875,7 @@ steps:
 
       - id: k8s-node-recovery-compute-on-failing
         label: "K8s recovery: compute on failing node"
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         # TODO: #25108 (k8s node recovery tests flaky)
         retry:
@@ -839,6 +899,7 @@ steps:
 
       - id: k8s-node-recovery-replicated-compute-on-failing
         label: "K8s recovery: replicated compute on failing node"
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         # TODO: #25108 (k8s node recovery tests flaky)
         retry:
@@ -861,6 +922,7 @@ steps:
 
       - id: k8s-node-recovery-envd-on-failing
         label: "K8s recovery: envd on failing node"
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         # TODO: #25108 (k8s node recovery tests flaky)
         retry:
@@ -881,11 +943,12 @@ steps:
               args: [--exitfirst, -k=test_envd_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
         sanitizer: skip
 
-  - group: Maelstrom
-    key: maelstrom
+  - group: Persist
+    key: persist
     steps:
       - id: persist-maelstrom
         label: Maelstrom coverage of persist
+        depends_on: []
         timeout_in_minutes: 30
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
@@ -897,6 +960,7 @@ steps:
 
       - id: persist-maelstrom-single-node
         label: Long single-node Maelstrom coverage of persist
+        depends_on: []
         timeout_in_minutes: 20
         agents:
           queue: linux-aarch64-small
@@ -908,6 +972,7 @@ steps:
 
       - id: persist-maelstrom-multi-node
         label: Long multi-node Maelstrom coverage of persist with postgres consensus
+        depends_on: []
         timeout_in_minutes: 20
         agents:
           queue: linux-aarch64-small
@@ -919,6 +984,7 @@ steps:
 
       - id: persist-txn-maelstrom
         label: Maelstrom coverage of persist-txn
+        depends_on: []
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
@@ -928,22 +994,24 @@ steps:
               composition: persist
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --rate=500, --persist-txn]
 
-  - id: persistence-failpoints
-    label: Persistence failpoints
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-aarch64-small
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: persistence
-          run: failpoints
-    skip: Persistence tests disabled
+      - id: persistence-failpoints
+        label: Persistence failpoints
+        depends_on: []
+        timeout_in_minutes: 30
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: persistence
+              run: failpoints
+        skip: Persistence tests disabled
 
   - group: LD
     key: ld
     steps:
       - id: sql-feature-flags
         label: "SQL-level feature flags"
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
@@ -953,6 +1021,7 @@ steps:
 
       - id: launchdarkly
         label: "LaunchDarkly"
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
@@ -962,6 +1031,7 @@ steps:
 
   - id: cloud-canary
     label: "Canary Deploy in Staging Cloud"
+    depends_on: build-x86_64
     timeout_in_minutes: 1200
     concurrency: 1
     concurrency_group: 'cloud-canary'
@@ -975,6 +1045,7 @@ steps:
 
   - id: mz-e2e
     label: "Mz E2E Test"
+    depends_on: build-aarch64
     timeout_in_minutes: 1200
     concurrency: 1
     concurrency_group: 'mz-e2e'
@@ -989,6 +1060,7 @@ steps:
     steps:
       - id: output-consistency-internal
         label: "Output consistency (internal)"
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
@@ -999,6 +1071,7 @@ steps:
 
       - id: output-consistency-postgres
         label: "Output consistency (Postgres)"
+        depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
           queue: linux-aarch64-small
@@ -1009,6 +1082,7 @@ steps:
 
       - id: output-consistency-version
         label: "Output consistency (version)"
+        depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
           queue: linux-aarch64-small
@@ -1022,6 +1096,7 @@ steps:
     steps:
       - id: sqlsmith
         label: "SQLsmith"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-small
@@ -1032,6 +1107,7 @@ steps:
 
       - id: sqlsmith-explain
         label: "SQLsmith explain"
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-small
@@ -1045,6 +1121,7 @@ steps:
     steps:
       - id: sqlancer-pqs
         label: "SQLancer PQS"
+        depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
           queue: linux-aarch64-small
@@ -1055,6 +1132,7 @@ steps:
 
       - id: sqlancer-norec
         label: "SQLancer NoREC"
+        depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
           queue: linux-aarch64-small
@@ -1065,6 +1143,7 @@ steps:
 
       - id: sqlancer-query-partitioning
         label: "SQLancer QueryPartitioning"
+        depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
           queue: linux-aarch64-small
@@ -1075,6 +1154,7 @@ steps:
 
       - id: sqlancer-having
         label: "SQLancer Having"
+        depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
           queue: linux-aarch64-small
@@ -1088,6 +1168,7 @@ steps:
     steps:
       - id: rqg-simple-aggregates
         label: "RQG simple-aggregates workload"
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-small
@@ -1098,6 +1179,7 @@ steps:
 
       - id: rqg-db3-joins
         label: "RQG dbt3-joins workload"
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           # Runs into timeout on small agents
@@ -1109,6 +1191,7 @@ steps:
 
       - id: rqg-lateral-joins
         label: "RQG lateral-joins workload"
+        depends_on: build-aarch64
         skip: "flaky until #25865 is fixed"
         timeout_in_minutes: 45
         agents:
@@ -1120,6 +1203,7 @@ steps:
 
       - id: rqg-subqueries
         label: "RQG subqueries workload"
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-small
@@ -1130,6 +1214,7 @@ steps:
 
       - id: rqg-window-functions
         label: "RQG window functions workload"
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-small
@@ -1140,6 +1225,7 @@ steps:
 
       - id: rqg-wmr
         label: "RQG WMR workload"
+        depends_on: build-aarch64
         skip: "flaky until #24904 is fixed"
         timeout_in_minutes: 45
         agents:
@@ -1153,6 +1239,7 @@ steps:
 
       - id: rqg-banking
         label: "RQG banking workload"
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-small
@@ -1163,6 +1250,7 @@ steps:
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"
+    depends_on: build-aarch64
     timeout_in_minutes: 15
     agents:
       queue: linux-aarch64-small
@@ -1172,6 +1260,7 @@ steps:
 
   - id: pubsub-disruption
     label: "PubSub disruption"
+    depends_on: build-aarch64
     timeout_in_minutes: 15
     agents:
       queue: linux-aarch64
@@ -1181,6 +1270,7 @@ steps:
 
   - id: retain-history
     label: "Check retain history"
+    depends_on: build-aarch64
     skip: "#24479"
     timeout_in_minutes: 15
     agents:
@@ -1191,6 +1281,7 @@ steps:
 
   - id: data-ingest
     label: "Data Ingest"
+    depends_on: build-aarch64
     timeout_in_minutes: 60
     agents:
       queue: linux-aarch64
@@ -1203,6 +1294,7 @@ steps:
     steps:
       - id: parallel-workload-dml
         label: "Parallel Workload (DML)"
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
@@ -1214,6 +1306,7 @@ steps:
 
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
@@ -1225,6 +1318,7 @@ steps:
 
       - id: parallel-workload-100-threads
         label: "Parallel Workload (100 threads)"
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
@@ -1237,6 +1331,7 @@ steps:
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
@@ -1248,6 +1343,7 @@ steps:
 
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
@@ -1259,6 +1355,7 @@ steps:
 
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         skip: "TODO(def-): Reenable when #2392 is fixed"
@@ -1271,6 +1368,7 @@ steps:
 
       - id: parallel-workload-kill
         label: "Parallel Workload (kill)"
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
@@ -1283,6 +1381,7 @@ steps:
 
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
@@ -1295,6 +1394,7 @@ steps:
 
       - id: parallel-workload-persist-txn
         label: "Parallel Workload (toggle persist-txn)"
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
@@ -1306,6 +1406,7 @@ steps:
 
   - id: incident-70
     label: "Test for incident 70"
+    depends_on: build-aarch64
     timeout_in_minutes: 15
     skip: "Affected by #15209"
     agents:
@@ -1317,6 +1418,7 @@ steps:
 
   - id: balancerd
     label: "Tests for balancerd"
+    depends_on: build-aarch64
     timeout_in_minutes: 15
     agents:
       queue: linux-aarch64-small
@@ -1326,6 +1428,7 @@ steps:
 
   - id: restarts
     label: Restart test
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
@@ -1335,6 +1438,7 @@ steps:
 
   - id: legacy-upgrade
     label: Legacy upgrade tests (last version from git)
+    depends_on: build-aarch64
     timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
@@ -1345,6 +1449,7 @@ steps:
 
   - id: persist-txn-fencing
     label: Persist-txn fencing
+    depends_on: build-aarch64
     timeout_in_minutes: 120
     plugins:
       - ./ci/plugins/mzcompose:
@@ -1358,6 +1463,7 @@ steps:
     steps:
       - id: lang-csharp
         label: ":csharp: tests"
+        depends_on: build-aarch64
         timeout_in_minutes: 10
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1367,6 +1473,7 @@ steps:
 
       - id: lang-js
         label: ":js: tests"
+        depends_on: build-aarch64
         timeout_in_minutes: 10
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1376,6 +1483,7 @@ steps:
 
       - id: lang-java
         label: ":java: tests"
+        depends_on: build-aarch64
         timeout_in_minutes: 10
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1385,6 +1493,7 @@ steps:
 
       - id: lang-python
         label: ":python: tests"
+        depends_on: build-aarch64
         timeout_in_minutes: 10
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1394,6 +1503,7 @@ steps:
 
       - id: lang-ruby
         label: ":ruby: tests"
+        depends_on: build-aarch64
         timeout_in_minutes: 10
         plugins:
           - ./ci/plugins/mzcompose:

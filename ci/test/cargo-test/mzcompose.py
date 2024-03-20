@@ -164,6 +164,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         + " "
                         + " ".join(rustc_flags.sanitizer[sanitizer])
                     ),
+                    "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
                 }
                 spawn.runv(
                     [

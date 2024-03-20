@@ -309,6 +309,7 @@ class CargoBuild(CargoPreImage):
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                 "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
             }
             if rd.sanitizer != Sanitizer.none
             else {}

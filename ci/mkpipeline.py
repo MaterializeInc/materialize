@@ -33,7 +33,6 @@ from typing import Any
 import yaml
 
 from materialize import mzbuild, spawn
-from materialize.ci_util.trim_pipeline import permit_rerunning_successful_steps
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
 from materialize.rustc_flags import Sanitizer
@@ -274,6 +273,22 @@ def prioritize_pipeline(pipeline: Any) -> None:
             visit(config)
 
 
+def permit_rerunning_successful_steps(pipeline: Any) -> None:
+    def visit(step: Any) -> None:
+        step.setdefault("retry", {}).setdefault("manual", {}).setdefault(
+            "permit_on_passed", True
+        )
+
+    for config in pipeline["steps"]:
+        if "trigger" in config or "wait" in config or "block" in config:
+            continue
+        if "group" in config:
+            for inner_config in config.get("steps", []):
+                visit(inner_config)
+            continue
+        visit(config)
+
+
 def set_default_agents_queue(pipeline: Any) -> None:
     for step in steps(pipeline):
         if (
@@ -287,7 +302,7 @@ def set_default_agents_queue(pipeline: Any) -> None:
 
 
 def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
-    if pipeline_name != "test":
+    if pipeline_name not in ("test", "nightly", "release-qualification"):
         return
 
     for step in steps(pipeline):
