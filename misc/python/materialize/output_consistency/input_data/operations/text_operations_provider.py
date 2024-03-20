@@ -18,6 +18,7 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
     BooleanOperationParam,
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
+    LIKE_PARAM,
     REGEX_FLAG_PARAM,
     REGEX_PARAM,
     REPETITIONS_PARAM,
@@ -102,7 +103,7 @@ TEXT_OPERATION_TYPES.append(
 TEXT_OPERATION_TYPES.append(
     DbOperation(
         "$ LIKE $",
-        [TextOperationParam(), REGEX_PARAM],
+        [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
@@ -111,7 +112,7 @@ TEXT_OPERATION_TYPES.append(
 TEXT_OPERATION_TYPES.append(
     DbOperation(
         "$ ILIKE $",
-        [TextOperationParam(), REGEX_PARAM],
+        [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
@@ -120,7 +121,7 @@ TEXT_OPERATION_TYPES.append(
 TEXT_OPERATION_TYPES.append(
     DbOperation(
         "$ NOT LIKE $",
-        [TextOperationParam(), REGEX_PARAM],
+        [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
@@ -129,7 +130,7 @@ TEXT_OPERATION_TYPES.append(
 TEXT_OPERATION_TYPES.append(
     DbOperation(
         "$ NOT ILIKE $",
-        [TextOperationParam(), REGEX_PARAM],
+        [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
