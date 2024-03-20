@@ -1046,10 +1046,10 @@ impl RecordFirstRowStream {
 }
 
 /// ~~SPOOKY ZONE~~
-/// 
+///
 /// There is a small race that can occur with [`tokio`], a [`SessionClient`], and the `Coordinator`
 /// that requires this Drop guard.
-/// 
+///
 /// 1. A [`SessionClient`] can execute a command, sending it's owned [`Session`] to the
 ///    Coordinator.
 /// 2. While processing this request, the user closes their connection to Materialize.
@@ -1058,7 +1058,7 @@ impl RecordFirstRowStream {
 ///    provided [`oneshot::Sender`].
 /// 4. [`tokio`] realizes the connection is closed and Drops the task which is awaiting the result
 ///    from the [`oneshot::Receiver`].
-/// 
+///
 ///    !!Problem!! The Coordinator successfully responded to the request, so it doesn't need to
 ///                terminate the [`Session`], but at the same time Future that is responsible for
 ///                listening to the Receiver and putting the [`Session`] back into the
