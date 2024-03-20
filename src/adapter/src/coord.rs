@@ -2737,7 +2737,7 @@ impl Coordinator {
             .iter()
             .map(|(id, peek)| (id.to_string(), peek))
             .collect();
-        let pending_real_time_recenty_timestamp: BTreeMap<_, _> = self
+        let pending_real_time_recency_timestamp: BTreeMap<_, _> = self
             .pending_real_time_recency_timestamp
             .iter()
             .map(|(id, timestamp)| (id.unhandled().to_string(), format!("{timestamp:#?}")))
@@ -2778,8 +2778,8 @@ impl Coordinator {
                 serde_json::to_value(client_pending_peeks)?,
             ),
             (
-                "pending_real_time_recenty_timestamp".to_string(),
-                serde_json::to_value(pending_real_time_recenty_timestamp)?,
+                "pending_real_time_recency_timestamp".to_string(),
+                serde_json::to_value(pending_real_time_recency_timestamp)?,
             ),
             (
                 "pending_linearize_read_txns".to_string(),
