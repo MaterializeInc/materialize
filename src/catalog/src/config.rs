@@ -54,8 +54,10 @@ pub struct StateConfig {
     pub skip_migrations: bool,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    /// Builtin cluster replica size.
-    pub builtin_cluster_replica_size: String,
+    /// Builtin system cluster replica size.
+    pub builtin_system_cluster_replica_size: String,
+    /// Builtin introspection cluster replica size.
+    pub builtin_introspection_cluster_replica_size: String,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// A optional map of system parameters pulled from a remote frontend.

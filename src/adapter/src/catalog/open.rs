@@ -22,8 +22,8 @@ use uuid::Uuid;
 
 use mz_catalog::builtin::{
     Builtin, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
-    BUILTIN_ROLES, MZ_PREPARED_STATEMENT_HISTORY, MZ_SQL_TEXT, MZ_STATEMENT_EXECUTION_HISTORY,
-    MZ_STATEMENT_LIFECYCLE_HISTORY,
+    BUILTIN_ROLES, MZ_INTROSPECTION_CLUSTER_REPLICA, MZ_PREPARED_STATEMENT_HISTORY, MZ_SQL_TEXT,
+    MZ_STATEMENT_EXECUTION_HISTORY, MZ_STATEMENT_LIFECYCLE_HISTORY, MZ_SYSTEM_CLUSTER_REPLICA,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -40,7 +40,7 @@ use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
-use mz_controller_types::ClusterId;
+use mz_controller_types::{is_cluster_size_v2, ClusterId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
@@ -343,7 +343,8 @@ impl Catalog {
                 add_new_builtin_clusters_migration(&mut txn)?;
                 add_new_builtin_cluster_replicas_migration(
                     &mut txn,
-                    config.builtin_cluster_replica_size,
+                    &config.builtin_system_cluster_replica_size,
+                    &config.builtin_introspection_cluster_replica_size,
                 )?;
                 add_new_builtin_roles_migration(&mut txn)?;
             }
@@ -1725,7 +1726,8 @@ fn add_new_builtin_roles_migration(
 
 fn add_new_builtin_cluster_replicas_migration(
     txn: &mut Transaction<'_>,
-    builtin_cluster_replica_size: String,
+    builtin_system_cluster_replica_size: &str,
+    builtin_introspection_cluster_replica_size: &str,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
     let cluster_lookup: BTreeMap<_, _> = txn
         .get_clusters()
@@ -1745,6 +1747,17 @@ fn add_new_builtin_cluster_replicas_migration(
         let cluster_id = cluster_lookup
             .get(builtin_replica.cluster_name)
             .expect("builtin cluster replica references non-existent cluster");
+        let replica_size = match **builtin_replica {
+            MZ_SYSTEM_CLUSTER_REPLICA => builtin_system_cluster_replica_size.to_owned(),
+            MZ_INTROSPECTION_CLUSTER_REPLICA => {
+                builtin_introspection_cluster_replica_size.to_owned()
+            }
+            _ => {
+                return Err(mz_catalog::durable::CatalogError::Catalog(
+                    SqlCatalogError::UnexpectedBuiltinCluster(builtin_replica.name.to_owned()),
+                ))
+            }
+        };
 
         let replica_names = replicas.get(cluster_id);
         if matches!(replica_names, None)
@@ -1752,7 +1765,7 @@ fn add_new_builtin_cluster_replicas_migration(
         {
             let replica_id = txn.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
             let replica_id = ReplicaId::System(replica_id);
-            let config = builtin_cluster_replica_config(builtin_cluster_replica_size.clone());
+            let config = builtin_cluster_replica_config(replica_size);
             txn.insert_cluster_replica(
                 *cluster_id,
                 replica_id,
@@ -1766,15 +1779,15 @@ fn add_new_builtin_cluster_replicas_migration(
 }
 
 pub(crate) fn builtin_cluster_replica_config(
-    builtin_cluster_replica_size: String,
+    replica_size: String,
 ) -> mz_catalog::durable::ReplicaConfig {
     mz_catalog::durable::ReplicaConfig {
         location: mz_catalog::durable::ReplicaLocation::Managed {
             availability_zone: None,
             billed_as: None,
-            disk: false,
+            disk: is_cluster_size_v2(&replica_size),
             internal: false,
-            size: builtin_cluster_replica_size,
+            size: replica_size,
         },
         logging: default_logging_config(),
         idle_arrangement_merge_effort: None,
