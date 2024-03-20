@@ -40,6 +40,7 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
     VALUE SIZE 10,
     BATCH SIZE 2
   )
+  INCLUDE KEY AS whatever
   ENVELOPE UPSERT
 
 # Ensure data is spread as expected.
@@ -49,11 +50,18 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 2   4
 3   4
 
+
+> SELECT MAX(key) FROM up_no_update;
+15
+
 > SELECT partition, count(*) FROM up_quick GROUP BY partition
 0   4
 1   4
 2   4
 3   4
+
+> SELECT MAX(whatever) FROM up_quick;
+15
 
 # 48 values produced (3 snapshot rounds with 16 keys).
 # For the `TRANSACTIONAL SNAPSHOT = false` source, we produce 48 updates from the 3 rounds.
@@ -84,7 +92,7 @@ SELECT
     encode(value, 'base64')
   FROM up_quick
   WHERE
-    key = 14
+    whatever = 14
 
 > ALTER CLUSTER lg_cluster SET (REPLICATION FACTOR 0);
 
@@ -102,7 +110,7 @@ true
     encode(value, 'base64') = '${pre-rehydration-quick}'
   FROM up_quick
   WHERE
-    key = 14
+    whatever = 14
 true
 
 > SELECT
@@ -198,7 +206,7 @@ true
   )
   ENVELOPE NONE
 
-> SELECT partition, count(key) FROM kv_none GROUP BY partition
+> SELECT partition, count(*) FROM kv_none GROUP BY partition
 0   12
 1   12
 2   12
@@ -236,7 +244,9 @@ true
     VALUE SIZE 10,
     BATCH SIZE 2
   )
-  INCLUDE OFFSET AS something_else
+  INCLUDE
+    OFFSET AS something_else,
+    KEY AS whatever
   ENVELOPE NONE
 
 > SELECT partition, MAX(something_else) FROM kv_offset2 GROUP BY partition
@@ -244,3 +254,6 @@ true
 1   5
 2   5
 3   5
+
+> SELECT MAX(whatever) FROM kv_offset2;
+15

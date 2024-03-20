@@ -86,7 +86,7 @@ use mz_storage_types::sources::envelope::{
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{
     KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
-    LOAD_GENERATOR_KEY_VALUE_KEY_NAME, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
+    LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
 };
 use mz_storage_types::sources::mysql::{
     MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
@@ -1232,23 +1232,29 @@ pub fn plan_create_source(
             (key_desc, value_desc)
         }
         None => (
-            // `KEY VALUE` load generators do not have an encoding so must be special-cased.
-            if let GenericSourceConnection::LoadGenerator(
-                lg @ LoadGeneratorSourceConnection {
-                    load_generator: LoadGenerator::KeyValue(_),
-                    ..
-                },
-            ) = &external_connection
-            {
-                Some(lg.key_desc())
-            } else {
-                None
-            },
+            Some(external_connection.key_desc()),
             external_connection.value_desc(),
         ),
     };
 
-    let key_envelope = get_key_envelope(include_metadata, encoding.as_ref())?;
+    // KEY VALUE load generators are the only UPSERT source that
+    // has no encoding but defaults to `INCLUDE KEY`.
+    //
+    // TODO(guswynn|petrosagg): when this is refactored, remove this special-case
+    // and move the `bail_unsupported` call below to a check specific to planning
+    // the decode stage.
+    let key_envelope_no_encoding = matches!(
+        external_connection,
+        GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+            load_generator: LoadGenerator::KeyValue(_),
+            ..
+        })
+    );
+    let mut key_envelope = get_key_envelope(
+        include_metadata,
+        encoding.as_ref(),
+        key_envelope_no_encoding,
+    )?;
 
     match (&envelope, &key_envelope) {
         (ast::SourceEnvelope::Debezium, KeyEnvelope::None) => {}
@@ -1257,18 +1263,6 @@ pub fn plan_create_source(
         ),
         _ => {}
     };
-
-    // `KEY VALUE` load generators always include the key, so must be special-cased.
-    let key_envelope =
-        if let GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-            load_generator: LoadGenerator::KeyValue(_),
-            ..
-        }) = &external_connection
-        {
-            KeyEnvelope::Named(LOAD_GENERATOR_KEY_VALUE_KEY_NAME.to_string())
-        } else {
-            key_envelope
-        };
 
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
@@ -1298,33 +1292,23 @@ pub fn plan_create_source(
             }
         }
         ast::SourceEnvelope::Upsert => {
-            let key_envelope =
-                // `KEY VALUE` load generators do not have an encoding, so must be special-cased.
-                if let GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-                    load_generator: LoadGenerator::KeyValue(_),
-                    ..
-                }) = &external_connection
-                {
-                key_envelope
-                } else {
+            let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
+                None => {
+                    if !key_envelope_no_encoding {
+                        bail_unsupported!(format!(
+                            "UPSERT requires a key/value format: {:?}",
+                            format
+                        ))
+                    }
+                    None
+                }
+                Some(key_encoding) => Some(key_encoding),
+            };
             // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
             // specified.
-                    let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
-                        None => {
-                            bail_unsupported!(format!(
-                                "upsert requires a key/value format: {:?}",
-                                format
-                            ))
-                        }
-                        Some(key_encoding) => key_encoding,
-                    };
-                    if key_envelope == KeyEnvelope::None {
-                        get_unnamed_key_envelope(key_encoding)?
-                    } else {
-                        key_envelope
-                    }
-                };
-
+            if key_envelope == KeyEnvelope::None {
+                key_envelope = get_unnamed_key_envelope(key_encoding)?;
+            }
             UnplannedSourceEnvelope::Upsert {
                 style: UpsertStyle::Default(key_envelope),
             }
@@ -1797,16 +1781,22 @@ pub(crate) fn load_generator_ast_to_generator(
                 ..
             } = extracted;
 
-            let include_offset = match include_metadata {
-                [SourceIncludeMetadata::Offset { alias }] => match alias {
-                    Some(alias) => Some(alias.to_string()),
-                    None => Some(LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT.to_string()),
-                },
-                [] => None,
-                _ => {
-                    bail_unsupported!("only `INCLUDE OFFSET` is supported");
-                }
-            };
+            let mut include_offset = None;
+            for im in include_metadata {
+                match im {
+                    SourceIncludeMetadata::Offset { alias } => {
+                        include_offset = match alias {
+                            Some(alias) => Some(alias.to_string()),
+                            None => Some(LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT.to_string()),
+                        }
+                    }
+                    SourceIncludeMetadata::Key { .. } => continue,
+
+                    _ => {
+                        sql_bail!("only `INCLUDE OFFSET` and `INCLUDE KEY` is supported");
+                    }
+                };
+            }
 
             let lgkv = KeyValueLoadGenerator {
                 keys: keys.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires KEYS"))?,
@@ -2157,6 +2147,7 @@ fn get_encoding_inner(
 fn get_key_envelope(
     included_items: &[SourceIncludeMetadata],
     encoding: Option<&SourceDataEncoding<ReferencedConnection>>,
+    key_envelope_no_encoding: bool,
 ) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
@@ -2164,7 +2155,11 @@ fn get_key_envelope(
     if let Some(SourceIncludeMetadata::Key { alias }) = key_definition {
         match (alias, encoding.and_then(|e| e.key.as_ref())) {
             (Some(name), Some(_)) => Ok(KeyEnvelope::Named(name.as_str().to_string())),
-            (None, Some(key)) => get_unnamed_key_envelope(key),
+            (None, Some(key)) => get_unnamed_key_envelope(Some(key)),
+            (Some(name), _) if key_envelope_no_encoding => {
+                Ok(KeyEnvelope::Named(name.as_str().to_string()))
+            }
+            (None, _) if key_envelope_no_encoding => get_unnamed_key_envelope(None),
             (_, None) => {
                 // `kd.alias` == `None` means `INCLUDE KEY`
                 // `kd.alias` == `Some(_) means INCLUDE KEY AS ___`
@@ -2183,17 +2178,20 @@ fn get_key_envelope(
 /// Gets the key envelope for a given key encoding when no name for the key has
 /// been requested by the user.
 fn get_unnamed_key_envelope(
-    key: &DataEncoding<ReferencedConnection>,
+    key: Option<&DataEncoding<ReferencedConnection>>,
 ) -> Result<KeyEnvelope, PlanError> {
     // If the key is requested but comes from an unnamed type then it gets the name "key"
     //
     // Otherwise it gets the names of the columns in the type
     let is_composite = match key {
-        DataEncoding::Bytes | DataEncoding::Json | DataEncoding::Text => false,
-        DataEncoding::Avro(_)
-        | DataEncoding::Csv(_)
-        | DataEncoding::Protobuf(_)
-        | DataEncoding::Regex { .. } => true,
+        Some(DataEncoding::Bytes | DataEncoding::Json | DataEncoding::Text) => false,
+        Some(
+            DataEncoding::Avro(_)
+            | DataEncoding::Csv(_)
+            | DataEncoding::Protobuf(_)
+            | DataEncoding::Regex { .. },
+        ) => true,
+        None => false,
     };
 
     if is_composite {

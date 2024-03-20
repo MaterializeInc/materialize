@@ -27,7 +27,6 @@ include!(concat!(
     "/mz_storage_types.sources.load_generator.rs"
 ));
 
-pub const LOAD_GENERATOR_KEY_VALUE_KEY_NAME: &str = "key";
 pub const LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT: &str = "offset";
 
 /// Data and progress events of the native stream.
@@ -58,10 +57,10 @@ impl SourceConnection for LoadGeneratorSourceConnection {
 
     fn key_desc(&self) -> RelationDesc {
         match &self.load_generator {
-            LoadGenerator::KeyValue(_) => RelationDesc::empty().with_column(
-                LOAD_GENERATOR_KEY_VALUE_KEY_NAME,
-                ScalarType::UInt64.nullable(false),
-            ),
+            LoadGenerator::KeyValue(_) => {
+                // `"key"` is overridden by the key_envelope in planning.
+                RelationDesc::empty().with_column("key", ScalarType::UInt64.nullable(false))
+            }
             _ => RelationDesc::empty(),
         }
     }
