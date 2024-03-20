@@ -11,6 +11,7 @@
 
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{
@@ -37,6 +38,7 @@ use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerConfig, OptimizerError,
@@ -54,8 +56,12 @@ pub struct Optimizer {
     select_id: GlobalId,
     /// Data required to do a COPY TO query.
     copy_to_context: CopyToContext,
-    // Optimizer config.
+    /// Optimizer config.
     config: OptimizerConfig,
+    /// Optimizer metrics.
+    metrics: OptimizerMetrics,
+    /// The time spent performing optimization so far.
+    duration: Duration,
 }
 
 impl Optimizer {
@@ -65,6 +71,7 @@ impl Optimizer {
         select_id: GlobalId,
         copy_to_context: CopyToContext,
         config: OptimizerConfig,
+        metrics: OptimizerMetrics,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -73,6 +80,8 @@ impl Optimizer {
             select_id,
             copy_to_context,
             config,
+            metrics,
+            duration: Default::default(),
         }
     }
 
@@ -141,6 +150,8 @@ impl Optimize<HirRelationExpr> for Optimizer {
     type To = LocalMirPlan;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
         // Trace the pipeline input under `optimize/raw`.
         trace_plan!(at: "raw", &expr);
 
@@ -152,6 +163,8 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let mut transform_ctx =
             TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
+
+        self.duration += time.elapsed();
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan {
@@ -187,6 +200,8 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
     type To = GlobalLirPlan;
 
     fn optimize(&mut self, plan: LocalMirPlan<Resolved<'s>>) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
         let LocalMirPlan {
             expr,
             mut df_meta,
@@ -207,7 +222,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             DataflowBuilder::new(catalog, compute).with_config(&self.config)
         };
 
-        let debug_name = format!("oneshot-select-{}", self.select_id);
+        let debug_name = format!("copy-to-{}", self.select_id);
         let mut df_desc = MirDataflowDescription::new(debug_name.to_string());
 
         df_builder.import_view_into_dataflow(&self.select_id, &expr, &mut df_desc)?;
@@ -333,6 +348,10 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 
         // Trace the pipeline output under `optimize`.
         trace_plan(&df_desc);
+
+        self.duration += time.elapsed();
+        self.metrics
+            .observe_e2e_optimization_time("copy_to", self.duration);
 
         Ok(GlobalLirPlan { df_desc, df_meta })
     }

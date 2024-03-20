@@ -414,6 +414,7 @@ impl Coordinator {
             refresh_schedule.clone(),
             debug_name,
             optimizer_config,
+            self.optimizer_metrics(),
         );
 
         let span = Span::current();

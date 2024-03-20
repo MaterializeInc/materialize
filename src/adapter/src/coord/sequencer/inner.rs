@@ -1992,7 +1992,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
         // Build an optimizer for this VIEW.
-        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
         let optimized_plan = optimizer.optimize(raw_plan)?;
@@ -2161,7 +2161,7 @@ impl Coordinator {
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
             // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+            let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
             return_if_err!(optimizer.optimize(plan.values.clone()), ctx)

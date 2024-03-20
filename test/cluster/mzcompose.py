@@ -2253,6 +2253,12 @@ class Metrics:
         assert len(values) <= 1
         return next(iter(values), None)
 
+    def get_e2e_optimization_time(self, object_type: str) -> float:
+        metrics = self.with_name("mz_optimizer_e2e_optimization_time_seconds_sum")
+        values = [v for k, v in metrics.items() if f'object_type="{object_type}"' in k]
+        assert len(values) == 1
+        return values[0]
+
 
 def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
@@ -2525,6 +2531,56 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     metrics = fetch_metrics()
     assert metrics.get_initial_output_duration(index_id) is None
     assert metrics.get_initial_output_duration(mv_id) is None
+
+
+def workflow_test_optimizer_metrics(c: Composition) -> None:
+    """Test metrics exposed by the optimizer."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp)
+
+    # Run optimizations for different object types.
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+
+        -- view
+        CREATE VIEW v AS SELECT a + 1 FROM t;
+        -- index
+        CREATE INDEX i ON t (a);
+        -- materialized view
+        CREATE MATERIALIZED VIEW m AS SELECT a + 1 FROM t;
+        -- fast-path peek
+        SELECT * FROM t;
+        -- slow-path peek;
+        SELECT count(*) FROM t JOIN v ON (true);
+        -- subscribe
+        SUBSCRIBE (SELECT 1);
+        """
+    )
+
+    # Check that expected metrics exist and have sensible values.
+    metrics = fetch_metrics()
+
+    # mz_optimizer_e2e_optimization_time_seconds
+    time = metrics.get_e2e_optimization_time("view")
+    assert 0 < time < 1, f"got {time}"
+    time = metrics.get_e2e_optimization_time("index")
+    assert 0 < time < 1, f"got {time}"
+    time = metrics.get_e2e_optimization_time("materialized_view")
+    assert 0 < time < 1, f"got {time}"
+    time = metrics.get_e2e_optimization_time("peek:fast_path")
+    assert 0 < time < 1, f"got {time}"
+    time = metrics.get_e2e_optimization_time("peek:slow_path")
+    assert 0 < time < 1, f"got {time}"
+    time = metrics.get_e2e_optimization_time("subscribe")
+    assert 0 < time < 1, f"got {time}"
 
 
 def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
