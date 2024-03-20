@@ -14,7 +14,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_mysql_source = true
 
 #
-# Test the BOOLEAN data type
+# Invisible columns
 #
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -31,38 +31,21 @@ DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-# Insert data pre-snapshot
-CREATE TABLE t1 (f1 BOOLEAN);
-INSERT INTO t1 VALUES (true), (false);
+CREATE TABLE t1 (f1 INT, f2 INT INVISIBLE, f3 INT INVISIBLE);
+INSERT INTO t1 (f1, f2, f3) VALUES (10, 20, 30);
+INSERT INTO t1 VALUES (11);
 
-# default values
-CREATE TABLE t2 (f1 INT, f2 BOOLEAN DEFAULT true, f3 BOOLEAN DEFAULT false, f4 BOOLEAN);
-INSERT INTO t2 VALUES (1, NULL, NULL, NULL);
-INSERT INTO t2 VALUES (2, false, false, false);
-INSERT INTO t2 (f1) VALUES (3);
-
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
-
-> SELECT COUNT(*) > 0 FROM t1;
-true
-
-# Insert the same data post-snapshot
-$ mysql-execute name=mysql
-INSERT INTO t1 SELECT * FROM t1;
-
-# MySQL does not have a proper boolean type
-> SELECT pg_typeof(f1) FROM t1 LIMIT 1;
-smallint
-
-> SELECT * FROM t1;
-1
-0
-1
-0
-
-> SELECT * FROM t2;
-1 <null> <null> <null>
-2 0 0 0
-3 1 0 <null>
+# TODO: #26152 (invisible columns not supported)
+# > CREATE SOURCE mz_source
+#   FROM MYSQL CONNECTION mysql_conn
+#   FOR ALL TABLES;
+#
+# > SELECT * FROM t1;
+# 10
+# 11
+#
+# $ mysql-execute name=mysql
+# ALTER TABLE t1 ALTER COLUMN f2 SET VISIBLE;
+#
+# ! SELECT * FROM t1;
+# contains:incompatible schema change
