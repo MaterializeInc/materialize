@@ -228,7 +228,6 @@ array type for each of the types):
 <li><code>time</code></li>
 <li><code>timestamp</code></li>
 <li><code>timestamptz</code></li>
-<li><code>timetz</code></li>
 <li><code>tsrange</code></li>
 <li><code>tstzrange</code></li>
 <li><code>uuid</code></li>
