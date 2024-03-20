@@ -303,7 +303,7 @@ class ResultComparator:
                 col_index
             ].to_sql(SqlDialectAdjuster(), True)
 
-            if not self.is_value_equal(result_value1, result_value2):
+            if not self.is_type_equal(result_value1, result_value2):
                 error_type = ValidationErrorType.CONTENT_TYPE_MISMATCH
                 error_message = "Value type differs"
             elif not self.is_value_equal(result_value1, result_value2):
