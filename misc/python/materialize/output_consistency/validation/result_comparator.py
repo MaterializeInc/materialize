@@ -305,6 +305,8 @@ class ResultComparator:
 
             if not self.is_type_equal(result_value1, result_value2):
                 error_type = ValidationErrorType.CONTENT_TYPE_MISMATCH
+                result_value1 = type(result_value1)
+                result_value2 = type(result_value2)
                 error_message = "Value type differs"
             elif not self.is_value_equal(result_value1, result_value2):
                 error_type = ValidationErrorType.CONTENT_MISMATCH
