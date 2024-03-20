@@ -98,37 +98,37 @@ TEXT_OPERATION_TYPES.append(
     )
 )
 
-# Matches LIKE pattern case sensitively, using SQL LIKE matching
+# case-sensitive SQL LIKE matching (equal to: $ ~~ $)
 TEXT_OPERATION_TYPES.append(
     DbOperation(
-        "$ ~~ $",
+        "$ LIKE $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
 
-# Matches LIKE pattern case insensitively (ILIKE), using SQL LIKE matching
+# case-insensitive SQL LIKE matching (equal to: $ ~~* $)
 TEXT_OPERATION_TYPES.append(
     DbOperation(
-        "$ ~~* $",
+        "$ ILIKE $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
 
-# Does not match LIKE pattern case sensitively, using SQL LIKE matching
+# negative case-sensitive SQL LIKE matching (equal to: $ !~~ $)
 TEXT_OPERATION_TYPES.append(
     DbOperation(
-        "$ !~~ $",
+        "$ NOT LIKE $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
 
-#  Does not match LIKE pattern case insensitively (ILIKE), using SQL LIKE matching
+# negative case-insensitive SQL LIKE matching (equal to: $ !~~* $)
 TEXT_OPERATION_TYPES.append(
     DbOperation(
-        "$ !~~* $",
+        "$ NOT ILIKE $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
     )
