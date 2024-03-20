@@ -95,6 +95,469 @@ Remember to document any dependencies that may need to break or change as a
 result of this work.
 -->
 
+### Columnar Encodings
+
+<table>
+<tr>
+<td> Scalar Type </td><td> Rust Representation </td><td> Arrow Array </td><td> Notes </td>
+</tr>
+
+<tr>
+<td> Numeric </td>
+<td> 
+
+```rust
+struct Decimal<const N: usize> {
+  digits: u32,
+  exponent: i32,
+  bits: u8,
+  lsu: [u16; N],
+}
+``` 
+
+</td>
+<td>
+
+```
+StructArray<{
+  lossy: f64,
+  actual: Bytes,
+}>
+```
+
+</td>
+<td>
+
+Encoded as two values, a lossy `f64` for sorting and filtering, then a
+serialized representation of `Decimal` as opaque bytes.
+
+See <https://speleotrove.com/decimal/dnnumb.html> for an explanation as to what
+the fields in the Rust type represent.
+
+</td>
+
+<tr>
+<td> Date </td>
+<td> 
+
+```rust
+struct Date {
+  days: i32,
+}
+``` 
+
+</td>
+<td>
+
+`PrimitiveArray<i32>`
+
+</td>
+<td>
+
+Directly encode the number of days.
+
+</td>
+
+<tr>
+<td> Time </td>
+<td> 
+
+```rust
+struct NaiveTime {
+  secs: u32,
+  frac: u32,
+}
+``` 
+
+</td>
+<td>
+
+`PrimitiveArray<u64>`
+
+</td>
+<td>
+
+Represented as the number of microseconds since midnight.
+
+> **Alternative:** Instead of representing this as the number of microseconds
+since midnight we could stich together the two `u32`s from `NaiveTime`. This
+would maybe save some CPU cycles during encoding and decoding, but probably not
+enough to matter, and it locks us into a somewhat less flexible format.
+
+> Note: We only need 37 bits to represent this total range, leaving 27 bits 
+unused. In the future if we support the `TIMETZ` type we could probably also
+represent that in a `u64`, using these extra bits to store the timezone.
+
+</td>
+
+<tr>
+<td> Timestamp </td>
+<td> 
+
+```rust
+struct NaiveDateTime {
+  date: NaiveDate {
+    // (year << 13) | day
+    ymdf: i32,
+  },
+  time: NaiveTime,
+}
+``` 
+
+</td>
+<td>
+
+`PrimitiveArray<i64>`
+
+</td>
+<td>
+
+`chrono` (our underlying date time library) uses a more memory efficient
+encoding of date by squeezing both year and day into a single `i32`, combined
+with a `NaiveTime` this ends up being 12 bytes. 
+
+
+We can repesent this same range of time as the number of microseconds since 
+the UNIX epoch in an `i64`. Postgres does something very similar, the only 
+difference is it uses an offset of 2000-01-01.
+
+</td>
+
+<tr>
+<td> TimestampTz </td>
+<td> 
+
+```rust
+struct DateTime<Tz: TimeZone> {
+    datetime: NaiveDateTime,
+    // purely type info
+    offset: Tz::Offset,
+}
+``` 
+
+</td>
+<td>
+
+`PrimitiveArray<i64>`
+
+</td>
+<td>
+
+Just like Timestamp, we'll encode this as the number of microseconds since
+the UNIX epoch. We don't actually need to store any timezone information, 
+instead we convert to the session timezone when loaded. This is how both 
+Postgres works.
+
+</td>
+
+<tr>
+<td> Interval </td>
+<td> 
+
+```rust
+struct Interval {
+  months: i32,
+  days: i32,
+  micros: i64,
+}
+``` 
+
+</td>
+<td>
+
+`FixedSizeBinary[16]`
+
+</td>
+<td>
+
+Represented by encoding the `months`, `days`, and `micros` fields encoded as 
+little endian. 
+
+> **Alternative:** The smallest possible representation for interval would be
+11 bytes, or 12 if we don't want to do bit swizzling. But other than space
+savings I don't believe there is a benefit to this approach. In fact it would
+incur some computational overhead to encode and there are no benefits from a
+SIMD perspective either.
+
+> **Alternative:** We could represent `Interval`s in a `StructArray` but we
+don't expose the internal details of `Interval` so this wouldn't aid in
+filtering or pushdown. The only benefit of structuring an interval would be for
+space reduction in dictionary encoding, but this is offset by the overhead of
+the struct itself.
+
+</td>
+
+<tr>
+<td> Jsonb </td>
+<td> 
+
+`TODO`
+
+</td>
+<td>
+
+`TODO`
+
+</td>
+<td>
+
+TODO.
+
+</td>
+
+<tr>
+<td> UUID </td>
+<td> 
+
+```rust
+extern crate uuid;
+
+uuid::Uuid([u8; 16])
+``` 
+
+</td>
+<td>
+
+`FixedSizeBinary[16]`
+
+</td>
+<td>
+
+Encode the bytes from the `Uuid` directly into a fixed size buffer.
+
+</td>
+
+<tr>
+<td> Array </td>
+<td> 
+
+```rust
+// DatumList<'a>.
+[T; N]
+``` 
+
+</td>
+<td>
+
+`FixedSizeList<T>[N]`
+
+</td>
+<td>
+
+A column of type array requires all of its elements to be the same size.
+
+> **Alternative:** We could use Arrow's Variable-size list, but it's less
+memory efficient
+
+</td>
+
+<tr>
+<td> List </td>
+<td> 
+
+```rust
+// DatumList<'a>.
+Vec<T>
+``` 
+
+</td>
+<td>
+
+`VariableSizeList<T>`
+
+</td>
+<td>
+
+Unlike `Array`s, `List`s are allowed to be ragged.
+
+</td>
+
+<tr>
+<td> Record </td>
+<td> 
+
+```rust
+Vec<(ColumnName, ColumnType)>
+``` 
+
+</td>
+<td>
+
+`TODO`
+
+</td>
+<td>
+
+TODO
+
+</td>
+
+<tr>
+<td> Map </td>
+<td> 
+
+```rust
+// DatumMap<'a>.
+HashMap<String, T>
+``` 
+
+</td>
+<td>
+
+`MapArray`
+
+</td>
+<td>
+
+The Arrow spec does not include the concept of a Map but the `arrow2` and
+`arrow-rs` crates have a `MapArray` type that is a list of tuples.
+
+> **Alternative:** We could encode maps to some binary format, e.g. proto, and
+store them as a binary blob. While this might be simpler it prevents us from
+being able to push down optimizations into the map.
+
+</td>
+
+<tr>
+<td> MzTimestamp </td>
+<td> 
+
+```rust
+struct MzTimestamp(u64);
+``` 
+
+</td>
+<td>
+
+`PrimitiveArray<u64>`
+
+</td>
+<td>
+
+Number of milliseconds since the UNIX epoch.
+
+</td>
+
+<tr>
+<td> Range </td>
+<td> 
+
+```rust
+struct Range<T> {
+  lower: RangeBound<T> {
+    inclusize: bool,
+    bound: Option<T>,
+  },
+  upper: RangeBound<T>,
+}
+``` 
+
+</td>
+<td>
+
+```
+RangeBound: StructArray<{
+  inclusive: bool,
+  bound: T,
+}>
+```
+
+```
+Range: StructArray<{
+  lower: RangeBound,
+  upper: RangeBound,
+}>
+```
+
+</td>
+<td>
+
+Structure the data as it is in Rust.
+
+Ranges seem pretty interesting and powerful, so Persist having an understanding
+of the data seems worthwhile for the long term. They could also be entirely
+unused (I'm not sure) in which case the complexity of encoding these in a
+structured way might not be worth it.
+
+> **Alternative:** Encode a Range into a binary format and store it as a blob.
+
+</td>
+
+<tr>
+<td> MzAclItem </td>
+<td> 
+
+```rust
+struct MzAclItem {
+  // String
+  grantee: RoleId,
+  // String
+  grantor: RoleId,
+  // u64
+  acl_mode: AclMode,
+}
+``` 
+
+</td>
+<td>
+
+```
+StructArray<{
+  grantee: String,
+  grantor: String,
+  acl_mode: u64,
+}>
+```
+
+</td>
+<td>
+
+Structure the data as it is in Rust.
+
+> **Alternative:** Encode an MzAclItem into a binary format and store it as a blob.
+
+</td>
+
+<tr>
+<td> AclItem </td>
+<td> 
+
+```rust
+struct AclItem {
+  // u32
+  grantee: Oid,
+  // u32
+  grantor: Oid,
+  // u64
+  acl_mode: AclMode,
+}
+``` 
+
+</td>
+<td>
+
+```
+StructArray<{
+  grantee: u32,
+  grantor: u32,
+  acl_mode: u64,
+}>
+```
+
+</td>
+<td>
+
+Structure the data as it is in Rust.
+
+> **Alternative:** It would be relatively easy to stitch together the three
+values that make up an `AclItem` into a `FixedSizeBinary<16>`, it should even
+sort the same as its Rust counterpart.
+
+</td>
+
+</table>
+
+
 ## Minimal Viable Prototype
 
 <!--
