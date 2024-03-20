@@ -39,7 +39,7 @@ use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;
@@ -654,6 +654,15 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                 }
                                 retain_ids.extend(export_ids);
                             } else {
+                                warn!(
+                                    ?export_ids,
+                                    ?compatible,
+                                    ?uncompacted,
+                                    ?subscribe_free,
+                                    old_as_of = ?old_dataflow.as_of,
+                                    new_as_of = ?as_of,
+                                    "dataflow reconciliation failed",
+                                );
                                 todo_commands
                                     .push(ComputeCommand::CreateDataflow(dataflow.clone()));
                             }
