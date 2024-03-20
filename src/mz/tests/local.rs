@@ -16,6 +16,7 @@ mod tests {
     use mz_frontegg_auth::AppPassword;
     use serde::{Deserialize, Serialize};
     use tabled::{Style, Table, Tabled};
+    use uuid::Uuid;
 
     fn get_config_path() -> PathBuf {
         let config_file_path = dirs::cache_dir().unwrap();
@@ -74,7 +75,9 @@ mod tests {
     }
 
     /// Writes a valid config file at the [ConfigFile] default path.
-    fn init_config_file(mock: bool) {
+    fn init_config_file(file_name: &str, mock: bool) {
+        let mut config_path = get_config_path();
+        config_path.set_file_name(file_name);
         let main_config_file = format!(
             r#"
             "profile" = "default"
@@ -94,7 +97,7 @@ mod tests {
             get_password(mock)
         );
 
-        fs::write(get_config_path(), main_config_file).unwrap();
+        fs::write(&config_path, main_config_file).expect("Failed to write config file");
     }
 
     /// Tests local commands that do not requires interacting with any API.
@@ -102,9 +105,13 @@ mod tests {
     #[cfg_attr(coverage, ignore)] // TODO: Reenable when #25976 is fixed
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_local() {
-        init_config_file(true);
-        let config_path_buf = get_config_path();
+        let unique_id = Uuid::new_v4().to_string();
+        let config_file_name = format!("test_local_config_{}.toml", unique_id);
+        init_config_file(&config_file_name, true);
+        let mut config_path_buf = get_config_path();
+        config_path_buf.set_file_name(&config_file_name);
         let config_path = config_path_buf.to_str().unwrap();
+        eprintln!("Config path: {}", config_path);
 
         // Test - `mz config`
         //
@@ -131,7 +138,6 @@ mod tests {
             .failure();
 
         let output = output_to_string(assert);
-        eprintln!("Output: {}", output);
         assert!(output.trim() == "The profile name 'default' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name.");
 
         let assert = cmd()
@@ -145,7 +151,6 @@ mod tests {
             .failure();
 
         let output = output_to_string(assert);
-        eprintln!("Output: {}", output);
         assert!(output.trim() == "The profile name 'alternative' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name.");
 
         // Asert `mz profile config get region --profile alternative`
