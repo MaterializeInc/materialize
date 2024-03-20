@@ -71,6 +71,7 @@ impl Coordinator {
                     replication_factor: plan.replication_factor,
                     disk: plan.disk,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
+                    schedule: plan.schedule.clone(),
                 })
             }
             CreateClusterVariant::Unmanaged(_) => ClusterVariant::Unmanaged,
@@ -138,7 +139,11 @@ impl Coordinator {
         )?;
 
         if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
-            return Err(AdapterError::Unsupported("cluster schedules other than MANUAL"));
+            // todo: remove this check once ClusterScheduleOptionValue::Refresh is
+            // actually implemented.
+            return Err(AdapterError::Unsupported(
+                "cluster schedules other than MANUAL",
+            ));
         }
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
@@ -585,6 +590,7 @@ impl Coordinator {
                     replication_factor: 1,
                     disk,
                     optimizer_feature_overrides: Default::default(),
+                    schedule: Default::default(),
                 });
             }
         }
@@ -598,6 +604,7 @@ impl Coordinator {
                 replication_factor,
                 disk,
                 optimizer_feature_overrides: _,
+                schedule,
             }) => {
                 use AlterOptionParameter::*;
                 match &options.size {
@@ -636,12 +643,17 @@ impl Coordinator {
                     Unchanged => {}
                 }
                 match &options.schedule {
-                    Set(schedule) => {
-                        if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
-                            return Err(AdapterError::Unsupported("cluster schedules other than MANUAL"));
+                    Set(new_schedule) => {
+                        if !matches!(new_schedule, ClusterScheduleOptionValue::Manual) {
+                            // todo: remove this check once ClusterScheduleOptionValue::Refresh is
+                            // actually implemented.
+                            return Err(AdapterError::Unsupported(
+                                "cluster schedules other than MANUAL",
+                            ));
                         }
+                        *schedule = new_schedule.clone();
                     }
-                    Reset => {}
+                    Reset => *schedule = Default::default(),
                     Unchanged => {}
                 }
                 if !matches!(options.replicas, Unchanged) {
@@ -727,6 +739,7 @@ impl Coordinator {
                 idle_arrangement_merge_effort,
                 disk,
                 optimizer_feature_overrides: _,
+                schedule: _,
             },
             ClusterVariantManaged {
                 size: new_size,
@@ -736,6 +749,7 @@ impl Coordinator {
                 idle_arrangement_merge_effort: new_idle_arrangement_merge_effort,
                 disk: new_disk,
                 optimizer_feature_overrides: _,
+                schedule: _,
             },
         ) = (&config, &new_config);
 
@@ -871,6 +885,7 @@ impl Coordinator {
             idle_arrangement_merge_effort: _,
             disk: new_disk,
             optimizer_feature_overrides: _,
+            schedule: _,
         } = &mut new_config;
 
         // Validate replication factor parameter

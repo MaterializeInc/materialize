@@ -3365,7 +3365,7 @@ generate_extracted_config!(
     (
         Schedule,
         ClusterScheduleOptionValue,
-        Default(ClusterScheduleOptionValue::Manual)
+        Default(Default::default())
     )
 );
 

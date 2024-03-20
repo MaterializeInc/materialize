@@ -177,7 +177,7 @@ objects!(v42, v43, v44, v45, v46, v47, v48, v49);
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 49;
+pub const CATALOG_VERSION: u64 = 50;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///

@@ -165,6 +165,7 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("SchemaSpecifier.spec", ATTR)
         .enum_attribute("RoleVars.Entry.val", ATTR)
         .enum_attribute("StateUpdateKind.kind", ATTR)
+        .enum_attribute("ClusterScheduleOptionValue.value", ATTR)
         // Serialize/deserialize the top-level enum in the persist-backed
         // catalog as "internally tagged"[^1] to set up persist pushdown
         // statistics for success.
