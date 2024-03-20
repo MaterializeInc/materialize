@@ -86,7 +86,7 @@ impl TryFrom<Duration> for CompactionWindow {
 ///
 /// This type tracks both a default policy, as well as various holds that may
 /// be expressed, as by transactions to ensure collections remain readable.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct ReadCapability<T = mz_repr::Timestamp>
 where
     T: timely::progress::Timestamp,

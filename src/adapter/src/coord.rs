@@ -131,6 +131,7 @@ use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
+use serde::Serialize;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
@@ -285,6 +286,7 @@ impl Message {
                 Command::Terminate { .. } => "command-terminate",
                 Command::RetireExecute { .. } => "command-retire_execute",
                 Command::CheckConsistency { .. } => "command-check_consistency",
+                Command::Dump { .. } => "command-dump",
             },
             Message::ControllerReady => "controller_ready",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
@@ -872,7 +874,7 @@ pub struct ReplicaMetadata {
 }
 
 /// Metadata about an active connection.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct ConnMeta {
     /// Pgwire specifies that every connection have a 32-bit secret associated
     /// with it, that is known to both the client and the server. Cancellation
@@ -891,6 +893,7 @@ pub struct ConnMeta {
     drop_sinks: BTreeSet<GlobalId>,
 
     /// Channel on which to send notices to a session.
+    #[serde(skip)]
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
 
     /// The role that initiated the database context. Fixed for the duration of the connection.
@@ -2698,6 +2701,92 @@ impl Coordinator {
 
         self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
             .await;
+    }
+
+    /// Returns the state of the [`Coordinator`] formatted as JSON.
+    ///
+    /// The returned value is not guaranteed to be stable and may change at any point in time.
+    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        let active_conns: BTreeMap<_, _> = self
+            .active_conns
+            .iter()
+            .map(|(id, meta)| (id.unhandled().to_string(), meta))
+            .collect();
+        let storage_read_capabilities: BTreeMap<_, _> = self
+            .storage_read_capabilities
+            .iter()
+            .map(|(id, capability)| (id.to_string(), capability))
+            .collect();
+        let compute_read_capabilities: BTreeMap<_, _> = self
+            .compute_read_capabilities
+            .iter()
+            .map(|(id, capability)| (id.to_string(), capability))
+            .collect();
+        let txn_read_holds: BTreeMap<_, _> = self
+            .txn_read_holds
+            .iter()
+            .map(|(id, capability)| (id.unhandled().to_string(), capability))
+            .collect();
+        let pending_peeks: BTreeMap<_, _> = self
+            .pending_peeks
+            .iter()
+            .map(|(id, peek)| (id.to_string(), format!("{peek:#?}")))
+            .collect();
+        let client_pending_peeks: BTreeMap<_, _> = self
+            .client_pending_peeks
+            .iter()
+            .map(|(id, peek)| (id.to_string(), peek))
+            .collect();
+        let pending_real_time_recency_timestamp: BTreeMap<_, _> = self
+            .pending_real_time_recency_timestamp
+            .iter()
+            .map(|(id, timestamp)| (id.unhandled().to_string(), format!("{timestamp:#?}")))
+            .collect();
+        let pending_linearize_read_txns: BTreeMap<_, _> = self
+            .pending_linearize_read_txns
+            .iter()
+            .map(|(id, read_txn)| (id.unhandled().to_string(), format!("{read_txn:#?}")))
+            .collect();
+
+        let map = serde_json::Map::from_iter([
+            (
+                "transient_id_counter".to_string(),
+                serde_json::to_value(self.transient_id_counter)?,
+            ),
+            (
+                "active_conns".to_string(),
+                serde_json::to_value(active_conns)?,
+            ),
+            (
+                "storage_read_capabilities".to_string(),
+                serde_json::to_value(storage_read_capabilities)?,
+            ),
+            (
+                "compute_read_capabilities".to_string(),
+                serde_json::to_value(compute_read_capabilities)?,
+            ),
+            (
+                "txn_read_holds".to_string(),
+                serde_json::to_value(txn_read_holds)?,
+            ),
+            (
+                "pending_peeks".to_string(),
+                serde_json::to_value(pending_peeks)?,
+            ),
+            (
+                "client_pending_peeks".to_string(),
+                serde_json::to_value(client_pending_peeks)?,
+            ),
+            (
+                "pending_real_time_recency_timestamp".to_string(),
+                serde_json::to_value(pending_real_time_recency_timestamp)?,
+            ),
+            (
+                "pending_linearize_read_txns".to_string(),
+                serde_json::to_value(pending_linearize_read_txns)?,
+            ),
+        ]);
+        Ok(serde_json::Value::Object(map))
     }
 }
 

@@ -31,6 +31,7 @@ use mz_ore::instrument;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::read_policy::ReadPolicy;
+use serde::Serialize;
 use timely::progress::Antichain;
 
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -39,7 +40,7 @@ use crate::session::Session;
 use crate::util::ResultExt;
 
 /// Relevant information for acquiring or releasing a bundle of read holds.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct ReadHolds<T> {
     holds: HashMap<Antichain<T>, CollectionIdBundle>,
 }

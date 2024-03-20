@@ -12,13 +12,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_compute_types::ComputeInstanceId;
 use mz_repr::GlobalId;
 use mz_sql::session::metadata::SessionMetadata;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::coord::Coordinator;
 use crate::session::Session;
 
 /// A bundle of storage and compute collection identifiers.
-#[derive(Deserialize, Debug, Default, Clone)]
+#[derive(Deserialize, Debug, Default, Clone, Serialize)]
 pub struct CollectionIdBundle {
     /// The identifiers for sources in the storage layer.
     pub storage_ids: BTreeSet<GlobalId>,
