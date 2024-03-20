@@ -237,6 +237,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
 pub(crate) struct Consolidator<T, D> {
+    context: String,
     metrics: Arc<Metrics>,
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
@@ -258,11 +259,13 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
     /// on the size of the parts that the consolidator will fetch... we'll try and stay below the
     /// limit, but may burst above it if that's necessary to make progress.
     pub fn new(
+        context: String,
         metrics: Arc<Metrics>,
         filter: FetchBatchFilter<T>,
         prefetch_budget_bytes: usize,
     ) -> Self {
         Self {
+            context,
             metrics,
             runs: vec![],
             filter,
@@ -364,6 +367,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         }
 
         let mut iter = ConsolidatingIter::new(
+            &self.context,
             self.initial_state.as_ref().map(borrow_tuple),
             &mut self.drop_stash,
         );
@@ -709,6 +713,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
 
 #[derive(Debug)]
 pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
+    context: &'a str,
     parts: Vec<ConsolidationPartIter<'a, T, D>>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
     upper_bound: Option<(&'a [u8], &'a [u8], T)>,
@@ -722,10 +727,12 @@ where
     D: Codec64 + Semigroup,
 {
     pub fn new(
+        context: &'a str,
         init_state: Option<TupleRef<'a, T, D>>,
         drop_stash: &'a mut Option<Tuple<T, D>>,
     ) -> Self {
         Self {
+            context,
             parts: vec![],
             heap: BinaryHeap::new(),
             upper_bound: None,
@@ -773,7 +780,8 @@ where
                             // Don't want to log the entire KV, but it's interesting to know
                             // whether it's KVs going backwards or 'just' timestamps.
                             panic!(
-                                "data arrived at the consolidator out of order (kvs equal? {})",
+                                "data arrived at the consolidator out of order ({}, kvs equal? {})",
+                                self.context,
                                 (*k0, *v0) == (*k1, *v1)
                             );
                         }
@@ -875,6 +883,7 @@ mod tests {
             let streaming = {
                 // Toy compaction loop!
                 let mut consolidator = Consolidator {
+                    context: "test".to_string(),
                     metrics: Arc::clone(metrics),
                     // Generated runs of data that are sorted, but not necessarily consolidated.
                     // This is because timestamp-advancement may cause us to have duplicate KVTs,
@@ -956,6 +965,7 @@ mod tests {
             let shard_metrics = metrics.shards.shard(&shard_id, "");
 
             let mut consolidator: Consolidator<u64, i64> = Consolidator::new(
+                "test".to_string(),
                 Arc::clone(&metrics),
                 FetchBatchFilter::Compaction {
                     since: desc.since().clone(),
