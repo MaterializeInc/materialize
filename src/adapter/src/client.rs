@@ -10,25 +10,26 @@
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
-use std::pin::{self};
+use std::pin::{self, Pin};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use futures::{FutureExt, Stream, StreamExt};
+use futures::{ready, FutureExt, Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{org_id_conn_bits, IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID};
-use mz_ore::instrument;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{halt, instrument};
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
@@ -552,6 +553,8 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
+    ///
+    /// Note: the provided `cancel_future` must be cancel-safe as it's polled in a `select!` loop.
     #[mz_ore::instrument(level = "debug")]
     pub async fn execute(
         &mut self,
@@ -778,6 +781,9 @@ impl SessionClient {
         self.send_with_cancel(f, futures::future::pending()).await
     }
 
+    /// Send a [`Command`] to the Coordinator, with the ability to cancel the command.
+    ///
+    /// Note: the provided `cancel_future` must be cancel-safe as it's polled in a `select!` loop.
     #[instrument(level = "debug")]
     async fn send_with_cancel<T, F>(
         &mut self,
@@ -816,19 +822,18 @@ impl SessionClient {
             cmd
         });
 
-        // SPOOKY ZONE! See the doc comment on `SessionTerminateGuard` for why this exists.
+        // SPOOKY ZONE! See the doc comment on `SessionClientGuard` for why this exists.
         //
         // tl;dr this guard prevents a race where a `Session` is returned on `rx` but never placed
         // back in `self` because the Future returned by this function is concurrently dropped.
-        let mut guard = SessionTerminateGuard { client: self, rx };
+        let mut guard = SessionClientGuard { client: self, rx };
 
         let mut cancel_future = pin::pin!(cancel_future);
         let mut cancelled = false;
         loop {
             tokio::select! {
-                res = &mut guard => {
-                    let res = res.expect("sender dropped");
-                    let status = if res.result.is_ok() {
+                result = &mut guard => {
+                    let status = if result.is_ok() {
                         "success"
                     } else {
                         "error"
@@ -841,8 +846,7 @@ impl SessionClient {
                             .with_label_values(&[typ, status, name_hint.as_str()])
                             .inc();
                     }
-                    guard.client.session = Some(res.session);
-                    return res.result
+                    return result;
                 },
                 _err = &mut cancel_future, if !cancelled => {
                     cancelled = true;
@@ -1045,15 +1049,18 @@ impl RecordFirstRowStream {
     }
 }
 
-/// ~~SPOOKY ZONE~~
+/// [`SessionClientGuard`] guarantees that the [`Session`] will be placed back into the
+/// [`SessionClient`] if the provided `rx` ever received a response.
 ///
-/// There is a small race that can occur with [`tokio`], a [`SessionClient`], and the `Coordinator`
-/// that requires this Drop guard.
+/// !!SPOOKY ZONE!!
 ///
-/// 1. A [`SessionClient`] can execute a command, sending it's owned [`Session`] to the
+/// A naive handling of a [`SessionClient`] interacting with the semantics of a
+/// [`tokio::sync::oneshot`] cause cause a race, that this drop guard works around.
+///
+/// 1. A [`SessionClient`] can execute a command, sending its owned [`Session`] to the
 ///    Coordinator.
 /// 2. While processing this request, the user closes their connection to Materialize.
-/// 3. The Coordinator (which is run concurrently on a different thread and in a different task)
+/// 3. The Coordinator (which is run concurrently in a different task executing on its own thread)
 ///    finishes processing our request and is able to successfully send a response over the
 ///    provided [`oneshot::Sender`].
 /// 4. [`tokio`] realizes the connection is closed and Drops the task which is awaiting the result
@@ -1071,32 +1078,38 @@ impl RecordFirstRowStream {
 ///                 dropped mid-processing we can check for this race and re-assign the [`Session`]
 ///                 to the [`SessionClient`] so it can properly terminate the session as part of
 ///                 its Drop impl.
-pub struct SessionTerminateGuard<'a, T> {
+pub struct SessionClientGuard<'a, T> {
     client: &'a mut SessionClient,
     rx: oneshot::Receiver<Response<T>>,
 }
 
-impl<'a, T> Future for SessionTerminateGuard<'a, T> {
-    type Output = Result<Response<T>, tokio::sync::oneshot::error::RecvError>;
+impl<'a, T> Future for SessionClientGuard<'a, T> {
+    type Output = Result<T, AdapterError>;
 
-    fn poll(
-        mut self: pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        self.rx.poll_unpin(cx)
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let response = ready!(self.rx.poll_unpin(cx));
+
+        let Ok(response) = response else {
+            halt!("Sender dropped, Coordinator must be shutting down");
+        };
+
+        // Place the Session back in the SessionClient.
+        self.client.session = Some(response.session);
+
+        Poll::Ready(response.result)
     }
 }
 
-impl<'a, T> Drop for SessionTerminateGuard<'a, T> {
+impl<'a, T> Drop for SessionClientGuard<'a, T> {
     fn drop(&mut self) {
-        let SessionTerminateGuard { client, rx } = self;
+        let SessionClientGuard { client, rx } = self;
 
         // We need to explicitly close the channel to make sure if the Coordinator tries sending
         // a response, it will fail. If the sending fails the Coordinator will then terminate the
         // session for us.
         rx.close();
 
-        // Now that the channel is guaranteed close, lets check if we ever received a message and
+        // Now that the channel is guaranteed close, let's check if we ever received a message and
         // if so give the SessionClient back the Session so it can properly terminate it.
         if let Ok(msg) = rx.try_recv() {
             client.session = Some(msg.session);
