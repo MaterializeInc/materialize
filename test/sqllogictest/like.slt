@@ -130,3 +130,52 @@ SELECT s FROM t WHERE s ILIKE like_pat;
 ----
 ABC
 abc
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/26177
+
+statement ok
+CREATE TABLE t2 (text_val TEXT);
+
+statement ok
+INSERT INTO t2 VALUES ('abc');
+
+statement ok
+CREATE CLUSTER test SIZE '2-1';
+
+statement ok
+SET cluster = test;
+
+query B
+SELECT text_val NOT ILIKE '%A%' FROM t2;
+----
+false
+
+query B
+SELECT text_val NOT ILIKE '%A%' FROM t2;
+----
+false
+
+query B
+SELECT text_val NOT ILIKE '%A%' FROM t2;
+----
+false
+
+query B
+SELECT text_val NOT ILIKE '%A%' FROM t2;
+----
+false
+
+query B
+SELECT text_val NOT ILIKE '%A%' FROM t2;
+----
+false
+
+query B
+SELECT text_val NOT ILIKE '%A%' FROM t2;
+----
+false
+
+query B
+SELECT text_val NOT ILIKE '%A%' FROM t2;
+----
+false
