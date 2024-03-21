@@ -22,9 +22,6 @@ def schemas() -> str:
     return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
-@disabled(
-    "#24479 and compaction not predicable and now() not appropriate while mz_now() not applicable"
-)
 class RetainHistoryOnMv(Check):
     def _can_run(self, e: Executor) -> bool:
         return e.current_mz_version >= MzVersion.parse_mz("v0.81.0")
@@ -267,9 +264,6 @@ class RetainHistoryOnMv(Check):
         )
 
 
-@disabled(
-    "#24479 and compaction not predicable and now() not appropriate while mz_now() not applicable"
-)
 class RetainHistoryOnKafkaSource(Check):
     def _can_run(self, e: Executor) -> bool:
         return e.current_mz_version >= MzVersion.parse_mz("v0.81.0")
