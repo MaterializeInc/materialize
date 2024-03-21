@@ -21,7 +21,8 @@ package mz_dyncfg;
 // Intentionally not named with the usual Proto prefix because we pass this
 // around directly.
 message ConfigUpdates {
-    repeated ProtoConfigVal updates = 1;
+    map<string, ProtoConfigVal> updates = 2;
+    reserved 1;
 }
 
 
@@ -29,7 +30,6 @@ message ConfigUpdates {
 //
 // This may be sent across processes, but may not be durably written down.
 message ProtoConfigVal {
-    string name = 1;
     oneof val {
         bool bool = 2;
         uint32 u32 = 6;
@@ -38,6 +38,7 @@ message ProtoConfigVal {
         string string = 4;
         mz_proto.ProtoDuration duration = 5;
     }
+    reserved 1;
 }
 
 message ProtoOptionU64 {

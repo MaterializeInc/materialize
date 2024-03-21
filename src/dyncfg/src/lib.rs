@@ -281,10 +281,12 @@ impl ConfigUpdates {
     /// If a value of the same config has previously been added to these
     /// updates, replaces it.
     pub fn add(&mut self, config: &ConfigEntry) {
-        self.updates.push(ProtoConfigVal {
-            name: config.name.to_owned(),
-            val: config.val.into_proto(),
-        });
+        self.updates.insert(
+            config.name.to_owned(),
+            ProtoConfigVal {
+                val: config.val.into_proto(),
+            },
+        );
     }
 
     /// Adds the entries in `other` to `self`, with `other` taking precedence.
@@ -306,7 +308,7 @@ impl ConfigUpdates {
             T::set(dst, T::get(src))
         }
 
-        for ProtoConfigVal { name, val } in self.updates.iter() {
+        for (name, ProtoConfigVal { val }) in self.updates.iter() {
             let Some(config) = set.configs.get(name) else {
                 error!("config update {} {:?} not known set: {:?}", name, val, set);
                 continue;
@@ -594,5 +596,41 @@ mod tests {
         assert_eq!(USIZE.get(&c1), 3);
         updates.apply(&c1);
         assert_eq!(USIZE.get(&c1), 2);
+    }
+
+    #[mz_ore::test]
+    fn config_updates_extend() {
+        // Regression test for #26196.
+        //
+        // Construct two ConfigUpdates with overlapping, but not identical, sets
+        // of configs. Combine them and assert that the expected number of
+        // updates is present.
+        let mut u1 = {
+            let c = ConfigSet::default().add(&USIZE).add(&STRING);
+            let mut x = ConfigUpdates::default();
+            for e in c.entries() {
+                x.add(e);
+            }
+            x
+        };
+        let u2 = {
+            let c = ConfigSet::default().add(&USIZE).add(&DURATION);
+            usize::set(usize::shared(&USIZE, &c).unwrap(), 2);
+            let mut x = ConfigUpdates::default();
+            for e in c.entries() {
+                x.add(e);
+            }
+            x
+        };
+        assert_eq!(u1.updates.len(), 2);
+        assert_eq!(u2.updates.len(), 2);
+        u1.extend(u2);
+        assert_eq!(u1.updates.len(), 3);
+
+        // Assert that extend kept the correct (later) value for the overlapping
+        // config.
+        let c = ConfigSet::default().add(&USIZE);
+        u1.apply(&c);
+        assert_eq!(USIZE.get(&c), 2);
     }
 }
