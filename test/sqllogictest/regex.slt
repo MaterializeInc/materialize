@@ -125,14 +125,24 @@ CREATE TABLE t(s string, like_pat string, regex_pat string);
 statement ok
 INSERT INTO t VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 'a.*');
 
+statement ok
+INSERT INTO t VALUES (
+  E'test line 1\ntest line 2',
+  '%1%2%',
+  '1.*2'
+);
+
+# Note that sqllogictest can't handle newlines in string output, so replace those when displaying `s`
 query T multiline
 EXPLAIN
-SELECT s FROM t WHERE s~'a.*';
+SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~'a.*';
 ----
 Explained Query:
-  Project (#0)
+  Project (#3)
     Filter is_regexp_match["a.*", case_insensitive=false](#0)
-      ReadStorage materialize.public.t
+      Map (replace(#0, "
+", "<newline>"))
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=(is_regexp_match["a.*", case_insensitive=false](#0))
@@ -140,18 +150,20 @@ Source materialize.public.t
 EOF
 
 query T
-SELECT s FROM t WHERE s~'a.*';
+SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~'a.*';
 ----
 abc
 
 query T multiline
 EXPLAIN
-SELECT s FROM t WHERE s~*'a.*';
+SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~*'a.*';
 ----
 Explained Query:
-  Project (#0)
+  Project (#3)
     Filter is_regexp_match["a.*", case_insensitive=true](#0)
-      ReadStorage materialize.public.t
+      Map (replace(#0, "
+", "<newline>"))
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=(is_regexp_match["a.*", case_insensitive=true](#0))
@@ -159,47 +171,53 @@ Source materialize.public.t
 EOF
 
 query T
-SELECT s FROM t WHERE s~*'a.*';
+SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~*'a.*';
 ----
 ABC
 abc
 
 query T multiline
 EXPLAIN
-SELECT s, regexp_match(s, 'a.*') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*') FROM t;
 ----
 Explained Query:
-  Project (#0, #3)
-    Map (regexp_match["a.*", case_insensitive=false](#0))
+  Project (#3, #4)
+    Map (replace(#0, "
+", "<newline>"), regexp_match["a.*", case_insensitive=false](#0))
       ReadStorage materialize.public.t
 
 EOF
 
 query TT
-SELECT s, regexp_match(s, 'a.*') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*') FROM t;
 ----
 ABC
 NULL
 ccc
+NULL
+test line 1<newline>test line 2
 NULL
 abc
 {abc}
 
 query T multiline
 EXPLAIN
-SELECT s, regexp_match(s, 'a.*', 'i') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*', 'i') FROM t;
 ----
 Explained Query:
-  Project (#0, #3)
-    Map (regexp_match["a.*", case_insensitive=true](#0))
+  Project (#3, #4)
+    Map (replace(#0, "
+", "<newline>"), regexp_match["a.*", case_insensitive=true](#0))
       ReadStorage materialize.public.t
 
 EOF
 
 query TT
-SELECT s, regexp_match(s, 'a.*', 'i') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*', 'i') FROM t;
 ----
 ccc
+NULL
+test line 1<newline>test line 2
 NULL
 ABC
 {ABC}
@@ -207,19 +225,23 @@ abc
 {abc}
 
 query TT
-SELECT s, regexp_match(s, 'a.*', 'ic') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*', 'ic') FROM t;
 ----
 ABC
 NULL
 ccc
 NULL
+test line 1<newline>test line 2
+NULL
 abc
 {abc}
 
 query TT
-SELECT s, regexp_match(s, 'a.*', 'ci') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*', 'ci') FROM t;
 ----
 ccc
+NULL
+test line 1<newline>test line 2
 NULL
 ABC
 {ABC}
@@ -227,18 +249,20 @@ abc
 {abc}
 
 query error db error: ERROR: Evaluation error: invalid regular expression: regex parse error:
-SELECT s FROM t WHERE s ~ '\';
+SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~ '\';
 
 # Dynamic regexes (binary (or variadic) versions)
 
 query T multiline
 EXPLAIN
-SELECT s FROM t WHERE s ~ regex_pat;
+SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~ regex_pat;
 ----
 Explained Query:
-  Project (#0)
+  Project (#3)
     Filter (#0 ~ #2)
-      ReadStorage materialize.public.t
+      Map (replace(#0, "
+", "<newline>"))
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((#0 ~ #2))
@@ -246,18 +270,20 @@ Source materialize.public.t
 EOF
 
 query T
-SELECT s FROM t WHERE s ~ regex_pat;
+SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~ regex_pat;
 ----
 abc
 
 query T multiline
 EXPLAIN
-SELECT s FROM t WHERE s ~* regex_pat;
+SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 ----
 Explained Query:
-  Project (#0)
+  Project (#3)
     Filter (#0 ~* #2)
-      ReadStorage materialize.public.t
+      Map (replace(#0, "
+", "<newline>"))
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((#0 ~* #2))
@@ -265,30 +291,34 @@ Source materialize.public.t
 EOF
 
 query T
-SELECT s FROM t WHERE s ~* regex_pat;
+SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 ----
 ABC
 abc
 
 query T multiline
 EXPLAIN
-SELECT s, regex_pat, regexp_match(s, regex_pat) FROM t;
+SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat) FROM t;
 ----
 Explained Query:
-  Project (#0, #2, #3)
-    Map (regexp_match(#0, #2))
+  Project (#3, #2, #4)
+    Map (replace(#0, "
+", "<newline>"), regexp_match(#0, #2))
       ReadStorage materialize.public.t
 
 EOF
 
 query TTT
-SELECT s, regex_pat, regexp_match(s, regex_pat) FROM t;
+SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat) FROM t;
 ----
 ABC
 a.*
 NULL
 ccc
 a.*
+NULL
+test line 1<newline>test line 2
+1.*2
 NULL
 abc
 a.*
@@ -296,20 +326,24 @@ a.*
 
 query T multiline
 EXPLAIN
-SELECT s, regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
 ----
 Explained Query:
-  Project (#0, #2, #3)
-    Map (regexp_match(#0, #2, "i"))
+  Project (#3, #2, #4)
+    Map (replace(#0, "
+", "<newline>"), regexp_match(#0, #2, "i"))
       ReadStorage materialize.public.t
 
 EOF
 
 query TTT
-SELECT s, regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
 ----
 ccc
 a.*
+NULL
+test line 1<newline>test line 2
+1.*2
 NULL
 ABC
 a.*
@@ -319,7 +353,7 @@ a.*
 {abc}
 
 query TTT
-SELECT s, regex_pat, regexp_match(s, regex_pat, 'ic') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat, 'ic') FROM t;
 ----
 ABC
 a.*
@@ -327,15 +361,21 @@ NULL
 ccc
 a.*
 NULL
+test line 1<newline>test line 2
+1.*2
+NULL
 abc
 a.*
 {abc}
 
 query TTT
-SELECT s, regex_pat, regexp_match(s, regex_pat, 'ci') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat, 'ci') FROM t;
 ----
 ccc
 a.*
+NULL
+test line 1<newline>test line 2
+1.*2
 NULL
 ABC
 a.*
@@ -350,7 +390,7 @@ INSERT INTO T VALUES ('this is gonna be an invalid regex', '', '\');
 # Note: The actual error msg shows the regex itself (as it should), but it seems sqllogictest can't handle multiline
 # error msgs.
 query error db error: ERROR: Evaluation error: invalid regular expression: regex parse error:
-SELECT s FROM t WHERE s ~* regex_pat;
+SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 
 # TODO: multiline literal errors should be printed somehow differently in EXPLAIN
 query T multiline
