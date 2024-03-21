@@ -3644,7 +3644,7 @@ def workflow_test_http_race_condition(
     for thread in threads:
         thread.join()
 
-    time.sleep(5)
+    time.sleep(10)
 
     result = c.sql_query(
         "SELECT * FROM mz_internal.mz_sessions WHERE now() - connected_at > '5s'"

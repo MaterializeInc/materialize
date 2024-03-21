@@ -15,9 +15,14 @@
 
 //! Channel utilities and extensions.
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use async_trait::async_trait;
+use futures::{Future, FutureExt};
 use prometheus::core::Atomic;
 use tokio::sync::mpsc::{error, unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 
 use crate::metrics::PromLabelsExt;
 
@@ -189,6 +194,59 @@ where
             self.metric.bump();
         }
         res
+    }
+}
+
+/// Extensions for oneshot channel types.
+pub trait OneshotReceiverExt<T> {
+    /// If the receiver is dropped without the value being observed, the provided closure will be
+    /// called with the value that was left in the channel.
+    ///
+    /// This is useful in cases where you want to cleanup resources if the receiver of this value
+    /// has gone away. If the sender and receiver are running on separate threads, it's possible
+    /// for the sender to succeed, and for the receiver to be concurrently dropped, never realizing
+    /// that it received a value.
+    fn with_guard<F>(self, guard: F) -> GuardedReceiver<F, T>
+    where
+        F: FnMut(T);
+}
+
+impl<T> OneshotReceiverExt<T> for oneshot::Receiver<T> {
+    fn with_guard<F>(self, guard: F) -> GuardedReceiver<F, T>
+    where
+        F: FnMut(T),
+    {
+        GuardedReceiver { guard, inner: self }
+    }
+}
+
+/// A wrapper around [`oneshot::Receiver`] that will call the provided closure if there is a value
+/// in the receiver when it's dropped.
+#[derive(Debug)]
+pub struct GuardedReceiver<F: FnMut(T), T> {
+    guard: F,
+    inner: oneshot::Receiver<T>,
+}
+
+// Note(parkmycar): If this Unpin requirement becomes too restrictive, we can refactor
+// GuardedReceiver to use `pin_project`.
+impl<F: FnMut(T) + Unpin, T> Future for GuardedReceiver<F, T> {
+    type Output = Result<T, oneshot::error::RecvError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.inner.poll_unpin(cx)
+    }
+}
+
+impl<F: FnMut(T), T> Drop for GuardedReceiver<F, T> {
+    fn drop(&mut self) {
+        // Close the channel so the sender is guaranteed to fail.
+        self.inner.close();
+
+        // If there was some value waiting in the channel call the guard with the value.
+        if let Ok(x) = self.inner.try_recv() {
+            (self.guard)(x)
+        }
     }
 }
 
