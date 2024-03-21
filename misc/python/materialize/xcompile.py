@@ -15,6 +15,7 @@ import sys
 from enum import Enum
 
 from materialize import MZ_ROOT, spawn
+from materialize.rustc_flags import Sanitizer
 
 
 class Arch(Enum):
@@ -109,7 +110,6 @@ def cargo(
     _target_features = ",".join(target_features(arch))
 
     env = {
-        "RUSTFLAGS": " ".join(rustflags),
         **extra_env,
     }
 
@@ -147,6 +147,8 @@ def cargo(
             "-Clink-arg=-fuse-ld=lld",
             f"-L/opt/x-tools/{_target}/{_target}/sysroot/lib",
         ]
+
+    env.update({"RUSTFLAGS": " ".join(rustflags)})
 
     return [
         *_enter_builder(arch, channel),
@@ -187,12 +189,17 @@ def _enter_builder(arch: Arch, channel: str | None = None) -> list[str]:
     if "MZ_DEV_CI_BUILDER" in os.environ or sys.platform == "darwin":
         return []
     else:
+        default_channel = (
+            "stable"
+            if Sanitizer[os.getenv("CI_SANITIZER", "none")] == Sanitizer.none
+            else "nightly"
+        )
         return [
             "env",
             f"MZ_DEV_CI_BUILDER_ARCH={arch}",
             "bin/ci-builder",
             "run",
-            channel if channel else "nightly",
+            channel if channel else default_channel,
         ]
 
 

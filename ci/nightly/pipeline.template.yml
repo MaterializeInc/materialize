@@ -948,7 +948,7 @@ steps:
     steps:
       - id: persist-maelstrom
         label: Maelstrom coverage of persist
-        depends_on: []
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
@@ -960,7 +960,7 @@ steps:
 
       - id: persist-maelstrom-single-node
         label: Long single-node Maelstrom coverage of persist
-        depends_on: []
+        depends_on: build-aarch64
         timeout_in_minutes: 20
         agents:
           queue: linux-aarch64-small
@@ -972,7 +972,7 @@ steps:
 
       - id: persist-maelstrom-multi-node
         label: Long multi-node Maelstrom coverage of persist with postgres consensus
-        depends_on: []
+        depends_on: build-aarch64
         timeout_in_minutes: 20
         agents:
           queue: linux-aarch64-small
@@ -984,7 +984,7 @@ steps:
 
       - id: persist-txn-maelstrom
         label: Maelstrom coverage of persist-txn
-        depends_on: []
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
@@ -996,7 +996,7 @@ steps:
 
       - id: persistence-failpoints
         label: Persistence failpoints
-        depends_on: []
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
