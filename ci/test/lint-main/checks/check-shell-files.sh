@@ -18,7 +18,9 @@ cd "$(dirname "$0")/../../../.."
 . misc/shlib/shlib.bash
 
 if [[ ! "${MZDEV_NO_SHELLCHECK:-}" ]]; then
-    shell_files=$(sort -u <(git_files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.*'))
+    # Only consider a shebang in the first line
+    shell_files=$(sort -u <(git_files '*.sh' '*.bash') <(git grep -n '#!.*bash' -- ':!*.*' | grep ":1:" | sed -e "s/:1:.*//"))
+    echo "$shell_files"
     try xargs shellcheck -P SCRIPTDIR <<< "$shell_files"
 fi
 

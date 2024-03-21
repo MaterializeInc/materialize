@@ -1,3 +1,5 @@
+#!/usr/bin/bash
+
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -7,12 +9,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
-
-RUN apt-get update \
-    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
-        llvm
-
-COPY clusterd sqllogictest /usr/local/bin/
-
-WORKDIR /workdir
+exec /usr/bin/clang -fsanitize="$CI_SANITIZER" \
+  -fuse-ld=lld \
+  --target=x86_64-unknown-linux-gnu \
+  --gcc-toolchain=/opt/x-tools/x86_64-unknown-linux-gnu/ \
+  --sysroot=/opt/x-tools/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot \
+  -L/opt/x-tools/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot/lib \
+  "$@"
