@@ -54,15 +54,6 @@ class VersionConsistencyTest(OutputConsistencyTest):
         self.mz2_connection: Connection | None = None
         self.evaluation_strategy_name: str | None = None
 
-    def shall_run(self, sql_executors: SqlExecutors) -> bool:
-        assert isinstance(sql_executors, MultiVersionSqlExecutors)
-        different_versions_involved = sql_executors.uses_different_versions()
-
-        if not different_versions_involved:
-            print("Involved versions are identical, aborting")
-
-        return different_versions_involved
-
     def get_scenario(self) -> EvaluationScenario:
         return EvaluationScenario.VERSION_CONSISTENCY
 
