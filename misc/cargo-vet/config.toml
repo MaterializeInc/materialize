@@ -838,10 +838,6 @@ criteria = "safe-to-deploy"
 version = "0.6.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.mysql_common]]
-version = "0.31.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.mz-avro]]
 version = "0.7.0"
 criteria = "safe-to-deploy"
