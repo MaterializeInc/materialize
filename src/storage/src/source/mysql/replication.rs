@@ -50,6 +50,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
+use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Concat, Map};
@@ -145,8 +146,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             let connection_config = connection
                 .connection
                 .config(
-                    &*config.config.connection_context.secrets_reader,
+                    &config.config.connection_context.secrets_reader,
                     &config.config,
+                    InTask::Yes,
                 )
                 .await?;
 

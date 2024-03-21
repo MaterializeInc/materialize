@@ -84,6 +84,7 @@ use mz_interchange::json::JsonEncoder;
 use mz_kafka_util::client::{MzClientContext, TunnelingClientContext};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
+use mz_ore::future::InTask;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -274,7 +275,7 @@ impl TransactionalProducer {
 
         let producer: BaseProducer<_> = connection
             .connection
-            .create_with_context(storage_configuration, ctx, &options)
+            .create_with_context(storage_configuration, ctx, &options, InTask::Yes)
             .await?;
 
         let task_name = format!("kafka_sink_producer:{sink_id}");
@@ -757,12 +758,14 @@ fn encode_collection<G: Scope>(
                     //
                     // Note that where this lies in the rendering cycle means that we will publish the
                     // schemas each time the sink is rendered.
-                    let ccsr = csr_connection.connect(&storage_configuration).await?;
+                    let ccsr = csr_connection
+                        .connect(&storage_configuration, InTask::Yes)
+                        .await?;
                     let (key_schema_id, value_schema_id) =
                         mz_storage_client::sink::publish_kafka_schemas(
-                            &ccsr,
-                            &connection.topic,
-                            key_schema.as_deref(),
+                            ccsr,
+                            connection.topic.clone(),
+                            key_schema,
                             Some(mz_ccsr::SchemaType::Avro),
                             &value_schema,
                             mz_ccsr::SchemaType::Avro,

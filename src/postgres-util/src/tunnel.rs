@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_repr::GlobalId;
@@ -96,6 +97,7 @@ pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 pub struct Config {
     inner: tokio_postgres::Config,
     tunnel: TunnelConfig,
+    in_task: InTask,
     ssh_timeout_config: SshTimeoutConfig,
 }
 
@@ -105,10 +107,12 @@ impl Config {
         tunnel: TunnelConfig,
         tcp_timeouts: TcpTimeoutConfig,
         ssh_timeout_config: SshTimeoutConfig,
+        in_task: InTask,
     ) -> Result<Self, PostgresError> {
         let config = Self {
             inner,
             tunnel,
+            in_task,
             ssh_timeout_config,
         }
         .tcp_timeouts(tcp_timeouts);
@@ -223,14 +227,22 @@ impl Config {
 
         match &self.tunnel {
             TunnelConfig::Direct => {
-                let (client, connection) = postgres_config.connect(tls).await?;
+                let (client, connection) = async move { postgres_config.connect(tls).await }
+                    .run_in_task_if(self.in_task, || "pg_connect".to_string())
+                    .await?;
                 task::spawn(|| task_name, connection);
                 Ok(client)
             }
             TunnelConfig::Ssh { config } => {
                 let (host, port) = self.address()?;
                 let tunnel = ssh_tunnel_manager
-                    .connect(config.clone(), host, port, self.ssh_timeout_config)
+                    .connect(
+                        config.clone(),
+                        host,
+                        port,
+                        self.ssh_timeout_config,
+                        self.in_task,
+                    )
                     .await
                     .map_err(PostgresError::Ssh)?;
 
@@ -245,7 +257,10 @@ impl Config {
                 // Ideally we'd be able to configure SSH to enable TCP keepalives on the other
                 // end of the tunnel, between the SSH bastion host and the PostgreSQL server,
                 // but SSH does not expose an option for this.
-                let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
+                let (client, connection) =
+                    async move { postgres_config.connect_raw(tcp_stream, tls).await }
+                        .run_in_task_if(self.in_task, || "pg_connect".to_string())
+                        .await?;
                 task::spawn(|| task_name, async {
                     let _tunnel = tunnel; // Keep SSH tunnel alive for duration of connection.
 
@@ -274,7 +289,9 @@ impl Config {
                     ),
                 }
 
-                let (client, connection) = postgres_config.connect(tls).await?;
+                let (client, connection) = async move { postgres_config.connect(tls).await }
+                    .run_in_task_if(self.in_task, || "pg_connect".to_string())
+                    .await?;
                 task::spawn(|| task_name, connection);
                 Ok(client)
             }
