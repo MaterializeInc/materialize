@@ -315,6 +315,7 @@ class CopyToS3Action(Action):
             [
                 "in the same timedomain",
                 'is not allowed from the "mz_introspection" cluster',
+                "copy has been terminated because underlying relation",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -328,7 +329,7 @@ class CopyToS3Action(Action):
     def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         obj_name = str(obj)
-        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{obj_name}' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')"
+        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{self.rng.randrange(100)}' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')"
 
         exe.execute(query, explainable=False)
         return True

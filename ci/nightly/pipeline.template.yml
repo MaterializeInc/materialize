@@ -186,7 +186,7 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--redpanda, --aws-region=us-east-1]
+              args: [--redpanda]
 
       - id: redpanda-testdrive-aarch64
         label: ":panda_face: :racing_car: testdrive aarch64"
@@ -198,7 +198,7 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--redpanda, --aws-region=us-east-1]
+              args: [--redpanda]
         skip: "Disabled due to taking too long for the value provided"
 
       - id: testdrive-partitions-5
@@ -211,7 +211,7 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--aws-region=us-east-1, --kafka-default-partitions=5]
+              args: [--kafka-default-partitions=5]
 
       - id: testdrive-replicas-4
         label: ":racing_car: testdrive 4 replicas"
@@ -223,7 +223,7 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--aws-region=us-east-1, --replicas=4]
+              args: [--replicas=4]
 
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
@@ -235,7 +235,7 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--aws-region=us-east-1, --default-size=1]
+              args: [--default-size=1]
 
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
@@ -247,7 +247,7 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--aws-region=us-east-1, --default-size=8]
+              args: [--default-size=8]
 
       - id: testdrive-in-cloudtest
         label: Full Testdrive in Cloudtest (K8s)
@@ -258,7 +258,7 @@ steps:
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
-              args: [-m=long, --aws-region=us-east-1, test/cloudtest/test_full_testdrive.py]
+              args: [-m=long, test/cloudtest/test_full_testdrive.py]
         sanitizer: skip
 
       - id: persistence-testdrive
@@ -271,7 +271,7 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--aws-region=us-east-1, --persistent-user-tables]
+              args: [--persistent-user-tables]
         skip: "Persistence tests disabled"
 
   - group: Limits
@@ -844,7 +844,7 @@ steps:
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
-              args: [-m=long,  --aws-region=us-east-1, test/cloudtest/test_upgrade.py]
+              args: [-m=long, test/cloudtest/test_upgrade.py]
         sanitizer: skip
 
   - group: "K8s node recovery cloudtest"

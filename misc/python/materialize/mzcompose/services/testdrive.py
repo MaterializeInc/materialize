@@ -87,7 +87,7 @@ class Testdrive(Service):
         if aws_region:
             entrypoint.append(f"--aws-region={aws_region}")
 
-        if aws_endpoint:
+        if aws_endpoint and not aws_region:
             entrypoint.append(f"--aws-endpoint={aws_endpoint}")
             entrypoint.append(f"--var=aws-endpoint={aws_endpoint}")
 
