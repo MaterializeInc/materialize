@@ -60,9 +60,11 @@ pub struct Regex {
 }
 
 impl Regex {
-    /// A simple constructor for the default setting of `dot_matches_new_line: false`.
+    /// A simple constructor for the default setting of `dot_matches_new_line: true`.
+    /// See <https://www.postgresql.org/docs/current/functions-matching.html#POSIX-MATCHING-RULES>
+    /// "newline-sensitive matching"
     pub fn new(pattern: String, case_insensitive: bool) -> Result<Regex, Error> {
-        Self::new_dot_matches_new_line(pattern, case_insensitive, false)
+        Self::new_dot_matches_new_line(pattern, case_insensitive, true)
     }
 
     /// Allows explicitly setting `dot_matches_new_line`.
@@ -143,8 +145,6 @@ impl RustType<ProtoRegex> for Regex {
         Ok(Regex::new_dot_matches_new_line(
             proto.pattern,
             proto.case_insensitive,
-            // We used to not have the following field. If we happen to deserialize an old object,
-            // this will default to false, which is exactly what we want.
             proto.dot_matches_new_line,
         )?)
     }
@@ -365,8 +365,8 @@ mod tests {
             let orig_regex = Regex::new("A.*B".to_string(), true).unwrap();
             let serialized: String = serde_json::to_string(&orig_regex).unwrap();
             let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), false);
-            assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), false);
+            assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), true);
+            assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), true);
         }
     }
 }
