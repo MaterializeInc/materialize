@@ -264,9 +264,7 @@ where
     fn update_parameters(&mut self, config_params: StorageParameters) {
         // We serialize the dyncfg updates in StorageParameters, but configure
         // persist separately.
-        if let Some(updates) = &config_params.dyncfg_updates {
-            updates.apply(self.persist.cfg());
-        }
+        config_params.dyncfg_updates.apply(self.persist.cfg());
 
         for client in self.clients.values_mut() {
             client.send(StorageCommand::UpdateConfiguration(config_params.clone()));
