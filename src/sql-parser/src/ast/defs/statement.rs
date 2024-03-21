@@ -2092,8 +2092,9 @@ impl<T: AstInfo> AstDisplay for AlterRetainHistoryStatement<T> {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&self.name);
-        f.write_str(" SET RETAIN HISTORY ");
+        f.write_str(" SET (RETAIN HISTORY ");
         f.write_node(&self.history);
+        f.write_str(")");
     }
 }
 impl_display_t!(AlterRetainHistoryStatement);

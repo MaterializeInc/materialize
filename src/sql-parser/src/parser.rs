@@ -5148,17 +5148,19 @@ impl<'a> Parser<'a> {
                     to_item_name,
                 }))
             }
-            SET => match self
-                .expect_one_of_keywords(&[CLUSTER, RETAIN])
-                .map_parser_err(StatementKind::AlterObjectRename)?
-            {
-                CLUSTER => self.parse_alter_set_cluster(if_exists, name, object_type),
-                RETAIN => {
-                    self.expect_keywords(&[HISTORY])
+            SET => {
+                if self.parse_keyword(CLUSTER) {
+                    self.parse_alter_set_cluster(if_exists, name, object_type)
+                } else {
+                    self.expect_token(&Token::LParen)
+                        .map_no_statement_parser_err()?;
+                    self.expect_keywords(&[RETAIN, HISTORY])
                         .map_parser_err(StatementKind::AlterRetainHistory)?;
                     let history = self
                         .parse_retain_history()
                         .map_parser_err(StatementKind::AlterRetainHistory)?;
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterCluster)?;
                     Ok(Statement::AlterRetainHistory(AlterRetainHistoryStatement {
                         object_type,
                         if_exists,
@@ -5166,8 +5168,7 @@ impl<'a> Parser<'a> {
                         history,
                     }))
                 }
-                _ => unreachable!(),
-            },
+            }
             OWNER => {
                 self.expect_keyword(TO).map_no_statement_parser_err()?;
                 let new_owner = self
