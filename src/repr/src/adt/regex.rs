@@ -36,9 +36,10 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 ///
 /// This type wraps [`regex::Regex`] and imbues it with implementations of the
 /// above traits. Two regexes are considered equal iff their string
-/// representation is identical. The [`PartialOrd`], [`Ord`], and [`Hash`]
-/// implementations are similarly based upon the string representation. As
-/// mentioned above, is not the natural equivalence relation for regexes: for
+/// representation is identical, plus flags, such as `case_insensitive`,
+/// are identical. The [`PartialOrd`], [`Ord`], and [`Hash`] implementations
+/// are similarly based upon the string representation plus flags. As
+/// mentioned above, this is not the natural equivalence relation for regexes: for
 /// example, the regexes `aa*` and `a+` define the same language, but would not
 /// compare as equal with this implementation of [`PartialEq`]. Still, it is
 /// often useful to have _some_ equivalence relation available (e.g., to store
@@ -47,23 +48,36 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 ///
 /// [regex::Regex] is hard to serialize (because of the compiled code), so our approach is to
 /// instead serialize this wrapper struct, where we skip serializing the actual regex field, and
-/// we reconstruct the regex field from the other two fields upon deserialization.
+/// we reconstruct the regex field from the other fields upon deserialization.
 /// (Earlier, serialization was buggy due to <https://github.com/tailhook/serde-regex/issues/14>,
 /// and also making the same mistake in our own protobuf serialization code.)
 #[derive(Debug, Clone, MzReflect)]
 pub struct Regex {
     pub pattern: String,
     pub case_insensitive: bool,
+    pub dot_matches_new_line: bool,
     pub regex: regex::Regex,
 }
 
 impl Regex {
+    /// A simple constructor for the default setting of `dot_matches_new_line: false`.
     pub fn new(pattern: String, case_insensitive: bool) -> Result<Regex, Error> {
+        Self::new_dot_matches_new_line(pattern, case_insensitive, false)
+    }
+
+    /// Allows explicitly setting `dot_matches_new_line`.
+    pub fn new_dot_matches_new_line(
+        pattern: String,
+        case_insensitive: bool,
+        dot_matches_new_line: bool,
+    ) -> Result<Regex, Error> {
         let mut regex_builder = RegexBuilder::new(pattern.as_str());
         regex_builder.case_insensitive(case_insensitive);
+        regex_builder.dot_matches_new_line(dot_matches_new_line);
         Ok(Regex {
             pattern,
             case_insensitive,
+            dot_matches_new_line,
             regex: regex_builder.build()?,
         })
     }
@@ -71,7 +85,9 @@ impl Regex {
 
 impl PartialEq<Regex> for Regex {
     fn eq(&self, other: &Regex) -> bool {
-        self.pattern == other.pattern && self.case_insensitive == other.case_insensitive
+        self.pattern == other.pattern
+            && self.case_insensitive == other.case_insensitive
+            && self.dot_matches_new_line == other.dot_matches_new_line
     }
 }
 
@@ -85,7 +101,16 @@ impl PartialOrd for Regex {
 
 impl Ord for Regex {
     fn cmp(&self, other: &Regex) -> Ordering {
-        (&self.pattern, self.case_insensitive).cmp(&(&other.pattern, other.case_insensitive))
+        (
+            &self.pattern,
+            self.case_insensitive,
+            self.dot_matches_new_line,
+        )
+            .cmp(&(
+                &other.pattern,
+                other.case_insensitive,
+                other.dot_matches_new_line,
+            ))
     }
 }
 
@@ -93,6 +118,7 @@ impl Hash for Regex {
     fn hash<H: Hasher>(&self, hasher: &mut H) {
         self.pattern.hash(hasher);
         self.case_insensitive.hash(hasher);
+        self.dot_matches_new_line.hash(hasher);
     }
 }
 
@@ -109,11 +135,18 @@ impl RustType<ProtoRegex> for Regex {
         ProtoRegex {
             pattern: self.pattern.clone(),
             case_insensitive: self.case_insensitive,
+            dot_matches_new_line: self.dot_matches_new_line,
         }
     }
 
     fn from_proto(proto: ProtoRegex) -> Result<Self, TryFromProtoError> {
-        Ok(Regex::new(proto.pattern, proto.case_insensitive)?)
+        Ok(Regex::new_dot_matches_new_line(
+            proto.pattern,
+            proto.case_insensitive,
+            // We used to not have the following field. If we happen to deserialize an old object,
+            // this will default to false, which is exactly what we want.
+            proto.dot_matches_new_line,
+        )?)
     }
 }
 
@@ -122,9 +155,10 @@ impl Serialize for Regex {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("Regex", 2)?;
+        let mut state = serializer.serialize_struct("Regex", 3)?;
         state.serialize_field("pattern", &self.pattern)?;
         state.serialize_field("case_insensitive", &self.case_insensitive)?;
+        state.serialize_field("dot_matches_new_line", &self.dot_matches_new_line)?;
         state.end()
     }
 }
@@ -137,6 +171,7 @@ impl<'de> Deserialize<'de> for Regex {
         enum Field {
             Pattern,
             CaseInsensitive,
+            DotMatchesNewLine,
         }
 
         impl<'de> Deserialize<'de> for Field {
@@ -150,7 +185,9 @@ impl<'de> Deserialize<'de> for Regex {
                     type Value = Field;
 
                     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                        formatter.write_str("pattern string or case_insensitive bool")
+                        formatter.write_str(
+                            "pattern string or case_insensitive bool or dot_matches_new_line bool",
+                        )
                     }
 
                     fn visit_str<E>(self, value: &str) -> Result<Field, E>
@@ -160,6 +197,7 @@ impl<'de> Deserialize<'de> for Regex {
                         match value {
                             "pattern" => Ok(Field::Pattern),
                             "case_insensitive" => Ok(Field::CaseInsensitive),
+                            "dot_matches_new_line" => Ok(Field::DotMatchesNewLine),
                             _ => Err(de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -188,12 +226,16 @@ impl<'de> Deserialize<'de> for Regex {
                 let case_insensitive = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                Regex::new(pattern, case_insensitive).map_err(|err| {
-                    V::Error::custom(format!(
-                        "Unable to recreate regex during deserialization: {}",
-                        err
-                    ))
-                })
+                let dot_matches_new_line = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Regex::new_dot_matches_new_line(pattern, case_insensitive, dot_matches_new_line)
+                    .map_err(|err| {
+                        V::Error::custom(format!(
+                            "Unable to recreate regex during deserialization: {}",
+                            err
+                        ))
+                    })
             }
 
             fn visit_map<V>(self, mut map: V) -> Result<Regex, V::Error>
@@ -202,6 +244,7 @@ impl<'de> Deserialize<'de> for Regex {
             {
                 let mut pattern: Option<String> = None;
                 let mut case_insensitive: Option<bool> = None;
+                let mut dot_matches_new_line: Option<bool> = None;
                 while let Some(key) = map.next_key()? {
                     match key {
                         Field::Pattern => {
@@ -216,21 +259,30 @@ impl<'de> Deserialize<'de> for Regex {
                             }
                             case_insensitive = Some(map.next_value()?);
                         }
+                        Field::DotMatchesNewLine => {
+                            if dot_matches_new_line.is_some() {
+                                return Err(de::Error::duplicate_field("dot_matches_new_line"));
+                            }
+                            dot_matches_new_line = Some(map.next_value()?);
+                        }
                     }
                 }
                 let pattern = pattern.ok_or_else(|| de::Error::missing_field("pattern"))?;
                 let case_insensitive =
                     case_insensitive.ok_or_else(|| de::Error::missing_field("case_insensitive"))?;
-                Regex::new(pattern, case_insensitive).map_err(|err| {
-                    V::Error::custom(format!(
-                        "Unable to recreate regex during deserialization: {}",
-                        err
-                    ))
-                })
+                let dot_matches_new_line = dot_matches_new_line
+                    .ok_or_else(|| de::Error::missing_field("dot_matches_new_line"))?;
+                Regex::new_dot_matches_new_line(pattern, case_insensitive, dot_matches_new_line)
+                    .map_err(|err| {
+                        V::Error::custom(format!(
+                            "Unable to recreate regex during deserialization: {}",
+                            err
+                        ))
+                    })
             }
         }
 
-        const FIELDS: &[&str] = &["pattern", "case_insensitive"];
+        const FIELDS: &[&str] = &["pattern", "case_insensitive", "dot_matches_new_line"];
         deserializer.deserialize_struct("Regex", FIELDS, RegexVisitor)
     }
 }
@@ -247,10 +299,10 @@ const END_SYMBOLS: &str = r"(\$|(\\z))?";
 prop_compose! {
     pub fn any_regex()
                 (b in BEGINNING_SYMBOLS, c in CHARACTERS,
-                 r in REPETITIONS, e in END_SYMBOLS, case_insensitive in any::<bool>())
+                 r in REPETITIONS, e in END_SYMBOLS, case_insensitive in any::<bool>(), dot_matches_new_line in any::<bool>())
                 -> Regex {
         let string = format!("{}{}{}{}", b, c, r, e);
-        Regex::new(string, case_insensitive).unwrap()
+        Regex::new_dot_matches_new_line(string, case_insensitive, dot_matches_new_line).unwrap()
     }
 }
 
@@ -271,9 +323,9 @@ mod tests {
         }
     }
 
-    // This was failing before due to the derived serde serialization being incorrect, because of
-    // <https://github.com/tailhook/serde-regex/issues/14>.
-    // Nowadays, we use our own handwritten Serialize/Deserialize impls for our Regex wrapper struct.
+    /// This was failing before due to the derived serde serialization being incorrect, because of
+    /// <https://github.com/tailhook/serde-regex/issues/14>.
+    /// Nowadays, we use our own handwritten Serialize/Deserialize impls for our Regex wrapper struct.
     #[mz_ore::test]
     fn regex_serde_case_insensitive() {
         let orig_regex = Regex::new("AAA".to_string(), true).unwrap();
@@ -284,5 +336,37 @@ mod tests {
         // sensitivity).
         assert_eq!(orig_regex.regex.is_match("aaa"), true);
         assert_eq!(roundtrip_result.regex.is_match("aaa"), true);
+    }
+
+    /// Test the roundtripping of `dot_matches_new_line`.
+    /// (Similar to the above `regex_serde_case_insensitive`.)
+    #[mz_ore::test]
+    fn regex_serde_dot_matches_new_line() {
+        {
+            // dot_matches_new_line: true
+            let orig_regex =
+                Regex::new_dot_matches_new_line("A.*B".to_string(), true, true).unwrap();
+            let serialized: String = serde_json::to_string(&orig_regex).unwrap();
+            let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), true);
+            assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), true);
+        }
+        {
+            // dot_matches_new_line: false
+            let orig_regex =
+                Regex::new_dot_matches_new_line("A.*B".to_string(), true, false).unwrap();
+            let serialized: String = serde_json::to_string(&orig_regex).unwrap();
+            let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), false);
+            assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), false);
+        }
+        {
+            // dot_matches_new_line: default
+            let orig_regex = Regex::new("A.*B".to_string(), true).unwrap();
+            let serialized: String = serde_json::to_string(&orig_regex).unwrap();
+            let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), false);
+            assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), false);
+        }
     }
 }
