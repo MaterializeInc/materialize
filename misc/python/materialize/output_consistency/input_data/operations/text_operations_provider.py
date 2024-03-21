@@ -114,8 +114,6 @@ TEXT_OPERATION_TYPES.append(
         "$ ILIKE $",
         [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
-        # TODO: #26177 (ILIKE in data-flow rendering produces incorrect results when used with multiple replicas)
-        is_enabled=False,
     )
 )
 
@@ -134,8 +132,6 @@ TEXT_OPERATION_TYPES.append(
         "$ NOT ILIKE $",
         [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
-        # TODO: #26177 (ILIKE in data-flow rendering produces incorrect results when used with multiple replicas)
-        is_enabled=False,
     )
 )
 
