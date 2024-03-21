@@ -1060,15 +1060,6 @@ impl Stash {
             .await
     }
 
-    /// Returns Ok if the stash is the current leader and an error otherwise.
-    ///
-    /// Note: This can be optimized to not increment the version, which is done automatically via
-    /// `with_commit`. It will probably be more efficient to retry an in-determinate read-only
-    /// transaction than relying on incrementing the version.
-    pub async fn confirm_leadership(&mut self) -> Result<(), StashError> {
-        self.with_transaction(|_| Box::pin(async { Ok(()) })).await
-    }
-
     pub fn is_writeable(&self) -> bool {
         matches!(self.txn_mode, TransactionMode::Writeable)
     }

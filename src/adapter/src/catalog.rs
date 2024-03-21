@@ -3110,11 +3110,6 @@ impl Catalog {
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
     }
 
-    #[mz_ore::instrument(level = "debug")]
-    pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
-        Ok(self.storage().await.confirm_leadership().await?)
-    }
-
     /// Parses the given SQL string into a `CatalogItem`.
     #[mz_ore::instrument]
     fn parse_item(

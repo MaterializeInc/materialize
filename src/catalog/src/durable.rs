@@ -217,11 +217,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     async fn commit_transaction(&mut self, txn_batch: TransactionBatch)
         -> Result<(), CatalogError>;
 
-    /// Confirms that this catalog is connected as the current leader.
-    ///
-    /// NB: We may remove this in later iterations of Pv2.
-    async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
-
     /// Gets all storage usage events and permanently deletes from the catalog those
     /// that happened more than the retention period ago from boot_ts.
     ///

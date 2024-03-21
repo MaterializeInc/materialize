@@ -1309,25 +1309,6 @@ impl DurableCatalogState for PersistCatalogState {
             .await
     }
 
-    #[mz_ore::instrument(level = "debug")]
-    async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
-        // Read only catalog does not care about leadership.
-        if self.is_read_only() {
-            return Ok(());
-        }
-
-        let upper = self.current_upper().await;
-        if upper == self.upper {
-            Ok(())
-        } else {
-            Err(DurableCatalogError::Fence(format!(
-                "current catalog upper {:?} fenced by new catalog upper {:?}",
-                self.upper, upper
-            ))
-            .into())
-        }
-    }
-
     // TODO(jkosh44) For most modifications we delegate to transactions to avoid duplicate code.
     // This is slightly inefficient because we have to clone an entire snapshot when we usually
     // only need one part of the snapshot. A Potential mitigation against these performance hits is
@@ -1390,8 +1371,6 @@ impl DurableCatalogState for PersistCatalogState {
             let mut txn = self.transaction().await?;
             txn.remove_storage_usage_events(expired);
             txn.commit().await?;
-        } else {
-            self.confirm_leadership().await?;
         }
 
         Ok(events)

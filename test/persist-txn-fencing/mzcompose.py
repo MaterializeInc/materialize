@@ -229,8 +229,7 @@ def run_workload(c: Composition, workload: Workload) -> None:
         # Confirm that the first Mz has properly given up the ghost
         mz_first_log = c.invoke("logs", "mz_first", capture=True)
         assert (
-            "unable to confirm leadership" in mz_first_log.stdout
-            or "unexpected fence epoch" in mz_first_log.stdout
+            "unexpected fence epoch" in mz_first_log.stdout
             or "fenced by new catalog upper" in mz_first_log.stdout
         )
 

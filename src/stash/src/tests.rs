@@ -606,8 +606,6 @@ async fn test_stash_readonly() {
         BTreeMap::from([(1, 2)])
     );
 
-    // The previous stash should still be the leader.
-    assert!(stash_rw.confirm_leadership().await.is_ok());
     stash_rw.verify().await.unwrap();
     factory.drop().await;
 }
@@ -658,8 +656,6 @@ async fn test_stash_savepoint() {
 
     drop(stash_sp);
 
-    // The previous stash should still be the leader.
-    assert!(stash_rw.confirm_leadership().await.is_ok());
     // Verify c1 didn't change.
     assert_eq!(
         C1.peek_one(&mut stash_rw).await.unwrap(),

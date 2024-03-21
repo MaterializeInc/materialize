@@ -273,20 +273,6 @@ impl Coordinator {
             advance_to,
         } = self.get_local_write_ts().await;
 
-        // While we're flipping on the feature flags for persist-txn tables and
-        // the separated Postgres timestamp oracle, we also need to confirm
-        // leadership on writes _after_ getting the timestamp and _before_
-        // writing anything to table shards. See the big comment on `init_txns`
-        // in the Storage controller for details.
-        //
-        // TODO: Remove this after both (either?) of the above features are on
-        // for good and no possibility of running the old code.
-        let () = self
-            .catalog
-            .confirm_leadership()
-            .await
-            .unwrap_or_terminate("unable to confirm leadership");
-
         let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(self.pending_writes.len());
         let mut notifies = Vec::new();

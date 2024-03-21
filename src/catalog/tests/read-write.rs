@@ -29,52 +29,6 @@ use uuid::Uuid;
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_confirm_leadership() {
-    let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let openable_state2 = test_persist_backed_catalog_state(persist_client, organization_id).await;
-    test_confirm_leadership(openable_state1, openable_state2).await;
-}
-
-async fn test_confirm_leadership(
-    openable_state1: impl OpenableDurableCatalogState,
-    openable_state2: impl OpenableDurableCatalogState,
-) {
-    let mut state1 = Box::new(openable_state1)
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
-        .await
-        .unwrap();
-    assert!(state1.confirm_leadership().await.is_ok());
-
-    let mut state2 = Box::new(openable_state2)
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
-        .await
-        .unwrap();
-    assert!(state2.confirm_leadership().await.is_ok());
-
-    let err = state1.confirm_leadership().await.unwrap_err();
-    assert!(matches!(
-        err,
-        CatalogError::Durable(DurableCatalogError::Fence(_))
-    ));
-
-    // Test that state1 can't start a transaction.
-    let err = match state1.transaction().await {
-        Ok(_) => panic!("unexpected Ok"),
-        Err(e) => e,
-    };
-    assert!(matches!(
-        err,
-        CatalogError::Durable(DurableCatalogError::Fence(_))
-    ));
-    Box::new(state1).expire().await;
-    Box::new(state2).expire().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_get_and_prune_storage_usage() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
