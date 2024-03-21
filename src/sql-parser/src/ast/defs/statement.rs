@@ -23,7 +23,7 @@ use std::fmt;
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use crate::ast::display::{self, AstDisplay, AstFormatter};
+use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
     AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
     CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceFormat,
@@ -374,21 +374,32 @@ impl AstDisplay for CopyOptionName {
     }
 }
 
+impl WithOptionName for CopyOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CopyOptionName::Format
+            | CopyOptionName::Delimiter
+            | CopyOptionName::Null
+            | CopyOptionName::Escape
+            | CopyOptionName::Quote
+            | CopyOptionName::Header
+            | CopyOptionName::AwsConnection
+            | CopyOptionName::MaxFileSize => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CopyOption<T: AstInfo> {
     pub name: CopyOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for CopyOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(CopyOption);
 
 /// `COPY`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -618,21 +629,25 @@ impl AstDisplay for KafkaBrokerAwsPrivatelinkOptionName {
 }
 impl_display!(KafkaBrokerAwsPrivatelinkOptionName);
 
+impl WithOptionName for KafkaBrokerAwsPrivatelinkOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            Self::AvailabilityZone | Self::Port => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct KafkaBrokerAwsPrivatelinkOption<T: AstInfo> {
     pub name: KafkaBrokerAwsPrivatelinkOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for KafkaBrokerAwsPrivatelinkOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(value) = &self.value {
-            f.write_str(" ");
-            f.write_node(value);
-        }
-    }
-}
+impl_display_for_with_option!(KafkaBrokerAwsPrivatelinkOption);
 impl_display_t!(KafkaBrokerAwsPrivatelinkOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1086,21 +1101,25 @@ impl AstDisplay for CreateSubsourceOptionName {
     }
 }
 
+impl WithOptionName for CreateSubsourceOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CreateSubsourceOptionName::Progress | CreateSubsourceOptionName::References => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSubsourceOption<T: AstInfo> {
     pub name: CreateSubsourceOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for CreateSubsourceOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(CreateSubsourceOption);
 
 /// `CREATE SUBSOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1152,21 +1171,25 @@ impl AstDisplay for CreateSinkOptionName {
     }
 }
 
+impl WithOptionName for CreateSinkOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CreateSinkOptionName::Snapshot => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CreateSinkOption<T: AstInfo> {
     pub name: CreateSinkOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for CreateSinkOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(CreateSinkOption);
 
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1419,21 +1442,25 @@ impl AstDisplay for TableOptionName {
     }
 }
 
+impl WithOptionName for TableOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            TableOptionName::RetainHistory => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableOption<T: AstInfo> {
     pub name: TableOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for TableOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(TableOption);
 
 /// `CREATE INDEX`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1502,21 +1529,25 @@ impl AstDisplay for IndexOptionName {
     }
 }
 
+impl WithOptionName for IndexOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            IndexOptionName::RetainHistory => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IndexOption<T: AstInfo> {
     pub name: IndexOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for IndexOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(IndexOption);
 
 /// A `CREATE ROLE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1716,22 +1747,34 @@ impl AstDisplay for ClusterOptionName {
     }
 }
 
+impl WithOptionName for ClusterOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ClusterOptionName::AvailabilityZones
+            | ClusterOptionName::Disk
+            | ClusterOptionName::IdleArrangementMergeEffort
+            | ClusterOptionName::IntrospectionDebugging
+            | ClusterOptionName::IntrospectionInterval
+            | ClusterOptionName::Managed
+            | ClusterOptionName::Replicas
+            | ClusterOptionName::ReplicationFactor
+            | ClusterOptionName::Size => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CLUSTER` statement.
 pub struct ClusterOption<T: AstInfo> {
     pub name: ClusterOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for ClusterOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(ClusterOption);
 
 // Note: the `AstDisplay` implementation and `Parser::parse_` method for this
 // enum are generated automatically by this crate's `build.rs`.
@@ -1744,21 +1787,29 @@ pub enum ClusterFeatureName {
     EnableVariadicLeftJoinLowering,
 }
 
+impl WithOptionName for ClusterFeatureName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ClusterFeatureName::ReoptimizeImportedViews
+            | ClusterFeatureName::EnableNewOuterJoinLowering
+            | ClusterFeatureName::EnableEagerDeltaJoins
+            | ClusterFeatureName::EnableEquivalencePropagation
+            | ClusterFeatureName::EnableVariadicLeftJoinLowering => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ClusterFeature<T: AstInfo> {
     pub name: ClusterFeatureName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for ClusterFeature<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(ClusterFeature);
 
 /// `CREATE CLUSTER ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1924,22 +1975,38 @@ impl AstDisplay for ReplicaOptionName {
     }
 }
 
+impl WithOptionName for ReplicaOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ReplicaOptionName::BilledAs
+            | ReplicaOptionName::Size
+            | ReplicaOptionName::AvailabilityZone
+            | ReplicaOptionName::StorageAddresses
+            | ReplicaOptionName::StoragectlAddresses
+            | ReplicaOptionName::ComputectlAddresses
+            | ReplicaOptionName::ComputeAddresses
+            | ReplicaOptionName::Workers
+            | ReplicaOptionName::Internal
+            | ReplicaOptionName::IntrospectionInterval
+            | ReplicaOptionName::IntrospectionDebugging
+            | ReplicaOptionName::IdleArrangementMergeEffort
+            | ReplicaOptionName::Disk => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 /// An option in a `CREATE CLUSTER REPLICA` statement.
 pub struct ReplicaOption<T: AstInfo> {
     pub name: ReplicaOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(ReplicaOption);
 
 /// `CREATE TYPE .. AS <TYPE>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1979,21 +2046,25 @@ impl AstDisplay for CreateTypeListOptionName {
     }
 }
 
+impl WithOptionName for CreateTypeListOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CreateTypeListOptionName::ElementType => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CreateTypeListOption<T: AstInfo> {
     pub name: CreateTypeListOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for CreateTypeListOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(CreateTypeListOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateTypeMapOptionName {
@@ -2010,21 +2081,25 @@ impl AstDisplay for CreateTypeMapOptionName {
     }
 }
 
+impl WithOptionName for CreateTypeMapOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CreateTypeMapOptionName::KeyType | CreateTypeMapOptionName::ValueType => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CreateTypeMapOption<T: AstInfo> {
     pub name: CreateTypeMapOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for CreateTypeMapOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(CreateTypeMapOption);
 
 /// `ALTER <OBJECT> ... OWNER TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2217,22 +2292,26 @@ impl AstDisplay for AlterSourceAddSubsourceOptionName {
 }
 impl_display!(AlterSourceAddSubsourceOptionName);
 
+impl WithOptionName for AlterSourceAddSubsourceOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            AlterSourceAddSubsourceOptionName::TextColumns => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in an `ALTER SOURCE...ADD SUBSOURCE` statement.
 pub struct AlterSourceAddSubsourceOption<T: AstInfo> {
     pub name: AlterSourceAddSubsourceOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for AlterSourceAddSubsourceOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(AlterSourceAddSubsourceOption);
 impl_display_t!(AlterSourceAddSubsourceOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2382,22 +2461,26 @@ impl AstDisplay for AlterConnectionOptionName {
 }
 impl_display!(AlterConnectionOptionName);
 
+impl WithOptionName for AlterConnectionOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            AlterConnectionOptionName::Validate => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in an `ALTER CONNECTION...` statement.
 pub struct AlterConnectionOption<T: AstInfo> {
     pub name: AlterConnectionOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for AlterConnectionOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(AlterConnectionOption);
 impl_display_t!(AlterConnectionOption);
 
 /// `ALTER CONNECTION`
@@ -3017,21 +3100,25 @@ impl AstDisplay for SubscribeOptionName {
 }
 impl_display!(SubscribeOptionName);
 
+impl WithOptionName for SubscribeOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            SubscribeOptionName::Snapshot | SubscribeOptionName::Progress => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SubscribeOption<T: AstInfo> {
     pub name: SubscribeOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for SubscribeOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(SubscribeOption);
 impl_display_t!(SubscribeOption);
 
 /// `SUBSCRIBE`
@@ -3141,21 +3228,48 @@ pub enum ExplainPlanOptionName {
     EnableVariadicLeftJoinLowering,
 }
 
+impl WithOptionName for ExplainPlanOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            Self::Arity
+            | Self::Cardinality
+            | Self::ColumnNames
+            | Self::FilterPushdown
+            | Self::HumanizedExpressions
+            | Self::JoinImplementations
+            | Self::Keys
+            | Self::LinearChains
+            | Self::NonNegative
+            | Self::NoFastPath
+            | Self::NoNotices
+            | Self::NodeIdentifiers
+            | Self::RawPlans
+            | Self::RawSyntax
+            | Self::Raw
+            | Self::Redacted
+            | Self::SubtreeSize
+            | Self::Timing
+            | Self::Types
+            | Self::ReoptimizeImportedViews
+            | Self::EnableNewOuterJoinLowering
+            | Self::EnableEagerDeltaJoins
+            | Self::EnableEquivalencePropagation
+            | Self::EnableVariadicLeftJoinLowering => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ExplainPlanOption<T: AstInfo> {
     pub name: ExplainPlanOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for ExplainPlanOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(ExplainPlanOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExplainSinkSchemaFor {
@@ -3832,21 +3946,25 @@ impl AstDisplay for FetchOptionName {
     }
 }
 
+impl WithOptionName for FetchOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            FetchOptionName::Timeout => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FetchOption<T: AstInfo> {
     pub name: FetchOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for FetchOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(FetchOption);
 
 /// `FETCH ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

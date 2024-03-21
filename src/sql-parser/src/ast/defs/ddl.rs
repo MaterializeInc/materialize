@@ -23,7 +23,7 @@
 
 use std::fmt;
 
-use crate::ast::display::{self, AstDisplay, AstFormatter};
+use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{AstInfo, Expr, Ident, OrderByExpr, UnresolvedItemName, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -45,21 +45,27 @@ impl AstDisplay for MaterializedViewOptionName {
     }
 }
 
+impl WithOptionName for MaterializedViewOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            MaterializedViewOptionName::AssertNotNull
+            | MaterializedViewOptionName::RetainHistory
+            | MaterializedViewOptionName::Refresh => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MaterializedViewOption<T: AstInfo> {
     pub name: MaterializedViewOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for MaterializedViewOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(MaterializedViewOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Schema {
@@ -89,21 +95,25 @@ impl AstDisplay for AvroSchemaOptionName {
     }
 }
 
+impl WithOptionName for AvroSchemaOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            Self::ConfluentWireFormat => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AvroSchemaOption<T: AstInfo> {
     pub name: AvroSchemaOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for AvroSchemaOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(AvroSchemaOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AvroSchema<T: AstInfo> {
@@ -177,6 +187,23 @@ pub enum CsrConfigOptionName<T: AstInfo> {
     NullDefaults,
     AvroDocOn(AvroDocOn<T>),
 }
+
+impl<T: AstInfo> WithOptionName for CsrConfigOptionName<T> {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            Self::AvroKeyFullname
+            | Self::AvroValueFullname
+            | Self::NullDefaults
+            | Self::AvroDocOn(_) => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AvroDocOn<T: AstInfo> {
     pub identifier: DocOnIdentifier<T>,
@@ -234,16 +261,7 @@ pub struct CsrConfigOption<T: AstInfo> {
     pub name: CsrConfigOptionName<T>,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for CsrConfigOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(CsrConfigOption);
 impl_display_t!(CsrConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -718,22 +736,53 @@ impl AstDisplay for ConnectionOptionName {
 }
 impl_display!(ConnectionOptionName);
 
+impl WithOptionName for ConnectionOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ConnectionOptionName::AccessKeyId
+            | ConnectionOptionName::AvailabilityZones
+            | ConnectionOptionName::AwsPrivatelink
+            | ConnectionOptionName::Broker
+            | ConnectionOptionName::Brokers
+            | ConnectionOptionName::Database
+            | ConnectionOptionName::Endpoint
+            | ConnectionOptionName::Host
+            | ConnectionOptionName::Password
+            | ConnectionOptionName::Port
+            | ConnectionOptionName::ProgressTopic
+            | ConnectionOptionName::Region
+            | ConnectionOptionName::AssumeRoleArn
+            | ConnectionOptionName::AssumeRoleSessionName
+            | ConnectionOptionName::SaslMechanisms
+            | ConnectionOptionName::SaslPassword
+            | ConnectionOptionName::SaslUsername
+            | ConnectionOptionName::SecurityProtocol
+            | ConnectionOptionName::SecretAccessKey
+            | ConnectionOptionName::ServiceName
+            | ConnectionOptionName::SshTunnel
+            | ConnectionOptionName::SslCertificate
+            | ConnectionOptionName::SslCertificateAuthority
+            | ConnectionOptionName::SslKey
+            | ConnectionOptionName::SslMode
+            | ConnectionOptionName::SessionToken
+            | ConnectionOptionName::Url
+            | ConnectionOptionName::User => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CONNECTION`.
 pub struct ConnectionOption<T: AstInfo> {
     pub name: ConnectionOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for ConnectionOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(ConnectionOption);
 impl_display_t!(ConnectionOption);
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -790,22 +839,26 @@ impl AstDisplay for CreateConnectionOptionName {
 }
 impl_display!(CreateConnectionOptionName);
 
+impl WithOptionName for CreateConnectionOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CreateConnectionOptionName::Validate => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CONNECTION...` statement.
 pub struct CreateConnectionOption<T: AstInfo> {
     pub name: CreateConnectionOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for CreateConnectionOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(CreateConnectionOption);
 impl_display_t!(CreateConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -832,21 +885,29 @@ impl AstDisplay for KafkaSourceConfigOptionName {
 }
 impl_display!(KafkaSourceConfigOptionName);
 
+impl WithOptionName for KafkaSourceConfigOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            KafkaSourceConfigOptionName::GroupIdPrefix
+            | KafkaSourceConfigOptionName::Topic
+            | KafkaSourceConfigOptionName::TopicMetadataRefreshInterval
+            | KafkaSourceConfigOptionName::StartOffset
+            | KafkaSourceConfigOptionName::StartTimestamp => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KafkaSourceConfigOption<T: AstInfo> {
     pub name: KafkaSourceConfigOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for KafkaSourceConfigOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(KafkaSourceConfigOption);
 impl_display_t!(KafkaSourceConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -871,21 +932,29 @@ impl AstDisplay for KafkaSinkConfigOptionName {
 }
 impl_display!(KafkaSinkConfigOptionName);
 
+impl WithOptionName for KafkaSinkConfigOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            KafkaSinkConfigOptionName::CompressionType
+            | KafkaSinkConfigOptionName::ProgressGroupIdPrefix
+            | KafkaSinkConfigOptionName::Topic
+            | KafkaSinkConfigOptionName::TransactionalIdPrefix
+            | KafkaSinkConfigOptionName::LegacyIds => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KafkaSinkConfigOption<T: AstInfo> {
     pub name: KafkaSinkConfigOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for KafkaSinkConfigOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(KafkaSinkConfigOption);
 impl_display_t!(KafkaSinkConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -910,22 +979,28 @@ impl AstDisplay for PgConfigOptionName {
 }
 impl_display!(PgConfigOptionName);
 
+impl WithOptionName for PgConfigOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            PgConfigOptionName::Details
+            | PgConfigOptionName::Publication
+            | PgConfigOptionName::TextColumns => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `{FROM|INTO} CONNECTION ...` statement.
 pub struct PgConfigOption<T: AstInfo> {
     pub name: PgConfigOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for PgConfigOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(PgConfigOption);
 impl_display_t!(PgConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -950,22 +1025,28 @@ impl AstDisplay for MySqlConfigOptionName {
 }
 impl_display!(MySqlConfigOptionName);
 
+impl WithOptionName for MySqlConfigOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            MySqlConfigOptionName::Details
+            | MySqlConfigOptionName::TextColumns
+            | MySqlConfigOptionName::IgnoreColumns => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `{FROM|INTO} CONNECTION ...` statement.
 pub struct MySqlConfigOption<T: AstInfo> {
     pub name: MySqlConfigOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for MySqlConfigOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(MySqlConfigOption);
 impl_display_t!(MySqlConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1081,22 +1162,28 @@ impl AstDisplay for LoadGeneratorOptionName {
 }
 impl_display!(LoadGeneratorOptionName);
 
+impl WithOptionName for LoadGeneratorOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            LoadGeneratorOptionName::ScaleFactor
+            | LoadGeneratorOptionName::TickInterval
+            | LoadGeneratorOptionName::MaxCardinality => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CONNECTION...SSH`.
 pub struct LoadGeneratorOption<T: AstInfo> {
     pub name: LoadGeneratorOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for LoadGeneratorOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(LoadGeneratorOption);
 impl_display_t!(LoadGeneratorOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1268,22 +1355,29 @@ impl AstDisplay for CreateSourceOptionName {
 }
 impl_display!(CreateSourceOptionName);
 
+impl WithOptionName for CreateSourceOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CreateSourceOptionName::IgnoreKeys
+            | CreateSourceOptionName::Timeline
+            | CreateSourceOptionName::TimestampInterval
+            | CreateSourceOptionName::RetainHistory => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE SOURCE...` statement.
 pub struct CreateSourceOption<T: AstInfo> {
     pub name: CreateSourceOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for CreateSourceOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(CreateSourceOption);
 impl_display_t!(CreateSourceOption);
 
 /// SQL column definition

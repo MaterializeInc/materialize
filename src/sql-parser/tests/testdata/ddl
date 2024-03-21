@@ -386,14 +386,14 @@ CREATE MATERIALIZED VIEW v WITH (REFRESH EVERY '1 day', ASSERT NOT NULL x) AS SE
 ----
 CREATE MATERIALIZED VIEW v WITH (REFRESH = EVERY '1 day', ASSERT NOT NULL = x) AS SELECT * FROM t
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [MaterializedViewOption { name: Refresh, value: Some(Refresh(Every(RefreshEveryOptionValue { interval: IntervalValue { value: "1 day", precision_high: Year, precision_low: Second, fsec_max_precision: None }, aligned_to: None }))) }, MaterializedViewOption { name: AssertNotNull, value: Some(Ident(Ident("x"))) }] })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [MaterializedViewOption { name: Refresh, value: Some(Refresh(Every(RefreshEveryOptionValue { interval: IntervalValue { value: "1 day", precision_high: Year, precision_low: Second, fsec_max_precision: None }, aligned_to: None }))) }, MaterializedViewOption { name: AssertNotNull, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("x")]))) }] })
 
 parse-statement
 CREATE OR REPLACE MATERIALIZED VIEW v IN CLUSTER [1] WITH (REFRESH EVERY '1 day' ALIGNED TO '2023-12-11 11:00', ASSERT NOT NULL x, REFRESH AT mz_now(), REFRESH ON COMMIT, REFRESH = AT CREATION) AS SELECT * FROM t;
 ----
 CREATE OR REPLACE MATERIALIZED VIEW v IN CLUSTER [1] WITH (REFRESH = EVERY '1 day' ALIGNED TO '2023-12-11 11:00', ASSERT NOT NULL = x, REFRESH = AT mz_now(), REFRESH = ON COMMIT, REFRESH = AT CREATION) AS SELECT * FROM t
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Replace, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [MaterializedViewOption { name: Refresh, value: Some(Refresh(Every(RefreshEveryOptionValue { interval: IntervalValue { value: "1 day", precision_high: Year, precision_low: Second, fsec_max_precision: None }, aligned_to: Some(Value(String("2023-12-11 11:00"))) }))) }, MaterializedViewOption { name: AssertNotNull, value: Some(Ident(Ident("x"))) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(At(RefreshAtOptionValue { time: Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }) }))) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(OnCommit)) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(AtCreation)) }] })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Replace, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [MaterializedViewOption { name: Refresh, value: Some(Refresh(Every(RefreshEveryOptionValue { interval: IntervalValue { value: "1 day", precision_high: Year, precision_low: Second, fsec_max_precision: None }, aligned_to: Some(Value(String("2023-12-11 11:00"))) }))) }, MaterializedViewOption { name: AssertNotNull, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("x")]))) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(At(RefreshAtOptionValue { time: Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }) }))) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(OnCommit)) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(AtCreation)) }] })
 
 parse-statement roundtrip
 CREATE OR REPLACE MATERIALIZED VIEW v WITH (ASSERT NOT NULL a, ASSERT NOT NULL = b, RETAIN HISTORY = FOR '1s') AS SELECT 1
@@ -454,7 +454,7 @@ CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHO
 ----
 CREATE CONNECTION pgconn TO POSTGRES (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun, DATABASE = 'db', PASSWORD = 'pw', SSL CERTIFICATE = 'cert', SSL KEY = 'key', SSL MODE = 'mode', USER = 'postgres')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, ConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }, ConnectionOption { name: Database, value: Some(Value(String("db"))) }, ConnectionOption { name: Password, value: Some(Value(String("pw"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }, ConnectionOption { name: SslMode, value: Some(Value(String("mode"))) }, ConnectionOption { name: User, value: Some(Value(String("postgres"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: Host, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("foo")]))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, ConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }, ConnectionOption { name: Database, value: Some(Value(String("db"))) }, ConnectionOption { name: Password, value: Some(Value(String("pw"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }, ConnectionOption { name: SslMode, value: Some(Value(String("mode"))) }, ConnectionOption { name: User, value: Some(Value(String("postgres"))) }], with_options: [] })
 
 parse-statement
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234)
@@ -468,14 +468,14 @@ CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234,
 ----
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234, HOST = foo, SSL CERTIFICATE = 'cert', SSL CERTIFICATE AUTHORITY = 'auth', SSL KEY = 'key')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("foo")]))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
 
 parse-statement
 CREATE CONNECTION mysqlconn FOR mysql HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun, PASSWORD 'pw', SSL CERTIFICATE 'cert', SSL KEY 'key', SSL MODE 'mode', USER 'root'
 ----
 CREATE CONNECTION mysqlconn TO MYSQL (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun, PASSWORD = 'pw', SSL CERTIFICATE = 'cert', SSL KEY = 'key', SSL MODE = 'mode', USER = 'root')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("mysqlconn")]), connection_type: MySql, if_not_exists: false, values: [ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, ConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }, ConnectionOption { name: Password, value: Some(Value(String("pw"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }, ConnectionOption { name: SslMode, value: Some(Value(String("mode"))) }, ConnectionOption { name: User, value: Some(Value(String("root"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("mysqlconn")]), connection_type: MySql, if_not_exists: false, values: [ConnectionOption { name: Host, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("foo")]))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, ConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }, ConnectionOption { name: Password, value: Some(Value(String("pw"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }, ConnectionOption { name: SslMode, value: Some(Value(String("mode"))) }, ConnectionOption { name: User, value: Some(Value(String("root"))) }], with_options: [] })
 
 parse-statement
 CREATE CONNECTION mysqlconn TO MYSQL (AWS PRIVATELINK db.schema.item, PORT 1234)
@@ -489,7 +489,7 @@ CREATE CONNECTION mysqlconn TO MYSQL (AWS PRIVATELINK db.schema.item, PORT 1234,
 ----
 CREATE CONNECTION mysqlconn TO MYSQL (AWS PRIVATELINK = db.schema.item, PORT = 1234, HOST = foo, SSL CERTIFICATE = 'cert', SSL CERTIFICATE AUTHORITY = 'auth', SSL KEY = 'key')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("mysqlconn")]), connection_type: MySql, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("mysqlconn")]), connection_type: MySql, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("foo")]))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
 
 parse-statement
 CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn FOR TABLES (foo, bar as qux, baz into zop);
@@ -538,7 +538,7 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic', PROGRESS GROU
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic', PROGRESS GROUP ID PREFIX = 'prefix', COMPRESSION TYPE = gzip) FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }, KafkaSinkConfigOption { name: ProgressGroupIdPrefix, value: Some(Value(String("prefix"))) }, KafkaSinkConfigOption { name: CompressionType, value: Some(Ident(Ident("gzip"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }, KafkaSinkConfigOption { name: ProgressGroupIdPrefix, value: Some(Value(String("prefix"))) }, KafkaSinkConfigOption { name: CompressionType, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("gzip")]))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK FROM bar INTO KAFKA CONNECTION baz
@@ -1501,7 +1501,7 @@ AlterObjectRename(AlterObjectRenameStatement { object_type: MaterializedView, if
 parse-statement
 CREATE CLUSTER cluster REPLICAS ()
 ----
-CREATE CLUSTER cluster (REPLICAS ())
+CREATE CLUSTER cluster (REPLICAS = ())
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([])) }], features: [] })
 
@@ -1522,91 +1522,91 @@ CREATE CLUSTER cluster REPLICAS (), BADOPT
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES ['host1']))
 ----
-CREATE CLUSTER cluster (REPLICAS (a (STORAGECTL ADDRESSES = ('host1'))))
+CREATE CLUSTER cluster (REPLICAS = (a (STORAGECTL ADDRESSES = ('host1'))))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("host1"))])) }] }])) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (COMPUTECTL ADDRESSES ['host1']), b (SIZE '1'))
 ----
-CREATE CLUSTER cluster (REPLICAS (a (COMPUTECTL ADDRESSES = ('host1')), b (SIZE = '1')))
+CREATE CLUSTER cluster (REPLICAS = (a (COMPUTECTL ADDRESSES = ('host1')), b (SIZE = '1')))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("host1"))])) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (COMPUTE ADDRESSES ['host1'], INTROSPECTION INTERVAL '1s', INTROSPECTION DEBUGGING true), b (SIZE '1', INTROSPECTION INTERVAL 0))
 ----
-CREATE CLUSTER cluster (REPLICAS (a (COMPUTE ADDRESSES = ('host1'), INTROSPECTION INTERVAL = '1s', INTROSPECTION DEBUGGING = true), b (SIZE = '1', INTROSPECTION INTERVAL = 0)))
+CREATE CLUSTER cluster (REPLICAS = (a (COMPUTE ADDRESSES = ('host1'), INTROSPECTION INTERVAL = '1s', INTROSPECTION DEBUGGING = true), b (SIZE = '1', INTROSPECTION INTERVAL = 0)))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(String("1s"))) }, ReplicaOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Number("0"))) }] }])) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE '1', IDLE ARRANGEMENT MERGE EFFORT 0))
 ----
-CREATE CLUSTER cluster (REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE = '1', IDLE ARRANGEMENT MERGE EFFORT = 0)))
+CREATE CLUSTER cluster (REPLICAS = (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE = '1', IDLE ARRANGEMENT MERGE EFFORT = 0)))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("100"))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("0"))) }] }])) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE '1', DISK = true))
 ----
-CREATE CLUSTER cluster (REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE = '1', DISK = true)))
+CREATE CLUSTER cluster (REPLICAS = (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE = '1', DISK = true)))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("100"))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: Disk, value: Some(Value(Boolean(true))) }] }])) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (SIZE '1'))
 ----
-CREATE CLUSTER cluster (REPLICAS (a (SIZE = '1')))
+CREATE CLUSTER cluster (REPLICAS = (a (SIZE = '1')))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES ['123'], STORAGE ADDRESSES ['124'], COMPUTECTL ADDRESSES ['host1:2400', 'host2:2400'], COMPUTE ADDRESSES ['host1:2401', 'host2:2401'], WORKERS '1'))
 ----
-CREATE CLUSTER cluster (REPLICAS (a (STORAGECTL ADDRESSES = ('123'), STORAGE ADDRESSES = ('124'), COMPUTECTL ADDRESSES = ('host1:2400', 'host2:2400'), COMPUTE ADDRESSES = ('host1:2401', 'host2:2401'), WORKERS = '1')))
+CREATE CLUSTER cluster (REPLICAS = (a (STORAGECTL ADDRESSES = ('123'), STORAGE ADDRESSES = ('124'), COMPUTECTL ADDRESSES = ('host1:2400', 'host2:2400'), COMPUTE ADDRESSES = ('host1:2401', 'host2:2401'), WORKERS = '1')))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("123"))])) }, ReplicaOption { name: StorageAddresses, value: Some(Sequence([Value(String("124"))])) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("host1:2400")), Value(String("host2:2400"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("host1:2401")), Value(String("host2:2401"))])) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster SIZE '1'
 ----
-CREATE CLUSTER cluster (SIZE '1')
+CREATE CLUSTER cluster (SIZE = '1')
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE '1') FEATURES (enable eager delta joins = true)
 ----
-CREATE CLUSTER cluster (SIZE '1') FEATURES (ENABLE EAGER DELTA JOINS = true)
+CREATE CLUSTER cluster (SIZE = '1') FEATURES (ENABLE EAGER DELTA JOINS = true)
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }], features: [ClusterFeature { name: EnableEagerDeltaJoins, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICATION FACTOR 1
 ----
-CREATE CLUSTER cluster (REPLICATION FACTOR 1)
+CREATE CLUSTER cluster (REPLICATION FACTOR = 1)
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: ReplicationFactor, value: Some(Value(Number("1"))) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster AVAILABILITY ZONES ('1')
 ----
-CREATE CLUSTER cluster (AVAILABILITY ZONES ('1'))
+CREATE CLUSTER cluster (AVAILABILITY ZONES = ('1'))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("1"))])) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster IDLE ARRANGEMENT MERGE EFFORT 1000
 ----
-CREATE CLUSTER cluster (IDLE ARRANGEMENT MERGE EFFORT 1000)
+CREATE CLUSTER cluster (IDLE ARRANGEMENT MERGE EFFORT = 1000)
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("1000"))) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster MANAGED true
 ----
-CREATE CLUSTER cluster (MANAGED true)
+CREATE CLUSTER cluster (MANAGED = true)
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: Some(Value(Boolean(true))) }], features: [] })
 
@@ -1620,35 +1620,35 @@ CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Cluster
 parse-statement
 CREATE CLUSTER cluster MANAGED, DISK = true
 ----
-CREATE CLUSTER cluster (MANAGED, DISK true)
+CREATE CLUSTER cluster (MANAGED, DISK = true)
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }, ClusterOption { name: Disk, value: Some(Value(Boolean(true))) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster (MANAGED, DISK = true)
 ----
-CREATE CLUSTER cluster (MANAGED, DISK true)
+CREATE CLUSTER cluster (MANAGED, DISK = true)
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }, ClusterOption { name: Disk, value: Some(Value(Boolean(true))) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster INTROSPECTION INTERVAL '1'
 ----
-CREATE CLUSTER cluster (INTROSPECTION INTERVAL '1')
+CREATE CLUSTER cluster (INTROSPECTION INTERVAL = '1')
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionInterval, value: Some(Value(String("1"))) }], features: [] })
 
 parse-statement
 CREATE CLUSTER cluster INTROSPECTION DEBUGGING true
 ----
-CREATE CLUSTER cluster (INTROSPECTION DEBUGGING true)
+CREATE CLUSTER cluster (INTROSPECTION DEBUGGING = true)
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }], features: [] })
 
 parse-statement
 ALTER CLUSTER cluster SET (SIZE '1')
 ----
-ALTER CLUSTER cluster SET (SIZE '1')
+ALTER CLUSTER cluster SET (SIZE = '1')
 =>
 AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Size, value: Some(Value(String("1"))) }]) })
 
@@ -1662,28 +1662,28 @@ AlterCluster(AlterClusterStatement { if_exists: true, name: Ident("cluster"), ac
 parse-statement
 ALTER CLUSTER cluster SET (REPLICATION FACTOR 1)
 ----
-ALTER CLUSTER cluster SET (REPLICATION FACTOR 1)
+ALTER CLUSTER cluster SET (REPLICATION FACTOR = 1)
 =>
 AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: ReplicationFactor, value: Some(Value(Number("1"))) }]) })
 
 parse-statement
 ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('1', '2'))
 ----
-ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('1', '2'))
+ALTER CLUSTER cluster SET (AVAILABILITY ZONES = ('1', '2'))
 =>
 AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }]) })
 
 parse-statement
 ALTER CLUSTER cluster SET (IDLE ARRANGEMENT MERGE EFFORT 1000)
 ----
-ALTER CLUSTER cluster SET (IDLE ARRANGEMENT MERGE EFFORT 1000)
+ALTER CLUSTER cluster SET (IDLE ARRANGEMENT MERGE EFFORT = 1000)
 =>
 AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("1000"))) }]) })
 
 parse-statement
 ALTER CLUSTER cluster SET (MANAGED true)
 ----
-ALTER CLUSTER cluster SET (MANAGED true)
+ALTER CLUSTER cluster SET (MANAGED = true)
 =>
 AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Managed, value: Some(Value(Boolean(true))) }]) })
 
@@ -1697,21 +1697,21 @@ AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), a
 parse-statement
 ALTER CLUSTER cluster SET (INTROSPECTION INTERVAL '1')
 ----
-ALTER CLUSTER cluster SET (INTROSPECTION INTERVAL '1')
+ALTER CLUSTER cluster SET (INTROSPECTION INTERVAL = '1')
 =>
 AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IntrospectionInterval, value: Some(Value(String("1"))) }]) })
 
 parse-statement
 ALTER CLUSTER cluster SET (INTROSPECTION DEBUGGING true)
 ----
-ALTER CLUSTER cluster SET (INTROSPECTION DEBUGGING true)
+ALTER CLUSTER cluster SET (INTROSPECTION DEBUGGING = true)
 =>
 AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }]) })
 
 parse-statement
 ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('a'), IDLE ARRANGEMENT MERGE EFFORT 1, INTROSPECTION INTERVAL 1, INTROSPECTION DEBUGGING 1, MANAGED, REPLICAS (), REPLICATION FACTOR 0, SIZE 1)
 ----
-ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('a'), IDLE ARRANGEMENT MERGE EFFORT 1, INTROSPECTION INTERVAL 1, INTROSPECTION DEBUGGING 1, MANAGED, REPLICAS (), REPLICATION FACTOR 0, SIZE 1)
+ALTER CLUSTER cluster SET (AVAILABILITY ZONES = ('a'), IDLE ARRANGEMENT MERGE EFFORT = 1, INTROSPECTION INTERVAL = 1, INTROSPECTION DEBUGGING = 1, MANAGED, REPLICAS = (), REPLICATION FACTOR = 0, SIZE = 1)
 =>
 AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("a"))])) }, ClusterOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("1"))) }, ClusterOption { name: IntrospectionInterval, value: Some(Value(Number("1"))) }, ClusterOption { name: IntrospectionDebugging, value: Some(Value(Number("1"))) }, ClusterOption { name: Managed, value: None }, ClusterOption { name: Replicas, value: Some(ClusterReplicas([])) }, ClusterOption { name: ReplicationFactor, value: Some(Value(Number("0"))) }, ClusterOption { name: Size, value: Some(Value(Number("1"))) }]) })
 
@@ -2037,7 +2037,7 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("co
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093, AVAILABILITY ZONE 'az1'));
 ----
-CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093, AVAILABILITY ZONE 'az1'))
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT = 9093, AVAILABILITY ZONE = 'az1'))
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }, KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("az1"))) }] }) })) }], with_options: [] })
 
@@ -2050,7 +2050,7 @@ CREATE CONNECTION IF NOT EXISTS conn1 TO KAFKA (
     )
 );
 ----
-CREATE CONNECTION IF NOT EXISTS conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
+CREATE CONNECTION IF NOT EXISTS conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT = 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT = 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Kafka, if_not_exists: true, values: [ConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }], with_options: [] })
 
@@ -2063,7 +2063,7 @@ CREATE CONNECTION conn1 TO KAFKA (
     ]
 );
 ----
-CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
+CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT = 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT = 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }], with_options: [] })
 
