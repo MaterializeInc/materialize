@@ -190,7 +190,7 @@ ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 0
     USER postgres,
     PASSWORD SECRET pgpass
   )
-contains:error connecting to server: failed to lookup address information: Name or service not known: failed to lookup address
+contains:failed to lookup address information: Name or service not known
 
 ! CREATE CONNECTION no_such_port TO POSTGRES (
     HOST postgres,
@@ -225,6 +225,20 @@ contains:password authentication failed for user "postgres"
     PASSWORD SECRET pgpass
   )
 contains:database "no_such_dbname" does not exist
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_enforce_external_addresses = true
+
+! CREATE CONNECTION private_address TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
+contains:address is not global
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_enforce_external_addresses = false
 
 ! CREATE SOURCE "no_such_publication"
   IN CLUSTER cdc_cluster

@@ -23,6 +23,7 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
+use mz_ore::netio::resolve_external_address;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
@@ -319,6 +320,7 @@ pub struct TunnelingClientContext<C> {
     ssh_tunnel_manager: SshTunnelManager,
     ssh_timeout_config: SshTimeoutConfig,
     runtime: Handle,
+    enforce_external_addresses: bool,
 }
 
 impl<C> TunnelingClientContext<C> {
@@ -329,6 +331,7 @@ impl<C> TunnelingClientContext<C> {
         ssh_tunnel_manager: SshTunnelManager,
         ssh_timeout_config: SshTimeoutConfig,
         in_task: InTask,
+        enforce_external_addresses: bool,
     ) -> TunnelingClientContext<C> {
         TunnelingClientContext {
             inner,
@@ -338,6 +341,7 @@ impl<C> TunnelingClientContext<C> {
             ssh_tunnel_manager,
             ssh_timeout_config,
             runtime,
+            enforce_external_addresses,
         }
     }
 
@@ -532,7 +536,23 @@ where
                         host: host.to_owned(),
                         port: addr.port,
                     },
-                    TunnelConfig::None => addr,
+                    TunnelConfig::None => {
+                        // If no rewrite is specified, we still should check that this potentially
+                        // new broker address is a global address.
+                        let rewrite = self.runtime.block_on(async {
+                            let resolved = resolve_external_address(
+                                &addr.host,
+                                self.enforce_external_addresses,
+                            )
+                            .await
+                            .unwrap();
+                            BrokerRewriteHandle::Simple(BrokerRewrite {
+                                host: resolved.to_string(),
+                                port: addr.port.parse().ok(),
+                            })
+                        });
+                        return_rewrite(&rewrite)
+                    }
                 }
             }
             Some(rewrite) => return_rewrite(&rewrite),

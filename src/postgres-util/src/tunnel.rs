@@ -38,7 +38,7 @@ macro_rules! bail_generic {
 #[derive(Debug, PartialEq, Clone)]
 pub enum TunnelConfig {
     /// Establish a direct TCP connection to the database host.
-    Direct,
+    Direct { tcp_host_override: Option<String> },
     /// Establish a TCP connection to the database via an SSH tunnel.
     /// This means first establishing an SSH connection to a bastion host,
     /// and then opening a separate connection from that host to the database.
@@ -226,7 +226,21 @@ impl Config {
         })?;
 
         match &self.tunnel {
-            TunnelConfig::Direct => {
+            TunnelConfig::Direct { tcp_host_override } => {
+                // Override the TCP host we connect to, leaving the host used for TLS verification
+                // as the original host
+                if let Some(tcp_override) = tcp_host_override {
+                    let (host, _) = self.address()?;
+                    postgres_config.tls_verify_host(host);
+
+                    match postgres_config.get_hosts_mut() {
+                        [Host::Tcp(host)] => *host = tcp_override.clone(),
+                        _ => bail_generic!(
+                            "only TCP connections to a single PostgreSQL server are supported"
+                        ),
+                    }
+                };
+
                 let (client, connection) = async move { postgres_config.connect(tls).await }
                     .run_in_task_if(self.in_task, || "pg_connect".to_string())
                     .await?;
