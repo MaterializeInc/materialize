@@ -28,8 +28,10 @@ use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Atomicity, Blob};
+use mz_persist_types::columnar::{PartEncoder, Schema};
+use mz_persist_types::part::PartBuilder;
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
@@ -38,7 +40,7 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug_span, error, trace_span, warn, Instrument};
+use tracing::{debug_span, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::MiB;
@@ -220,6 +222,7 @@ pub struct BatchBuilderConfig {
     pub(crate) blob_target_size: usize,
     pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
+    pub(crate) batch_columnar_format: BatchColumnarFormat,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
@@ -244,6 +247,13 @@ pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
     "A target maximum size of persist blob payloads in bytes (Materialize).",
 );
 
+/// The columnar format we write down a batch with.
+pub(crate) const BATCH_COLUMNAR_FORMAT: Config<String> = Config::new(
+    "persist_batch_columnar_format",
+    BatchColumnarFormat::default().as_str(),
+    "Columnar format for a batch written to Persist (Materialize).",
+);
+
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
     pub fn new(value: &PersistConfig, _writer_id: &WriterId) -> Self {
@@ -255,6 +265,7 @@ impl BatchBuilderConfig {
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
+            batch_columnar_format: BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value)),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
             stats_untrimmable_columns: Arc::new(untrimmable_columns(value)),
@@ -820,39 +831,60 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let stats_budget = self.cfg.stats_budget;
         let schemas = schemas.clone();
         let untrimmable_columns = Arc::clone(&self.cfg.stats_untrimmable_columns);
+        let _columnar_format = self.cfg.batch_columnar_format.clone();
 
         let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
         let handle = mz_ore::task::spawn(
             || "batch::write_part",
             async move {
                 let goodbytes = updates.goodbytes();
-                let batch = BlobTraceBatchPart {
-                    desc,
-                    updates: vec![updates],
-                    index,
-                };
 
                 let (stats, (buf, encode_time)) = isolated_runtime
                     .spawn_named(|| "batch::encode_part", async move {
-                        let stats = if stats_collection_enabled {
-                            let stats_start = Instant::now();
-                            match PartStats::legacy_part_format(&schemas, &batch.updates) {
-                                Ok(x) => {
-                                    let mut trimmed_bytes = 0;
-                                    let x = LazyPartStats::encode(&x, |s| {
-                                        trimmed_bytes = trim_to_budget(s, stats_budget, |s| {
-                                            untrimmable_columns.should_retain(s)
-                                        });
-                                    });
-                                    Some((x, stats_start.elapsed(), trimmed_bytes))
-                                }
-                                Err(err) => {
-                                    error!("failed to construct part stats: {}", err);
-                                    None
-                                }
+                        let mut part_builder =
+                            PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref());
+                        {
+                            let mut columnar_builder = part_builder.get_mut();
+
+                            let mut key = schemas.key.encoder(columnar_builder.key).expect("blah");
+                            let mut val = schemas.val.encoder(columnar_builder.val).expect("blah");
+
+                            for ((k, v), t, d) in updates.iter() {
+                                let k = K::decode(k).expect("uh oh");
+                                let v = V::decode(v).expect("oh no");
+                                key.encode(&k);
+                                val.encode(&v);
+                                columnar_builder.ts.push(i64::from_le_bytes(t));
+                                columnar_builder.diff.push(i64::from_le_bytes(d));
                             }
+                        }
+                        let columnar_part = part_builder.finish().expect("no columnar for you");
+
+                        let stats = if stats_collection_enabled {
+                            let columnar_stats = PartStats::new(&columnar_part)
+                                .expect("noooo failed to collect stats");
+
+                            let stats_start = Instant::now();
+                            let mut trimmed_bytes = 0;
+                            let encoded_stats = LazyPartStats::encode(&columnar_stats, |s| {
+                                trimmed_bytes = trim_to_budget(s, stats_budget, |s| {
+                                    untrimmable_columns.should_retain(s)
+                                });
+                            });
+                            let stats_encode_duration = stats_start.elapsed();
+                            Some((encoded_stats, stats_encode_duration, trimmed_bytes))
                         } else {
                             None
+                        };
+
+                        // TODO(parkmycar): Switch updates format based on `columnar_format` dyncfg.
+                        let batch = BlobTraceBatchPart {
+                            desc,
+                            updates: BlobTraceUpdates::Both {
+                                codec: vec![updates],
+                                parquet: vec![Arc::new(columnar_part)],
+                            },
+                            index,
                         };
 
                         let encode_start = Instant::now();
@@ -955,7 +987,14 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::bytes::SegmentedBytes;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist::metrics::ColumnarMetrics;
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_repr::{ColumnType, Datum, RelationDesc, Row, ScalarType};
+
     use crate::cache::PersistClientCache;
+    use crate::internal::metrics::Metrics;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::tests::{all_ok, CodecProduct};
     use crate::PersistLocation;
@@ -1165,5 +1204,74 @@ mod tests {
         assert!(untrimmable.should_retain("ijk_xyZ"));
         assert!(untrimmable.should_retain("ww-XYZ"));
         assert!(!untrimmable.should_retain("xya"));
+    }
+
+    #[mz_ore::test]
+    fn encoding_roundtrips() {
+        let registry = MetricsRegistry::new();
+        let persist_cfg = PersistConfig::new_for_tests();
+
+        let metrics = Metrics::new(&persist_cfg, &registry);
+        let batch_write_metrics = BatchWriteMetrics::new(&registry, "test");
+        let columnar_metrics = ColumnarMetrics::disconnected();
+
+        let mut builder =
+            BatchBuffer::<i64, i64>::new(Arc::new(metrics), batch_write_metrics, 128 * 1024, true);
+
+        let relation_desc = RelationDesc::from_names_and_types([
+            (
+                "foo",
+                ColumnType {
+                    scalar_type: ScalarType::String,
+                    nullable: false,
+                },
+            ),
+            (
+                "bar",
+                ColumnType {
+                    scalar_type: ScalarType::Int64,
+                    nullable: false,
+                },
+            ),
+        ]);
+        let row = Row::pack_slice(&[Datum::String("hello world"), Datum::Int64(42)]);
+        builder.push(&row, &(), 1, 1);
+
+        let (_lower, updates) = builder.drain();
+
+        let mut columnar_part = PartBuilder::new(&relation_desc, &UnitSchema);
+        {
+            let mut columnar_builder = columnar_part.get_mut();
+
+            let mut key =
+                <RelationDesc as Schema<Row>>::encoder(&relation_desc, columnar_builder.key)
+                    .expect("blah");
+            let mut val = <UnitSchema as Schema<()>>::encoder(&UnitSchema, columnar_builder.val)
+                .expect("blah");
+
+            key.encode(&row);
+            val.encode(&());
+            columnar_builder.ts.push(1i64);
+            columnar_builder.diff.push(1i64);
+        }
+        let _columnar_part = columnar_part.finish().expect("success");
+
+        let mut buf = Vec::new();
+        let og_batch = BlobTraceBatchPart {
+            desc: Description::new(
+                Antichain::from_elem(i64::minimum()),
+                Antichain::from_elem(i64::MAX),
+                Antichain::from_elem(i64::minimum()),
+            ),
+            index: 1,
+            updates: BlobTraceUpdates::Row(vec![updates]),
+        };
+        BlobTraceBatchPart::<i64>::encode(&og_batch, &mut buf);
+
+        let buf = SegmentedBytes::from(buf);
+        let _rnd_batch = BlobTraceBatchPart::<i64>::decode(&buf, &columnar_metrics).unwrap();
+
+        // TODO(parkmycar): `Part` doesn't implement Eq
+        // assert_eq!(og_batch, rnd_batch);
     }
 }

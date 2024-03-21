@@ -1259,6 +1259,7 @@ pub mod datadriven {
         pub shard_id: ShardId,
         pub state_versions: Arc<StateVersions>,
         pub machine: Machine<String, (), u64, i64>,
+        pub schemas: Schemas<String, ()>,
         pub gc: GarbageCollector<String, (), u64, i64>,
         pub batches: BTreeMap<String, HollowBatch<u64>>,
         pub rollups: BTreeMap<String, EncodedRollup>,
@@ -1294,11 +1295,16 @@ pub mod datadriven {
             .await
             .expect("codecs should match");
             let gc = GarbageCollector::new(machine.clone(), Arc::clone(&client.isolated_runtime));
+            let schemas = Schemas {
+                key: Arc::new(StringSchema::default()),
+                val: Arc::new(UnitSchema::default()),
+            };
             MachineState {
                 shard_id,
                 client,
                 state_versions,
                 machine,
+                schemas,
                 gc,
                 batches: BTreeMap::default(),
                 rollups: BTreeMap::default(),
@@ -1598,7 +1604,7 @@ pub mod datadriven {
             )
             .await
             .expect("invalid batch part");
-            let mut cursor = Cursor::default();
+            let mut cursor = Cursor::new(datadriven.schemas.clone());
             while let Some((k, _v, t, d)) = cursor.pop(&part) {
                 let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
                 write!(s, "{k} {t} {d}\n");
@@ -1824,7 +1830,7 @@ pub mod datadriven {
                     .expect("invalid batch part");
 
                     let mut updates = Vec::new();
-                    let mut cursor = Cursor::default();
+                    let mut cursor = Cursor::new(datadriven.schemas.clone());
                     while let Some((k, _v, mut t, d)) = cursor.pop(&part) {
                         t.advance_by(as_of.borrow());
                         updates.push((String::decode(k).unwrap(), t, i64::decode(d)));

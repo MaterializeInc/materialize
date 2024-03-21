@@ -120,7 +120,7 @@ pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
     let mut actual = T::default();
     assert_eq!(part.len(), 1);
     let part = part.key_ref();
-    schema.decoder(part)?.decode(0, &mut actual);
+    schema.decoder(part)?.decode_into(0, &mut actual);
     if &actual != val {
         Err(format!(
             "validate_roundtrip expected {:?} but got {:?}",

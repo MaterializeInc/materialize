@@ -92,10 +92,13 @@ impl DynColumnRef {
         Ok(col)
     }
 
-    pub(crate) fn to_arrow(&self) -> (Encoding, Box<dyn Array>, bool) {
+    pub(crate) fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>, bool) {
         struct ToArrowDataFn<'a>(&'a DynColumnRef);
-        impl DataFn<Result<(Encoding, Box<dyn Array>), String>> for ToArrowDataFn<'_> {
-            fn call<T: Data>(self, _cfg: &T::Cfg) -> Result<(Encoding, Box<dyn Array>), String> {
+        impl DataFn<Result<(Vec<Encoding>, Box<dyn Array>), String>> for ToArrowDataFn<'_> {
+            fn call<T: Data>(
+                self,
+                _cfg: &T::Cfg,
+            ) -> Result<(Vec<Encoding>, Box<dyn Array>), String> {
                 Ok(self.0.downcast::<T>()?.to_arrow())
             }
         }

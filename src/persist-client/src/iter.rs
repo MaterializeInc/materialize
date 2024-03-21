@@ -26,12 +26,13 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use mz_ore::task::JoinHandle;
 use mz_persist::location::Blob;
-use mz_persist_types::Codec64;
+use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::progress::Timestamp;
 use tracing::{debug_span, Instrument};
 
 use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter, LeasedBatchPart};
+use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{BatchPartReadMetrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::{PartialBatchKey, WriterKey};
 use crate::internal::state::HollowBatchPart;
@@ -151,7 +152,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
 }
 
 #[derive(Debug)]
-pub(crate) enum ConsolidationPart<T, D> {
+pub(crate) enum ConsolidationPart<K: Codec, V: Codec, T, D> {
     Queued {
         data: FetchData<T>,
     },
@@ -162,7 +163,7 @@ pub(crate) enum ConsolidationPart<T, D> {
     },
     Encoded {
         part: EncodedPart<T>,
-        cursor: Cursor,
+        cursor: Cursor<K, V>,
     },
     Sorted {
         data: Vec<((Vec<u8>, Vec<u8>), T, D)>,
@@ -170,13 +171,16 @@ pub(crate) enum ConsolidationPart<T, D> {
     },
 }
 
-impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> ConsolidationPart<T, D> {
+impl<'a, K: Codec, V: Codec, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup>
+    ConsolidationPart<K, V, T, D>
+{
     pub(crate) fn from_encoded(
         part: EncodedPart<T>,
         filter: &'a FetchBatchFilter<T>,
         maybe_unconsolidated: bool,
+        schema: Schemas<K, V>,
     ) -> Self {
-        let mut cursor = Cursor::default();
+        let mut cursor = Cursor::new(schema);
         if part.maybe_unconsolidated() || maybe_unconsolidated {
             Self::from_iter(ConsolidationPartIter::encoded(&part, &mut cursor, filter))
         } else {
@@ -236,11 +240,12 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub(crate) struct Consolidator<T, D> {
+pub(crate) struct Consolidator<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
-    runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
+    runs: Vec<VecDeque<(ConsolidationPart<K, V, T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
+    schema: Schemas<K, V>,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
@@ -253,7 +258,9 @@ pub(crate) struct Consolidator<T, D> {
     drop_stash: Option<Tuple<T, D>>,
 }
 
-impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D> {
+impl<K: Codec, V: Codec, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup>
+    Consolidator<K, V, T, D>
+{
     /// Create a new [Self] instance with the given prefetch budget. This budget is a "soft limit"
     /// on the size of the parts that the consolidator will fetch... we'll try and stay below the
     /// limit, but may burst above it if that's necessary to make progress.
@@ -261,12 +268,14 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         metrics: Arc<Metrics>,
         filter: FetchBatchFilter<T>,
         prefetch_budget_bytes: usize,
+        schema: Schemas<K, V>,
     ) -> Self {
         Self {
             metrics,
             runs: vec![],
             filter,
             budget: prefetch_budget_bytes,
+            schema,
             initial_state: None,
             drop_stash: None,
         }
@@ -354,7 +363,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
     /// Return an iterator over the next consolidated chunk of output, if there's any left.
     ///
     /// Requirement: at least the first part of each run should be fetched and nonempty.
-    fn iter(&mut self) -> Option<ConsolidatingIter<T, D>> {
+    fn iter(&mut self) -> Option<ConsolidatingIter<K, V, T, D>> {
         // At this point, the `initial_state` of the previously-returned iterator has either been
         // fully consolidated and returned, or put back into `drop_stash`. In either case, this is
         // safe to overwrite.
@@ -432,6 +441,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                             data.take().fetch().await?,
                             &self.filter,
                             maybe_unconsolidated,
+                            self.schema.clone(),
                         );
                     }
                     ConsolidationPart::Prefetched {
@@ -449,6 +459,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                             handle.await??,
                             &self.filter,
                             *maybe_unconsolidated,
+                            self.schema.clone(),
                         );
                     }
                     ConsolidationPart::Encoded { .. } | ConsolidationPart::Sorted { .. } => {}
@@ -475,7 +486,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
     /// Wait until data is available, then return an iterator over the next
     /// consolidated chunk of output. If this method returns `None`, that all the data has been
     /// exhausted and the full consolidated dataset has been returned.
-    pub(crate) async fn next(&mut self) -> anyhow::Result<Option<ConsolidatingIter<T, D>>> {
+    pub(crate) async fn next(&mut self) -> anyhow::Result<Option<ConsolidatingIter<K, V, T, D>>> {
         self.trim();
         self.unblock_progress().await?;
         Ok(self.iter())
@@ -554,7 +565,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
     }
 }
 
-impl<T, D> Drop for Consolidator<T, D> {
+impl<K: Codec, V: Codec, T, D> Drop for Consolidator<K, V, T, D> {
     fn drop(&mut self) {
         for run in &self.runs {
             for (part, _) in run {
@@ -577,10 +588,10 @@ impl<T, D> Drop for Consolidator<T, D> {
 /// too eagerly.
 /// In particular, we only advance the cursor past a tuple when that tuple has been returned from
 /// a call to `next`.
-pub(crate) enum ConsolidationPartIter<'a, T: Timestamp, D> {
+pub(crate) enum ConsolidationPartIter<'a, K: Codec, V: Codec, T: Timestamp, D> {
     Encoded {
         part: &'a EncodedPart<T>,
-        cursor: &'a mut Cursor,
+        cursor: &'a mut Cursor<K, V>,
         filter: &'a FetchBatchFilter<T>,
         // The tuple that would be returned by the next call to `cursor.peek`, with the timestamp
         // advanced to the as-of.
@@ -592,17 +603,20 @@ pub(crate) enum ConsolidationPartIter<'a, T: Timestamp, D> {
     },
 }
 
-impl<'a, T: Timestamp, D: Debug> Debug for ConsolidationPartIter<'a, T, D> {
+impl<'a, K: Codec, V: Codec, T: Timestamp, D: Debug> Debug
+    for ConsolidationPartIter<'a, K, V, T, D>
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ConsolidationPartIter::Encoded {
                 part: _,
-                cursor,
+                cursor: _,
                 filter: _,
                 next,
             } => {
                 let mut f = f.debug_struct("Encoded");
-                f.field("cursor", cursor);
+                // TODO(parkmycar)
+                // f.field("cursor", cursor);
                 f.field("next", next);
                 f.finish()
             }
@@ -616,12 +630,14 @@ impl<'a, T: Timestamp, D: Debug> Debug for ConsolidationPartIter<'a, T, D> {
     }
 }
 
-impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPartIter<'a, T, D> {
+impl<'a, K: Codec, V: Codec, T: Timestamp + Codec64 + Lattice, D: Codec64>
+    ConsolidationPartIter<'a, K, V, T, D>
+{
     fn encoded(
         part: &'a EncodedPart<T>,
-        cursor: &'a mut Cursor,
+        cursor: &'a mut Cursor<K, V>,
         filter: &'a FetchBatchFilter<T>,
-    ) -> ConsolidationPartIter<'a, T, D> {
+    ) -> ConsolidationPartIter<'a, K, V, T, D> {
         let mut iter = Self::Encoded {
             part,
             cursor,
@@ -639,8 +655,8 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPartIter<'a,
     }
 }
 
-impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> Iterator
-    for ConsolidationPartIter<'a, T, D>
+impl<'a, K: Codec, V: Codec, T: Timestamp + Codec64 + Lattice, D: Codec64> Iterator
+    for ConsolidationPartIter<'a, K, V, T, D>
 {
     type Item = TupleRef<'a, T, D>;
 
@@ -694,12 +710,15 @@ struct PartRef<'a, T: Timestamp, D> {
 }
 
 impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T, D> {
-    fn update_peek(&mut self, iter: &ConsolidationPartIter<'a, T, D>) {
+    fn update_peek<K: Codec, V: Codec>(&mut self, iter: &ConsolidationPartIter<'a, K, V, T, D>) {
         let peek = iter.peek();
         self.next_kvt = Reverse(peek.map(|(k, v, t, _)| (k, v, t)));
     }
 
-    fn pop(&mut self, from: &mut [ConsolidationPartIter<'a, T, D>]) -> Option<TupleRef<'a, T, D>> {
+    fn pop<K: Codec, V: Codec>(
+        &mut self,
+        from: &mut [ConsolidationPartIter<'a, K, V, T, D>],
+    ) -> Option<TupleRef<'a, T, D>> {
         let iter = &mut from[self.index];
         let popped = iter.next();
         self.update_peek(iter);
@@ -708,16 +727,18 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
 }
 
 #[derive(Debug)]
-pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
-    parts: Vec<ConsolidationPartIter<'a, T, D>>,
+pub(crate) struct ConsolidatingIter<'a, K: Codec, V: Codec, T: Timestamp, D> {
+    parts: Vec<ConsolidationPartIter<'a, K, V, T, D>>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
     upper_bound: Option<(&'a [u8], &'a [u8], T)>,
     state: Option<TupleRef<'a, T, D>>,
     drop_stash: &'a mut Option<Tuple<T, D>>,
 }
 
-impl<'a, T, D> ConsolidatingIter<'a, T, D>
+impl<'a, K, V, T, D> ConsolidatingIter<'a, K, V, T, D>
 where
+    K: Codec,
+    V: Codec,
     T: Timestamp + Codec64 + Lattice,
     D: Codec64 + Semigroup,
 {
@@ -734,7 +755,7 @@ where
         }
     }
 
-    fn push(&mut self, iter: ConsolidationPartIter<'a, T, D>, last_in_run: bool) {
+    fn push(&mut self, iter: ConsolidationPartIter<'a, K, V, T, D>, last_in_run: bool) {
         let mut part_ref = PartRef {
             next_kvt: Reverse(None),
             index: self.parts.len(),
@@ -812,8 +833,10 @@ where
     }
 }
 
-impl<'a, T, D> Iterator for ConsolidatingIter<'a, T, D>
+impl<'a, K, V, T, D> Iterator for ConsolidatingIter<'a, K, V, T, D>
 where
+    K: Codec,
+    V: Codec,
     T: Timestamp + Codec64 + Lattice,
     D: Codec64 + Semigroup,
 {
@@ -829,7 +852,7 @@ where
     }
 }
 
-impl<'a, T: Timestamp, D> Drop for ConsolidatingIter<'a, T, D> {
+impl<'a, K: Codec, V: Codec, T: Timestamp, D> Drop for ConsolidatingIter<'a, K, V, T, D> {
     fn drop(&mut self) {
         // Make sure to stash any incomplete state in a place where we'll pick it up on the next run.
         // See the comment on `Consolidator` for more on why this is necessary.
@@ -844,6 +867,7 @@ mod tests {
     use std::sync::Arc;
 
     use differential_dataflow::trace::Description;
+    use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
     use proptest::collection::vec;
     use proptest::prelude::*;
     use timely::progress::Antichain;
@@ -864,6 +888,10 @@ mod tests {
         type Part = Vec<((Vec<u8>, Vec<u8>), u64, i64)>;
 
         fn check(metrics: &Arc<Metrics>, parts: Vec<(Part, usize)>) {
+            let schema = Schemas::<Vec<u8>, Vec<u8>> {
+                key: Arc::new(VecU8Schema::default()),
+                val: Arc::new(VecU8Schema::default()),
+            };
             let original = {
                 let mut rows = parts
                     .iter()
@@ -899,6 +927,7 @@ mod tests {
                         since: Antichain::from_elem(0),
                     },
                     budget: 0,
+                    schema,
                     initial_state: None,
                     drop_stash: None,
                 };
@@ -938,6 +967,10 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn prefetches() {
         fn check(budget: usize, runs: Vec<Vec<usize>>, prefetch_all: bool) {
+            let schema = Schemas::<(), ()> {
+                key: Arc::new(UnitSchema::default()),
+                val: Arc::new(UnitSchema::default()),
+            };
             let desc = Description::new(
                 Antichain::from_elem(0u64),
                 Antichain::new(),
@@ -955,12 +988,13 @@ mod tests {
             ));
             let shard_metrics = metrics.shards.shard(&shard_id, "");
 
-            let mut consolidator: Consolidator<u64, i64> = Consolidator::new(
+            let mut consolidator: Consolidator<(), (), u64, i64> = Consolidator::new(
                 Arc::clone(&metrics),
                 FetchBatchFilter::Compaction {
                     since: desc.since().clone(),
                 },
                 budget,
+                schema,
             );
 
             for run in runs {

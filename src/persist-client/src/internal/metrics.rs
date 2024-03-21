@@ -687,7 +687,7 @@ pub struct BatchWriteMetrics {
 }
 
 impl BatchWriteMetrics {
-    fn new(registry: &MetricsRegistry, name: &str) -> Self {
+    pub(crate) fn new(registry: &MetricsRegistry, name: &str) -> Self {
         BatchWriteMetrics {
             bytes: registry.register(metric!(
                 name: format!("mz_persist_{}_bytes", name),

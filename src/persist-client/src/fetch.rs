@@ -22,6 +22,7 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::columnar::{PartDecoder, Schema};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
@@ -289,9 +290,9 @@ where
             // data was corrupted, or if operations messes up deployment. In any
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
-        read_metrics.part_goodbytes.inc_by(u64::cast_from(
-            part.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
-        ));
+        read_metrics
+            .part_goodbytes
+            .inc_by(u64::cast_from(part.updates.goodbytes()));
         EncodedPart::new(key, registered_desc, part)
     })
 }
@@ -521,7 +522,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     part: EncodedPart<T>,
     schemas: Schemas<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
-    part_cursor: Cursor,
+    part_cursor: Cursor<K, V>,
     key_storage: Option<K::Storage>,
     val_storage: Option<V::Storage>,
 
@@ -563,9 +564,9 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             metrics,
             ts_filter,
             part,
-            schemas,
+            schemas: schemas.clone(),
             filter_pushdown_audit,
-            part_cursor: Cursor::default(),
+            part_cursor: Cursor::new(schemas),
             key_storage: None,
             val_storage: None,
             _phantom: PhantomData,
@@ -754,13 +755,41 @@ where
 ///
 /// We avoid implementing copy to make it hard to accidentally duplicate a cursor. However,
 /// clone is very cheap.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Cursor {
+#[derive(Debug)]
+pub(crate) struct Cursor<K, V>
+where
+    K: Codec,
+    V: Codec,
+{
     part_idx: usize,
     idx: usize,
+    // TODO(parkmycar): This should probably be two `Schema::Decoder`s that are built when the
+    // `Cursor` is to amortize the cost of downcasting.
+    //
+    // TODO(parkmycar): Maybe the Schema (or Decoder) should exist on whatever holds a Cursor
+    // instead of Cursor itself?
+    schema: Schemas<K, V>,
 }
 
-impl Cursor {
+impl<K: Codec, V: Codec> Clone for Cursor<K, V> {
+    fn clone(&self) -> Self {
+        Cursor {
+            part_idx: self.part_idx,
+            idx: self.idx,
+            schema: self.schema.clone(),
+        }
+    }
+}
+
+impl<K: Codec, V: Codec> Cursor<K, V> {
+    pub fn new(schema: Schemas<K, V>) -> Self {
+        Cursor {
+            part_idx: 0,
+            idx: 0,
+            schema,
+        }
+    }
+
     /// A cursor points to a particular update in the backing part data.
     /// If the update it points to is not valid, advance it to the next valid update
     /// if there is one, and return the pointed-to data.
@@ -768,8 +797,9 @@ impl Cursor {
         &mut self,
         encoded: &'a EncodedPart<T>,
     ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
-        while let Some(part) = encoded.part.updates.get(self.part_idx) {
-            let ((k, v), t, d) = match part.get(self.idx) {
+        // TODO(parkmycar): Handle returning only columnar parts.
+        while let (Some(update), part) = encoded.part.updates.get(self.part_idx) {
+            let ((k, v), t, d) = match update.get(self.idx) {
                 Some(x) => x,
                 None => {
                     self.part_idx += 1;
@@ -777,6 +807,30 @@ impl Cursor {
                     continue;
                 }
             };
+
+            // Validate the columnar_part matches.
+            //
+            // LOL: Super inefficient code path. We decode an instance of `K` from the columnar
+            // representation just to re-encode it with Codec to make sure the value is the same.
+            //
+            // TODO(parkmycar): We could (should?) probably move this up a level higher where our
+            // types are already parameterized by some K and V, but this didn't work well with our
+            // existing columnar structure. Specifically a `PartDecoder` operates on an entire
+            // batch of data (i.e. ColumnsRef<'a>) but from here we return a single row (e.g. a
+            // `DynStructRef`) and the two are(?) incompatible.
+            if let Some(columnar_part) = part {
+                let keys = columnar_part.key_ref();
+
+                let key_schema = self.schema.key.as_ref();
+                let key_decoder = key_schema.decoder(keys).expect("failed to decode");
+
+                let columnar_key = key_decoder.decode(self.idx);
+
+                let mut columnar_buf = Vec::with_capacity(k.len());
+                K::encode(&columnar_key, &mut columnar_buf);
+
+                assert_eq!(columnar_buf, k);
+            }
 
             let t = T::decode(t);
 

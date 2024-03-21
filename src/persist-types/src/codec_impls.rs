@@ -43,7 +43,9 @@ impl PartEncoder<'_, ()> for UnitSchema {
 }
 
 impl PartDecoder<'_, ()> for UnitSchema {
-    fn decode(&self, _idx: usize, _val: &mut ()) {}
+    fn decode(&self, _idx: usize) -> () {}
+
+    fn decode_into(&self, _idx: usize, _val: &mut ()) {}
 }
 
 impl Schema<()> for UnitSchema {
@@ -119,7 +121,11 @@ pub struct SimpleDecoder<'a, X, T: Data> {
 }
 
 impl<'a, X, T: Data> PartDecoder<'a, X> for SimpleDecoder<'a, X, T> {
-    fn decode(&self, idx: usize, val: &mut X) {
+    fn decode(&self, _idx: usize) -> X {
+        unreachable!("TODO")
+    }
+
+    fn decode_into(&self, idx: usize, val: &mut X) {
         (self.decode)(ColumnGet::<T>::get(self.col, idx), val)
     }
 }
@@ -488,9 +494,9 @@ impl ColumnRef<()> for Bitmap {
     fn len(&self) -> usize {
         self.len()
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+    fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
         let array = BooleanArray::new(ArrowLogicalType::Boolean, self.clone(), None);
-        (Encoding::Plain, Box::new(array))
+        (vec![Encoding::Plain], Box::new(array))
     }
     fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
@@ -523,8 +529,8 @@ impl ColumnRef<()> for BooleanArray {
     fn len(&self) -> usize {
         self.len()
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        (Encoding::Plain, Box::new(self.clone()))
+    fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
+        (vec![Encoding::Plain], Box::new(self.clone()))
     }
     fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
@@ -560,9 +566,9 @@ macro_rules! arrowable_primitive {
             fn len(&self) -> usize {
                 self.len()
             }
-            fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+            fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
                 let array = PrimitiveArray::new($data::PRIMITIVE.into(), self.clone(), None);
-                ($encoding, Box::new(array.clone()))
+                (vec![$encoding], Box::new(array.clone()))
             }
             fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
                 let array = array
@@ -604,8 +610,8 @@ macro_rules! arrowable_primitive {
             fn len(&self) -> usize {
                 self.len()
             }
-            fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-                ($encoding, Box::new(self.clone()))
+            fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
+                (vec![$encoding], Box::new(self.clone()))
             }
             fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
                 let array = array
@@ -658,8 +664,8 @@ impl ColumnRef<()> for BinaryArray<i32> {
     fn len(&self) -> usize {
         self.len()
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        (Encoding::Plain, Box::new(self.clone()))
+    fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
+        (vec![Encoding::Plain], Box::new(self.clone()))
     }
     fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
@@ -707,8 +713,8 @@ impl ColumnRef<()> for Utf8Array<i32> {
     fn len(&self) -> usize {
         self.len()
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        (Encoding::Plain, Box::new(self.clone()))
+    fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
+        (vec![Encoding::Plain], Box::new(self.clone()))
     }
     fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
@@ -766,7 +772,11 @@ impl<T> PartEncoder<'_, T> for TodoSchema<T> {
 }
 
 impl<T> PartDecoder<'_, T> for TodoSchema<T> {
-    fn decode(&self, _idx: usize, _val: &mut T) {
+    fn decode(&self, _idx: usize) -> T {
+        panic!("TODO")
+    }
+
+    fn decode_into(&self, _idx: usize, _val: &mut T) {
         panic!("TODO")
     }
 }

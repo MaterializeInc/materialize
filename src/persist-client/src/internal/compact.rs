@@ -700,6 +700,7 @@ where
                 since: desc.since().clone(),
             },
             prefetch_budget_bytes,
+            real_schemas.clone(),
         );
 
         for (desc, parts) in runs {

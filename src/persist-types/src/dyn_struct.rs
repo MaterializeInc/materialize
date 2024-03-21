@@ -34,7 +34,8 @@ use crate::stats::{OptionStats, StatsFn, StructStats};
 #[derive(Debug, Clone)]
 #[cfg_attr(debug_assertions, derive(PartialEq))]
 pub struct DynStructCfg {
-    pub(crate) cols: Arc<Vec<(String, DataType, StatsFn)>>,
+    /// TODO
+    pub cols: Arc<Vec<(String, DataType, StatsFn)>>,
 }
 
 impl From<Vec<(String, DataType, StatsFn)>> for DynStructCfg {
@@ -74,10 +75,14 @@ impl Default for DynStructRef<'_> {
 /// A [crate::columnar::ColumnGet] impl for [DynStruct].
 #[derive(Debug)]
 pub struct DynStructCol {
-    len: usize,
-    cfg: DynStructCfg,
-    pub(crate) validity: Option<<bool as Data>::Col>,
-    pub(crate) cols: Vec<DynColumnRef>,
+    /// TODO
+    pub len: usize,
+    /// TODO
+    pub cfg: DynStructCfg,
+    /// TODO
+    pub validity: Option<<bool as Data>::Col>,
+    /// TODO
+    pub cols: Vec<DynColumnRef>,
 }
 
 impl ColumnRef<DynStructCfg> for DynStructCol {
@@ -87,12 +92,14 @@ impl ColumnRef<DynStructCfg> for DynStructCol {
     fn len(&self) -> usize {
         self.len
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        let array: Box<dyn Array> = match self.to_arrow_struct() {
-            Some((array, _col_encodings)) => Box::new(array),
-            None => Box::new(NullArray::new_empty(ArrowLogicalType::Null)),
-        };
-        (Encoding::Plain, array)
+    fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
+        match self.to_arrow_struct() {
+            Some((array, col_encodings)) => (col_encodings, Box::new(array)),
+            None => {
+                let array = Box::new(NullArray::new_empty(ArrowLogicalType::Null));
+                (vec![Encoding::Plain], array)
+            }
+        }
     }
     fn from_arrow(cfg: &DynStructCfg, array: &Box<dyn Array>) -> Result<Self, String> {
         Self::from_arrow(cfg.clone(), array)
@@ -131,7 +138,8 @@ impl ColumnGet<Option<DynStruct>> for DynStructCol {
 }
 
 impl DynStructCol {
-    pub(crate) fn empty(cfg: DynStructCfg) -> Self {
+    /// TODO
+    pub fn empty(cfg: DynStructCfg) -> Self {
         DynStructCol {
             len: 0,
             cfg,
@@ -214,7 +222,7 @@ impl DynStructCol {
         for (name, _stats_fn, col) in self.cols() {
             let (encoding, array, is_nullable) = col.to_arrow();
             fields.push(Field::new(name, array.data_type().clone(), is_nullable));
-            encodings.push(encoding);
+            encodings.extend(encoding);
             arrays.push(array);
         }
         if fields.is_empty() {
@@ -224,8 +232,9 @@ impl DynStructCol {
         Some((array, encodings))
     }
 
+    /// TODO
     #[allow(clippy::borrowed_box)]
-    pub(crate) fn from_arrow(cfg: DynStructCfg, array: &Box<dyn Array>) -> Result<Self, String> {
+    pub fn from_arrow(cfg: DynStructCfg, array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<StructArray>()

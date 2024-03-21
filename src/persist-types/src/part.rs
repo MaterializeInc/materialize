@@ -26,11 +26,16 @@ use crate::Codec64;
 /// A columnar representation of one blob's worth of data.
 #[derive(Debug)]
 pub struct Part {
-    len: usize,
-    key: DynStructCol,
-    val: DynStructCol,
-    ts: Buffer<i64>,
-    diff: Buffer<i64>,
+    /// TODO
+    pub len: usize,
+    /// TODO
+    pub key: DynStructCol,
+    /// TODO
+    pub val: DynStructCol,
+    /// TODO
+    pub ts: Buffer<i64>,
+    /// TODO
+    pub diff: Buffer<i64>,
 }
 
 impl Part {
@@ -56,7 +61,8 @@ impl Part {
         Ok(stats.some)
     }
 
-    pub(crate) fn to_arrow(&self) -> (Vec<Field>, Vec<Vec<Encoding>>, Chunk<Box<dyn Array>>) {
+    /// Returns [`arrow2`] arrays that represent this [`Part`].
+    pub fn to_arrow(&self) -> (Vec<Field>, Vec<Vec<Encoding>>, Chunk<Box<dyn Array>>) {
         let (mut fields, mut encodings, mut arrays) =
             (Vec::new(), Vec::new(), Vec::<Box<dyn Array>>::new());
 
@@ -67,7 +73,7 @@ impl Part {
             // NullArray). This also matches how we'd do the same for nested
             // structs.
             if let Some((key_array, key_encodings)) = self.key.to_arrow_struct() {
-                fields.push(Field::new("k", key_array.data_type().clone(), false));
+                fields.push(Field::new("k_c", key_array.data_type().clone(), false));
                 encodings.push(key_encodings);
                 arrays.push(Box::new(key_array));
             }
@@ -80,7 +86,7 @@ impl Part {
             // NullArray). This also matches how we'd do the same for nested
             // structs.
             if let Some((val_array, val_encodings)) = self.val.to_arrow_struct() {
-                fields.push(Field::new("v", val_array.data_type().clone(), false));
+                fields.push(Field::new("v_c", val_array.data_type().clone(), false));
                 encodings.push(val_encodings);
                 arrays.push(Box::new(val_array));
             }

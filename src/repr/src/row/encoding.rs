@@ -679,7 +679,13 @@ impl<'a> RowDecoder<'a> {
 }
 
 impl<'a> PartDecoder<'a, Row> for RowDecoder<'a> {
-    fn decode(&self, idx: usize, val: &mut Row) {
+    fn decode(&self, idx: usize) -> Row {
+        let mut row = Row::default();
+        Self::decode_into(self, idx, &mut row);
+        row
+    }
+
+    fn decode_into(&self, idx: usize, val: &mut Row) {
         let mut packer = val.packer();
         for decoder in self.col_decoders.iter() {
             decoder.decode(idx, &mut packer);
