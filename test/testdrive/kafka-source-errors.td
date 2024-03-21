@@ -34,7 +34,7 @@ contains:Failed to resolve hostname
 ! CREATE CONNECTION IF NOT EXISTS fawlty_csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://non-existent-csr:8081'
   );
-contains:failed to lookup address information
+contains:failed to lookup address information: Name or service not known
 
 # Check that for all tables clause is rejected
 ! CREATE SOURCE bad_definition1
