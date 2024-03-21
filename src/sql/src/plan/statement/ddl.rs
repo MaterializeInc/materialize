@@ -1786,7 +1786,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 partitions,
                 batch_size,
                 ..
-            } = options.to_vec().try_into()?;
+            } = extracted;
 
             let lgu = UpsertLoadGenerator {
                 keys: keys.ok_or_else(|| sql_err!("LOADGEN UPSERT requires KEYS"))?,
