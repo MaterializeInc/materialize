@@ -19,7 +19,6 @@ from materialize.checks.all_checks.alter_connection import (
     AlterConnectionToNonSsh,
     AlterConnectionToSsh,
 )
-from materialize.checks.all_checks.copy_to_s3 import CopyToS3
 from materialize.checks.all_checks.kafka_protocols import KafkaProtocols
 from materialize.checks.checks import Check
 from materialize.checks.cloudtest_actions import (
@@ -79,7 +78,6 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
     executor = CloudtestExecutor(application=mz, version=last_released_version)
     # KafkaProtocols: No shared secrets directory
     # AlterConnection*: No second SSH host (other_ssh_bastion) set up
-    # CopyToS3: No minio running
     checks = list(
         all_subclasses(Check)
         - {
@@ -87,7 +85,6 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
             AlterConnectionToSsh,
             AlterConnectionToNonSsh,
             AlterConnectionHost,
-            CopyToS3,
         }
     )
     scenario = CloudtestUpgrade(checks=checks, executor=executor)

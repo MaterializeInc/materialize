@@ -42,7 +42,7 @@ class TestdriveBase:
         )
         self.kafka_addr = kafka_addr or "redpanda:9092"
         self.schema_registry_url = schema_registry_url or "http://redpanda:8081"
-        self.aws_endpoint = "http://minio:9000"
+        self.aws_endpoint = "http://minio-service.default:9000"
 
     def run(
         self,
@@ -73,10 +73,10 @@ class TestdriveBase:
                 [
                     f"--aws-endpoint={self.aws_endpoint}",
                     f"--var=aws-endpoint={self.aws_endpoint}",
-                    "--aws-access-key-id=minioadmin",
-                    "--var=aws-access-key-id=minioadmin",
-                    "--aws-secret-access-key=minioadmin",
-                    "--var=aws-secret-access-key=minioadmin",
+                    "--aws-access-key-id=minio",
+                    "--var=aws-access-key-id=minio",
+                    "--aws-secret-access-key=minio123",
+                    "--var=aws-secret-access-key=minio123",
                 ]
                 if not self.aws_region
                 else []

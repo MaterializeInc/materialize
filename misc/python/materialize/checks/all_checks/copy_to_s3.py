@@ -25,8 +25,8 @@ class CopyToS3(Check):
         return Testdrive(
             dedent(
                 """
-                > CREATE SECRET minio AS 'minioadmin'
-                > CREATE CONNECTION aws_conn1 TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)
+                > CREATE SECRET minio AS '${arg.aws-secret-access-key}'
+                > CREATE CONNECTION aws_conn1 TO AWS (ENDPOINT '${arg.aws-endpoint}', REGION 'us-east-1', ACCESS KEY ID '${arg.aws-access-key-id}', SECRET ACCESS KEY SECRET minio)
                 > COPY (SELECT 1, 2, 3) TO 's3://copytos3/key1' WITH (AWS CONNECTION = aws_conn1, FORMAT = 'csv');
                 """
             )
@@ -37,12 +37,12 @@ class CopyToS3(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE CONNECTION aws_conn2 TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)
+                > CREATE CONNECTION aws_conn2 TO AWS (ENDPOINT '${arg.aws-endpoint}', REGION 'us-east-1', ACCESS KEY ID '${arg.aws-access-key-id}', SECRET ACCESS KEY SECRET minio)
                 > COPY (SELECT 11, 12, 13) TO 's3://copytos3/key11' WITH (AWS CONNECTION = aws_conn1, FORMAT = 'csv');
                 > COPY (SELECT 11, 12, 13) TO 's3://copytos3/key12' WITH (AWS CONNECTION = aws_conn2, FORMAT = 'csv');
                 """,
                 """
-                > CREATE CONNECTION aws_conn3 TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)
+                > CREATE CONNECTION aws_conn3 TO AWS (ENDPOINT '${arg.aws-endpoint}', REGION 'us-east-1', ACCESS KEY ID '${arg.aws-access-key-id}', SECRET ACCESS KEY SECRET minio)
                 > COPY (SELECT 21, 22, 23) TO 's3://copytos3/key21' WITH (AWS CONNECTION = aws_conn1, FORMAT = 'csv');
                 > COPY (SELECT 21, 22, 23) TO 's3://copytos3/key22' WITH (AWS CONNECTION = aws_conn2, FORMAT = 'csv');
                 > COPY (SELECT 21, 22, 23) TO 's3://copytos3/key23' WITH (AWS CONNECTION = aws_conn3, FORMAT = 'csv');
