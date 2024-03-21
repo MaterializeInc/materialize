@@ -21,6 +21,11 @@ mz_system
 mz_introspection
 quickstart
 
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+> select managed from mz_catalog.mz_clusters where id like 's%';
+true
+true
+
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO false
 
@@ -43,10 +48,13 @@ $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-inter
 ALTER SYSTEM SET enable_rbac_checks TO false
 
 ! CREATE CLUSTER REPLICA mz_system.r2 SIZE '1';
-contains:system cluster 'mz_system' cannot be modified
+contains: cannot modify managed cluster mz_system
 
-! DROP CLUSTER REPLICA mz_system.r1
-contains:system cluster 'mz_system' cannot be modified
+! DROP CLUSTER REPLICA mz_system.r1;
+contains:cannot drop replica of managed cluster
+
+! ALTER CLUSTER mz_system SET (SIZE='2');
+contains: system cluster 'mz_system' cannot be modified
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO true
@@ -91,14 +99,3 @@ $ set-regex match=true|false replacement=<TRUE_OR_FALSE>
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
 mz_system r1 1 <TRUE_OR_FALSE>
-
-$ postgres-execute connection=mz_system
-DROP CLUSTER REPLICA mz_system.r1
-
-> SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
-
-$ postgres-execute connection=mz_system
-CREATE CLUSTER REPLICA mz_system.r1 SIZE '${arg.default-replica-size}';
-
-> SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
-mz_system r1 ${arg.default-replica-size} <TRUE_OR_FALSE>
