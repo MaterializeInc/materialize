@@ -222,6 +222,19 @@ contains:Connection refused
   )
 contains:Access denied for user 'root'
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_enforce_external_addresses = true
+
+! CREATE CONNECTION private_address TO MYSQL (
+    HOST mysql,
+    USER root,
+    PASSWORD SECRET mysqlpass
+  )
+contains:address is not global
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_enforce_external_addresses = false
+
 ! CREATE SOURCE "mz_source"
   IN CLUSTER cdc_cluster
   FROM MYSQL CONNECTION mysql_conn
