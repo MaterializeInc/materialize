@@ -31,6 +31,7 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate;
@@ -41,6 +42,7 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::ComputeInstanceId;
+use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -144,6 +146,11 @@ pub struct ComputeController<T> {
     envd_epoch: NonZeroI64,
     /// The compute controller metrics.
     metrics: ComputeControllerMetrics,
+    /// Dynamic system configuration.
+    ///
+    /// Updated through `ComputeController::update_configuration` calls and shared with all
+    /// subcompontents of the compute controller.
+    dyncfg: Arc<ConfigSet>,
 
     /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
     /// `ActiveComputeController::process`.
@@ -183,6 +190,7 @@ impl<T: Timestamp> ComputeController<T> {
             stashed_replica_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
+            dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
             response_rx,
             response_tx,
             introspection_rx,
@@ -310,6 +318,7 @@ impl<T: Timestamp> ComputeController<T> {
             stashed_replica_response,
             envd_epoch,
             metrics: _,
+            dyncfg: _,
             response_rx: _,
             response_tx: _,
             introspection_rx: _,
@@ -371,6 +380,7 @@ where
                 arranged_logs,
                 self.envd_epoch,
                 self.metrics.for_instance(id),
+                Arc::clone(&self.dyncfg),
                 self.response_tx.clone(),
                 self.introspection_tx.clone(),
             ),
@@ -400,10 +410,15 @@ where
 
     /// Update compute configuration.
     pub fn update_configuration(&mut self, config_params: ComputeParameters) {
+        // Apply dyncfg updates.
+        config_params.dyncfg_updates.apply(&self.dyncfg);
+
+        // Forward updates to existing clusters.
         for instance in self.instances.values_mut() {
             instance.update_configuration(config_params.clone());
         }
 
+        // Remember updates for future clusters.
         self.config.update(config_params);
     }
 

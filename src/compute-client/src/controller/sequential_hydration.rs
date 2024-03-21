@@ -42,6 +42,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use mz_compute_types::dyncfgs::HYDRATION_CONCURRENCY;
+use mz_dyncfg::ConfigSet;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_eq_or_log;
 use mz_repr::GlobalId;
@@ -62,8 +64,8 @@ type Token = Arc<()>;
 pub(super) struct SequentialHydration<C, T> {
     /// The wrapped client.
     client: C,
-    /// TODO: make configurable
-    hydration_concurrency: usize,
+    /// Dynamic system configuration.
+    dyncfg: Arc<ConfigSet>,
     /// Tracked collections.
     ///
     /// Entries are inserted in response to observed `CreateDataflow` commands.
@@ -85,10 +87,10 @@ where
     T: Timestamp,
 {
     /// Create a new `SequentialHydration` client.
-    pub fn new(client: C) -> Self {
+    pub fn new(client: C, dyncfg: Arc<ConfigSet>) -> Self {
         Self {
             client,
-            hydration_concurrency: 1,
+            dyncfg,
             collections: Default::default(),
             hydration_queue: Default::default(),
             hydration_token: Default::default(),
@@ -194,7 +196,8 @@ where
 
     /// Allow hydration based on the available capacity.
     async fn hydrate_collections(&mut self) -> Result<(), anyhow::Error> {
-        while self.hydration_count() < self.hydration_concurrency {
+        let capacity = HYDRATION_CONCURRENCY.get(&self.dyncfg);
+        while self.hydration_count() < capacity {
             let Some(id) = self.hydration_queue.pop_front() else {
                 // Hydration queue is empty.
                 break;

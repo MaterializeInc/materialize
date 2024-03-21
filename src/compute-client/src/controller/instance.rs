@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
+use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
@@ -25,6 +26,7 @@ use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_compute_types::sources::SourceInstanceDesc;
+use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -185,6 +187,8 @@ pub(super) struct Instance<T> {
     replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
+    /// Dynamic system configuration.
+    dyncfg: Arc<ConfigSet>,
 }
 
 impl<T: Timestamp> Instance<T> {
@@ -553,6 +557,7 @@ impl<T: Timestamp> Instance<T> {
             envd_epoch,
             replica_epochs,
             metrics: _,
+            dyncfg: _,
         } = self;
 
         fn field(
@@ -609,6 +614,7 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
+        dyncfg: Arc<ConfigSet>,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
@@ -636,6 +642,7 @@ where
             envd_epoch,
             replica_epochs: Default::default(),
             metrics,
+            dyncfg,
         };
 
         instance.send(ComputeCommand::CreateTimely {
@@ -854,6 +861,7 @@ where
             config.clone(),
             ClusterStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
             metrics.clone(),
+            Arc::clone(&self.compute.dyncfg),
         );
 
         // Take this opportunity to clean up the history we should present.

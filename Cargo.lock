@@ -4149,6 +4149,7 @@ dependencies = [
  "mz-cluster-client",
  "mz-compute-types",
  "mz-dyncfg",
+ "mz-dyncfgs",
  "mz-expr",
  "mz-orchestrator",
  "mz-ore",
