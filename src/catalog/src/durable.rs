@@ -258,13 +258,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(GlobalId::User(id))
     }
 
-    /// Allocates and returns a system [`ClusterId`].
-    async fn allocate_system_cluster_id(&mut self) -> Result<ClusterId, CatalogError> {
-        let id = self.allocate_id(SYSTEM_CLUSTER_ID_ALLOC_KEY, 1).await?;
-        let id = id.into_element();
-        Ok(ClusterId::System(id))
-    }
-
     /// Allocates and returns a user [`ClusterId`].
     async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, CatalogError> {
         let id = self.allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1).await?;

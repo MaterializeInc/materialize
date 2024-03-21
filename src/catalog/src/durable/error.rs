@@ -11,7 +11,6 @@ use std::fmt::Debug;
 
 use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_stash_types::{InternalStashError, StashError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -19,12 +18,6 @@ pub enum CatalogError {
     Catalog(#[from] SqlCatalogError),
     #[error(transparent)]
     Durable(#[from] DurableCatalogError),
-}
-
-impl From<StashError> for CatalogError {
-    fn from(e: StashError) -> Self {
-        Self::Durable(e.into())
-    }
 }
 
 impl From<TryFromProtoError> for CatalogError {
@@ -70,20 +63,28 @@ pub enum DurableCatalogError {
     /// Uniqueness violation occurred in some catalog collection.
     #[error("uniqueness violation")]
     UniquenessViolation,
-    /// Misc errors from the Stash implementation.
-    ///
-    /// Once the Stash implementation is removed we can remove this variant.
-    #[error(transparent)]
-    MiscStash(StashError),
 }
 
 impl DurableCatalogError {
+    /// Reports whether the error should halt rather than panic the process.
+    pub fn should_halt(&self) -> bool {
+        match self {
+            DurableCatalogError::Fence(_)
+            | DurableCatalogError::IncompatibleDataVersion { .. }
+            | DurableCatalogError::IncompatiblePersistVersion { .. }
+            | DurableCatalogError::Proto(_) => true,
+            DurableCatalogError::Uninitialized
+            | DurableCatalogError::NotWritable(_)
+            | DurableCatalogError::DuplicateKey
+            | DurableCatalogError::UniquenessViolation => false,
+        }
+    }
+
     /// Reports whether the error is unrecoverable (retrying will never succeed,
     /// or a retry is not safe due to an indeterminate state).
     pub fn is_unrecoverable(&self) -> bool {
         match self {
-            DurableCatalogError::Fence(_) | DurableCatalogError::NotWritable(_) => true,
-            DurableCatalogError::MiscStash(e) => e.is_unrecoverable(),
+            DurableCatalogError::Fence(_) | DurableCatalogError::Uninitialized => true,
             _ => false,
         }
     }
@@ -92,41 +93,7 @@ impl DurableCatalogError {
     pub fn can_recover_with_write_mode(&self) -> bool {
         match self {
             DurableCatalogError::NotWritable(_) => true,
-            DurableCatalogError::MiscStash(e) => e.can_recover_with_write_mode(),
             _ => false,
-        }
-    }
-
-    /// The underlying operation failed in a way that must be resolved by retrying.
-    pub fn should_retry(&self) -> bool {
-        match self {
-            DurableCatalogError::MiscStash(e) => e.should_retry(),
-            _ => false,
-        }
-    }
-}
-
-impl From<StashError> for DurableCatalogError {
-    fn from(e: StashError) -> Self {
-        // We're not really supposed to look at the inner error, but we'll make an exception here.
-        match e.inner {
-            InternalStashError::Fence(msg) => DurableCatalogError::Fence(msg),
-            InternalStashError::IncompatibleVersion {
-                found_version,
-                min_stash_version,
-                stash_version,
-            } => DurableCatalogError::IncompatibleDataVersion {
-                found_version,
-                min_catalog_version: min_stash_version,
-                catalog_version: stash_version,
-            },
-            InternalStashError::Uninitialized => DurableCatalogError::Uninitialized,
-            InternalStashError::StashNotWritable(msg) => DurableCatalogError::NotWritable(msg),
-            InternalStashError::Proto(e) => DurableCatalogError::Proto(e),
-            InternalStashError::Postgres(_)
-            | InternalStashError::PeekSinceUpper(_)
-            | InternalStashError::Decoding(_)
-            | InternalStashError::Other(_) => DurableCatalogError::MiscStash(e),
         }
     }
 }

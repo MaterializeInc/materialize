@@ -41,7 +41,6 @@ mz-secrets = { path = "../secrets" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
-mz-stash-types = { path = "../stash-types" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 paste = "1.0.11"

@@ -265,10 +265,14 @@ pub fn describe(
 }
 
 pub trait ResultExt<T> {
-    // Like [`Result::expect`], but terminates the process with `halt` instead
-    // of `panic` if the underlying error is a condition that should halt the
-    // rather than panic the process.
+    /// Like [`Result::expect`], but terminates the process with `halt` instead
+    /// of `panic` if the underlying error is a condition that should halt the
+    /// rather than panic the process.
     fn unwrap_or_terminate(self, context: &str) -> T;
+
+    /// Terminates the process with `halt` if `self` is an error that should halt.
+    /// Otherwise does nothing.
+    fn maybe_terminate(self, context: &str) -> Self;
 }
 
 impl<T, E> ResultExt<T> for Result<T, E>
@@ -281,6 +285,16 @@ where
             Err(e) if e.should_halt() => halt!("{context}: {e:?}"),
             Err(e) => panic!("{context}: {e:?}"),
         }
+    }
+
+    fn maybe_terminate(self, context: &str) -> Self {
+        if let Err(e) = &self {
+            if e.should_halt() {
+                halt!("{context}: {e:?}");
+            }
+        }
+
+        self
     }
 }
 
@@ -319,7 +333,7 @@ impl ShouldHalt for mz_catalog::durable::CatalogError {
 
 impl ShouldHalt for mz_catalog::durable::DurableCatalogError {
     fn should_halt(&self) -> bool {
-        self.is_unrecoverable()
+        self.should_halt()
     }
 }
 
