@@ -179,3 +179,18 @@ query B
 SELECT text_val NOT ILIKE '%A%' FROM t2;
 ----
 false
+
+# Test that % matches \n
+query B
+SELECT E'test line 1\ntest line 2' LIKE '%1%2%';
+----
+true
+
+statement ok
+INSERT INTO t2 VALUES ('test line 1\ntest line 2');
+
+query B
+SELECT text_val LIKE '%1%2%' FROM t2;
+----
+false
+true
