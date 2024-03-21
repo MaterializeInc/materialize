@@ -2919,4 +2919,11 @@ ALTER MATERIALIZED VIEW mv SET (RETAIN HISTORY FOR '3m')
 ----
 ALTER MATERIALIZED VIEW mv SET (RETAIN HISTORY FOR '3m')
 =>
-AlterRetainHistory(AlterRetainHistoryStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("mv")])), history: RetainHistoryFor(String("3m")) })
+AlterRetainHistory(AlterRetainHistoryStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("mv")])), history: Some(RetainHistoryFor(String("3m"))) })
+
+parse-statement
+ALTER MATERIALIZED VIEW mv RESET (RETAIN HISTORY)
+----
+ALTER MATERIALIZED VIEW mv RESET (RETAIN HISTORY)
+=>
+AlterRetainHistory(AlterRetainHistoryStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("mv")])), history: None })
