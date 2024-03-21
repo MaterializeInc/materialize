@@ -692,8 +692,14 @@ impl KafkaConnection {
                     .await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
 
+                // Ensure any ssh-bastion address we connect to is resolved to an external address.
+                let resolved = resolve_external_address(
+                    &ssh_tunnel.connection.host,
+                    ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                )
+                .await?;
                 context.set_default_tunnel(TunnelConfig::Ssh(SshTunnelConfig {
-                    host: ssh_tunnel.connection.host.clone(),
+                    host: resolved.to_string(),
                     port: ssh_tunnel.connection.port,
                     user: ssh_tunnel.connection.user.clone(),
                     key_pair,
@@ -712,25 +718,21 @@ impl KafkaConnection {
             };
             match &broker.tunnel {
                 Tunnel::Direct => {
+                    // By default, don't override broker address lookup.
+                    //
+                    // N.B.
+                    //
                     // We _could_ pre-setup the default ssh tunnel for all known brokers here, but
                     // we avoid doing because:
                     // - Its not necessary.
                     // - Not doing so makes it easier to test the `FailedDefaultSshTunnel` path
                     // in the `TunnelingClientContext`.
-
-                    // Ensure any broker address we connect to is resolved to an external address.
-                    let resolved = resolve_external_address(
-                        &addr.host,
-                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
-                    )
-                    .await?;
-                    context.add_broker_rewrite(
-                        addr,
-                        BrokerRewrite {
-                            host: resolved.to_string(),
-                            port: None,
-                        },
-                    )
+                    //
+                    // NOTE that we do not need to use the `resolve_external_address` method to
+                    // validate the broker address here since it will be validated when the
+                    // connection is established in `src/kafka-util/src/client.rs`, and we do not
+                    // want to specify any BrokerRewrite that would override any default-tunnel
+                    // settings.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
                     let host = mz_cloud_resources::vpc_endpoint_host(

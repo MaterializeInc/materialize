@@ -18,7 +18,7 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 ALTER SYSTEM SET storage_enforce_external_addresses = true
 
 ! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = true)
-contains:address is not global
+contains:Failed to resolve hostname
 
 # Setup kafka topic with schema
 # must be a subset of the keys in the rows

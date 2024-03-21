@@ -20,7 +20,9 @@ use chrono::{DateTime, NaiveDateTime};
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use maplit::btreemap;
-use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
+use mz_kafka_util::client::{
+    get_partitions, BrokerStatus, MzClientContext, PartitionId, TunnelingClientContext,
+};
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
@@ -390,13 +392,29 @@ impl SourceRender for KafkaSourceConnection {
                                         "kafka metadata thread: updated partition metadata info",
                                     );
 
-                                    // Clear all the health namespaces we know about.
-                                    // Note that many kafka sources's don't have an ssh tunnel, but
-                                    // the `health_operator` handles this fine.
-                                    *status_report.lock().unwrap() = HealthStatus {
-                                        kafka: Some(HealthStatusUpdate::running()),
-                                        ssh: Some(HealthStatusUpdate::running()),
-                                    };
+                                    // Check to see if any broker errors have been hit
+                                    match consumer.client().context().tunnel_status().broker_status
+                                    {
+                                        BrokerStatus::Failed(err) => {
+                                            let status = HealthStatusUpdate::stalled(
+                                                format!("broker error: {}", err),
+                                                None,
+                                            );
+                                            *status_report.lock().unwrap() = HealthStatus {
+                                                kafka: Some(status),
+                                                ssh: None,
+                                            };
+                                        }
+                                        BrokerStatus::Nominal => {
+                                            // Clear all the health namespaces we know about.
+                                            // Note that many kafka sources's don't have an ssh tunnel, but
+                                            // the `health_operator` handles this fine.
+                                            *status_report.lock().unwrap() = HealthStatus {
+                                                kafka: Some(HealthStatusUpdate::running()),
+                                                ssh: Some(HealthStatusUpdate::running()),
+                                            };
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     let kafka_status = Some(HealthStatusUpdate::stalled(
@@ -404,7 +422,8 @@ impl SourceRender for KafkaSourceConnection {
                                         None,
                                     ));
 
-                                    let ssh_status = consumer.client().context().tunnel_status();
+                                    let ssh_status =
+                                        consumer.client().context().tunnel_status().ssh_status;
                                     let ssh_status = match ssh_status {
                                         SshTunnelStatus::Running => {
                                             Some(HealthStatusUpdate::running())
