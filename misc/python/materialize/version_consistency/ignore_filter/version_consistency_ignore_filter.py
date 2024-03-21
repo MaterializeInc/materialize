@@ -45,6 +45,7 @@ MZ_VERSION_0_77_0 = MzVersion.parse_mz("v0.77.0")
 MZ_VERSION_0_78_0 = MzVersion.parse_mz("v0.78.0")
 MZ_VERSION_0_81_0 = MzVersion.parse_mz("v0.81.0")
 MZ_VERSION_0_88_0 = MzVersion.parse_mz("v0.88.0")
+MZ_VERSION_0_93_0 = MzVersion.parse_mz("v0.93.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -118,6 +119,22 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
                 partial(
                     matches_fun_by_name,
                     function_name_in_lower_case="date_trunc",
+                ),
+                True,
+            )
+        ):
+            return YesIgnore("date_trunc fixed in 25202")
+
+        if (
+            self.lower_version < MZ_VERSION_0_93_0 <= self.higher_version
+            and expression.matches(
+                partial(
+                    matches_fun_by_any_name,
+                    function_names_in_lower_case={
+                        "regexp_match",
+                        "regexp_replace",
+                        "regexp_split_to_array",
+                    },
                 ),
                 True,
             )
