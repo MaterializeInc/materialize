@@ -32,6 +32,8 @@ breaking:
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v48.proto
     # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v49.proto
+    # reason: does currently not require backward-compatibility
     - cluster-client/src/client.proto
     # reason: does currently not require backward-compatibility
     - compute-client/src/logging.proto

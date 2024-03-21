@@ -22,19 +22,19 @@
 //!    `objects_v<CATALOG_VERSION>.proto`.
 //! 2. Bump [`CATALOG_VERSION`] by one.
 //! 3. Make your changes to `objects.proto`.
-//! 4. Copy and paste `objects.proto`, naming the copy `objects_v<CATALOG_VERSION>.proto`.
+//! 4. Copy and paste `objects.proto`, naming the copy `objects_v<CATALOG_VERSION>.proto`. Update
+//!    the package name of the `.proto` to `package objects_v<CATALOG_VERSION>;`
 //! 5. We should now have a copy of the protobuf objects as they currently exist, and a copy of
 //!    how we want them to exist. For example, if the version of the Catalog before we made our
 //!    changes was 15, we should now have `objects_v15.proto` and `objects_v16.proto`.
 //! 6. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file.
-//! 7. Add a new file to `catalog/src/durable/upgrade/persist` and
-//!    `catalog/src/durable/upgrade/stash`, which is where we'll put the new migration path.
-//! 8. Write upgrade functions using the the two versions of the protos we now have, e.g.
+//! 7. Add a new file to `catalog/src/durable/upgrade` which is where we'll put the new migration
+//!    path.
+//! 8. Write upgrade functions using the two versions of the protos we now have, e.g.
 //!    `objects_v15.proto` and `objects_v16.proto`. In this migration code you __should not__
 //!    import any defaults or constants from elsewhere in the codebase, because then a future
-//!    change could then impact a previous migration. You need to write separate upgrade functions
-//!    for the stash catalog and the persist catalog.
-//! 9. Call your upgrade function in [`stash::upgrade()`] and [`persist::upgrade()`].
+//!    change could then impact a previous migration.
+//! 9. Call your upgrade function in [`persist::upgrade()`].
 //! 10. Generate a test file for the new version:
 //!     ```ignore
 //!     cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
@@ -170,14 +170,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v42, v43, v44, v45, v46, v47, v48);
+objects!(v42, v43, v44, v45, v46, v47, v48, v49);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 48;
+pub const CATALOG_VERSION: u64 = 49;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -195,6 +195,7 @@ mod v44_to_v45;
 mod v45_to_v46;
 mod v46_to_v47;
 mod v47_to_v48;
+mod v48_to_v49;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -292,6 +293,10 @@ pub(crate) async fn upgrade(
             }
             47 => {
                 run_versioned_upgrade(unopened_catalog_state, mode, version, v47_to_v48::upgrade)
+                    .await
+            }
+            48 => {
+                run_versioned_upgrade(unopened_catalog_state, mode, version, v48_to_v49::upgrade)
                     .await
             }
 

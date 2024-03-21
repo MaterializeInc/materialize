@@ -32,7 +32,6 @@ use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_types::controller::PersistTxnTablesImpl;
-use mz_storage_types::sources::Timeline;
 
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY};
@@ -46,13 +45,11 @@ use crate::durable::objects::{
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
     SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
-    TimestampKey, TimestampValue,
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
-    SystemConfiguration, TimelineTimestamp, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY,
-    OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    SystemConfiguration, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
@@ -74,7 +71,6 @@ pub struct Transaction<'a> {
     id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
     configs: TableTransaction<ConfigKey, ConfigValue>,
     settings: TableTransaction<SettingKey, SettingValue>,
-    timestamps: TableTransaction<TimestampKey, TimestampValue>,
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
@@ -100,7 +96,6 @@ impl<'a> Transaction<'a> {
             id_allocator,
             configs,
             settings,
-            timestamps,
             system_object_mappings,
             system_configurations,
             default_privileges,
@@ -133,7 +128,6 @@ impl<'a> Transaction<'a> {
             id_allocator: TableTransaction::new(id_allocator, |_a, _b| false)?,
             configs: TableTransaction::new(configs, |_a, _b| false)?,
             settings: TableTransaction::new(settings, |_a, _b| false)?,
-            timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
             system_gid_mapping: TableTransaction::new(system_object_mappings, |_a, _b| false)?,
             system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
             default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
@@ -561,22 +555,6 @@ impl<'a> Transaction<'a> {
         ) {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
-        }
-    }
-
-    pub fn insert_timestamp(
-        &mut self,
-        timeline: Timeline,
-        ts: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError> {
-        match self.timestamps.insert(
-            TimestampKey {
-                id: timeline.to_string(),
-            },
-            TimestampValue { ts },
-        ) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(SqlCatalogError::TimelineAlreadyExists(timeline.to_string()).into()),
         }
     }
 
@@ -1193,18 +1171,6 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    /// Set persisted timestamp.
-    pub fn set_timestamp(
-        &mut self,
-        timeline: Timeline,
-        ts: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError> {
-        let timeline_timestamp = TimelineTimestamp { timeline, ts };
-        let (key, value) = timeline_timestamp.into_key_value();
-        self.timestamps.set(key, Some(value))?;
-        Ok(())
-    }
-
     /// Set persisted replica.
     pub fn set_replicas(&mut self, replicas: Vec<ClusterReplica>) -> Result<(), CatalogError> {
         let replicas = replicas
@@ -1401,14 +1367,6 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
-    pub fn get_timestamp(&self, timeline: &Timeline) -> Option<mz_repr::Timestamp> {
-        self.timestamps
-            .get(&TimestampKey {
-                id: timeline.to_string(),
-            })
-            .map(|value| value.ts)
-    }
-
     pub fn get_introspection_source_indexes(
         &mut self,
         cluster_id: ClusterId,
@@ -1465,7 +1423,6 @@ impl<'a> Transaction<'a> {
             id_allocator: self.id_allocator.pending(),
             configs: self.configs.pending(),
             settings: self.settings.pending(),
-            timestamps: self.timestamps.pending(),
             system_gid_mapping: self.system_gid_mapping.pending(),
             system_configurations: self.system_configurations.pending(),
             default_privileges: self.default_privileges.pending(),
@@ -1495,7 +1452,6 @@ impl<'a> Transaction<'a> {
             id_allocator,
             configs,
             settings,
-            timestamps,
             system_gid_mapping,
             system_configurations,
             default_privileges,
@@ -1516,7 +1472,6 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
         differential_dataflow::consolidation::consolidate_updates(configs);
         differential_dataflow::consolidation::consolidate_updates(settings);
-        differential_dataflow::consolidation::consolidate_updates(timestamps);
         differential_dataflow::consolidation::consolidate_updates(system_gid_mapping);
         differential_dataflow::consolidation::consolidate_updates(system_configurations);
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
@@ -1545,7 +1500,6 @@ pub struct TransactionBatch {
     pub(crate) id_allocator: Vec<(proto::IdAllocKey, proto::IdAllocValue, Diff)>,
     pub(crate) configs: Vec<(proto::ConfigKey, proto::ConfigValue, Diff)>,
     pub(crate) settings: Vec<(proto::SettingKey, proto::SettingValue, Diff)>,
-    pub(crate) timestamps: Vec<(proto::TimestampKey, proto::TimestampValue, Diff)>,
     pub(crate) system_gid_mapping: Vec<(proto::GidMappingKey, proto::GidMappingValue, Diff)>,
     pub(crate) system_configurations: Vec<(
         proto::ServerConfigurationKey,
@@ -1580,7 +1534,6 @@ impl TransactionBatch {
             id_allocator,
             configs,
             settings,
-            timestamps,
             system_gid_mapping,
             system_configurations,
             default_privileges,
@@ -1600,7 +1553,6 @@ impl TransactionBatch {
             && id_allocator.is_empty()
             && configs.is_empty()
             && settings.is_empty()
-            && timestamps.is_empty()
             && system_gid_mapping.is_empty()
             && system_configurations.is_empty()
             && default_privileges.is_empty()

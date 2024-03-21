@@ -29,7 +29,7 @@ use mz_catalog::durable::debug::{
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
     IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
     StorageUsageCollection, SystemConfigurationCollection, SystemItemMappingCollection,
-    SystemPrivilegeCollection, TimestampCollection, Trace,
+    SystemPrivilegeCollection, Trace,
 };
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
@@ -261,7 +261,6 @@ macro_rules! for_collection {
             CollectionType::SystemConfiguration => $fn::<SystemConfigurationCollection>($($arg),*).await?,
             CollectionType::SystemGidMapping => $fn::<SystemItemMappingCollection>($($arg),*).await?,
             CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
-            CollectionType::Timestamp => $fn::<TimestampCollection>($($arg),*).await?,
         }
     };
 }
@@ -395,7 +394,6 @@ async fn dump(
         system_object_mappings,
         system_configurations,
         system_privileges,
-        timestamps,
     } = if consolidate {
         openable_state.trace_consolidated().await?
     } else {
@@ -459,7 +457,6 @@ async fn dump(
         stats_only,
         consolidate,
     );
-    dump_col(&mut data, timestamps, &ignore, stats_only, consolidate);
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())
