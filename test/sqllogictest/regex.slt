@@ -125,6 +125,9 @@ CREATE TABLE t(s string, like_pat string, regex_pat string);
 statement ok
 INSERT INTO t VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 'a.*');
 
+# In Postgres' regexes, `.` matches newlines by default, so let's test this as well.
+# See https://www.postgresql.org/docs/current/functions-matching.html#POSIX-MATCHING-RULES
+# "newline-sensitive matching"
 statement ok
 INSERT INTO t VALUES (
   E'test line 1\ntest line 2',
@@ -273,6 +276,7 @@ query T
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~ regex_pat;
 ----
 abc
+test line 1<newline>test line 2
 
 query T multiline
 EXPLAIN
@@ -295,6 +299,7 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 ----
 ABC
 abc
+test line 1<newline>test line 2
 
 query T multiline
 EXPLAIN
@@ -308,8 +313,9 @@ Explained Query:
 
 EOF
 
+# We need to also replace newlines in the output here to not confuse sqllogictest.
 query TTT
-SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat) FROM t;
+SELECT replace(s, E'\n', '<newline>'), regex_pat, replace(regexp_match(s, regex_pat)::text, E'\n', '<newline>') FROM t;
 ----
 ABC
 a.*
@@ -317,12 +323,12 @@ NULL
 ccc
 a.*
 NULL
-test line 1<newline>test line 2
-1.*2
-NULL
 abc
 a.*
 {abc}
+test line 1<newline>test line 2
+1.*2
+{"1<newline>test line 2"}
 
 query T multiline
 EXPLAIN
@@ -337,13 +343,10 @@ Explained Query:
 EOF
 
 query TTT
-SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regex_pat, replace(regexp_match(s, regex_pat, 'i')::text, E'\n', '<newline>') FROM t;
 ----
 ccc
 a.*
-NULL
-test line 1<newline>test line 2
-1.*2
 NULL
 ABC
 a.*
@@ -351,9 +354,12 @@ a.*
 abc
 a.*
 {abc}
+test line 1<newline>test line 2
+1.*2
+{"1<newline>test line 2"}
 
 query TTT
-SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat, 'ic') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regex_pat, replace(regexp_match(s, regex_pat, 'ic')::text, E'\n', '<newline>') FROM t;
 ----
 ABC
 a.*
@@ -361,21 +367,18 @@ NULL
 ccc
 a.*
 NULL
-test line 1<newline>test line 2
-1.*2
-NULL
 abc
 a.*
 {abc}
+test line 1<newline>test line 2
+1.*2
+{"1<newline>test line 2"}
 
 query TTT
-SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat, 'ci') FROM t;
+SELECT replace(s, E'\n', '<newline>'), regex_pat, replace(regexp_match(s, regex_pat, 'ci')::text, E'\n', '<newline>') FROM t;
 ----
 ccc
 a.*
-NULL
-test line 1<newline>test line 2
-1.*2
 NULL
 ABC
 a.*
@@ -383,6 +386,9 @@ a.*
 abc
 a.*
 {abc}
+test line 1<newline>test line 2
+1.*2
+{"1<newline>test line 2"}
 
 statement ok
 INSERT INTO T VALUES ('this is gonna be an invalid regex', '', '\');

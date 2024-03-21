@@ -403,7 +403,7 @@ fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Reg
         sp.write_regex_to(&mut r);
     }
     r.push('$');
-    match Regex::new_dot_matches_new_line(r, case_insensitive, true) {
+    match Regex::new(r, case_insensitive) {
         Ok(regex) => Ok(regex),
         Err(regex::Error::CompiledTooBig(_)) => Err(EvalError::LikePatternTooLong),
         Err(e) => Err(EvalError::Internal(format!(
