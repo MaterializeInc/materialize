@@ -374,6 +374,12 @@ impl Coordinator {
                     let result = self.sequence_alter_set_cluster(ctx.session(), plan).await;
                     ctx.retire(result);
                 }
+                Plan::AlterRetainHistory(plan) => {
+                    let result = self
+                        .sequence_alter_retain_history(ctx.session_mut(), plan)
+                        .await;
+                    ctx.retire(result);
+                }
                 Plan::AlterItemRename(plan) => {
                     let result = self
                         .sequence_alter_item_rename(ctx.session_mut(), plan)

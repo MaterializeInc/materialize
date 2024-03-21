@@ -1431,14 +1431,14 @@ ALTER SOURCE IF EXISTS n ADD SOURCE a, b.c AS d
 parse-statement
 ALTER VIEW name SET (property = true)
 ----
-error: Expected CLUSTER, found left parenthesis
+error: Expected one of CLUSTER or RETAIN, found left parenthesis
 ALTER VIEW name SET (property = true)
                     ^
 
 parse-statement
 ALTER MATERIALIZED VIEW name SET (property = true)
 ----
-error: Expected CLUSTER, found left parenthesis
+error: Expected one of CLUSTER or RETAIN, found left parenthesis
 ALTER MATERIALIZED VIEW name SET (property = true)
                                  ^
 
@@ -2913,3 +2913,10 @@ CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '1s');
 CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '1s')
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("s")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1s"))) }], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+ALTER MATERIALIZED VIEW mv SET RETAIN HISTORY FOR '3m'
+----
+ALTER MATERIALIZED VIEW mv SET RETAIN HISTORY FOR '3m'
+=>
+AlterRetainHistory(AlterRetainHistoryStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("mv")])), history: RetainHistoryFor(String("3m")) })

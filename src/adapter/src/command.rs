@@ -587,6 +587,7 @@ impl ExecuteResponse {
             | AlterClusterReplicaRename
             | AlterOwner
             | AlterItemRename
+            | AlterRetainHistory
             | AlterItemSwap
             | AlterNoop
             | AlterSchemaRename

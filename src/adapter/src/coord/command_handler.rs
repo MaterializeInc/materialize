@@ -552,6 +552,7 @@ impl Coordinator {
                     | Statement::AlterIndex(_)
                     | Statement::AlterSetCluster(_)
                     | Statement::AlterOwner(_)
+                    | Statement::AlterRetainHistory(_)
                     | Statement::AlterRole(_)
                     | Statement::AlterSecret(_)
                     | Statement::AlterSink(_)

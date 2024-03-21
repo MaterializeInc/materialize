@@ -189,6 +189,7 @@ pub enum Plan {
     ReassignOwned(ReassignOwnedPlan),
     SideEffectingFunc(SideEffectingFunc),
     ValidateConnection(ValidateConnectionPlan),
+    AlterRetainHistory(AlterRetainHistoryPlan),
 }
 
 impl Plan {
@@ -291,6 +292,7 @@ impl Plan {
             StatementKind::Subscribe => &[PlanKind::Subscribe],
             StatementKind::Update => &[PlanKind::ReadThenWrite],
             StatementKind::ValidateConnection => &[PlanKind::ValidateConnection],
+            StatementKind::AlterRetainHistory => &[PlanKind::AlterRetainHistory],
         }
     }
 
@@ -426,6 +428,7 @@ impl Plan {
             Plan::ReassignOwned(_) => "reassign owned",
             Plan::SideEffectingFunc(_) => "side effecting func",
             Plan::ValidateConnection(_) => "validate connection",
+            Plan::AlterRetainHistory(_) => "alter retain history",
         }
     }
 }
@@ -963,6 +966,12 @@ pub struct AlterNoopPlan {
 pub struct AlterSetClusterPlan {
     pub id: GlobalId,
     pub set_cluster: ClusterId,
+}
+
+#[derive(Debug)]
+pub struct AlterRetainHistoryPlan {
+    pub id: GlobalId,
+    pub history: CompactionWindow,
 }
 
 #[derive(Debug)]
