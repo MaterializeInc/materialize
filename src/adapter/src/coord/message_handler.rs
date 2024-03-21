@@ -281,10 +281,11 @@ impl Coordinator {
         match self.catalog_transact_inner(None, ops).await {
             Ok(table_updates) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let mut task_span =
+                    info_span!(parent: None, "coord::storage_usage_update::table_updates");
+                OpenTelemetryContext::obtain().attach_as_parent_to(&mut task_span);
                 task::spawn(|| "storage_usage_update_table_updates", async move {
-                    table_updates
-                        .instrument(info_span!("coord::storage_usage_update::table_updates"))
-                        .await;
+                    table_updates.instrument(task_span).await;
                     // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
                     if let Err(e) = internal_cmd_tx.send(Message::StorageUsageSchedule) {
                         warn!("internal_cmd_rx dropped before we could send: {e:?}");
