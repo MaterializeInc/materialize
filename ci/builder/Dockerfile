@@ -254,8 +254,8 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
     && echo '04d4be5097b98cd28de469f8856b3fbe82669f57b482a4cf3092a55e9e8e9e0d  htmltest.tar.gz' | sha256sum --check \
     && tar -xzf htmltest.tar.gz -C /usr/local/bin htmltest \
     && rm htmltest.tar.gz \
-    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.87.0/hugo_extended_0.87.0_Linux-64bit.tar.gz > hugo.tar.gz \
-    && echo 'f216af92c06809c03981296f513ce54d3d690715d3c9fdfaff802d4a6759a260  hugo.tar.gz' | sha256sum --check \
+    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.124.1/hugo_extended_0.124.1_Linux-64bit.tar.gz > hugo.tar.gz \
+    && echo '55f5a5f6a4c923457b2ed4e2b00c251eabfe43d8d4afbe2ada92d9759c5e0410 hugo.tar.gz' | sha256sum --check \
     && tar -xzf hugo.tar.gz -C /usr/local/bin hugo \
     && rm hugo.tar.gz; \
     fi
