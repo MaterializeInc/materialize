@@ -308,6 +308,32 @@ class SQLsmithAction(Action):
         return True
 
 
+class CopyToS3Action(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                "in the same timedomain",
+                'is not allowed from the "mz_introspection" cluster',
+            ]
+        )
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(
+                [
+                    "does not exist",
+                ]
+            )
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        obj = self.rng.choice(exe.db.db_objects())
+        obj_name = str(obj)
+        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{obj_name}' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')"
+
+        exe.execute(query, explainable=False)
+        return True
+
+
 class InsertAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -1697,6 +1723,7 @@ read_action_list = ActionList(
         (SelectAction, 100),
         (SelectOneAction, 1),
         (SQLsmithAction, 30),
+        (CopyToS3Action, 100),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),

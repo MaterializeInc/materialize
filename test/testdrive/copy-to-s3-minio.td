@@ -18,13 +18,14 @@ ALTER SYSTEM SET enable_copy_to_expr = true;
 > INSERT INTO t VALUES (1);
 > INSERT INTO t VALUES (2);
 
-> CREATE SECRET aws_secret_access_key as '${arg.secret-key}';
+> CREATE SECRET aws_secret AS '${arg.aws-secret-access-key}'
+
 > CREATE CONNECTION aws_conn
   TO AWS (
-    ACCESS KEY ID = '${arg.access-key}',
-    SECRET ACCESS KEY = SECRET aws_secret_access_key,
-    ENDPOINT = '${arg.endpoint}',
-    REGION = '${arg.region}'
+    ACCESS KEY ID = '${arg.aws-access-key-id}',
+    SECRET ACCESS KEY = SECRET aws_secret,
+    ENDPOINT = '${arg.aws-endpoint}',
+    REGION = 'us-east-1'
   );
 
 ! COPY t TO 's3://path/to/dir';
@@ -84,32 +85,55 @@ contains:MAX FILE SIZE cannot be less than 16MB
 > SET cluster = c1;
 
 # functions like now() should work in the s3 path
-> COPY t TO 's3://${arg.s3-prefix}/1/' || TO_CHAR(now(), 'YYYY-MM-DD')
+> COPY t TO 's3://copytos3/test/1' || TO_CHAR(now(), 'YYYY-MM-DD')
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
 
-> COPY (SELECT a FROM t) TO 's3://${arg.s3-prefix}/2/'
+> COPY (SELECT a FROM t) TO 's3://copytos3/test/2'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
 
-> COPY (SELECT 1000) TO 's3://${arg.s3-prefix}/3/'
+> COPY (SELECT array[1,2]::int[], false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 12345678901234567890123.4567890123456789::numeric(39,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, '0 day'::interval, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/test/3'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
 
-> COPY (SELECT generate_series(1, 1000000)) TO 's3://${arg.s3-prefix}/4/'
+> COPY (SELECT a FROM t) TO 's3://copytos3'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
 
-> DROP CLUSTER c1 CASCADE;
+> COPY (SELECT * FROM generate_series(1, 1000000)) TO 's3://copytos3/test/4'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'csv'
+  );
+
+$ set-from-sql var=key-1
+SELECT 'test/1' || TO_CHAR(now(), 'YYYY-MM-DD')
+
+$ s3-verify-data bucket=copytos3 key=${key-1}
+1
+2
+
+$ s3-verify-data bucket=copytos3 key=test/2
+1
+2
+
+$ s3-verify-data bucket=copytos3 key=test/3
+"{1,2}",f,Infinity,"{""s"":""abc""}",1,32767,2147483647,9223372036854775807,12345678901234567890123.4567890123456789,2010-10-10,10:10:10,2010-10-10 10:10:10,00:00:00,aaaa,\x5c7841414141,това е,\xd182d0b5d0bad181d182
+
+$ s3-verify-data bucket=copytos3 key=
+1
+2

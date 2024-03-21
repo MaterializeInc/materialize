@@ -495,7 +495,7 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `testdrive.aws-token`
 
-#### `"stdrive.aws-endpoint`
+#### `testdrive.aws-endpoint`
 
 #### `testdrive.materialize-internal-http-addr`
 
@@ -678,6 +678,12 @@ file the specified number of times, rather than just once.
 
 Deletes the specified file from within the temporary directory.
 
+## Actions on S3
+
+#### `$ s3-verify-data address=s3://...`
+
+Verify the data at a specific S3 address.
+
 ## Actions on Kafka topics
 
 #### `$ kafka-add-partitions topic=... total-partitions=N`
@@ -766,16 +772,16 @@ be ordered according to the following rules:
  - deletes sort before inserts
  - as all items are sorted as strings, "10" sorts before "2"
 
-It is possible to call `$ kafka-verify` multiple times on the same topic in case the test needs to check
+It is possible to call `$ kafka-verify-data` multiple times on the same topic in case the test needs to check
 that the data arrives in some partial order. For example, to make sure that all of timestamp `1` arrived
 before all of timestamp `2`:
 
 ```
-$ kafka-verify ... sort-messages=true
+$ kafka-verify-data ... sort-messages=true
 1 {"a":"1"}
 1 {"b":"1"}
 
-$ kafka-verify ... sort-messages=true
+$ kafka-verify-data ... sort-messages=true
 2 {"c":"1"}
 2 {"d":"1"}
 ```
