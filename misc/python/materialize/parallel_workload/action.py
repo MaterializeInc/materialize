@@ -308,6 +308,79 @@ class SQLsmithAction(Action):
         return True
 
 
+class HttpSelectAction(Action):
+    def run(self, exe: Executor) -> bool:
+        obj = self.rng.choice(exe.db.db_objects())
+        column = self.rng.choice(obj.columns)
+        obj2 = self.rng.choice(exe.db.db_objects_without_views())
+        obj_name = str(obj)
+        obj2_name = str(obj2)
+        columns = [
+            c
+            for c in obj2.columns
+            if c.data_type == column.data_type and c.data_type != TextTextMap
+        ]
+
+        join = obj_name != obj2_name and obj not in exe.db.views and columns
+
+        if join:
+            all_columns = list(obj.columns) + list(obj2.columns)
+        else:
+            all_columns = obj.columns
+
+        if self.rng.choice([True, False]):
+            expressions = ", ".join(
+                str(column)
+                for column in self.rng.sample(
+                    all_columns, k=self.rng.randint(1, len(all_columns))
+                )
+            )
+            if self.rng.choice([True, False]):
+                column1 = self.rng.choice(all_columns)
+                column2 = self.rng.choice(all_columns)
+                column3 = self.rng.choice(all_columns)
+                fns = ["COUNT"]
+                if column1.data_type in NUMBER_TYPES:
+                    fns.extend(["SUM", "AVG", "MAX", "MIN"])
+                window_fn = self.rng.choice(fns)
+                expressions += f", {window_fn}({column1}) OVER (PARTITION BY {column2} ORDER BY {column3})"
+        else:
+            expressions = "*"
+
+        query = f"SELECT {expressions} FROM {obj_name} "
+
+        if join:
+            column2 = self.rng.choice(columns)
+            query += f"JOIN {obj2_name} ON {column} = {column2}"
+
+        query += " LIMIT 1"
+
+        try:
+            result = requests.post(
+                f"http://{exe.db.host}:{exe.db.ports['http']}/api/sql",
+                data=json.dumps({"query": query}),
+                headers={"content-type": "application/json"},
+                timeout=self.rng.uniform(0, 10),
+            )
+            print(result.status_code)
+            if result.status_code != 200:
+                raise QueryError(
+                    f"{result.status_code}: {result.text}", f"HTTP query: {query}"
+                )
+        except requests.exceptions.ReadTimeout:
+            return False
+        except requests.exceptions.ConnectionError:
+            # Expected when Mz is killed
+            if exe.db.scenario not in (
+                Scenario.Kill,
+                Scenario.TogglePersistTxn,
+                Scenario.BackupRestore,
+            ):
+                raise
+
+        return True
+
+
 class CopyToS3Action(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
@@ -1670,7 +1743,7 @@ class HttpPostAction(Action):
                 )
                 if result.status_code != 200:
                     raise QueryError(f"{result.status_code}: {result.text}", log)
-            except (requests.exceptions.ConnectionError):
+            except requests.exceptions.ConnectionError:
                 # Expected when Mz is killed
                 if exe.db.scenario not in (
                     Scenario.Kill,
@@ -1724,6 +1797,7 @@ read_action_list = ActionList(
         (SelectAction, 100),
         (SelectOneAction, 1),
         (SQLsmithAction, 30),
+        (HttpSelectAction, 100),
         (CopyToS3Action, 100),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 30),

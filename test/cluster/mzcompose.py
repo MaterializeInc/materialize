@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+import random
 import re
 import time
 from collections.abc import Callable
@@ -3605,3 +3606,49 @@ def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -
         c.up("materialized")
 
         check_frontiers_advance()
+
+
+def workflow_test_http_race_condition(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    def worker() -> None:
+        end_time = time.time() + 60
+        while time.time() < end_time:
+            timeout = random.uniform(0.01, 1.0)
+            rows = random.uniform(1, 10000)
+            envd_port = c.port("materialized", 6876)
+            try:
+                result = requests.post(
+                    f"http://localhost:{envd_port}/api/sql",
+                    data=json.dumps(
+                        {"query": f"select generate_series(1, {rows}::int8)"}
+                    ),
+                    headers={"content-type": "application/json"},
+                    timeout=timeout,
+                )
+            except requests.exceptions.ReadTimeout:
+                continue
+            assert result.status_code == 200, result
+
+    threads = []
+    for j in range(100):
+        thread = Thread(name=f"worker_{j}", target=worker)
+        threads.append(thread)
+
+    for thread in threads:
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+
+    time.sleep(5)
+
+    result = c.sql_query(
+        "SELECT * FROM mz_internal.mz_sessions WHERE now() - connected_at > '5s'"
+    )
+    assert (
+        not result
+    ), f"There are supposed to be now sessions remaining, but there are:\n{result}"

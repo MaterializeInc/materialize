@@ -361,6 +361,15 @@ def run(
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM mz_internal.mz_sessions WHERE now() - connected_at > '5s'"
+        )
+        sessions = cur.fetchall()
+        if len(sessions) > 0:
+            raise ValueError(
+                f"Sessions are still running even though all threads are done: {sessions}"
+            )
+
         exe = Executor(rng, cur, database)
         for db in database.dbs:
             print(f"Dropping database {db}")
