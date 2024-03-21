@@ -21,13 +21,33 @@ CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCO
 query T multiline
 SELECT redacted_create_sql FROM mz_connections WHERE name = 'kafka_conn'
 ----
-CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = '<REDACTED>', SECURITY PROTOCOL = '<REDACTED>')
+CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext)
 EOF
 
 query T multiline
 SELECT pretty_sql(redacted_create_sql) FROM mz_connections WHERE name = 'kafka_conn'
 ----
-CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = '<REDACTED>', SECURITY PROTOCOL = '<REDACTED>');
+CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext);
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_redacted_test_option TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE redactable_t (a int) WITH (RETAIN HISTORY = FOR '1ms', REDACTED = 'pii');
+
+query T multiline
+SELECT redacted_create_sql FROM mz_tables WHERE name = 'redactable_t'
+----
+CREATE TABLE materialize.public.redactable_t (a [s20 AS pg_catalog.int4]) WITH (RETAIN HISTORY = FOR '1ms', REDACTED = '<REDACTED>')
+EOF
+
+query T multiline
+SELECT pretty_sql(redacted_create_sql) FROM mz_tables WHERE name = 'redactable_t'
+----
+CREATE TABLE materialize.public.redactable_t (a [s20 AS pg_catalog.int4]) WITH (RETAIN HISTORY = FOR '1ms', REDACTED = '<REDACTED>');
 EOF
 
 statement ok

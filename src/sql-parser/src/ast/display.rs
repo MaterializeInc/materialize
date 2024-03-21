@@ -234,8 +234,9 @@ pub trait WithOptionName {
     /// ## Nothing is ever redacted...
     ///
     /// In the initial implementation of this trait, no option requires its
-    /// values to be redacted. That doesn't mean there won't be in the future.
-    /// When in doubt, take the more conservative approach.
+    /// values to be redacted (except for the one test case). That doesn't mean
+    /// there won't be in the future. When in doubt, take the more conservative
+    /// approach.
     fn redact_value(&self) -> bool {
         // We conservatively assume that all values should be redacted.
         true

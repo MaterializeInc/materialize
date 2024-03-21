@@ -1430,6 +1430,8 @@ impl_display_t!(CreateTableStatement);
 pub enum TableOptionName {
     // The `RETAIN HISTORY` option
     RetainHistory,
+    /// A special option to test that we do redact values.
+    RedactedTest,
 }
 
 impl AstDisplay for TableOptionName {
@@ -1437,6 +1439,9 @@ impl AstDisplay for TableOptionName {
         match self {
             TableOptionName::RetainHistory => {
                 f.write_str("RETAIN HISTORY");
+            }
+            TableOptionName::RedactedTest => {
+                f.write_str("REDACTED");
             }
         }
     }
@@ -1451,6 +1456,7 @@ impl WithOptionName for TableOptionName {
     fn redact_value(&self) -> bool {
         match self {
             TableOptionName::RetainHistory => false,
+            TableOptionName::RedactedTest => true,
         }
     }
 }

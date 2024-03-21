@@ -3486,6 +3486,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_table_option_name(&mut self) -> Result<TableOptionName, ParserError> {
+        // this is only so we can test redacted values, of which no other
+        // examples exist as of its introduction.
+        if self.parse_keyword(REDACTED) {
+            return Ok(TableOptionName::RedactedTest);
+        }
         self.expect_keywords(&[RETAIN, HISTORY])?;
         Ok(TableOptionName::RetainHistory)
     }
@@ -3494,6 +3499,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_table_option_name()?;
         let value = match name {
             TableOptionName::RetainHistory => self.parse_option_retain_history(),
+            TableOptionName::RedactedTest => self.parse_optional_option_value(),
         }?;
         Ok(TableOption { name, value })
     }

@@ -4456,13 +4456,25 @@ fn plan_index_options(
     Ok(out)
 }
 
-generate_extracted_config!(TableOption, (RetainHistory, OptionalDuration));
+generate_extracted_config!(
+    TableOption,
+    (RetainHistory, OptionalDuration),
+    (RedactedTest, String)
+);
 
 fn plan_table_options(
     scx: &StatementContext,
     with_opts: Vec<TableOption<Aug>>,
 ) -> Result<Vec<crate::plan::TableOption>, PlanError> {
-    let TableOptionExtracted { retain_history, .. }: TableOptionExtracted = with_opts.try_into()?;
+    let TableOptionExtracted {
+        retain_history,
+        redacted_test,
+        ..
+    }: TableOptionExtracted = with_opts.try_into()?;
+
+    if redacted_test.is_some() {
+        scx.require_feature_flag(&vars::ENABLE_REDACTED_TEST_OPTION)?;
+    }
 
     let mut out = Vec::with_capacity(1);
     if let Some(cw) = plan_retain_history_option(scx, retain_history)? {
