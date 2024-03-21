@@ -106,6 +106,16 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "1.0.0 -> 1.0.0@git:df1440c8b93a192d50470d1b258615febe52f1f8"
 
+[[audits.mysql_async]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.34.1"
+
+[[audits.mysql_common]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.32.1"
+
 [[audits.nonzero_ext]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"

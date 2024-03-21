@@ -68,8 +68,8 @@ log = { version = "0.4.17", default-features = false, features = ["std"] }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.11", features = ["net", "os-ext"] }
-mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
-mysql_common = { version = "0.31.0", default-features = false, features = ["binlog", "chrono"] }
+mysql_async = { version = "0.34.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
+mysql_common = { version = "0.32.1", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
@@ -130,6 +130,8 @@ unicode-normalization = { version = "0.1.23" }
 url = { version = "2.5.0", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
+zstd = { version = "0.13.0" }
+zstd-safe = { version = "7.0.0", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.9", features = ["std"] }
 
 [build-dependencies]
@@ -188,8 +190,8 @@ log = { version = "0.4.17", default-features = false, features = ["std"] }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.11", features = ["net", "os-ext"] }
-mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
-mysql_common = { version = "0.31.0", default-features = false, features = ["binlog", "chrono"] }
+mysql_async = { version = "0.34.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
+mysql_common = { version = "0.32.1", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
@@ -251,6 +253,8 @@ unicode-normalization = { version = "0.1.23" }
 url = { version = "2.5.0", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
+zstd = { version = "0.13.0" }
+zstd-safe = { version = "7.0.0", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.9", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]

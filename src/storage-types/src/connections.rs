@@ -1376,8 +1376,9 @@ impl MySqlConnection<InlinedConnection> {
         ) {
             if let Some(tls_root_cert) = &self.tls_root_cert {
                 let tls_root_cert = tls_root_cert.get_string(secrets_reader).await?;
-                ssl_opts = ssl_opts
-                    .map(|opts| opts.with_root_cert(Some(tls_root_cert.as_bytes().to_vec())));
+                ssl_opts = ssl_opts.map(|opts| {
+                    opts.with_root_certs(vec![tls_root_cert.as_bytes().to_vec().into()])
+                });
             }
         }
 
@@ -1390,7 +1391,7 @@ impl MySqlConnection<InlinedConnection> {
             // Add client identity to SSLOpts
             ssl_opts = ssl_opts.map(|opts| {
                 opts.with_client_identity(Some(
-                    mysql_async::ClientIdentity::new_from_bytes(der).with_password(pass),
+                    mysql_async::ClientIdentity::new(der.into()).with_password(pass),
                 ))
             });
         }
