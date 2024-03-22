@@ -13,23 +13,162 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! An operator that transforms a `source` collection that evolves with some timestamp `FromTime`
-//! into a collection that evolve with some other timestamp `IntoTime`.
+//! ## Notation
 //!
-//! The operator processes a `remap` collection, which is a map from a target timestamp `IntoTime`
-//! to a set of `FromTime` times which form an antichain. The `remap` collection must maintain the
-//! property of monotonicity: if `into1 <= into2` then `remap[into1] <= remap[into2]` where the
-//! second inequality is the partial order on antichains.
+//! Collections are represented with capital letters (T, S, R), collection traces as bold letters
+//! (𝐓, 𝐒, 𝐑), and difference traces as δ𝐓.
 //!
-//! The operator produces the `reclocked` collection which is defined as a differential dataflow
-//! collection that that contains at `into` all messages from `source` whose timestamp is not
-//! greater than or equal to some element of `remap[into]`. The `reclocked` collection is created
-//! in the same scope as the `remap` collection and therefore evolves according to `IntoTime`.
+//! Indexing a collection trace 𝐓 to obtain its version at `t` is written as 𝐓(t). Indexing a
+//! collection to obtain the multiplicity of a record `x` is written as T\[x\]. These can be combined
+//! to obtain the multiplicity of a record `x` at some version `t` as 𝐓(t)\[x\].
 //!
-//! The `source` collection is not possible to be connected to the reclock operator as a normal
-//! timely input since that collection exists in a different scope whose timestamp is `FromTime`.
-//! Instead, the `source` collection must be captured (e.g using timely's capture facilities) and
-//! the raw data be sent into the `Pusher` constructed and returned by the reclock operator.
+//! ## Overview
+//!
+//! Reclocking transforms a source collection `S` that evolves with some timestamp `FromTime` into
+//! a collection `T` that evolves with some other timestamp `IntoTime`. The reclocked collection T
+//! contains all updates `u ∈ S` that are not beyond some `FromTime` frontier fₜ. The collection
+//! `R` that prescribes `fₜ` for every `t` is called the remap collection.
+//!
+//! More formally, for some arbitrary time `t` of `IntoTime` and some arbitrary record `x`, the
+//! reclocked collection `T(t)[x]` is defined to be the `sum{δ𝐒(s)[x]: !(𝐑(t) ⪯ s)}`. Since this
+//! holds for any record we can write the definition of Reclock(𝐒, 𝐑) as:
+//!
+//! > Reclock(𝐒, 𝐑) ≜ 𝐓: ∀ t ∈ IntoTime : 𝐓(t) = sum{δ𝐒(s): !(𝐑(t) ⪯ s)}
+//!
+//! In order for the reclocked collection `T` to have a sensible definition of progress we require
+//! that `t1 ≤ t2 ⇒ 𝐑(t1) ⪯ 𝐑(t2)` where the first `≤` is the partial order of `IntoTime` and the
+//! second one the partial order of `FromTime` antichains. 
+//!
+//! ## Total order simplification
+//!
+//! In order to simplify the implementation we will require that `IntoTime` is a total order. This
+//! limitation can be lifted in the future but further elaboration on the mechanics of reclocking
+//! is required to ensure a correct implementation.
+//!
+//! ## The difference trace
+//!
+//! By the definition of difference traces we have:
+//!
+//! ```text
+//!     δ𝐓(t) = T(t) - sum{δ𝐓(s): s < t}
+//! ```
+//!
+//! Due to the total order assumption we only need to consider two cases.
+//!
+//! **Case 1:** `t` is the minimum timestamp
+//!
+//! In this case `sum{δ𝐓(s): s < t}` is the empty set and so we obtain:
+//!
+//! ```text
+//!     δ𝐓(min) = T(min) = sum{δ𝐒(s): !(𝐑(min) ≤ s}
+//! ```
+//!
+//! **Case 2:** `t` is a timestamp with a predecessor `prev`
+//!
+//! In this case `sum{δ𝐓(s): s < t}` is equal to `T(prev)` because:
+//!
+//! ```text
+//!     sum{δ𝐓(s): s < t} = sum{δ𝐓(s): s ≤ prev} + sum{δ𝐓(s): prev < s < t}
+//!                       = T(prev) + ∅
+//!                       = T(prev)
+//! ```
+//!
+//! And therefore the difference trace of T is:
+//!
+//! ```text
+//!     δ𝐓(t) = 𝐓(t) - 𝐓(prev)
+//!           = sum{δ𝐒(s): !(𝐑(t) ⪯ s)} - sum{δ𝐒(s): !(𝐑(prev) ⪯ s)}
+//!           = sum{δ𝐒(s): (𝐑(prev) ⪯ s) ∧ !(𝐑(t) ⪯ s)}
+//! ```
+//!
+//! ## Unique mapping property
+//!
+//! Given the definition above we can derive the fact that for any source difference δ𝐒(s) there is
+//! at most one target timestamp t that it must be reclocked to. This property can be exploited by
+//! the implementation of the operator as it can safely discard source updates once a matching
+//! δT(t) has been found, making it "stateless" with respect to the source trace. A formal proof of
+//! this property is [provided below](#unique-mapping-property-proof).
+//!
+//! ## Operational description
+//!
+//! The operator follows a run-to-completion model where on each scheduling it completes all
+//! outstanding work that can be completed.
+//!
+//! ### Unique mapping property proof
+//!
+//! This section contains the formal proof the unique mapping property. The proof follows the
+//! structure proof notation created by Leslie Lamport. Readers unfamiliar with structured proofs
+//! can read about them here <https://lamport.azurewebsites.net/pubs/proof.pdf>.
+//!
+//! #### Statement
+//!
+//! AtMostOne(X, φ(x)) ≜ ∀ x1, x2 ∈ X : φ(x1) ∧ φ(x2) ⇒ x1 = x2
+//!
+//! * **THEOREM** UniqueMapping ≜ 
+//!     * **ASSUME**
+//!         * **NEW** (FromTime, ⪯) ∈ PartiallyOrderedTimestamps
+//!         * **NEW** (IntoTime, ≤) ∈ TotallyOrderedTimestamps
+//!         * **NEW** 𝐒 ∈ SetOfCollectionTraces(FromTime)
+//!         * **NEW** 𝐑 ∈ SetOfCollectionTraces(IntoTime)
+//!         * ∀ t ∈ IntoTime: 𝐑(t) ∈ SetOfAntichains(FromTime)
+//!         * ∀ t1, t1 ∈ IntoTime: t1 ≤ t2 ⇒ 𝐑(t1) ⪯ 𝐑(t2)
+//!         * **NEW** 𝐓 = Reclock(𝐒, 𝐑)
+//!     * **PROVE**  ∀ s ∈ FromTime : AtMostOne(IntoTime, δ𝐒(s) ∈ δ𝐓(x))
+//!
+//! #### Proof
+//!
+//! 1. **SUFFICES ASSUME** ∃ s ∈ FromTime: ¬AtMostOne(IntoTime, δ𝐒(s) ∈ δ𝐓(x))
+//!     * **PROVE FALSE**
+//!     * _By proof by contradiction._
+//! 2. **PICK** s ∈ FromTime : ¬AtMostOne(IntoTime, δ𝐒(s) ∈ δ𝐓(x))
+//!    * _Proof: Such time exists by <1>1._
+//! 3. ∃ t1, t2 ∈ IntoTime : t1 ≠ t2 ∧ δ𝐒(s) ∈ δ𝐓(t1) ∧ δ𝐒(s) ∈ δ𝐓(t2)
+//!     1. ¬(∀ x1, x2 ∈ X : (δ𝐒(s) ∈ δ𝐓(x1)) ∧ (δ𝐒(s) ∈ δ𝐓(x2)) ⇒ x1 = x2)
+//!         * _Proof: By <1>2 and definition of AtMostOne._
+//!     2. Q.E.D
+//!         * _Proof: By <2>1, quantifier negation rules, and theorem of propositional logic ¬(P ⇒ Q) ≡ P ∧ ¬Q._
+//! 4. **PICK** t1, t2 ∈ IntoTime : t1 < t2 ∧ δ𝐒(s) ∈ δ𝐓(t1) ∧ δ𝐒(s) ∈ δ𝐓(t2)
+//!    * _Proof: By <1>3. Assume t1 < t2 without loss of generality._
+//! 5. ¬(𝐑(t1) ⪯ s)
+//!     1. **CASE** t1 = min(IntoTime)
+//!         1. δ𝐓(t1) = sum{δ𝐒(s): !(𝐑(t1)) ⪯ s}
+//!             * _Proof: By definition of δ𝐓(min)._
+//!         2. δ𝐒(s) ∈ δ𝐓(t1)
+//!             * _Proof: By <1>4._
+//!         3. Q.E.D
+//!             * _Proof: By <3>1 and <3>2._
+//!     2. **CASE** t1 > min(IntoTime)
+//!         1. **PICK** t1_prev = Predecessor(t1)
+//!             * _Proof: Predecessor exists because the set {t: t < t1} is non-empty since it must contain at least min(IntoTime)._
+//!         2. δ𝐓(t1) = sum{δ𝐒(s): (𝐑(t1_prev) ⪯ s) ∧ !(𝐑(t1) ⪯ s)}
+//!             * _Proof: By definition of δ𝐓(t)._
+//!         3. δ𝐒(s) ∈ δ𝐓(t1)
+//!             * _Proof: By <1>4._
+//!         3. Q.E.D
+//!             * _Proof: By <3>2 and <3>3._
+//!     3. Q.E.D
+//!         * _Proof: From cases <2>1 and <2>2 which are exhaustive_
+//! 6. **PICK** t2_prev ∈ IntoTime : t2_prev = Predecessor(t2)
+//!    * _Proof: Predecessor exists because by <1>4 the set {t: t < t2} is non empty since it must contain at least t1._
+//! 7. t1 ≤ t2_prev
+//!    * _Proof: t1 ∈ {t: t < t2} and t2_prev is the maximum element of the set._
+//! 8. 𝐑(t2) ⪯ s
+//!     1. t2 > min(IntoTime)
+//!         * _Proof: By <1>5._
+//!     2. **PICK** t2_prev = Predecessor(t2)
+//!         * _Proof: Predecessor exists because the set {t: t < t2} is non-empty since it must contain at least min(IntoTime)._
+//!     3. δ𝐓(t) = sum{δ𝐒(s): (𝐑(t2_prev) ⪯ s) ∧ !(𝐑(t) ⪯ s)}
+//!         * _Proof: By definition of δ𝐓(t)_
+//!     4. δ𝐒(s) ∈ δ𝐓(t1)
+//!         * _Proof: By <1>4._
+//!     5. Q.E.D
+//!         * _Proof: By <2>3 and <2>4._
+//! 9. 𝐑(t1) ⪯ 𝐑(t2_prev)
+//!     * _Proof: By <1>.7 and hypothesis on R_
+//! 10. 𝐑(t1) ⪯ s
+//!     * _Proof: By <1>8 and <1>9._
+//! 11. Q.E.D
+//!     * _Proof: By <1>5 and <1>10_
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::{BinaryHeap, PeekMut};
