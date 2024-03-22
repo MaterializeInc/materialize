@@ -157,6 +157,9 @@ where
                 .await;
         }
 
+        // Finalize any other shards that have been added to the WAL.
+        self.finalize_shards().await;
+
         // If we know about collections that the adapter has forgotten about, clean that up.
         if !leaked_collections.is_empty() {
             let mut shards_to_finalize = Vec::with_capacity(leaked_collections.len());
