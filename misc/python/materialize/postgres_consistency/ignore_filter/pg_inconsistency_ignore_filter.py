@@ -39,20 +39,11 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
     PostExecutionInconsistencyIgnoreFilterBase,
     PreExecutionInconsistencyIgnoreFilterBase,
 )
-from materialize.output_consistency.ignore_filter.param_matchers import (
-    index_of_param_by_type,
-)
 from materialize.output_consistency.input_data.operations.generic_operations_provider import (
     TAG_CASTING,
 )
 from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
     TAG_JSONB_TO_TEXT,
-)
-from materialize.output_consistency.input_data.operations.text_operations_provider import (
-    TAG_REGEX,
-)
-from materialize.output_consistency.input_data.params.text_operation_param import (
-    TextOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
@@ -95,17 +86,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
     ) -> IgnoreVerdict:
         if matches_float_comparison(expression):
             return YesIgnore("#22022: real with decimal comparison")
-
-        if operation.is_tagged(TAG_REGEX):
-            regex_param_index = index_of_param_by_type(
-                operation.params, TextOperationParam
-            )
-            assert regex_param_index is not None
-
-            if expression.args[regex_param_index].has_any_characteristic(
-                {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
-            ):
-                return YesIgnore("#22000: regexp with linebreak")
 
         if operation.is_tagged(TAG_JSONB_TO_TEXT) and expression.matches(
             partial(
