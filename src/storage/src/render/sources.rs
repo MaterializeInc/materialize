@@ -201,15 +201,30 @@ where
     } = description.desc;
 
     let (decoded_stream, decode_health) = match encoding {
-        None => (
-            ok_source.map(|r| DecodeResult {
-                key: None,
-                value: Some(Ok(r.value)),
-                metadata: Row::default(),
-                from_time: r.from_time,
-            }),
-            empty(scope),
-        ),
+        None => {
+            (
+                ok_source.map(|r| {
+                    let mut key = r.key.iter();
+                    let first = key.next();
+                    let more = key.next().is_some();
+                    DecodeResult {
+                        // The rest of the rendering code (particularly upsert) relies on the fact
+                        // that `Null`'s provided by the source are mapped to `None`'s.
+                        //
+                        // TODO(guswynn|petrosagg): these constraints should be lifted, or rendering
+                        // should use native `Datum::Null` representations and not this option-wrapping.
+                        key: match (first, more) {
+                            (Some(Datum::Null), false) => None,
+                            _ => Some(Ok(r.key)),
+                        },
+                        value: Some(Ok(r.value)),
+                        metadata: r.metadata,
+                        from_time: r.from_time,
+                    }
+                }),
+                empty(scope),
+            )
+        }
         Some(encoding) => render_decode_delimited(
             &ok_source,
             encoding.key,

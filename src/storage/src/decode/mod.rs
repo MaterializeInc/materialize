@@ -478,12 +478,13 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
 
             while let Some(event) = input.next().await {
                 match event {
-                    AsyncEvent::Data(cap, data) => {
+                    AsyncEvent::Data(cap, mut data) => {
                         let mut n_errors = 0;
                         let mut n_successes = 0;
-                        for (output, ts, diff) in data.iter() {
+                        for (output, ts, diff) in data.drain(..) {
                             let key_buf = match output.key.unpack_first() {
                                 Datum::Bytes(buf) => Some(buf),
+                                //needed??
                                 Datum::Null => None,
                                 d => unreachable!("invalid datum: {d}"),
                             };
@@ -492,7 +493,13 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
                                 Some((decoder, buf)) => {
                                     decode_delimited(decoder, buf).await?.transpose()
                                 }
-                                None => None,
+                                None => {
+                                    if key_buf.is_some() {
+                                        Some(Ok(output.key))
+                                    } else {
+                                        None
+                                    }
+                                }
                             };
 
                             let value = match output.value.unpack_first() {
@@ -515,7 +522,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
                                 metadata: output.metadata.clone(),
                                 from_time: output.from_time.clone(),
                             };
-                            output_container.push((result, ts.clone(), *diff));
+                            output_container.push((result, ts.clone(), diff));
                         }
 
                         // Matching historical practice, we only log metrics on the value decoder.

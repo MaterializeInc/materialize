@@ -1194,15 +1194,34 @@ pub fn plan_create_source(
                 [typ] => match typ.scalar_type {
                     ScalarType::Bytes => {}
                     _ => sql_bail!(
-                        "The schema produced by the source is incompatible with format decoding"
+                        "The schema produced by the source is \
+                        incompatible with `FORMAT`/`VALUE FORMAT` decoding"
                     ),
                 },
                 _ => sql_bail!(
-                    "The schema produced by the source is incompatible with format decoding"
+                    "The schema produced by the source is \
+                    incompatible with `FORMAT`/`VALUE FORMAT` decoding"
                 ),
             }
 
             let (key_desc, value_desc) = encoding.desc()?;
+
+            match (&key_desc, external_connection.key_desc().typ().columns()) {
+                (Some(_), [typ]) => match typ.scalar_type {
+                    ScalarType::Bytes => {}
+                    _ => sql_bail!(
+                        "The key schema produced by the source is \
+                        incompatible with `KEY FORMAT` decoding"
+                    ),
+                },
+                (Some(_), _) => {
+                    sql_bail!(
+                        "This source produces no key, so cannot be \
+                        used with `KEY FORMAT`"
+                    );
+                }
+                (None, _) => {}
+            }
 
             // TODO(petrosagg): This piece of code seems to be making a statement about the
             // nullability of the NONE envelope when the source is Kafka. As written, the code
@@ -1210,32 +1229,56 @@ pub fn plan_create_source(
             // example in the case of `FORMAT BYTES ENVELOPE NONE` the output is indeed
             // non-nullable but we will mark it as nullable anyway. This kind of crude reasoning
             // should be replaced with precise type-level reasoning.
-            let key_desc = key_desc.map(|desc| {
-                let is_kafka = matches!(connection, CreateSourceConnection::Kafka { .. });
-                let is_envelope_none = matches!(envelope, ast::SourceEnvelope::None);
-                if is_kafka && is_envelope_none {
-                    RelationDesc::from_names_and_types(
-                        desc.into_iter()
-                            .map(|(name, typ)| (name, typ.nullable(true))),
-                    )
-                } else {
-                    desc
-                }
-            });
+            let key_desc = key_desc
+                .map(|desc| {
+                    let is_kafka = matches!(connection, CreateSourceConnection::Kafka { .. });
+                    let is_envelope_none = matches!(envelope, ast::SourceEnvelope::None);
+                    if is_kafka && is_envelope_none {
+                        RelationDesc::from_names_and_types(
+                            desc.into_iter()
+                                .map(|(name, typ)| (name, typ.nullable(true))),
+                        )
+                    } else {
+                        desc
+                    }
+                })
+                .unwrap_or_else(|| {
+                    let key_desc = external_connection.key_desc();
+                    // The `UPSERT` envelope enforces non-nullable keys. `DEBEZIUM` requires
+                    // a key encoding.
+                    match &envelope {
+                        ast::SourceEnvelope::Upsert => RelationDesc::from_names_and_types(
+                            key_desc
+                                .into_iter()
+                                .map(|(name, typ)| (name, typ.nullable(false))),
+                        ),
+                        _ => key_desc,
+                    }
+                });
             (key_desc, value_desc)
         }
-        None => (None, external_connection.value_desc()),
+        None => {
+            let key_desc = external_connection.key_desc();
+            // The `UPSERT` envelope enforces non-nullable keys. `DEBEZIUM` requires
+            // a key encoding.
+            let key_desc = match &envelope {
+                ast::SourceEnvelope::Upsert => RelationDesc::from_names_and_types(
+                    key_desc
+                        .into_iter()
+                        .map(|(name, typ)| (name, typ.nullable(false))),
+                ),
+                _ => key_desc,
+            };
+            (key_desc, external_connection.value_desc())
+        }
     };
 
-    let mut key_envelope = get_key_envelope(include_metadata, encoding.as_ref())?;
-
-    match (&envelope, &key_envelope) {
-        (ast::SourceEnvelope::Debezium, KeyEnvelope::None) => {}
-        (ast::SourceEnvelope::Debezium, _) => sql_bail!(
-            "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
-        ),
-        _ => {}
-    };
+    let key_envelope = get_key_envelope(
+        key_desc.clone(),
+        encoding.as_ref().and_then(|e| e.key.as_ref()),
+        envelope.clone(),
+        include_metadata,
+    )?;
 
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
@@ -1264,22 +1307,9 @@ pub fn plan_create_source(
                 style: UpsertStyle::Debezium { after_idx },
             }
         }
-        ast::SourceEnvelope::Upsert => {
-            let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
-                None => {
-                    bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
-                }
-                Some(key_encoding) => key_encoding,
-            };
-            // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
-            // specified.
-            if key_envelope == KeyEnvelope::None {
-                key_envelope = get_unnamed_key_envelope(key_encoding)?;
-            }
-            UnplannedSourceEnvelope::Upsert {
-                style: UpsertStyle::Default(key_envelope),
-            }
-        }
+        ast::SourceEnvelope::Upsert => UnplannedSourceEnvelope::Upsert {
+            style: UpsertStyle::Default(key_envelope),
+        },
         ast::SourceEnvelope::CdcV2 => {
             scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
             //TODO check that key envelope is not set
@@ -1778,13 +1808,10 @@ fn get_encoding(
         }
     };
 
-    let requires_keyvalue = matches!(
-        envelope,
-        ast::SourceEnvelope::Debezium | ast::SourceEnvelope::Upsert
-    );
+    let requires_keyvalue = matches!(envelope, ast::SourceEnvelope::Debezium);
     let is_keyvalue = encoding.key.is_some();
     if requires_keyvalue && !is_keyvalue {
-        sql_bail!("ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified");
+        sql_bail!("ENVELOPE DEBEZIUM requires that KEY FORMAT be specified");
     };
 
     Ok(encoding)
@@ -2010,47 +2037,78 @@ fn get_encoding_inner(
     Ok(SourceDataEncoding { key: None, value })
 }
 
-/// Extract the key envelope, if it is requested
 fn get_key_envelope(
+    connection_key_desc: RelationDesc,
+    key_encoding: Option<&DataEncoding<ReferencedConnection>>,
+    envelope: ast::SourceEnvelope,
     included_items: &[SourceIncludeMetadata],
-    encoding: Option<&SourceDataEncoding<ReferencedConnection>>,
 ) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
         .find(|i| matches!(i, SourceIncludeMetadata::Key { .. }));
-    if let Some(SourceIncludeMetadata::Key { alias }) = key_definition {
-        match (alias, encoding.and_then(|e| e.key.as_ref())) {
-            (Some(name), Some(_)) => Ok(KeyEnvelope::Named(name.as_str().to_string())),
-            (None, Some(key)) => get_unnamed_key_envelope(key),
-            (_, None) => {
-                // `kd.alias` == `None` means `INCLUDE KEY`
-                // `kd.alias` == `Some(_) means INCLUDE KEY AS ___`
-                // These both make sense with the same error message
+
+    let key_definition = if let Some(SourceIncludeMetadata::Key { alias }) = key_definition {
+        Some(alias)
+    } else {
+        None
+    };
+
+    let connection_has_key = !connection_key_desc.is_empty();
+
+    let key_envelope = match (key_definition, connection_has_key, key_encoding) {
+        // Explicit `INCLUDE KEY`, with a valid connection-level key_desc.
+        (Some(alias), true, key_encoding) => {
+            if let ast::SourceEnvelope::Debezium = envelope {
                 sql_bail!(
-                    "INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, \
-                        got bare FORMAT"
-                );
+                    "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: \
+                    Debezium values include all keys."
+                )
+            }
+
+            if let Some(alias) = alias {
+                KeyEnvelope::Named(alias.as_str().to_string())
+            } else {
+                get_unnamed_key_envelope(key_encoding)?
             }
         }
-    } else {
-        Ok(KeyEnvelope::None)
-    }
+        // No `INCLUDE KEY`, with a valid connection-level key_desc.
+        (None, true, key_encoding) => {
+            if let ast::SourceEnvelope::Upsert = envelope {
+                get_unnamed_key_envelope(key_encoding)?
+            } else {
+                KeyEnvelope::None
+            }
+        }
+        (Some(_include_key), false, _) => {
+            sql_bail!("This source produces no key, so cannot be used with `INCLUDE KEY`");
+        }
+        (None, false, Some(_encoding)) => {
+            panic!(
+                "an invalid key desc with a specified key encoding has been previously invalidated"
+            )
+        }
+        (None, false, None) => KeyEnvelope::None,
+    };
+
+    Ok(key_envelope)
 }
 
 /// Gets the key envelope for a given key encoding when no name for the key has
 /// been requested by the user.
 fn get_unnamed_key_envelope(
-    key: &DataEncoding<ReferencedConnection>,
+    key: Option<&DataEncoding<ReferencedConnection>>,
 ) -> Result<KeyEnvelope, PlanError> {
     // If the key is requested but comes from an unnamed type then it gets the name "key"
     //
     // Otherwise it gets the names of the columns in the type
     let is_composite = match key {
-        DataEncoding::Bytes | DataEncoding::Json | DataEncoding::Text => false,
-        DataEncoding::Avro(_)
-        | DataEncoding::Csv(_)
-        | DataEncoding::Protobuf(_)
-        | DataEncoding::Regex { .. } => true,
+        Some(DataEncoding::Bytes | DataEncoding::Json | DataEncoding::Text) | None => false,
+        Some(
+            DataEncoding::Avro(_)
+            | DataEncoding::Csv(_)
+            | DataEncoding::Protobuf(_)
+            | DataEncoding::Regex { .. },
+        ) => true,
     };
 
     if is_composite {

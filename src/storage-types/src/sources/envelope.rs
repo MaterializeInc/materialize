@@ -238,9 +238,12 @@ impl UnplannedSourceEnvelope {
 
     /// Computes the output relation of this envelope when applied on top of the decoded key and
     /// value relation desc
+    ///
+    /// TODO(guswynn|petrosgg): when source ddl planning becomes stages, this should almost
+    /// certainly be merged with `get_key_envelope`.
     pub fn desc(
         self,
-        key_desc: Option<RelationDesc>,
+        key_desc: RelationDesc,
         value_desc: RelationDesc,
         metadata_desc: RelationDesc,
     ) -> anyhow::Result<(SourceEnvelope, RelationDesc)> {
@@ -250,14 +253,13 @@ impl UnplannedSourceEnvelope {
                 style: UpsertStyle::Default(key_envelope),
                 ..
             } => {
-                let key_desc = match key_desc {
-                    Some(desc) => desc,
-                    None => {
-                        return Ok((
-                            self.into_source_envelope(None, None, None),
-                            value_desc.concat(metadata_desc),
-                        ))
-                    }
+                let key_desc = if !key_desc.is_empty() {
+                    key_desc
+                } else {
+                    return Ok((
+                        self.into_source_envelope(None, None, None),
+                        value_desc.concat(metadata_desc),
+                    ));
                 };
                 let key_arity = key_desc.arity();
 
@@ -314,9 +316,10 @@ impl UnplannedSourceEnvelope {
             } => match &value_desc.typ().column_types[*after_idx].scalar_type {
                 ScalarType::Record { fields, .. } => {
                     let mut desc = RelationDesc::from_names_and_types(fields.clone());
-                    let key = key_desc.map(|k| match_key_indices(&k, &desc)).transpose()?;
-                    if let Some(key) = key.clone() {
-                        desc = desc.with_key(key);
+                    let key = match_key_indices(&key_desc, &desc)?;
+
+                    if !key_desc.is_empty() {
+                        desc = desc.with_key(key.clone());
                     }
 
                     let desc = match self {
@@ -325,7 +328,7 @@ impl UnplannedSourceEnvelope {
                     };
 
                     (
-                        self.into_source_envelope(key, None, Some(desc.arity())),
+                        self.into_source_envelope(Some(key), None, Some(desc.arity())),
                         desc,
                     )
                 }
