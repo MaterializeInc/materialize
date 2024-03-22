@@ -242,6 +242,7 @@ def workflow_copy_to_s3(c: Composition) -> None:
             f"--var=secret-key={AWS_SECRET_ACCESS_KEY}",
             f"--var=s3-prefix={bucket_name}/{path_prefix}",
             f"--var=region={DEFAULT_CLOUD_REGION}",
+            "--default-timeout=300s",
             "copy-to-s3/copy-to-s3.td",
         )
 
@@ -254,6 +255,12 @@ def workflow_copy_to_s3(c: Composition) -> None:
             == f"{path_prefix}/1/{date}/part-0001.csv"
         )
 
+        content = s3_client.get_object(
+            Bucket=bucket_name,
+            Key=f"{path_prefix}/1/{date}/part-0001.csv",
+        )["Body"].read()
+        assert content == b"1\n2\n", content
+
         assert (
             s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/2/")[
                 "Contents"
@@ -261,9 +268,32 @@ def workflow_copy_to_s3(c: Composition) -> None:
             == f"{path_prefix}/2/part-0001.csv"
         )
 
+        content = s3_client.get_object(
+            Bucket=bucket_name, Key=f"{path_prefix}/2/part-0001.csv"
+        )["Body"].read()
+        assert content == b"1\n2\n", content
+
         assert (
             s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/3/")[
                 "Contents"
             ][0]["Key"]
             == f"{path_prefix}/3/part-0001.csv"
         )
+
+        content = s3_client.get_object(
+            Bucket=bucket_name, Key=f"{path_prefix}/3/part-0001.csv"
+        )["Body"].read()
+        assert content == b"1000\n", content
+
+        assert (
+            s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/4/")[
+                "Contents"
+            ][0]["Key"]
+            == f"{path_prefix}/4/part-0001.csv"
+        )
+
+        content = s3_client.get_object(
+            Bucket=bucket_name, Key=f"{path_prefix}/4/part-0001.csv"
+        )["Body"].read()
+        expected = b"".join([f"{i}\n".encode() for i in range(1, 1000001)])
+        assert sorted(content.split(b"\n")) == sorted(expected.split(b"\n")), content

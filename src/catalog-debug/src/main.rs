@@ -29,7 +29,7 @@ use mz_catalog::durable::debug::{
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
     IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
     StorageUsageCollection, SystemConfigurationCollection, SystemItemMappingCollection,
-    SystemPrivilegeCollection, TimestampCollection, Trace,
+    SystemPrivilegeCollection, Trace,
 };
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
@@ -261,7 +261,6 @@ macro_rules! for_collection {
             CollectionType::SystemConfiguration => $fn::<SystemConfigurationCollection>($($arg),*).await?,
             CollectionType::SystemGidMapping => $fn::<SystemItemMappingCollection>($($arg),*).await?,
             CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
-            CollectionType::Timestamp => $fn::<TimestampCollection>($($arg),*).await?,
         }
     };
 }
@@ -395,7 +394,6 @@ async fn dump(
         system_object_mappings,
         system_configurations,
         system_privileges,
-        timestamps,
     } = if consolidate {
         openable_state.trace_consolidated().await?
     } else {
@@ -459,7 +457,6 @@ async fn dump(
         stats_only,
         consolidate,
     );
-    dump_col(&mut data, timestamps, &ignore, stats_only, consolidate);
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())
@@ -495,7 +492,7 @@ async fn upgrade_check(
 
     // If this upgrade has new builtin replicas, then we need to assign some size to it. It doesn't
     // really matter what size since it's not persisted, so we pick a random valid one.
-    let builtin_cluster_replica_size = cluster_replica_sizes
+    let builtin_clusters_replica_size = cluster_replica_sizes
         .0
         .first_key_value()
         .expect("we must have at least a single valid replica size")
@@ -511,7 +508,8 @@ async fn upgrade_check(
             now,
             skip_migrations: false,
             cluster_replica_sizes,
-            builtin_cluster_replica_size,
+            builtin_system_cluster_replica_size: builtin_clusters_replica_size.clone(),
+            builtin_introspection_cluster_replica_size: builtin_clusters_replica_size,
             system_parameter_defaults: Default::default(),
             remote_system_parameters: None,
             availability_zones: vec![],

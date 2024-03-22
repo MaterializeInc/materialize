@@ -1134,17 +1134,6 @@ Snapshot {
         },
     },
     settings: {},
-    timestamps: {
-        TimestampKey {
-            id: "M",
-        }: TimestampValue {
-            ts: Some(
-                Timestamp {
-                    internal: 0,
-                },
-            ),
-        },
-    },
     system_object_mappings: {},
     system_configurations: {},
     default_privileges: {

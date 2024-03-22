@@ -398,13 +398,20 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_default_cluster_replica_size: String,
-    /// The size of the builtin cluster replicas if bootstrapping.
+    /// The size of the builtin system cluster replicas if bootstrapping.
     #[clap(
         long,
-        env = "BOOTSTRAP_BUILTIN_CLUSTER_REPLICA_SIZE",
+        env = "BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE",
         default_value = "1"
     )]
-    bootstrap_builtin_cluster_replica_size: String,
+    bootstrap_builtin_system_cluster_replica_size: String,
+    /// The size of the builtin introspection cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_INTROSPECTION_CLUSTER_REPLICA_SIZE",
+        default_value = "1"
+    )]
+    bootstrap_builtin_introspection_cluster_replica_size: String,
     /// An list of NAME=VALUE pairs used to override static defaults
     /// for system parameters.
     #[clap(
@@ -903,7 +910,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 environment_id: args.environment_id,
                 cluster_replica_sizes,
                 bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
-                bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
+                bootstrap_builtin_system_cluster_replica_size: args
+                    .bootstrap_builtin_system_cluster_replica_size,
+                bootstrap_builtin_introspection_cluster_replica_size: args
+                    .bootstrap_builtin_introspection_cluster_replica_size,
                 system_parameter_defaults: args
                     .system_parameter_default
                     .into_iter()

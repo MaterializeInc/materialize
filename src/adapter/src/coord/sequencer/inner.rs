@@ -1992,7 +1992,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
         // Build an optimizer for this VIEW.
-        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
         let optimized_plan = optimizer.optimize(raw_plan)?;
@@ -2161,7 +2161,7 @@ impl Coordinator {
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
             // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+            let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
             return_if_err!(optimizer.optimize(plan.values.clone()), ctx)
@@ -2592,6 +2592,15 @@ impl Coordinator {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_retain_history(
+        &mut self,
+        _session: &mut Session,
+        _plan: plan::AlterRetainHistoryPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        unreachable!("should be unsupported during planning");
     }
 
     #[instrument]

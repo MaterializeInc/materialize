@@ -64,7 +64,6 @@ impl Debug for HiddenUserVersionTrace<'_> {
             system_object_mappings,
             system_configurations,
             system_privileges,
-            timestamps,
         } = self.0;
         let configs: CollectionTrace<ConfigCollection> = CollectionTrace {
             values: configs
@@ -92,7 +91,6 @@ impl Debug for HiddenUserVersionTrace<'_> {
             .field("system_object_mappings", system_object_mappings)
             .field("system_configurations", system_configurations)
             .field("system_privileges", system_privileges)
-            .field("timestamps", timestamps)
             .finish()
     }
 }

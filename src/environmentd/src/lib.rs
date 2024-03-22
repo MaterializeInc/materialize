@@ -110,8 +110,10 @@ pub struct Config {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
-    /// The size of the builtin cluster replicas if bootstrapping.
-    pub bootstrap_builtin_cluster_replica_size: String,
+    /// The size of the builtin system cluster replicas if bootstrapping.
+    pub bootstrap_builtin_system_cluster_replica_size: String,
+    /// The size of the builtin introspection cluster replicas if bootstrapping.
+    pub bootstrap_builtin_introspection_cluster_replica_size: String,
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub system_parameter_defaults: BTreeMap<String, String>,
@@ -521,7 +523,10 @@ impl Listeners {
             secrets_controller: config.secrets_controller,
             cloud_resource_controller: config.cloud_resource_controller,
             cluster_replica_sizes: config.cluster_replica_sizes,
-            builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
+            builtin_system_cluster_replica_size: config
+                .bootstrap_builtin_system_cluster_replica_size,
+            builtin_introspection_cluster_replica_size: config
+                .bootstrap_builtin_introspection_cluster_replica_size,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,
             storage_usage_client,

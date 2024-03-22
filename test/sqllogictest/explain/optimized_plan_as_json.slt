@@ -5747,7 +5747,8 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                     "func": {
                       "IsRegexpMatch": {
                         "pattern": "a.*",
-                        "case_insensitive": false
+                        "case_insensitive": false,
+                        "dot_matches_new_line": true
                       }
                     },
                     "expr": {
@@ -5780,7 +5781,8 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                 "func": {
                   "IsRegexpMatch": {
                     "pattern": "a.*",
-                    "case_insensitive": false
+                    "case_insensitive": false,
+                    "dot_matches_new_line": true
                   }
                 },
                 "expr": {

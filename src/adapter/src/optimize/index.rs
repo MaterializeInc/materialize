@@ -26,6 +26,7 @@
 //! See also MaterializeInc/materialize#22940.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
@@ -42,6 +43,7 @@ use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
     OptimizerConfig, OptimizerError,
@@ -56,8 +58,12 @@ pub struct Optimizer {
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported index arrangement.
     exported_index_id: GlobalId,
-    // Optimizer config.
+    /// Optimizer config.
     config: OptimizerConfig,
+    /// Optimizer metrics.
+    metrics: OptimizerMetrics,
+    /// The time spent performing optimization so far.
+    duration: Duration,
 }
 
 impl Optimizer {
@@ -66,6 +72,7 @@ impl Optimizer {
         compute_instance: ComputeInstanceSnapshot,
         exported_index_id: GlobalId,
         config: OptimizerConfig,
+        metrics: OptimizerMetrics,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -73,6 +80,8 @@ impl Optimizer {
             compute_instance,
             exported_index_id,
             config,
+            metrics,
+            duration: Default::default(),
         }
     }
 }
@@ -137,6 +146,8 @@ impl Optimize<Index> for Optimizer {
     type To = GlobalMirPlan;
 
     fn optimize(&mut self, index: Index) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
         let state = self.catalog.state();
         let on_entry = state.get_entry(&index.on);
         let full_name = state.resolve_full_name(&index.name, on_entry.conn_id());
@@ -202,6 +213,8 @@ impl Optimize<Index> for Optimizer {
             });
         }
 
+        self.duration += time.elapsed();
+
         // Return the (sealed) plan at the end of this optimization step.
         Ok(GlobalMirPlan { df_desc, df_meta })
     }
@@ -211,6 +224,8 @@ impl Optimize<GlobalMirPlan> for Optimizer {
     type To = GlobalLirPlan;
 
     fn optimize(&mut self, plan: GlobalMirPlan) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
         let GlobalMirPlan {
             mut df_desc,
             df_meta,
@@ -228,6 +243,10 @@ impl Optimize<GlobalMirPlan> for Optimizer {
 
         // Trace the pipeline output under `optimize`.
         trace_plan(&df_desc);
+
+        self.duration += time.elapsed();
+        self.metrics
+            .observe_e2e_optimization_time("index", self.duration);
 
         // Return the plan at the end of this `optimize` step.
         Ok(GlobalLirPlan { df_desc, df_meta })

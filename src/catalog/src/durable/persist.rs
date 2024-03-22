@@ -1142,9 +1142,6 @@ impl PersistCatalogState {
                     StateUpdateKind::SystemPrivilege(key, value) => {
                         apply(&mut snapshot.system_privileges, key, value, diff);
                     }
-                    StateUpdateKind::Timestamp(key, value) => {
-                        apply(&mut snapshot.timestamps, key, value, diff);
-                    }
                 }
             }
             f(snapshot)
@@ -1660,9 +1657,6 @@ impl Trace {
                         .system_privileges
                         .values
                         .push(((k, v), ts.to_string(), diff))
-                }
-                StateUpdateKind::Timestamp(k, v) => {
-                    trace.timestamps.values.push(((k, v), ts.to_string(), diff))
                 }
             }
         }

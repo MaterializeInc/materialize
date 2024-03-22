@@ -23,6 +23,7 @@ class Minio(Service):
         name: str = "minio",
         image: str = "minio/minio:RELEASE.2023-07-07T07-13-57Z",
         setup_materialize: bool = False,
+        additional_directories: list[str] = [],
     ) -> None:
         # We can pre-create buckets in minio by creating subdirectories in
         # /data. A bit gross to do this via a shell command, but it's net
@@ -30,6 +31,8 @@ class Minio(Service):
         command = "minio server /data --console-address :9001"
         if setup_materialize:
             command = f"mkdir -p /data/persist && {command}"
+        for dir in additional_directories:
+            command = f"mkdir -p /data/{dir} && {command}"
         super().__init__(
             name=name,
             config={

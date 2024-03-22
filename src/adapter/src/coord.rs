@@ -131,6 +131,7 @@ use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
+use serde::Serialize;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
@@ -156,6 +157,7 @@ use crate::metrics::Metrics;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
@@ -284,6 +286,7 @@ impl Message {
                 Command::Terminate { .. } => "command-terminate",
                 Command::RetireExecute { .. } => "command-retire_execute",
                 Command::CheckConsistency { .. } => "command-check_consistency",
+                Command::Dump { .. } => "command-dump",
             },
             Message::ControllerReady => "controller_ready",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
@@ -845,7 +848,8 @@ pub struct Config {
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    pub builtin_cluster_replica_size: String,
+    pub builtin_system_cluster_replica_size: String,
+    pub builtin_introspection_cluster_replica_size: String,
     pub system_parameter_defaults: BTreeMap<String, String>,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
@@ -870,7 +874,7 @@ pub struct ReplicaMetadata {
 }
 
 /// Metadata about an active connection.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct ConnMeta {
     /// Pgwire specifies that every connection have a 32-bit secret associated
     /// with it, that is known to both the client and the server. Cancellation
@@ -889,6 +893,7 @@ pub struct ConnMeta {
     drop_sinks: BTreeSet<GlobalId>,
 
     /// Channel on which to send notices to a session.
+    #[serde(skip)]
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
 
     /// The role that initiated the database context. Fixed for the duration of the connection.
@@ -1354,6 +1359,8 @@ pub struct Coordinator {
 
     /// Coordinator metrics.
     metrics: Metrics,
+    /// Optimizer metrics.
+    optimizer_metrics: OptimizerMetrics,
 
     /// Tracing handle.
     tracing_handle: TracingHandle,
@@ -1394,7 +1401,6 @@ impl Coordinator {
         let scheduling_config = flags::orchestrator_scheduling_config(system_config);
         let merge_effort = system_config.default_idle_arrangement_merge_effort();
         let exert_prop = system_config.default_arrangement_exert_proportionality();
-        let aggressive_downgrades = system_config.enable_compute_aggressive_readhold_downgrades();
         self.controller.compute.update_configuration(compute_config);
         self.controller.storage.update_parameters(storage_config);
         self.controller
@@ -1403,8 +1409,6 @@ impl Coordinator {
             .set_default_idle_arrangement_merge_effort(merge_effort);
         self.controller
             .set_default_arrangement_exert_proportionality(exert_prop);
-        self.controller
-            .set_enable_compute_aggressive_readhold_downgrades(aggressive_downgrades);
 
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();
@@ -2037,6 +2041,7 @@ impl Coordinator {
                         compute_instance.clone(),
                         entry.id(),
                         optimizer_config.clone(),
+                        self.optimizer_metrics(),
                     );
 
                     // MIR ⇒ MIR optimization (global)
@@ -2089,6 +2094,7 @@ impl Coordinator {
                         mv.refresh_schedule.clone(),
                         debug_name,
                         optimizer_config.clone(),
+                        self.optimizer_metrics(),
                     );
 
                     // MIR ⇒ MIR optimization (global)
@@ -2610,6 +2616,12 @@ impl Coordinator {
         Arc::clone(&self.catalog)
     }
 
+    /// Obtain a handle to the optimizer metrics, suitable for giving
+    /// out to non-Coordinator thread tasks.
+    fn optimizer_metrics(&self) -> OptimizerMetrics {
+        self.optimizer_metrics.clone()
+    }
+
     /// Obtain a writeable Catalog reference.
     fn catalog_mut(&mut self) -> &mut Catalog {
         // make_mut will cause any other Arc references (from owned_catalog) to
@@ -2678,18 +2690,9 @@ impl Coordinator {
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
     ) {
-        let export_ids = if self
-            .controller
-            .compute
-            .enable_aggressive_readhold_downgrades()
-        {
-            // We must only install read policies for indexes, not for sinks.
-            // Sinks are write-only compute collections that don't have read policies.
-            dataflow.exported_index_ids().collect()
-        } else {
-            // If aggressive downgrading is disabled, all compute collections expect a read policy.
-            dataflow.export_ids().collect()
-        };
+        // We must only install read policies for indexes, not for sinks.
+        // Sinks are write-only compute collections that don't have read policies.
+        let export_ids = dataflow.exported_index_ids().collect();
 
         self.controller
             .active_compute()
@@ -2698,6 +2701,92 @@ impl Coordinator {
 
         self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
             .await;
+    }
+
+    /// Returns the state of the [`Coordinator`] formatted as JSON.
+    ///
+    /// The returned value is not guaranteed to be stable and may change at any point in time.
+    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        let active_conns: BTreeMap<_, _> = self
+            .active_conns
+            .iter()
+            .map(|(id, meta)| (id.unhandled().to_string(), meta))
+            .collect();
+        let storage_read_capabilities: BTreeMap<_, _> = self
+            .storage_read_capabilities
+            .iter()
+            .map(|(id, capability)| (id.to_string(), capability))
+            .collect();
+        let compute_read_capabilities: BTreeMap<_, _> = self
+            .compute_read_capabilities
+            .iter()
+            .map(|(id, capability)| (id.to_string(), capability))
+            .collect();
+        let txn_read_holds: BTreeMap<_, _> = self
+            .txn_read_holds
+            .iter()
+            .map(|(id, capability)| (id.unhandled().to_string(), capability))
+            .collect();
+        let pending_peeks: BTreeMap<_, _> = self
+            .pending_peeks
+            .iter()
+            .map(|(id, peek)| (id.to_string(), format!("{peek:#?}")))
+            .collect();
+        let client_pending_peeks: BTreeMap<_, _> = self
+            .client_pending_peeks
+            .iter()
+            .map(|(id, peek)| (id.to_string(), peek))
+            .collect();
+        let pending_real_time_recency_timestamp: BTreeMap<_, _> = self
+            .pending_real_time_recency_timestamp
+            .iter()
+            .map(|(id, timestamp)| (id.unhandled().to_string(), format!("{timestamp:#?}")))
+            .collect();
+        let pending_linearize_read_txns: BTreeMap<_, _> = self
+            .pending_linearize_read_txns
+            .iter()
+            .map(|(id, read_txn)| (id.unhandled().to_string(), format!("{read_txn:#?}")))
+            .collect();
+
+        let map = serde_json::Map::from_iter([
+            (
+                "transient_id_counter".to_string(),
+                serde_json::to_value(self.transient_id_counter)?,
+            ),
+            (
+                "active_conns".to_string(),
+                serde_json::to_value(active_conns)?,
+            ),
+            (
+                "storage_read_capabilities".to_string(),
+                serde_json::to_value(storage_read_capabilities)?,
+            ),
+            (
+                "compute_read_capabilities".to_string(),
+                serde_json::to_value(compute_read_capabilities)?,
+            ),
+            (
+                "txn_read_holds".to_string(),
+                serde_json::to_value(txn_read_holds)?,
+            ),
+            (
+                "pending_peeks".to_string(),
+                serde_json::to_value(pending_peeks)?,
+            ),
+            (
+                "client_pending_peeks".to_string(),
+                serde_json::to_value(client_pending_peeks)?,
+            ),
+            (
+                "pending_real_time_recency_timestamp".to_string(),
+                serde_json::to_value(pending_real_time_recency_timestamp)?,
+            ),
+            (
+                "pending_linearize_read_txns".to_string(),
+                serde_json::to_value(pending_linearize_read_txns)?,
+            ),
+        ]);
+        Ok(serde_json::Value::Object(map))
     }
 }
 
@@ -2780,7 +2869,8 @@ pub fn serve(
         secrets_controller,
         cloud_resource_controller,
         cluster_replica_sizes,
-        builtin_cluster_replica_size,
+        builtin_system_cluster_replica_size,
+        builtin_introspection_cluster_replica_size,
         system_parameter_defaults,
         availability_zones,
         storage_usage_client,
@@ -2880,7 +2970,8 @@ pub fn serve(
                         now: now.clone(),
                         skip_migrations: false,
                         cluster_replica_sizes,
-                        builtin_cluster_replica_size,
+                        builtin_system_cluster_replica_size,
+                        builtin_introspection_cluster_replica_size,
                         system_parameter_defaults,
                         remote_system_parameters,
                         availability_zones,
@@ -2906,6 +2997,7 @@ pub fn serve(
 
         let metrics = Metrics::register_into(&metrics_registry);
         let metrics_clone = metrics.clone();
+        let optimizer_metrics = OptimizerMetrics::register_into(&metrics_registry);
         let segment_client_clone = segment_client.clone();
         let coord_now = now.clone();
         let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
@@ -2986,6 +3078,7 @@ pub fn serve(
                     storage_usage_collection_interval,
                     segment_client,
                     metrics,
+                    optimizer_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,

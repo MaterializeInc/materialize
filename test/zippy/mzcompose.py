@@ -44,7 +44,7 @@ SERVICES = [
     Debezium(redpanda=True),
     Postgres(),
     Cockroach(),
-    Minio(setup_materialize=True),
+    Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Balancerd(),
     # Those two are overriden below

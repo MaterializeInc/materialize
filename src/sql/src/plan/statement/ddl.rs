@@ -42,28 +42,28 @@ use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
-    AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRoleOption, AlterRoleStatement,
-    AlterSecretStatement, AlterSetClusterStatement, AlterSinkStatement, AlterSourceAction,
-    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement, AvroSchema,
-    AvroSchemaOption, AvroSchemaOptionName, ClusterFeature, ClusterFeatureName, ClusterOption,
-    ClusterOptionName, ColumnOption, CommentObjectType, CommentStatement,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
-    CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
+    AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRetainHistoryStatement,
+    AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
+    AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, AvroSchema, AvroSchemaOption,
+    AvroSchemaOptionName, ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
+    ColumnOption, CommentObjectType, CommentStatement, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
+    CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
+    DropOwnedStatement, Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName,
+    KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
+    MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
     RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
     TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName,
@@ -5098,6 +5098,20 @@ pub fn plan_alter_object_swap(
             issue_no: Some(12972),
         }),
     }
+}
+
+pub fn describe_alter_retain_history(
+    _: &StatementContext,
+    _: AlterRetainHistoryStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_retain_history(
+    _: &StatementContext,
+    _: AlterRetainHistoryStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    bail_unsupported!("ALTER RETAIN HISTORY");
 }
 
 pub fn describe_alter_secret_options(

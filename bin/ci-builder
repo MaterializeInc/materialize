@@ -205,6 +205,7 @@ case "$cmd" in
             --env AWS_SESSION_TOKEN
             --env BUILDKITE_CI_API_KEY
             --env CI
+            --env CI_SANITIZER
             --env CI_COVERAGE_ENABLED
             --env CI_FINAL_PREFLIGHT_CHECK_VERSION
             --env CI_FINAL_PREFLIGHT_CHECK_ROLLBACK

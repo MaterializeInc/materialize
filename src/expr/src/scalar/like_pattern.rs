@@ -14,8 +14,8 @@ use derivative::Derivative;
 use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::regex::Regex;
 use proptest::prelude::{Arbitrary, Strategy};
-use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
@@ -151,7 +151,7 @@ mod matcher {
     #[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
     pub(super) enum MatcherImpl {
         String(Vec<Subpattern>),
-        Regex(#[serde(with = "serde_regex")] Regex),
+        Regex(Regex),
     }
 }
 
@@ -403,10 +403,7 @@ fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Reg
         sp.write_regex_to(&mut r);
     }
     r.push('$');
-    let mut rb = RegexBuilder::new(&r);
-    rb.dot_matches_new_line(true);
-    rb.case_insensitive(case_insensitive);
-    match rb.build() {
+    match Regex::new(r, case_insensitive) {
         Ok(regex) => Ok(regex),
         Err(regex::Error::CompiledTooBig(_)) => Err(EvalError::LikePatternTooLong),
         Err(e) => Err(EvalError::Internal(format!(

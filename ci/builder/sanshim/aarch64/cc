@@ -1,0 +1,18 @@
+#!/usr/bin/bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+exec /usr/bin/clang -fsanitize="$CI_SANITIZER" \
+  -fuse-ld=lld \
+  --target=aarch64-unknown-linux-gnu \
+  --gcc-toolchain=/opt/x-tools/aarch64-unknown-linux-gnu/ \
+  --sysroot=/opt/x-tools/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot \
+  -L/opt/x-tools/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot/lib \
+  "$@"

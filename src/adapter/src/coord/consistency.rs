@@ -11,6 +11,7 @@
 
 use super::Coordinator;
 use crate::catalog::consistency::CatalogInconsistencies;
+use mz_adapter_types::connection::ConnectionIdType;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
 use mz_ore::instrument;
 use mz_repr::GlobalId;
@@ -77,6 +78,13 @@ impl Coordinator {
                     .push(ReadCapabilitiesInconsistency::Compute(gid.clone()));
             }
         }
+        for (conn_id, _) in &self.txn_read_holds {
+            if !self.active_conns.contains_key(conn_id) {
+                read_capabilities_inconsistencies.push(ReadCapabilitiesInconsistency::Transaction(
+                    conn_id.unhandled(),
+                ));
+            }
+        }
 
         if read_capabilities_inconsistencies.is_empty() {
             Ok(())
@@ -120,6 +128,7 @@ impl Coordinator {
 enum ReadCapabilitiesInconsistency {
     Storage(GlobalId),
     Compute(GlobalId),
+    Transaction(ConnectionIdType),
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]

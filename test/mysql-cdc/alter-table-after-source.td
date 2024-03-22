@@ -37,8 +37,11 @@ INSERT INTO add_columns VALUES (1);
 CREATE TABLE remove_column (f1 INTEGER, f2 VARCHAR(2));
 INSERT INTO remove_column VALUES (2, 'ab');
 
-CREATE TABLE alter_column (f1 INTEGER, f2 VARCHAR(2));
-INSERT INTO alter_column VALUES (2, 'ab');
+CREATE TABLE alter_column_type_1 (f1 INTEGER, f2 VARCHAR(2));
+INSERT INTO alter_column_type_1 VALUES (2, 'ab');
+
+CREATE TABLE alter_column_type_2 (f1 TINYINT);
+INSERT INTO alter_column_type_2 VALUES (2);
 
 CREATE TABLE alter_drop_nullability (f1 INTEGER NOT NULL);
 INSERT INTO alter_drop_nullability VALUES (1);
@@ -125,17 +128,26 @@ contains:incompatible schema change
 #
 # Alter column type
 
-> SELECT * from alter_column;
+> SELECT * from alter_column_type_1;
 2 ab
 
 $ mysql-execute name=mysql
-UPDATE alter_column SET f2 = '12';
-ALTER TABLE alter_column MODIFY f2 int;
-INSERT INTO alter_column VALUES (3, 23);
+UPDATE alter_column_type_1 SET f2 = '12';
+ALTER TABLE alter_column_type_1 MODIFY f2 int;
+INSERT INTO alter_column_type_1 VALUES (3, 23);
 
-! select * from alter_column;
+! select * from alter_column_type_1;
 contains:incompatible schema change
 
+> SELECT * from alter_column_type_2;
+2
+
+$ mysql-execute name=mysql
+ALTER TABLE alter_column_type_2 MODIFY f1 int;
+INSERT INTO alter_column_type_2 VALUES (2048);
+
+! select * from alter_column_type_2;
+contains:incompatible schema change
 
 #
 # Drop NOT NULL

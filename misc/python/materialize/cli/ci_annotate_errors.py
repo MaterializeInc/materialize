@@ -56,6 +56,7 @@ ERROR_RE = re.compile(
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
     | environmentd .* unrecognized\ configuration\ parameter
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
+    | SUMMARY:\ .*Sanitizer
     )
     .* $
     """,

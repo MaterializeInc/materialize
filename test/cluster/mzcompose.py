@@ -2253,6 +2253,12 @@ class Metrics:
         assert len(values) <= 1
         return next(iter(values), None)
 
+    def get_e2e_optimization_time(self, object_type: str) -> float:
+        metrics = self.with_name("mz_optimizer_e2e_optimization_time_seconds_sum")
+        values = [v for k, v in metrics.items() if f'object_type="{object_type}"' in k]
+        assert len(values) == 1
+        return values[0]
+
 
 def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
@@ -2525,6 +2531,56 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     metrics = fetch_metrics()
     assert metrics.get_initial_output_duration(index_id) is None
     assert metrics.get_initial_output_duration(mv_id) is None
+
+
+def workflow_test_optimizer_metrics(c: Composition) -> None:
+    """Test metrics exposed by the optimizer."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp)
+
+    # Run optimizations for different object types.
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+
+        -- view
+        CREATE VIEW v AS SELECT a + 1 FROM t;
+        -- index
+        CREATE INDEX i ON t (a);
+        -- materialized view
+        CREATE MATERIALIZED VIEW m AS SELECT a + 1 FROM t;
+        -- fast-path peek
+        SELECT * FROM t;
+        -- slow-path peek;
+        SELECT count(*) FROM t JOIN v ON (true);
+        -- subscribe
+        SUBSCRIBE (SELECT 1);
+        """
+    )
+
+    # Check that expected metrics exist and have sensible values.
+    metrics = fetch_metrics()
+
+    # mz_optimizer_e2e_optimization_time_seconds
+    time = metrics.get_e2e_optimization_time("view")
+    assert 0 < time < 1, f"got {time}"
+    time = metrics.get_e2e_optimization_time("index")
+    assert 0 < time < 1, f"got {time}"
+    time = metrics.get_e2e_optimization_time("materialized_view")
+    assert 0 < time < 1, f"got {time}"
+    time = metrics.get_e2e_optimization_time("peek:fast_path")
+    assert 0 < time < 1, f"got {time}"
+    time = metrics.get_e2e_optimization_time("peek:slow_path")
+    assert 0 < time < 1, f"got {time}"
+    time = metrics.get_e2e_optimization_time("subscribe")
+    assert 0 < time < 1, f"got {time}"
 
 
 def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
@@ -3103,73 +3159,6 @@ def workflow_test_subscribe_hydration_status(
             """
         )
     )
-
-
-def workflow_test_compute_aggressive_readhold_downgrades_disabled(
-    c: Composition, parser: WorkflowArgumentParser
-) -> None:
-    """
-    Test that frontiers of MVs don't become stuck with aggressive read
-    hold downgrading disabled.
-    """
-
-    c.down(destroy_volumes=True)
-
-    with c.override(
-        Materialized(
-            additional_system_parameter_defaults={
-                "enable_compute_aggressive_readhold_downgrades": "false",
-            },
-        ),
-        Testdrive(no_reset=True),
-    ):
-        c.up("materialized")
-        c.up("testdrive", persistent=True)
-
-        c.sql(
-            """
-            CREATE TABLE t (a int);
-            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
-            SELECT * FROM mv;
-            """
-        )
-
-        # Wait for `t`'s read frontier to be available.
-        c.testdrive(
-            input=dedent(
-                """
-                > SELECT true
-                  FROM mz_internal.mz_frontiers
-                  JOIN mz_tables ON (id = object_id)
-                  WHERE name = 't'
-                true
-                """
-            )
-        )
-
-        # Retrieve the current read frontier.
-        output = c.sql_query(
-            """
-            SELECT read_frontier
-            FROM mz_internal.mz_frontiers
-            JOIN mz_tables ON (id = object_id)
-            WHERE name = 't'
-            """
-        )
-        read_frontier = int(output[0][0])
-
-        # Verify that `t`'s read frontier advances.
-        c.testdrive(
-            input=dedent(
-                f"""
-                > SELECT read_frontier > {read_frontier}
-                  FROM mz_internal.mz_frontiers
-                  JOIN mz_tables ON (id = object_id)
-                  WHERE name = 't'
-                true
-                """
-            )
-        )
 
 
 def workflow_cluster_drop_concurrent(

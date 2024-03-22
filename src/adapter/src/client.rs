@@ -664,6 +664,10 @@ impl SessionClient {
             })
     }
 
+    pub async fn dump_coordinator_state(&mut self) -> Result<serde_json::Value, anyhow::Error> {
+        self.send_without_session(|tx| Command::Dump { tx }).await
+    }
+
     /// Tells the coordinator a statement has finished execution, in the cases
     /// where we have no other reason to communicate with the coordinator.
     pub fn retire_execute(
@@ -699,7 +703,7 @@ impl SessionClient {
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
         // Build an optimizer for this VIEW.
-        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
         let result: Result<_, AdapterError> =
             mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, columns, rows)
@@ -806,7 +810,8 @@ impl SessionClient {
                 | Command::SetSystemVars { .. }
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
-                | Command::CheckConsistency { .. } => {}
+                | Command::CheckConsistency { .. }
+                | Command::Dump { .. } => {}
             };
             cmd
         });

@@ -137,14 +137,6 @@ message RoleValue {
   uint32 oid = 5;
 }
 
-message TimestampKey {
-  string id = 1;
-}
-
-message TimestampValue {
-  Timestamp ts = 1;
-}
-
 message ServerConfigurationKey {
   string name = 1;
 }
@@ -764,11 +756,8 @@ message StateUpdateKind {
     SystemPrivilegesValue value = 2;
   }
 
-  message Timestamp {
-    TimestampKey key = 1;
-    TimestampValue value = 2;
-  }
-
+  reserved 19;
+  reserved "timestamp";
   oneof kind {
     AuditLog audit_log = 1;
     Cluster cluster = 2;
@@ -788,6 +777,5 @@ message StateUpdateKind {
     ServerConfiguration server_configuration = 16;
     GidMapping gid_mapping = 17;
     SystemPrivileges system_privileges = 18;
-    Timestamp timestamp = 19;
   }
 }

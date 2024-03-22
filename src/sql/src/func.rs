@@ -1872,6 +1872,14 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "char_length" => Scalar {
             params!(String) => UnaryFunc::CharLength(func::CharLength) => Int32, 1381;
         },
+        // SQL exactly matches PostgreSQL's implementation.
+        "col_description" => Scalar {
+            params!(Oid, Int32) => sql_impl_func(
+                "(SELECT description
+                    FROM pg_description
+                    WHERE objoid = $1 AND classoid = 'pg_class'::regclass AND objsubid = $2)"
+                ) => String, 1216;
+        },
         "concat" => Scalar {
             params!(Any...) => Operation::variadic(|ecx, cexprs| {
                 if cexprs.is_empty() {
@@ -2260,13 +2268,18 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 )
             }) => Int32, 1375;
         },
+        // SQL closely matches PostgreSQL's implementation.
+        // We don't yet support casting to regnamespace, so use our constant for
+        // the oid of 'pg_catalog'.
         "obj_description" => Scalar {
-            params!(Oid, String) => Operation::binary(|_ecx, _oid, _catalog| {
-                // This function is meant to return the comment on a
-                // database object, but we don't presently support comments,
-                // so stubbed out out to always return NULL.
-                Ok(HirScalarExpr::literal_null(ScalarType::String))
-            }) => String, 1215;
+            params!(Oid, String) => sql_impl_func(&format!(
+                "(SELECT description FROM pg_description
+                  WHERE objoid = $1
+                    AND classoid = (
+                      SELECT oid FROM pg_class WHERE relname = $2 AND relnamespace = {})
+                    AND objsubid = 0)",
+                oid::SCHEMA_PG_CATALOG_OID
+            )) => String, 1215;
         },
         "pg_column_size" => Scalar {
             params!(Any) => UnaryFunc::PgColumnSize(func::PgColumnSize) => Int32, 1269;

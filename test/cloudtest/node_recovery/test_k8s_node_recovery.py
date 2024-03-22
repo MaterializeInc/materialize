@@ -13,8 +13,12 @@ from textwrap import dedent
 import pytest
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.mzcompose.test_result import (
+    FailedTestExecutionError,
+    TestFailureDetails,
+)
 
-TD_TIMEOUT_SHORT = 30
+TD_TIMEOUT_SHORT = 45
 TD_TIMEOUT_FULL_RECOVERY = 600
 
 
@@ -149,10 +153,10 @@ def validate_state(
                     f"""
                     > SET TRANSACTION_ISOLATION TO '{isolation_level}';
 
-                    > SELECT COUNT(*) {comparison_operator} {reached_index} FROM source; -- validate source
+                    > SELECT COUNT(*) {comparison_operator} {reached_index} FROM source; -- validate source with isolation {isolation_level}
                     true
 
-                    > SELECT COUNT(*) {comparison_operator} {reached_index} FROM mv; -- validate mv
+                    > SELECT COUNT(*) {comparison_operator} {reached_index} FROM mv; -- validate mv with isolation {isolation_level}
                     true
                     """
                 ),
@@ -163,18 +167,24 @@ def validate_state(
             validation_succeeded = True
             break
         except Exception as e:
+            run_info = f"{run}/{max_run_count}"
             # arbitrary error can occur if envd is not yet ready after restart
             if is_last_run:
-                print("Error occurred, aborting!")
+                print(f"Error occurred in run {run_info}, aborting!")
             else:
-                print("Error occurred, retrying.")
+                print(f"Error occurred in run {run_info}, retrying.")
             last_error_message = str(e)
 
     end_time = time.time()
 
     if not validation_succeeded:
-        raise RuntimeError(
-            f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s!\nLast error message:{last_error_message}"
+        raise FailedTestExecutionError(
+            [
+                TestFailureDetails(
+                    message=f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s!",
+                    details=last_error_message,
+                )
+            ]
         )
 
     duration = round(end_time - start_time, 1)

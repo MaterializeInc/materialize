@@ -203,11 +203,6 @@ impl<T: Timestamp> Controller<T> {
             .set_default_arrangement_exert_proportionality(value);
     }
 
-    pub fn set_enable_compute_aggressive_readhold_downgrades(&mut self, value: bool) {
-        self.compute
-            .set_enable_aggressive_readhold_downgrades(value);
-    }
-
     /// Returns the connection context installed in the controller.
     ///
     /// This is purely a helper, and can be obtained from `self.storage`.

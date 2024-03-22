@@ -513,10 +513,6 @@ where
         next_user_replica_id: u64,
         next_system_replica_id: u64,
     ) -> Result<(), anyhow::Error> {
-        // Remove replicas with the old service name format.
-        // TODO(teskje): Remove this after v0.67 has been rolled out.
-        self.deprovision_old_services().await?;
-
         let desired: BTreeSet<_> = self.metrics_tasks.keys().copied().collect();
 
         let actual: BTreeSet<_> = self
@@ -547,24 +543,6 @@ where
             if !desired.contains(&replica_id) {
                 self.deprovision_replica(cluster_id, replica_id).await?;
             }
-        }
-
-        Ok(())
-    }
-
-    async fn deprovision_old_services(&self) -> Result<(), anyhow::Error> {
-        static OLD_SERVICE_NAME_RE: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(?-u)^[us]\d+-replica-\d+$").unwrap());
-
-        let old_services = self
-            .orchestrator
-            .list_services()
-            .await?
-            .into_iter()
-            .filter(|s| OLD_SERVICE_NAME_RE.is_match(s));
-
-        for service_name in old_services {
-            self.orchestrator.drop_service(&service_name).await?;
         }
 
         Ok(())

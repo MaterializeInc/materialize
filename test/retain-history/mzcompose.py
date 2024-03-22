@@ -62,6 +62,9 @@ def run_test_with_mv_on_table(c: Composition) -> None:
 
             > SELECT count(*) FROM retain_history_mv1;
             2
+
+            ! ALTER MATERIALIZED VIEW retain_history_mv1 SET RETAIN HISTORY FOR '1s';
+            ALTER RETAIN HISTORY not yet supported
             """,
         )
     )
@@ -323,7 +326,7 @@ def run_test_with_table(c: Composition) -> None:
 
 
 def run_test_gh_24479(c: Composition) -> None:
-    for (seed, sleep_enabled) in [(0, False), (1, True)]:
+    for seed, sleep_enabled in [(0, False), (1, True)]:
         c.testdrive(
             dedent(
                 f"""

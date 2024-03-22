@@ -1054,7 +1054,8 @@ impl<'a> RunnerInner<'a> {
             environment_id,
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_system_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_introspection_cluster_replica_size: config.replicas.to_string(),
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(
