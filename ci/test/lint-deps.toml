@@ -47,6 +47,51 @@ dependencies = [
     "mz-stash",
 ]
 
+# Keep various `*-types` crates from depending on `*-client` crates. This list
+# is unfortunately manual for now.
+
+[[deny]]
+name = "mz-adapter-types"
+dependencies = [
+    "mz-persist-client",
+]
+
+[[deny]]
+name = "mz-compute-types"
+dependencies = [
+    "mz-persist-client",
+]
+
+[[deny]]
+name = "mz-controller-types"
+dependencies = [
+    "mz-persist-client",
+]
+
+[[deny]]
+name = "mz-persist-types"
+dependencies = [
+    "mz-persist-client",
+]
+
+[[deny]]
+name = "mz-rocksdb-types"
+dependencies = [
+    "mz-persist-client",
+]
+
+[[deny]]
+name = "mz-stash-types"
+dependencies = [
+    "mz-persist-client",
+]
+
+[[deny]]
+name = "mz-storage-types"
+dependencies = [
+    "mz-persist-client",
+]
+
 # Keep various crates in only one of environmentd or clusterd.
 [[deny]]
 name = "mz-environmentd"
