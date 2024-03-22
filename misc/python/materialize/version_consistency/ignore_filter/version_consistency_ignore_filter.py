@@ -18,6 +18,7 @@ from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
+    is_operation_tagged,
     matches_fun_by_any_name,
     matches_fun_by_name,
     matches_op_by_any_pattern,
@@ -35,6 +36,9 @@ from materialize.output_consistency.ignore_filter.internal_output_inconsistency_
 )
 from materialize.output_consistency.input_data.operations.date_time_operations_provider import (
     DATE_TIME_OPERATION_TYPES,
+)
+from materialize.output_consistency.input_data.operations.text_operations_provider import (
+    TAG_REGEX,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -147,6 +151,15 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             )
         ):
             return YesIgnore("ILIKE fixed in PR 26183")
+
+        if (
+            self.lower_version < MZ_VERSION_0_93_0 <= self.higher_version
+            and expression.matches(
+                partial(is_operation_tagged, tag=TAG_REGEX),
+                True,
+            )
+        ):
+            return YesIgnore("Newline handling in regex fixed in PR 26191")
 
         return super().shall_ignore_expression(expression, row_selection)
 
