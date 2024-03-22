@@ -158,11 +158,16 @@ def annotate_errors(
     unknown_errors: list[str],
     known_errors: list[str],
     failures_on_main: str | None,
+    max_errors_per_group: int = 10,
 ) -> None:
     assert unknown_errors or known_errors
     style = "info" if not unknown_errors else "error"
-    unknown_errors = group_identical_errors(unknown_errors)
-    known_errors = group_identical_errors(known_errors)
+    unknown_errors = limit_errors(
+        group_identical_errors(unknown_errors), max_errors_per_group
+    )
+    known_errors = limit_errors(
+        group_identical_errors(known_errors), max_errors_per_group
+    )
 
     if unknown_errors:
         text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> failed"
@@ -185,6 +190,15 @@ def annotate_errors(
     if not unknown_errors:
         text += "\n</details>"
     add_annotation_raw(style=style, markdown=text)
+
+
+def limit_errors(errors: list[str], max_entries: int) -> list[str]:
+    if len(errors) <= max_entries:
+        return errors
+
+    errors = errors[0:max_entries]
+    errors.append(f"{len(errors) - max_entries} further errors")
+    return errors
 
 
 def group_identical_errors(errors: list[str]) -> list[str]:
