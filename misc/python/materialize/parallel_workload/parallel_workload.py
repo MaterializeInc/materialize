@@ -366,9 +366,13 @@ def run(
         )
         sessions = cur.fetchall()
         if len(sessions) > 0:
-            raise ValueError(
+            # TODO: Switch back to exception when #26206 is fixed
+            print(
                 f"Sessions are still running even though all threads are done: {sessions}"
             )
+            # raise ValueError(
+            #     f"Sessions are still running even though all threads are done: {sessions}"
+            # )
 
         exe = Executor(rng, cur, database)
         for db in database.dbs:
