@@ -266,7 +266,7 @@ pub fn describe(
 
 pub trait ResultExt<T> {
     /// Like [`Result::expect`], but terminates the process with `halt` instead
-    /// of `panic` if the underlying error is a condition that should halt the
+    /// of `panic` if the underlying error is a condition that should halt,
     /// rather than panic the process.
     fn unwrap_or_terminate(self, context: &str) -> T;
 
