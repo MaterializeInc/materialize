@@ -215,8 +215,8 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
 use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
 use mz_persist_types::stats::PartStats;
+use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
-use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error};
@@ -277,63 +277,6 @@ pub const INIT_FORGET_ALL: Config<bool> = Config::new(
     false,
     "Whether to call forget_all (true) or empty txn and apply_eager (false) at boot",
 );
-
-/// The in-mem representation of an update in the txns shard.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TxnsEntry {
-    /// A data shard register operation.
-    ///
-    /// The `[u8; 8]` is a Codec64 encoded timestamp.
-    Register(ShardId, [u8; 8]),
-    /// A batch written to a data shard in a txn.
-    ///
-    /// The `[u8; 8]` is a Codec64 encoded timestamp.
-    Append(ShardId, [u8; 8], Vec<u8>),
-}
-
-impl TxnsEntry {
-    fn data_id(&self) -> &ShardId {
-        match self {
-            TxnsEntry::Register(data_id, _) => data_id,
-            TxnsEntry::Append(data_id, _, _) => data_id,
-        }
-    }
-
-    fn ts<T: Codec64>(&self) -> T {
-        match self {
-            TxnsEntry::Register(_, ts) => T::decode(*ts),
-            TxnsEntry::Append(_, ts, _) => T::decode(*ts),
-        }
-    }
-}
-
-/// An abstraction over the encoding format of [TxnsEntry].
-///
-/// This enables users of this crate to control how data is written to the txns
-/// shard (which will allow mz to present it as a normal introspection source).
-pub trait TxnsCodec: Debug {
-    /// The `K` type used in the txns shard.
-    type Key: Debug + Codec;
-    /// The `V` type used in the txns shard.
-    type Val: Debug + Codec;
-
-    /// Returns the Schemas to use with [Self::Key] and [Self::Val].
-    fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema);
-    /// Encodes a [TxnsEntry] in the format persisted in the txns shard.
-    fn encode(e: TxnsEntry) -> (Self::Key, Self::Val);
-    /// Decodes a [TxnsEntry] from the format persisted in the txns shard.
-    ///
-    /// Implementations should panic if the values are invalid.
-    fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry;
-
-    /// Returns if a part might include the given data shard based on pushdown
-    /// stats.
-    ///
-    /// False positives are okay (needless fetches) but false negatives are not
-    /// (incorrectness). Returns an Option to make `?` convenient, `None` is
-    /// treated the same as `Some(true)`.
-    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool>;
-}
 
 /// A reasonable default implementation of [TxnsCodec].
 ///

@@ -1259,7 +1259,7 @@ mod tests {
         let cfg = PersistConfig::new_for_tests();
         let state = TypedState::<(), (), u64, i64>::new(
             cfg.build_version.clone(),
-            ShardId([0u8; 16]),
+            ShardId::new(),
             cfg.hostname.clone(),
             (cfg.now)(),
         );

@@ -35,7 +35,6 @@ mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-mysql-util = { path = "../mysql-util" }
-mz-persist-txn = { path = "../persist-txn" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }

@@ -32,6 +32,7 @@ pub mod parquet;
 pub mod part;
 pub mod stats;
 pub mod timestamp;
+pub mod txn;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.

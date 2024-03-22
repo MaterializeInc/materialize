@@ -25,6 +25,7 @@ use mz_persist_client::cfg::RetryParameters;
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+use mz_persist_types::txn::TxnsCodec;
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::builder_async::{
     AsyncInputHandle, Event, InputConnection, OperatorBuilder as AsyncOperatorBuilder,
@@ -42,7 +43,7 @@ use tracing::debug;
 
 use crate::txn_cache::TxnsCache;
 use crate::txn_read::DataListenNext;
-use crate::{TxnsCodec, TxnsCodecDefault};
+use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
 ///
