@@ -1080,8 +1080,8 @@ steps:
               composition: postgres-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
 
-      - id: output-consistency-version
-        label: "Output consistency (version)"
+      - id: output-consistency-version-dfr
+        label: "Output consistency (version for DFR)"
         depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
@@ -1089,7 +1089,19 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
-              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering"]
+
+      - id: output-consistency-version-ctf
+        label: "Output consistency (version for CTF)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 58
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: version-consistency
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=constant_folding"]
+
 
   - group: SQLsmith
     key: sqlsmith-group
