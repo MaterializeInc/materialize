@@ -188,13 +188,10 @@ def td(c: Composition, *args: str) -> None:
                         f"sasl.password={CONFLUENT_API_SECRET}",
                     ]
                 ),
-                "VAR="
-                + ",".join(
-                    [
-                        f"confluent-api-key={CONFLUENT_API_KEY}",
-                        f"confluent-api-secret={CONFLUENT_API_SECRET}",
-                    ]
-                ),
+            ],
+            entrypoint_extra=[
+                f"--var=confluent-api-key={CONFLUENT_API_KEY}",
+                f"--var=confluent-api-secret={CONFLUENT_API_SECRET}",
             ],
         )
     ):

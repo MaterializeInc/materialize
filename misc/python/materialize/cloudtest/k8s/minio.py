@@ -65,9 +65,19 @@ class Minio(K8sResource):
             condition="condition=Available=True",
         )
 
-        self.create_bucket("persist")
+        self.create_buckets(["persist", "copytos3"])
 
-    def create_bucket(self, bucket: str) -> None:
+    def create_buckets(self, buckets: list[str]) -> None:
+        cmds = [
+            f"mc config host add myminio http://minio-service.{self.namespace()}:9000 minio minio123"
+        ]
+        for bucket in buckets:
+            cmds.extend(
+                [
+                    f"mc rm -r --force myminio/{bucket}",
+                    f"mc mb myminio/{bucket}",
+                ]
+            )
         self.kubectl(
             "run",
             "minio",
@@ -77,13 +87,7 @@ class Minio(K8sResource):
             "/bin/sh",
             "--",
             "-c",
-            ";".join(
-                [
-                    f"mc config host add myminio http://minio-service.{self.namespace()}:9000 minio minio123",
-                    f"mc rm -r --force myminio/{bucket}",
-                    f"mc mb myminio/{bucket}",
-                ]
-            ),
+            ";".join(cmds),
         )
 
         self.wait(
