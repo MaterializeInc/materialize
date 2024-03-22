@@ -21,6 +21,8 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     matches_fun_by_any_name,
     matches_fun_by_name,
     matches_op_by_any_pattern,
+    matches_op_by_pattern,
+    matches_x_or_y,
 )
 from materialize.output_consistency.ignore_filter.ignore_verdict import YesIgnore
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
@@ -45,6 +47,7 @@ MZ_VERSION_0_77_0 = MzVersion.parse_mz("v0.77.0")
 MZ_VERSION_0_78_0 = MzVersion.parse_mz("v0.78.0")
 MZ_VERSION_0_81_0 = MzVersion.parse_mz("v0.81.0")
 MZ_VERSION_0_88_0 = MzVersion.parse_mz("v0.88.0")
+MZ_VERSION_0_93_0 = MzVersion.parse_mz("v0.93.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -110,7 +113,9 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
                 True,
             )
         ):
-            return YesIgnore("Implemented min/max for interval and time types in 24007")
+            return YesIgnore(
+                "Implemented min/max for interval and time types in PR 24007"
+            )
 
         if (
             self.lower_version < MZ_VERSION_0_88_0 <= self.higher_version
@@ -122,7 +127,26 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
                 True,
             )
         ):
-            return YesIgnore("date_trunc fixed in 25202")
+            return YesIgnore("date_trunc fixed in PR 25202")
+
+        if (
+            self.lower_version < MZ_VERSION_0_93_0 <= self.higher_version
+            and expression.matches(
+                partial(
+                    matches_x_or_y,
+                    x=partial(
+                        matches_op_by_pattern,
+                        pattern="$ ILIKE $",
+                    ),
+                    y=partial(
+                        matches_op_by_pattern,
+                        pattern="$ NOT ILIKE $",
+                    ),
+                ),
+                True,
+            )
+        ):
+            return YesIgnore("ILIKE fixed in PR 26183")
 
         return super().shall_ignore_expression(expression, row_selection)
 
