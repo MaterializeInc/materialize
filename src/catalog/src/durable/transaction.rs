@@ -44,7 +44,8 @@ use crate::durable::objects::{
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, StorageUsageKey, SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    SettingValue, StorageUsageKey, SystemObjectDescription, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue,
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
