@@ -303,6 +303,7 @@ impl Coordinator {
             compute_instance,
             exported_index_id,
             optimizer_config,
+            self.optimizer_metrics(),
         );
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(

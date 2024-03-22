@@ -60,10 +60,23 @@ pub const ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING: Config<bool> = Config::new(
 );
 
 /// Enable usage of a pre-correction stash in the `persist_sink`.
+///
+/// Introduced to derisk the rollout of the `persist_sink` stash.
+/// TODO(teskje): remove after successful validation in prod
 pub const ENABLE_PERSIST_SINK_STASH: Config<bool> = Config::new(
     "enable_compute_persist_sink_stash",
     true,
     "Enable usage of a pre-correction stash in the compute `persist_sink`.",
+);
+
+/// Enable controller-controlled dataflow scheduling.
+///
+/// Introduced to derisk the rollout of the `Schedule` compute command.
+/// TODO(teskje): remove after successful validation in prod
+pub const ENABLE_CONTROLLER_DATAFLOW_SCHEDULING: Config<bool> = Config::new(
+    "enable_compute_controller_dataflow_scheduling",
+    true,
+    "Enable compute controller-controlled dataflow scheduling.",
 );
 
 /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
@@ -116,6 +129,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_CHUNKED_STACK)
         .add(&ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING)
         .add(&ENABLE_PERSIST_SINK_STASH)
+        .add(&ENABLE_CONTROLLER_DATAFLOW_SCHEDULING)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)

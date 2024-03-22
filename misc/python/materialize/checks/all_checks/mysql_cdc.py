@@ -57,6 +57,9 @@ class MySqlCdcBase:
 
                 INSERT INTO mysql_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
 
+                $[version<9300] mysql-execute name=mysql
+                GRANT SELECT ON performance_schema.replication_connection_configuration TO mysql1{self.suffix};
+
                 > CREATE SECRET mysqlpass1{self.suffix} AS 'mysql';
 
                 > CREATE CONNECTION mysql1{self.suffix} TO MYSQL (
@@ -92,7 +95,7 @@ class MySqlCdcBase:
                 > CREATE CONNECTION mysql2{self.suffix} TO MYSQL (
                     HOST 'mysql',
                     USER mysql1{self.suffix},
-                    PASSWORD SECRET mysqlpass1{self.suffix}
+                    PASSWORD SECRET mysqlpass2{self.suffix}
                   )
 
                 $ mysql-execute name=mysql
@@ -272,6 +275,9 @@ class MySqlCdcMzNow(Check):
                 INSERT INTO mysql_mz_now_table VALUES (NOW(), 'C1');
                 INSERT INTO mysql_mz_now_table VALUES (NOW(), 'D1');
                 INSERT INTO mysql_mz_now_table VALUES (NOW(), 'E1');
+
+                $[version<9300] mysql-execute name=mysql
+                GRANT SELECT ON performance_schema.replication_connection_configuration TO mysql2;
 
                 > CREATE SECRET mysql_mz_now_pass AS 'mysql';
                 > CREATE CONNECTION mysql_mz_now_conn TO MYSQL (

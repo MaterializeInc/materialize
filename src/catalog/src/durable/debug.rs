@@ -70,7 +70,6 @@ pub enum CollectionType {
     SystemConfiguration,
     SystemGidMapping,
     SystemPrivileges,
-    Timestamp,
 }
 
 derive_display_from_serialize!(CollectionType);
@@ -252,14 +251,6 @@ collection_impl!({
     trace_field: system_privileges,
     update: StateUpdateKind::SystemPrivilege,
 });
-collection_impl!({
-    name: TimestampCollection,
-    key: proto::TimestampKey,
-    value: proto::TimestampValue,
-    collection_type: CollectionType::Timestamp,
-    trace_field: timestamps,
-    update: StateUpdateKind::Timestamp,
-});
 
 /// A trace of timestamped diffs for a particular [`Collection`].
 ///
@@ -296,7 +287,6 @@ pub struct Trace {
     pub system_object_mappings: CollectionTrace<SystemItemMappingCollection>,
     pub system_configurations: CollectionTrace<SystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
-    pub timestamps: CollectionTrace<TimestampCollection>,
 }
 
 impl Trace {
@@ -319,7 +309,6 @@ impl Trace {
             system_object_mappings: CollectionTrace::new(),
             system_configurations: CollectionTrace::new(),
             system_privileges: CollectionTrace::new(),
-            timestamps: CollectionTrace::new(),
         }
     }
 }

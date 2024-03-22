@@ -314,6 +314,7 @@ impl Coordinator {
                     view_id,
                     index_id,
                     optimizer_config,
+                    self.optimizer_metrics(),
                 ))
             }
             Some(copy_to_ctx) => {
@@ -324,6 +325,7 @@ impl Coordinator {
                     view_id,
                     copy_to_ctx,
                     optimizer_config,
+                    self.optimizer_metrics(),
                 ))
             }
         };

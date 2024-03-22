@@ -20,6 +20,7 @@ import base64
 import collections
 import hashlib
 import json
+import multiprocessing
 import os
 import re
 import shlex
@@ -38,7 +39,8 @@ from typing import IO, Any, cast
 import yaml
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
-from materialize.xcompile import Arch
+from materialize.rustc_flags import Sanitizer
+from materialize.xcompile import Arch, target
 
 
 class Fingerprint(bytes):
@@ -64,6 +66,7 @@ class RepositoryDetails:
         release_mode: Whether the repository is being built in release mode.
         coverage: Whether the repository has code coverage instrumentation
             enabled.
+        sanitizer: Whether to use a sanitizer (address, hwaddress, cfi, thread, leak, memory, none)
         cargo_workspace: The `cargo.Workspace` associated with the repository.
         image_registry: The Docker image registry to pull images from and push
             images to.
@@ -76,6 +79,7 @@ class RepositoryDetails:
         arch: Arch,
         release_mode: bool,
         coverage: bool,
+        sanitizer: Sanitizer,
         image_registry: str,
         image_prefix: str,
     ):
@@ -83,16 +87,25 @@ class RepositoryDetails:
         self.arch = arch
         self.release_mode = release_mode
         self.coverage = coverage
+        self.sanitizer = sanitizer
         self.cargo_workspace = cargo.Workspace(root)
         self.image_registry = image_registry
         self.image_prefix = image_prefix
 
     def cargo(
-        self, subcommand: str, rustflags: list[str], channel: str | None = None
+        self,
+        subcommand: str,
+        rustflags: list[str],
+        channel: str | None = None,
+        extra_env: dict[str, str] = {},
     ) -> list[str]:
         """Start a cargo invocation for the configured architecture."""
         return xcompile.cargo(
-            arch=self.arch, channel=channel, subcommand=subcommand, rustflags=rustflags
+            arch=self.arch,
+            channel=channel,
+            subcommand=subcommand,
+            rustflags=rustflags,
+            extra_env=extra_env,
         )
 
     def tool(self, name: str) -> list[str]:
@@ -228,13 +241,15 @@ class CargoPreImage(PreImage):
         }
 
     def extra(self) -> str:
-        # Cargo images depend on the release mode and whether coverage is
-        # enabled.
+        # Cargo images depend on the release mode and whether
+        # coverage/sanitizer is enabled.
         flags: list[str] = []
         if self.rd.release_mode:
             flags += "release"
         if self.rd.coverage:
             flags += "coverage"
+        if self.rd.sanitizer != Sanitizer.none:
+            flags += self.rd.sanitizer.value
         flags.sort()
         return ",".join(flags)
 
@@ -263,10 +278,45 @@ class CargoBuild(CargoPreImage):
         bins: list[str],
         examples: list[str],
     ) -> list[str]:
-        rustflags = rustc_flags.coverage if rd.coverage else ["--cfg=tokio_unstable"]
+        rustflags = (
+            rustc_flags.coverage
+            if rd.coverage
+            else rustc_flags.sanitizer[rd.sanitizer]
+            if rd.sanitizer != Sanitizer.none
+            else ["--cfg=tokio_unstable"]
+        )
+        cflags = (
+            [
+                f"--target={target(rd.arch)}",
+                f"--gcc-toolchain=/opt/x-tools/{target(rd.arch)}/",
+                "-fuse-ld=lld",
+                f"--sysroot=/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/sysroot",
+                f"-L/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/lib64",
+            ]
+            + rustc_flags.sanitizer_cflags[rd.sanitizer]
+            if rd.sanitizer != Sanitizer.none
+            else []
+        )
+        extra_env = (
+            {
+                "CFLAGS": " ".join(cflags),
+                "CXXFLAGS": " ".join(cflags),
+                "LDFLAGS": " ".join(cflags),
+                "CXXSTDLIB": "stdc++",
+                "CC": "cc",
+                "CXX": "c++",
+                "CPP": "clang-cpp-15",
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+                "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
+            }
+            if rd.sanitizer != Sanitizer.none
+            else {}
+        )
 
         cargo_build = [
-            *rd.cargo("build", channel=None, rustflags=rustflags),
+            *rd.cargo("build", channel=None, rustflags=rustflags, extra_env=extra_env),
             "--workspace",
         ]
 
@@ -277,6 +327,13 @@ class CargoBuild(CargoPreImage):
 
         if rd.release_mode:
             cargo_build.append("--release")
+        if rd.sanitizer != Sanitizer.none:
+            # ASan doesn't work with jemalloc
+            cargo_build.append("--no-default-features")
+            # Uses more memory, so reduce the number of jobs
+            cargo_build.extend(
+                ["--jobs", str(round(multiprocessing.cpu_count() * 2 / 3))]
+            )
 
         return cargo_build
 
@@ -694,6 +751,7 @@ class ResolvedImage:
 
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
+        self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
@@ -819,6 +877,7 @@ class Repository:
         arch: The CPU architecture to build for.
         release_mode: Whether to build the repository in release mode.
         coverage: Whether to enable code coverage instrumentation.
+        sanitizer: Whether to a sanitizer (address, thread, leak, memory, none)
         image_registry: The Docker image registry to pull images from and push
             images to.
         image_prefix: A prefix to apply to all Docker image names.
@@ -834,11 +893,12 @@ class Repository:
         arch: Arch = Arch.host(),
         release_mode: bool = True,
         coverage: bool = False,
+        sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = "materialize",
         image_prefix: str = "",
     ):
         self.rd = RepositoryDetails(
-            root, arch, release_mode, coverage, image_registry, image_prefix
+            root, arch, release_mode, coverage, sanitizer, image_registry, image_prefix
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
@@ -911,6 +971,13 @@ class Repository:
             action="store_true",
         )
         parser.add_argument(
+            "--sanitizer",
+            help="whether to enable a sanitizer",
+            default=Sanitizer[os.getenv("CI_SANITIZER", "none")],
+            type=Sanitizer,
+            choices=Sanitizer,
+        )
+        parser.add_argument(
             "--arch",
             default=Arch.host(),
             help="the CPU architecture to build for",
@@ -939,9 +1006,10 @@ class Repository:
             root,
             release_mode=args.release,
             coverage=args.coverage,
-            arch=args.arch,
+            sanitizer=args.sanitizer,
             image_registry=args.image_registry,
             image_prefix=args.image_prefix,
+            arch=args.arch,
         )
 
     @property
@@ -976,8 +1044,8 @@ class Repository:
                 visit(self.images[d], path + [image.name])
             resolved[image.name] = image
 
-        for target in sorted(targets, key=lambda image: image.name):
-            visit(target)
+        for target_image in sorted(targets, key=lambda image: image.name):
+            visit(target_image)
 
         return DependencySet(resolved.values())
 

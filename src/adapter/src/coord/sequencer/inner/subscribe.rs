@@ -190,6 +190,7 @@ impl Coordinator {
             up_to,
             debug_name,
             optimizer_config,
+            self.optimizer_metrics(),
         );
 
         let span = Span::current();

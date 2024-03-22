@@ -56,9 +56,10 @@ fn verify_parse_redacted(stmt: &str) {
         Err(_) => return,
     };
     let redacted = stmt.to_ast_string_redacted();
+    let res = parse_statements(&redacted);
     assert!(
-        parse_statements(&redacted).is_ok(),
-        "redacted statement could not be parsed:\noriginal:\n{stmt}\nredacted:\n{redacted}"
+        res.is_ok(),
+        "redacted statement could not be parsed: {res:?}\noriginal:\n{stmt}\nredacted:\n{redacted}"
     );
 }
 

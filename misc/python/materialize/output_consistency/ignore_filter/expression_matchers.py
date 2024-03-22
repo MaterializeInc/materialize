@@ -106,3 +106,10 @@ def involves_data_type_category(
     expression: Expression, data_type_category: DataTypeCategory
 ) -> bool:
     return expression.resolve_return_type_category() == data_type_category
+
+
+def is_operation_tagged(expression: Expression, tag: str) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        return expression.operation.is_tagged(tag)
+
+    return False

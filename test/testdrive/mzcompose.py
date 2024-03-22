@@ -12,8 +12,8 @@ from pathlib import Path
 from materialize import ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
-from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -24,9 +24,9 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
-    Localstack(),
-    Materialized(),
-    Testdrive(),
+    Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Materialized(external_minio=True),
+    Testdrive(external_minio=True),
 ]
 
 
@@ -70,14 +70,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     (args, passthrough_args) = parser.parse_known_args()
 
-    dependencies = ["materialized"]
+    dependencies = ["minio", "materialized"]
     if args.redpanda:
         dependencies += ["redpanda"]
     else:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
-
-    if args.aws_region is None:
-        dependencies += ["localstack"]
 
     testdrive = Testdrive(
         forward_buildkite_shard=True,
@@ -86,10 +83,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_catalog_store=True,
         default_timeout=args.default_timeout,
         volumes_extra=["mzdata:/mzdata"],
+        external_minio=True,
     )
 
     materialized = Materialized(
         default_size=args.default_size,
+        external_minio=True,
     )
 
     with c.override(testdrive, materialized):

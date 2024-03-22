@@ -184,11 +184,6 @@ pub(super) struct Instance<T> {
     replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
-    /// Whether to aggressively downgrade read holds for sink dataflows.
-    ///
-    /// This flag exists to derisk the rollout of the aggressive downgrading approach.
-    /// TODO(teskje): Remove this after a couple weeks.
-    enable_aggressive_readhold_downgrades: bool,
 }
 
 impl<T: Timestamp> Instance<T> {
@@ -246,7 +241,7 @@ impl<T: Timestamp> Instance<T> {
         let mut state =
             CollectionState::new(as_of.clone(), storage_dependencies, compute_dependencies);
         // If the collection is write-only, clear its read policy to reflect that.
-        if write_only && self.enable_aggressive_readhold_downgrades {
+        if write_only {
             state.read_policy = None;
         }
 
@@ -545,7 +540,6 @@ where
         metrics: InstanceMetrics,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        enable_aggressive_readhold_downgrades: bool,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -571,7 +565,6 @@ where
             envd_epoch,
             replica_epochs: Default::default(),
             metrics,
-            enable_aggressive_readhold_downgrades,
         };
 
         instance.send(ComputeCommand::CreateTimely {
@@ -1113,11 +1106,67 @@ where
                 "not sending `CreateDataflow`, because of empty `as_of`",
             );
         } else {
+            let collections: Vec<_> = augmented_dataflow.export_ids().collect();
             self.compute
                 .send(ComputeCommand::CreateDataflow(augmented_dataflow));
+
+            for id in collections {
+                self.maybe_schedule_collection(id);
+            }
         }
 
         Ok(())
+    }
+
+    /// Schedule the identified collection if all its inputs are available.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the identified collection does not exist.
+    fn maybe_schedule_collection(&mut self, id: GlobalId) {
+        let collection = self.compute.expect_collection(id);
+
+        // Don't schedule collections twice.
+        if collection.scheduled {
+            return;
+        }
+
+        let as_of = collection.read_frontier();
+
+        // If the collection has an empty `as_of`, it was either never installed on the replica or
+        // has since been dropped. In either case the replica does not expect any commands for it.
+        if as_of.is_empty() {
+            return;
+        }
+
+        // Check dependency frontiers to determine if all inputs are available.
+        // An input is available when its frontier is greater than the `as_of`, i.e., all input
+        // data up to and including the `as_of` has been sealed.
+        let compute_frontiers = collection.compute_dependencies.iter().map(|id| {
+            let dep = &self.compute.expect_collection(*id);
+            &dep.write_frontier
+        });
+        let storage_frontiers = collection.storage_dependencies.iter().map(|id| {
+            let dep = &self.storage_controller.collection(*id).expect("must exist");
+            &dep.write_frontier
+        });
+        let ready = compute_frontiers
+            .chain(storage_frontiers)
+            .all(|frontier| PartialOrder::less_than(&as_of, &frontier.borrow()));
+
+        if ready {
+            self.compute.send(ComputeCommand::Schedule(id));
+            let collection = self.compute.expect_collection_mut(id);
+            collection.scheduled = true;
+        }
+    }
+
+    /// Schedule any unscheduled collections that are ready.
+    fn schedule_collections(&mut self) {
+        let ids: Vec<_> = self.compute.collections.keys().copied().collect();
+        for id in ids {
+            self.maybe_schedule_collection(id);
+        }
     }
 
     /// Drops the read capability for the given collections and allows their resources to be
@@ -1878,6 +1927,7 @@ where
     pub fn maintain(&mut self) {
         self.rehydrate_failed_replicas();
         self.downgrade_warmup_capabilities();
+        self.schedule_collections();
         self.compute.cleanup_collections();
         self.compute.refresh_state_metrics();
     }

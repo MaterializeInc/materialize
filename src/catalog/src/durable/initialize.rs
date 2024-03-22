@@ -29,7 +29,6 @@ use mz_sql::names::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use mz_storage_types::sources::Timeline;
 
 use crate::builtin::BUILTIN_ROLES;
 use crate::durable::upgrade::CATALOG_VERSION;
@@ -86,9 +85,6 @@ pub async fn initialize(
 ) -> Result<(), CatalogError> {
     // Collect audit events so we can commit them once at the very end.
     let mut audit_events = vec![];
-
-    // First thing we need to do is persist the timestamp we're booting with.
-    tx.insert_timestamp(Timeline::EpochMilliseconds, initial_ts.into())?;
 
     for (name, next_id) in [
         (USER_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),

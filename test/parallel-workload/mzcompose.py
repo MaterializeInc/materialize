@@ -41,7 +41,7 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(),
-    Minio(setup_materialize=True),
+    Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Materialized(),
     Service("sqlsmith", {"mzbuild": "sqlsmith"}),

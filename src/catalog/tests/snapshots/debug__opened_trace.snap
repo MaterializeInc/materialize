@@ -1935,24 +1935,4 @@ Trace {
             ),
         ],
     },
-    timestamps: CollectionTrace {
-        values: [
-            (
-                (
-                    TimestampKey {
-                        id: "M",
-                    },
-                    TimestampValue {
-                        ts: Some(
-                            Timestamp {
-                                internal: 0,
-                            },
-                        ),
-                    },
-                ),
-                2,
-                1,
-            ),
-        ],
-    },
 }

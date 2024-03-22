@@ -36,7 +36,9 @@ CREATE TABLE t1 (f1 JSON);
 
 INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false}' AS JSON));
 INSERT INTO t1 VALUES (CAST('null' AS JSON));
+INSERT INTO t1 VALUES (JSON_ARRAY('x', 1, NULL, CAST('{"x": ["y"]}' AS JSON)));
 INSERT INTO t1 VALUES (NULL);
+INSERT INTO t1 VALUES (JSON_ARRAY(NULL));
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
@@ -59,8 +61,16 @@ null
 null
 "{\"active\":false,\"balance\":7.77,\"bar\":\"baz\"}"
 "{\"active\":false,\"balance\":7.77,\"bar\":\"baz\"}"
+"[\"x\",1,null,{\"x\":[\"y\"]}]"
+"[\"x\",1,null,{\"x\":[\"y\"]}]"
+"[null]"
+"[null]"
 
 > SELECT f1->>'balance' FROM t1;
+<null>
+<null>
+<null>
+<null>
 <null>
 <null>
 <null>

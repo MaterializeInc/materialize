@@ -93,7 +93,8 @@ pub struct TestHarness {
     storage_usage_collection_interval: Duration,
     storage_usage_retention_period: Option<Duration>,
     default_cluster_replica_size: String,
-    builtin_cluster_replica_size: String,
+    builtin_system_cluster_replica_size: String,
+    builtin_introspection_cluster_replica_size: String,
     propagate_crashes: bool,
     enable_tracing: bool,
     // This is currently unrelated to enable_tracing, and is used only to disable orchestrator
@@ -122,7 +123,8 @@ impl Default for TestHarness {
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
             default_cluster_replica_size: "1".to_string(),
-            builtin_cluster_replica_size: "1".to_string(),
+            builtin_system_cluster_replica_size: "1".to_string(),
+            builtin_introspection_cluster_replica_size: "1".to_string(),
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
@@ -226,11 +228,19 @@ impl TestHarness {
         self
     }
 
-    pub fn with_builtin_cluster_replica_size(
+    pub fn with_builtin_system_cluster_replica_size(
         mut self,
-        builtin_cluster_replica_size: String,
+        builtin_system_cluster_replica_size: String,
     ) -> Self {
-        self.builtin_cluster_replica_size = builtin_cluster_replica_size;
+        self.builtin_system_cluster_replica_size = builtin_system_cluster_replica_size;
+        self
+    }
+    pub fn with_builtin_introspection_cluster_replica_size(
+        mut self,
+        builtin_introspection_cluster_replica_size: String,
+    ) -> Self {
+        self.builtin_introspection_cluster_replica_size =
+            builtin_introspection_cluster_replica_size;
         self
     }
 
@@ -468,7 +478,10 @@ impl Listeners {
                 cors_allowed_origin: AllowOrigin::list([]),
                 cluster_replica_sizes: Default::default(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
-                bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
+                bootstrap_builtin_system_cluster_replica_size: config
+                    .builtin_system_cluster_replica_size,
+                bootstrap_builtin_introspection_cluster_replica_size: config
+                    .builtin_introspection_cluster_replica_size,
                 system_parameter_defaults: config.system_parameter_defaults,
                 availability_zones: Default::default(),
                 tracing_handle,

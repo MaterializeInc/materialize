@@ -72,9 +72,8 @@ pub struct StorageParameters {
     /// Duration that we wait to batch rows for user owned, storage managed, collections.
     pub user_storage_managed_collections_batch_duration: Duration,
 
-    /// Updates used to update `StorageConfiguration::config_set`. `None` when
-    /// not being moved over the wire.
-    pub dyncfg_updates: Option<mz_dyncfg::ConfigUpdates>,
+    /// Updates used to update `StorageConfiguration::config_set`.
+    pub dyncfg_updates: mz_dyncfg::ConfigUpdates,
 }
 
 pub const STATISTICS_INTERVAL_DEFAULT: Duration = Duration::from_secs(60);
@@ -108,7 +107,7 @@ impl Default for StorageParameters {
             enable_dependency_read_hold_asserts: true,
             user_storage_managed_collections_batch_duration:
                 STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
-            dyncfg_updates: None,
+            dyncfg_updates: Default::default(),
         }
     }
 }
@@ -206,7 +205,7 @@ impl StorageParameters {
             pg_snapshot_config,
             enable_dependency_read_hold_asserts,
             user_storage_managed_collections_batch_duration,
-            dyncfg_updates: _,
+            dyncfg_updates,
         }: StorageParameters,
     ) {
         self.pg_source_tcp_timeouts = pg_source_tcp_timeouts;
@@ -234,9 +233,7 @@ impl StorageParameters {
         self.enable_dependency_read_hold_asserts = enable_dependency_read_hold_asserts;
         self.user_storage_managed_collections_batch_duration =
             user_storage_managed_collections_batch_duration;
-
-        // The storage controller and storage state don't need `dyncfg_updates` maintained.
-        self.dyncfg_updates = None;
+        self.dyncfg_updates.extend(dyncfg_updates);
     }
 }
 
@@ -279,7 +276,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 self.user_storage_managed_collections_batch_duration
                     .into_proto(),
             ),
-            dyncfg_updates: self.dyncfg_updates.clone(),
+            dyncfg_updates: Some(self.dyncfg_updates.clone()),
         }
     }
 
@@ -348,7 +345,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 .into_rust_if_some(
                     "ProtoStorageParameters::user_storage_managed_collections_batch_duration",
                 )?,
-            dyncfg_updates: proto.dyncfg_updates,
+            dyncfg_updates: proto.dyncfg_updates.ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoStorageParameters::dyncfg_updates")
+            })?,
         })
     }
 }

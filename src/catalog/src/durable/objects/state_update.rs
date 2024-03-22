@@ -86,7 +86,6 @@ impl StateUpdate {
             id_allocator,
             configs,
             settings,
-            timestamps,
             system_gid_mapping,
             system_configurations,
             default_privileges,
@@ -109,7 +108,6 @@ impl StateUpdate {
         let id_allocators = from_batch(id_allocator, ts, StateUpdateKind::IdAllocator);
         let configs = from_batch(configs, ts, StateUpdateKind::Config);
         let settings = from_batch(settings, ts, StateUpdateKind::Setting);
-        let timestamps = from_batch(timestamps, ts, StateUpdateKind::Timestamp);
         let system_object_mappings =
             from_batch(system_gid_mapping, ts, StateUpdateKind::SystemObjectMapping);
         let system_configurations = from_batch(
@@ -135,7 +133,6 @@ impl StateUpdate {
             .chain(id_allocators)
             .chain(configs)
             .chain(settings)
-            .chain(timestamps)
             .chain(system_object_mappings)
             .chain(system_configurations)
             .chain(default_privileges)
@@ -217,7 +214,6 @@ pub enum StateUpdateKind {
     ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
-    Timestamp(proto::TimestampKey, proto::TimestampValue),
 }
 
 impl StateUpdateKind {
@@ -243,7 +239,6 @@ impl StateUpdateKind {
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
-            StateUpdateKind::Timestamp(_, _) => Some(CollectionType::Timestamp),
         }
     }
 }
@@ -370,12 +365,6 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                             value: Some(value.clone()),
                         },
                     )
-                }
-                StateUpdateKind::Timestamp(key, value) => {
-                    proto::state_update_kind::Kind::Timestamp(proto::state_update_kind::Timestamp {
-                        key: Some(key.clone()),
-                        value: Some(value.clone()),
-                    })
                 }
             }),
         }
@@ -579,16 +568,6 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         TryFromProtoError::missing_field(
                             "state_update_kind::SystemPrivileges::value",
                         )
-                    })?,
-                ),
-                proto::state_update_kind::Kind::Timestamp(
-                    proto::state_update_kind::Timestamp { key, value },
-                ) => StateUpdateKind::Timestamp(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Timestamp::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Timestamp::value")
                     })?,
                 ),
             },

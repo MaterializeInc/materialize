@@ -1026,8 +1026,13 @@ class Composition:
     def capture_logs(self, *services: str) -> None:
         # Capture logs into services.log since they will be lost otherwise
         # after dowing a composition.
-        with open(MZ_ROOT / "services.log", "a") as f:
-            self.invoke("logs", "--no-color", *services, capture=f)
+        path = MZ_ROOT / "services.log"
+        # Don't capture log lines we received already
+        time = os.path.getmtime(path) if os.path.isfile(path) else 0
+        with open(path, "a") as f:
+            self.invoke(
+                "logs", "--no-color", "--since", str(time), *services, capture=f
+            )
 
     def down(
         self,

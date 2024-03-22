@@ -55,11 +55,9 @@ class FailedTestExecutionError(UIError):
 
     def __init__(
         self,
-        message: str,
         errors: list[TestFailureDetails],
-        hint: str | None = None,
     ):
-        super().__init__(message, hint)
+        super().__init__("At least one test failed")
         self.errors = errors
 
 

@@ -67,10 +67,6 @@ class Materialized(Service):
 
         environment = [
             f"MZ_SOFT_ASSERTIONS={int(soft_assertions)}",
-            # TODO(benesch): remove the following environment variables
-            # after v0.38 ships, since these environment variables will be
-            # baked into the Docker image.
-            "MZ_ORCHESTRATOR=process",
             # The following settings can not be baked in the default image, as they
             # are enabled for testing purposes only
             "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",

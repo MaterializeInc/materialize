@@ -617,47 +617,47 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         // - a disk limit (so it must be an actual managed cluster with a real limit)
                         // - a reported disk capacity
                         // - a reported disk usage
-                        // - disk capacity is less than disk limit.
-                        // - There are no overflows
                         //
-                        //
-                        // The `disk_usage` is augmented with the difference between
-                        // the limit and the `capacity`, so users don't erroneously think they
-                        // have more real usable capacity than they actually do. The difference
-                        // comes from LVM and filesystem overheads.
+                        // There are 3 weird cases we have to handle here:
+                        // - Some instance types report a large disk capacity than the requested
+                        // limit. We clamp those capacities to the limit, which means we can
+                        // report 100% usage even if we have a bit of space left.
+                        // - Other instances report a smaller disk capacity than the limit, due to
+                        // overheads. In this case, we correct the usage by adding the overhead, so
+                        // we report a more accurate usage number.
+                        // - The disk limit can be more up-to-date (from `service_infos`) than the
+                        // reported metric. In that case, we report the minimum of the usage
+                        // and the limit, which means we can report 100% usage temporarily
+                        // if a replica is sized down.
                         match (disk_usage, disk_capacity, disk_limit) {
                             (
                                 Some(disk_usage),
                                 Some(disk_capacity),
                                 Some(DiskLimit(disk_limit)),
                             ) => {
-                                if disk_limit.0 >= disk_capacity {
-                                    if let Some(disk_usage) =
-                                        (disk_limit.0 - disk_capacity).checked_add(disk_usage)
-                                    {
-                                        Some(disk_usage)
-                                    } else {
-                                        tracing::error!(
-                                            "disk usage  {} + correction {} overflowed?",
-                                            disk_usage,
-                                            disk_limit.0 - disk_capacity
-                                        );
-                                        None
-                                    }
-                                } else {
-                                    // `fetch_service_metrics` gets the `disk_limit` from the
-                                    // `service_infos`, which can be _more_ up-to-date than the
-                                    // actual replica when it is altered, so we warn instead of
-                                    // error. This is the same as the warning above about not
-                                    // finding the containers above, which could occur when the
-                                    // `scale` is being altered.
+                                let disk_capacity = if disk_limit.0 < disk_capacity {
+                                    // We warn and not error because all the above cases are
+                                    // relatively common.
                                     tracing::warn!(
                                         "disk capacity {} is larger than the disk limit {} ?",
                                         disk_capacity,
                                         disk_limit.0
                                     );
-                                    None
-                                }
+                                    // Clamp to the limit.
+                                    disk_limit.0
+                                } else {
+                                    disk_capacity
+                                };
+
+                                // If we overflow, just clamp to the disk limit
+                                let disk_usage = (disk_limit.0 - disk_capacity)
+                                    .checked_add(disk_usage)
+                                    .unwrap_or(disk_limit.0);
+
+                                // Clamp to the limit. Note that this can be clamped during
+                                // replica resizes of if the disk usage is ABOVE the
+                                // configured limit, as may occur on some instances.
+                                Some(std::cmp::min(disk_usage, disk_limit.0))
                             }
                             _ => None,
                         }

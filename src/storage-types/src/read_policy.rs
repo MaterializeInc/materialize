@@ -12,6 +12,7 @@ use std::sync::Arc;
 use derivative::Derivative;
 use itertools::Itertools;
 use mz_repr::TimestampManipulation;
+use serde::Serialize;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 
@@ -19,7 +20,7 @@ use timely::progress::{Antichain, Timestamp};
 ///
 /// NOTE(benesch): this might want to live somewhere besides the storage crate,
 /// because it is fundamental to both storage and compute.
-#[derive(Clone, Derivative)]
+#[derive(Clone, Derivative, Serialize)]
 #[derivative(Debug)]
 pub enum ReadPolicy<T> {
     /// No-one has yet requested a `ReadPolicy` from us, which means that we can
@@ -36,7 +37,9 @@ pub enum ReadPolicy<T> {
     ///
     /// The `Arc` makes the function cloneable.
     LagWriteFrontier(
-        #[derivative(Debug = "ignore")] Arc<dyn Fn(AntichainRef<T>) -> Antichain<T> + Send + Sync>,
+        #[derivative(Debug = "ignore")]
+        #[serde(skip)]
+        Arc<dyn Fn(AntichainRef<T>) -> Antichain<T> + Send + Sync>,
     ),
     /// Allows one to express multiple read policies, taking the least of
     /// the resulting frontiers.

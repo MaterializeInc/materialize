@@ -45,6 +45,10 @@ INSERT INTO t2 VALUES (' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèß
 CREATE TABLE t3 (f1 TINYTEXT, f2 MEDIUMTEXT, f3 LONGTEXT) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 INSERT INTO t3 VALUES ('abc ', 'abc ', 'abc ');
 
+CREATE TABLE t4 (f1 TEXT) CHARACTER SET ascii COLLATE ascii_general_ci;
+INSERT INTO t4 VALUES ('aaa');
+INSERT INTO t4 VALUES ('abc');
+
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
@@ -88,3 +92,15 @@ UPDATE t1 SET f1 = 'xyz ', f2 = 'xyz ', f3 = 'xyz ' WHERE lower(f1) LIKE 'abc ';
 
 > SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3) FROM t3 LIMIT 1;
 "text" "text" "text"
+
+> SELECT * FROM t4;
+"aaa"
+"abc"
+
+$ mysql-execute name=mysql
+ALTER TABLE t4 CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+UPDATE t4 SET f1 = 'äöü' WHERE f1 = 'aaa';
+
+> SELECT * FROM t4;
+"äöü"
+"abc"

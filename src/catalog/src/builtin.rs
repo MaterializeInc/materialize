@@ -225,7 +225,7 @@ pub struct BuiltinCluster {
     pub privileges: &'static [MzAclItem],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuiltinClusterReplica {
     /// Name of the compute replica.
     pub name: &'static str,

@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_repr::role_id::RoleId;
 use mz_repr::user::ExternalUserMetadata;
 use once_cell::sync::Lazy;
+use serde::Serialize;
 
 pub const SYSTEM_USER_NAME: &str = "mz_system";
 pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
@@ -49,7 +50,7 @@ pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
 });
 
 /// Identifies a user.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct User {
     /// The name of the user within the system.
     pub name: String,

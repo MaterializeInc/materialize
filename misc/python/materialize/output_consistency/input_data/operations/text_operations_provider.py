@@ -18,6 +18,7 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
     BooleanOperationParam,
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
+    LIKE_PARAM,
     REGEX_FLAG_PARAM,
     REGEX_PARAM,
     REPETITIONS_PARAM,
@@ -98,38 +99,38 @@ TEXT_OPERATION_TYPES.append(
     )
 )
 
-# Matches LIKE pattern case sensitively, using SQL LIKE matching
+# case-sensitive SQL LIKE matching (equal to: $ ~~ $)
 TEXT_OPERATION_TYPES.append(
     DbOperation(
-        "$ ~~ $",
-        [TextOperationParam(), REGEX_PARAM],
+        "$ LIKE $",
+        [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
 
-# Matches LIKE pattern case insensitively (ILIKE), using SQL LIKE matching
+# case-insensitive SQL LIKE matching (equal to: $ ~~* $)
 TEXT_OPERATION_TYPES.append(
     DbOperation(
-        "$ ~~* $",
-        [TextOperationParam(), REGEX_PARAM],
+        "$ ILIKE $",
+        [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
 
-# Does not match LIKE pattern case sensitively, using SQL LIKE matching
+# negative case-sensitive SQL LIKE matching (equal to: $ !~~ $)
 TEXT_OPERATION_TYPES.append(
     DbOperation(
-        "$ !~~ $",
-        [TextOperationParam(), REGEX_PARAM],
+        "$ NOT LIKE $",
+        [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
 
-#  Does not match LIKE pattern case insensitively (ILIKE), using SQL LIKE matching
+# negative case-insensitive SQL LIKE matching (equal to: $ !~~* $)
 TEXT_OPERATION_TYPES.append(
     DbOperation(
-        "$ !~~* $",
-        [TextOperationParam(), REGEX_PARAM],
+        "$ NOT ILIKE $",
+        [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
     )
 )
