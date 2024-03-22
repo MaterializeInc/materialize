@@ -23,7 +23,6 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
-use mz_storage_types::sources::Timeline;
 use proptest_derive::Arbitrary;
 
 use crate::durable::objects::serialization::proto;
@@ -621,30 +620,6 @@ impl DurableType<SettingKey, SettingValue> for Setting {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TimelineTimestamp {
-    pub timeline: Timeline,
-    pub ts: mz_repr::Timestamp,
-}
-
-impl DurableType<TimestampKey, TimestampValue> for TimelineTimestamp {
-    fn into_key_value(self) -> (TimestampKey, TimestampValue) {
-        (
-            TimestampKey {
-                id: self.timeline.to_string(),
-            },
-            TimestampValue { ts: self.ts },
-        )
-    }
-
-    fn from_key_value(key: TimestampKey, value: TimestampValue) -> Self {
-        Self {
-            timeline: key.id.parse().expect("invalid timeline persisted"),
-            ts: value.ts,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemConfiguration {
     pub name: String,
     pub value: String,
@@ -707,7 +682,6 @@ pub struct Snapshot {
     pub id_allocator: BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
     pub configs: BTreeMap<proto::ConfigKey, proto::ConfigValue>,
     pub settings: BTreeMap<proto::SettingKey, proto::SettingValue>,
-    pub timestamps: BTreeMap<proto::TimestampKey, proto::TimestampValue>,
     pub system_object_mappings: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
     pub system_configurations:
         BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
@@ -729,7 +703,6 @@ impl Snapshot {
             id_allocator: BTreeMap::new(),
             configs: BTreeMap::new(),
             settings: BTreeMap::new(),
-            timestamps: BTreeMap::new(),
             system_object_mappings: BTreeMap::new(),
             system_configurations: BTreeMap::new(),
             default_privileges: BTreeMap::new(),
@@ -750,7 +723,6 @@ impl Snapshot {
             id_allocator,
             configs,
             settings,
-            timestamps,
             system_object_mappings,
             system_configurations,
             default_privileges,
@@ -767,7 +739,6 @@ impl Snapshot {
             && id_allocator.is_empty()
             && configs.is_empty()
             && settings.is_empty()
-            && timestamps.is_empty()
             && system_object_mappings.is_empty()
             && system_configurations.is_empty()
             && default_privileges.is_empty()
@@ -957,16 +928,6 @@ pub struct AuditLogKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageUsageKey {
     pub(crate) metric: VersionedStorageUsage,
-}
-
-#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct TimestampKey {
-    pub(crate) id: String,
-}
-
-#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
-pub struct TimestampValue {
-    pub(crate) ts: mz_repr::Timestamp,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

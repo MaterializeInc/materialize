@@ -31,7 +31,7 @@ class Balancerd(Service):
                 "--https-listen-addr=0.0.0.0:6876",
                 "--internal-http-listen-addr=0.0.0.0:6878",
                 "--static-resolver-addr=materialized:6875",
-                "--https-resolver-template='materialized:6876'",
+                "--https-resolver-template=materialized:6876",
             ]
 
         depends_graph: dict[str, ServiceDependency] = {

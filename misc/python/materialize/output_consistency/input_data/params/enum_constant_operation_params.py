@@ -50,6 +50,12 @@ ISO8601_TIMESTAMP_PARAM = EnumConstantOperationParam(
     add_quotes=True,
 )
 
+LIKE_PARAM = EnumConstantOperationParam(
+    ["a%", "a%b", "%c", "a__", "%", "%A%", "a", "a.c", "a?c", ""],
+    add_quotes=True,
+    add_invalid_value=False,
+)
+
 REGEX_PARAM = EnumConstantOperationParam(
     [".*", "A+", "[ab]"], add_quotes=True, invalid_value="ab("
 )

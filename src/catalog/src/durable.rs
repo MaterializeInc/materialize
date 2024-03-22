@@ -33,7 +33,7 @@ use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
     Database, DefaultPrivilege, Item, ReplicaConfig, ReplicaLocation, Role, Schema,
-    SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
+    SystemConfiguration, SystemObjectMapping,
 };
 use crate::durable::persist::UnopenedPersistCatalogState;
 pub use crate::durable::transaction::Transaction;
@@ -256,13 +256,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(GlobalId::User(id))
-    }
-
-    /// Allocates and returns a system [`ClusterId`].
-    async fn allocate_system_cluster_id(&mut self) -> Result<ClusterId, CatalogError> {
-        let id = self.allocate_id(SYSTEM_CLUSTER_ID_ALLOC_KEY, 1).await?;
-        let id = id.into_element();
-        Ok(ClusterId::System(id))
     }
 
     /// Allocates and returns a user [`ClusterId`].

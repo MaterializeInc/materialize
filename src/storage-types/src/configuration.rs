@@ -60,12 +60,10 @@ impl StorageConfiguration {
         &self.config_set
     }
 
-    pub fn update(&mut self, mut parameters: StorageParameters) {
+    pub fn update(&mut self, parameters: StorageParameters) {
         // We serialize the dyncfg updates in StorageParameters, but store the config set
         // top-level. Eventually, all of `StorageParameters` goes away.
-        if let Some(updates) = parameters.dyncfg_updates.take() {
-            updates.apply(&self.config_set);
-        }
+        parameters.dyncfg_updates.apply(&self.config_set);
         self.parameters.update(parameters);
     }
 }

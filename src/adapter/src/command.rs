@@ -122,6 +122,10 @@ pub enum Command {
     CheckConsistency {
         tx: oneshot::Sender<Result<(), CoordinatorInconsistencies>>,
     },
+
+    Dump {
+        tx: oneshot::Sender<Result<serde_json::Value, anyhow::Error>>,
+    },
 }
 
 impl Command {
@@ -137,7 +141,8 @@ impl Command {
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
-            | Command::CheckConsistency { .. } => None,
+            | Command::CheckConsistency { .. }
+            | Command::Dump { .. } => None,
         }
     }
 
@@ -153,7 +158,8 @@ impl Command {
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
-            | Command::CheckConsistency { .. } => None,
+            | Command::CheckConsistency { .. }
+            | Command::Dump { .. } => None,
         }
     }
 }
@@ -581,6 +587,7 @@ impl ExecuteResponse {
             | AlterClusterReplicaRename
             | AlterOwner
             | AlterItemRename
+            | AlterRetainHistory
             | AlterItemSwap
             | AlterNoop
             | AlterSchemaRename

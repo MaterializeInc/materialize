@@ -40,7 +40,7 @@ use crate::durable::objects::{
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
     ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
     ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemPrivilegesKey,
-    SystemPrivilegesValue, TimestampKey, TimestampValue,
+    SystemPrivilegesValue,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -667,32 +667,6 @@ impl RustType<proto::StorageUsageKey> for StorageUsageKey {
     fn from_proto(proto: proto::StorageUsageKey) -> Result<Self, TryFromProtoError> {
         Ok(StorageUsageKey {
             metric: proto.usage.into_rust_if_some("StorageUsageKey::usage")?,
-        })
-    }
-}
-
-impl RustType<proto::TimestampKey> for TimestampKey {
-    fn into_proto(&self) -> proto::TimestampKey {
-        proto::TimestampKey {
-            id: self.id.clone(),
-        }
-    }
-
-    fn from_proto(proto: proto::TimestampKey) -> Result<Self, TryFromProtoError> {
-        Ok(TimestampKey { id: proto.id })
-    }
-}
-
-impl RustType<proto::TimestampValue> for TimestampValue {
-    fn into_proto(&self) -> proto::TimestampValue {
-        proto::TimestampValue {
-            ts: Some(self.ts.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: proto::TimestampValue) -> Result<Self, TryFromProtoError> {
-        Ok(TimestampValue {
-            ts: proto.ts.into_rust_if_some("TimestampValue::ts")?,
         })
     }
 }

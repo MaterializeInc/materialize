@@ -35,6 +35,12 @@ USE public;
 CREATE TABLE t1 (f1 BOOLEAN);
 INSERT INTO t1 VALUES (true), (false);
 
+# default values
+CREATE TABLE t2 (f1 INT, f2 BOOLEAN DEFAULT true, f3 BOOLEAN DEFAULT false, f4 BOOLEAN);
+INSERT INTO t2 VALUES (1, NULL, NULL, NULL);
+INSERT INTO t2 VALUES (2, false, false, false);
+INSERT INTO t2 (f1) VALUES (3);
+
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
@@ -55,3 +61,8 @@ smallint
 0
 1
 0
+
+> SELECT * FROM t2;
+1 <null> <null> <null>
+2 0 0 0
+3 1 0 <null>

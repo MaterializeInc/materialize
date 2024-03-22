@@ -22,8 +22,7 @@ use uuid::Uuid;
 
 use mz_catalog::builtin::{
     Builtin, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
-    BUILTIN_ROLES, MZ_INTROSPECTION_CLUSTER_REPLICA, MZ_PREPARED_STATEMENT_HISTORY, MZ_SQL_TEXT,
-    MZ_STATEMENT_EXECUTION_HISTORY, MZ_STATEMENT_LIFECYCLE_HISTORY, MZ_SYSTEM_CLUSTER_REPLICA,
+    BUILTIN_ROLES, MZ_INTROSPECTION_CLUSTER_REPLICA, MZ_SYSTEM_CLUSTER_REPLICA,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -398,7 +397,7 @@ impl Catalog {
             let AllocatedBuiltinSystemIds {
                 all_builtins,
                 new_builtins,
-                mut migrated_builtins,
+                migrated_builtins,
             } = Catalog::allocate_system_ids(
                 &mut txn,
                 BUILTINS::iter()
@@ -760,44 +759,6 @@ impl Catalog {
             )?;
 
             let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
-
-            // Run a one-time migration to clear the existing sources.
-            //
-            // TODO(parkmycar): Remove after v0.92.
-            const ACTIVITY_LOG_ONE_TIME_MIGRATION: &str = "activity_log_v_0_92_migration";
-            let ran_migration = txn.get_config(ACTIVITY_LOG_ONE_TIME_MIGRATION.to_string()).is_some();
-            if !ran_migration {
-                let candidates = [
-                    MZ_PREPARED_STATEMENT_HISTORY.name,
-                    MZ_SQL_TEXT.name,
-                    MZ_STATEMENT_LIFECYCLE_HISTORY.name,
-                    MZ_STATEMENT_EXECUTION_HISTORY.name,
-                ];
-
-                let mz_internal_schema = ItemQualifiers {
-                    database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(state.get_mz_internal_schema_id().clone()),
-                };
-                let to_migrate: Vec<_> = state
-                    .entry_by_id
-                    .iter()
-                    // Filter to items in the internal schema.
-                    .filter(|(_id, entry)| entry.name().qualifiers == mz_internal_schema)
-                    // Filter to our candidates items.
-                    .filter(|(_id, entry)| candidates.contains(&entry.name().item.as_str()))
-                    // Get just the GlobalId of these items.
-                    .map(|(id, _entry)| id)
-                    .collect();
-
-                if to_migrate.len() != candidates.len() {
-                    tracing::error!("found the wrong number of items for one time migration!");
-                }
-                tracing::info!(?to_migrate, "running one time migration");
-
-                migrated_builtins.extend(to_migrate);
-
-                txn.set_config(ACTIVITY_LOG_ONE_TIME_MIGRATION.to_string(), Some(1))?;
-            }
 
             let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
                 &state,

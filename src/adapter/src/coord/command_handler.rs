@@ -219,6 +219,10 @@ impl Coordinator {
                 Command::CheckConsistency { tx } => {
                     let _ = tx.send(self.check_consistency());
                 }
+
+                Command::Dump { tx } => {
+                    let _ = tx.send(self.dump());
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
@@ -548,6 +552,7 @@ impl Coordinator {
                     | Statement::AlterIndex(_)
                     | Statement::AlterSetCluster(_)
                     | Statement::AlterOwner(_)
+                    | Statement::AlterRetainHistory(_)
                     | Statement::AlterRole(_)
                     | Statement::AlterSecret(_)
                     | Statement::AlterSink(_)

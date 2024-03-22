@@ -22,8 +22,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo,
-    VersionedData,
+    Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
 };
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -211,7 +210,7 @@ impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
         self.store.list_keys_and_metadata(key_prefix, f).await
     }
 
-    async fn set(&self, key: &str, _value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, _value: Bytes) -> Result<(), ExternalError> {
         warn!("ignoring set({key}) in read-only mode");
         self.ignoring_write();
         Ok(())

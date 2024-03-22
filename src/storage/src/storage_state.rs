@@ -870,6 +870,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.storage_state
                     .storage_configuration
                     .update(storage_parameters);
+
+                // Clear out the updates as we no longer forward them to anyone else to process.
+                // We clone `StorageState::storage_configuration` many times during rendering
+                // and want to avoid cloning these unused updates.
+                self.storage_state
+                    .storage_configuration
+                    .parameters
+                    .dyncfg_updates = Default::default();
             }
             InternalStorageCommand::StatisticsUpdate { sources, sinks } => self
                 .storage_state
@@ -1196,15 +1204,13 @@ impl StorageState {
         match cmd {
             StorageCommand::CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             StorageCommand::InitializationComplete => (),
-            StorageCommand::UpdateConfiguration(mut params) => {
+            StorageCommand::UpdateConfiguration(params) => {
                 // These can be done from all workers safely.
                 tracing::info!("Applying configuration update: {params:?}");
 
                 // We serialize the dyncfg updates in StorageParameters, but configure
                 // persist separately.
-                if let Some(updates) = params.dyncfg_updates.take() {
-                    updates.apply(self.persist_clients.cfg());
-                }
+                params.dyncfg_updates.apply(self.persist_clients.cfg());
 
                 params.tracing.apply(self.tracing_handle.as_ref());
 

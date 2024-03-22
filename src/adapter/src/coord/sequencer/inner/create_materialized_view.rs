@@ -308,8 +308,6 @@ impl Coordinator {
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
-        // TODO(teskje): Remove this check once arrangement-based log sources
-        // are replaced with persist-based ones.
         let log_names = expr_depends_on
             .iter()
             .flat_map(|id| self.catalog().introspection_dependencies(*id))

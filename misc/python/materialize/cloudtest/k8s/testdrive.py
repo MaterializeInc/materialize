@@ -42,6 +42,7 @@ class TestdriveBase:
         )
         self.kafka_addr = kafka_addr or "redpanda:9092"
         self.schema_registry_url = schema_registry_url or "http://redpanda:8081"
+        self.aws_endpoint = "http://minio:9000"
 
     def run(
         self,
@@ -68,10 +69,18 @@ class TestdriveBase:
             "--var=default-storage-size=1",
             "--var=default-replica-size=1",
             *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
-            # S3 sources are not compatible with Minio unfortunately
-            # f"--aws-endpoint=http://minio-service.{self.namespace()}:9000",
-            # "--aws-access-key-id=minio",
-            # "--aws-secret-access-key=minio123",
+            *(
+                [
+                    f"--aws-endpoint={self.aws_endpoint}",
+                    f"--var=aws-endpoint={self.aws_endpoint}",
+                    "--aws-access-key-id=minioadmin",
+                    "--var=aws-access-key-id=minioadmin",
+                    "--aws-secret-access-key=minioadmin",
+                    "--var=aws-secret-access-key=minioadmin",
+                ]
+                if not self.aws_region
+                else []
+            ),
             *(["--no-reset"] if no_reset else []),
             *([f"--seed={seed}"] if seed else []),
             *([f"--source={caller.filename}:{caller.lineno}"] if caller else []),

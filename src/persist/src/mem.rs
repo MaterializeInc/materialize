@@ -24,8 +24,8 @@ use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream,
-    SeqNo, VersionedData,
+    Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream, SeqNo,
+    VersionedData,
 };
 
 // A snapshot of the old tokio::task::yield_now() implementation, from before it
@@ -208,7 +208,7 @@ impl Blob for MemBlob {
         self.core.lock().await.list_keys_and_metadata(key_prefix, f)
     }
 
-    async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         // Yield to maximize our chances for getting interesting orderings.
         let () = yield_now().await;
         // NB: This is always atomic, so we're free to ignore the atomic param.

@@ -128,7 +128,7 @@ impl<T> Trace<T> {
     }
 
     #[must_use]
-    pub fn batches<'a>(&'a self) -> impl IntoIterator<Item = &'a HollowBatch<T>> {
+    pub fn batches(&self) -> impl IntoIterator<Item = &HollowBatch<T>> {
         // It should be possible to do this without the Vec.
         let mut batches = Vec::new();
         self.map_batches(|b| batches.push(b));
@@ -196,7 +196,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
         for batch in self.spine.merging.iter_mut().rev() {
             match batch {
-                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
+                MergeState::Double(batch1, batch2, _) => {
                     let result = batch1.maybe_replace(res);
                     if result.matched() {
                         return result;
@@ -206,13 +206,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                         return result;
                     }
                 }
-                MergeState::Double(MergeVariant::Complete(Some(batch))) => {
-                    let result = batch.maybe_replace(res);
-                    if result.matched() {
-                        return result;
-                    }
-                }
-                MergeState::Single(Some(batch)) => {
+                MergeState::Single(batch) => {
                     let result = batch.maybe_replace(res);
                     if result.matched() {
                         return result;
@@ -238,7 +232,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
     // This is only called with the results of one `insert` and so the length of
     // `merge_reqs` is bounded by the number of levels in the spine (or possibly
-    // some small constant multiple?). The number of levels is logarithmic in
+    // some small constant multiple?). The number of levels is logarithmic in the
     // number of updates in the spine, so this number should stay very small. As
     // a result, we simply use the naive O(n^2) algorithm here instead of doing
     // anything fancy with e.g. interval trees.
@@ -267,28 +261,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
             }
         }
         ret
-    }
-
-    #[allow(dead_code)]
-    pub fn describe(&self) -> String {
-        let mut s = Vec::new();
-        for b in self.spine.merging.iter().rev() {
-            match b {
-                MergeState::Vacant
-                | MergeState::Single(None)
-                | MergeState::Double(MergeVariant::Complete(None)) => s.push("_".to_owned()),
-                MergeState::Single(Some(x))
-                | MergeState::Double(MergeVariant::Complete(Some(x))) => s.push(x.describe(false)),
-                MergeState::Double(MergeVariant::InProgress(b0, b1, m)) => s.push(format!(
-                    "f{}/{}({}+{})",
-                    m.remaining_work,
-                    b0.len() + b1.len(),
-                    b0.describe(false),
-                    b1.describe(false),
-                )),
-            }
-        }
-        s.join(" ")
     }
 }
 
@@ -515,6 +487,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         }
     }
 
+    #[cfg(test)]
     fn describe(&self, extended: bool) -> String {
         match (extended, self) {
             (false, SpineBatch::Merged(x)) => format!(
@@ -761,12 +734,11 @@ impl<T> Spine<T> {
     pub fn map_batches<'a, F: FnMut(&'a SpineBatch<T>)>(&'a self, mut f: F) {
         for batch in self.merging.iter().rev() {
             match batch {
-                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
+                MergeState::Double(batch1, batch2, _) => {
                     f(batch1);
                     f(batch2);
                 }
-                MergeState::Double(MergeVariant::Complete(Some(batch))) => f(batch),
-                MergeState::Single(Some(batch)) => f(batch),
+                MergeState::Single(batch) => f(batch),
                 _ => {}
             }
         }
@@ -807,15 +779,16 @@ impl<T: Timestamp + Lattice> Spine<T> {
         self.upper.clone_from(batch.upper());
 
         // If `batch` and the most recently inserted batch are both empty,
-        // we can just fuse them. We can also replace a structurally empty
-        // batch with this empty batch, preserving the apparent record count
-        // but now with non-trivial lower and upper bounds.
+        // we can just fuse them.
         if batch.is_empty() {
             if let Some(position) = self.merging.iter().position(|m| !m.is_vacant()) {
                 if self.merging[position].is_single() && self.merging[position].is_empty() {
-                    self.insert_at(Some(batch), position);
-                    let merged = self.complete_at(position, log);
-                    self.merging[position] = MergeState::Single(merged);
+                    self.insert_at(batch, position);
+                    // Since we just inserted a batch, we should always have work to complete...
+                    // but otherwise we just leave this layer vacant.
+                    if let Some(merged) = self.complete_at(position, log) {
+                        self.merging[position] = MergeState::Single(merged);
+                    }
                     return;
                 }
             }
@@ -823,60 +796,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
 
         // Normal insertion for the batch.
         let index = batch.len().next_power_of_two();
-        self.introduce_batch(Some(batch), usize::cast_from(index.trailing_zeros()), log);
-    }
-
-    /// Apply some amount of effort to trace maintenance.
-    ///
-    /// The units of effort are updates, and the method should be thought of as
-    /// analogous to inserting as many empty updates, where the trace is
-    /// permitted to perform proportionate work.
-    ///
-    /// When this function is called, `effort` must be non-negative
-    #[allow(dead_code)]
-    pub fn exert(&mut self, effort: &isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
-        let mut log = SpineLog::Enabled { merge_reqs };
-        // If there is work to be done, ...
-        self.tidy_layers();
-        if !self.reduced() {
-            // If any merges exist, we can directly call `apply_fuel`.
-            if self.merging.iter().any(|b| b.is_double()) {
-                self.apply_fuel(effort, &mut log);
-            }
-            // Otherwise, we'll need to introduce fake updates to move merges
-            // along.
-            else {
-                // Introduce an empty batch with roughly *effort number of
-                // virtual updates.
-                let level = usize::cast_from(
-                    (usize::try_from(*effort).expect("`exert` called with negative effort"))
-                        .next_power_of_two()
-                        .trailing_zeros(),
-                );
-                self.introduce_batch(None, level, &mut log);
-            }
-        }
-    }
-
-    /// True iff there is at most one non-empty batch in `self.merging`.
-    ///
-    /// When true, there is no maintenance work to perform in the trace, other
-    /// than compaction. We do not yet have logic in place to determine if
-    /// compaction would improve a trace, so for now we are ignoring that.
-    fn reduced(&self) -> bool {
-        let mut non_empty = 0;
-        for index in 0..self.merging.len() {
-            if self.merging[index].is_double() {
-                return false;
-            }
-            if !self.merging[index].is_empty() {
-                non_empty += 1;
-            }
-            if non_empty > 1 {
-                return false;
-            }
-        }
-        true
+        self.introduce_batch(batch, usize::cast_from(index.trailing_zeros()), log);
     }
 
     /// Describes the merge progress of layers in the trace.
@@ -889,7 +809,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             .map(|b| match b {
                 MergeState::Vacant => (0, 0),
                 x @ MergeState::Single(_) => (1, x.len()),
-                x @ MergeState::Double(_) => (2, x.len()),
+                x @ MergeState::Double(..) => (2, x.len()),
             })
             .collect()
     }
@@ -901,7 +821,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// batches at non-trivial indices, to move merges along.
     fn introduce_batch(
         &mut self,
-        batch: Option<SpineBatch<T>>,
+        batch: SpineBatch<T>,
         batch_index: usize,
         log: &mut SpineLog<'_, T>,
     ) {
@@ -1002,19 +922,23 @@ impl<T: Timestamp + Lattice> Spine<T> {
             // `index`.
             let mut merged = None;
             for i in 0..index {
-                self.insert_at(merged, i);
+                if let Some(merged) = merged.take() {
+                    self.insert_at(merged, i);
+                }
                 merged = self.complete_at(i, log);
             }
 
             // The merged results should be introduced at level `index`, which
             // should be ready to absorb them (possibly creating a new merge at
             // the time).
-            self.insert_at(merged, index);
+            if let Some(merged) = merged {
+                self.insert_at(merged, index);
+            }
 
             // If the insertion results in a merge, we should complete it to
             // ensure the upcoming insertion at `index` does not panic.
             if self.merging[index].is_double() {
-                let merged = self.complete_at(index, log);
+                let merged = self.complete_at(index, log).expect("double batch");
                 self.insert_at(merged, index + 1);
             }
         }
@@ -1038,7 +962,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             let mut fuel = *fuel;
             // Pass along various logging stuffs, in case we need to report
             // success.
-            self.merging[index].work(&mut fuel, log);
+            self.merging[index].work(&mut fuel);
             // `fuel` could have a deficit at this point, meaning we over-spent
             // when we took a merge step. We could ignore this, or maintain the
             // deficit and account future fuel against it before spending again.
@@ -1051,7 +975,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             // level, which is "guaranteed" to be complete at this point, by our
             // fueling discipline.
             if self.merging[index].is_complete() {
-                let complete = self.complete_at(index, log);
+                let complete = self.complete_at(index, log).expect("complete batch");
                 self.insert_at(complete, index + 1);
             }
         }
@@ -1062,7 +986,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// This is a non-public internal method that can panic if we try and insert
     /// into a layer which already contains two batches (and is still in the
     /// process of merging).
-    fn insert_at(&mut self, batch: Option<SpineBatch<T>>, index: usize) {
+    fn insert_at(&mut self, batch: SpineBatch<T>, index: usize) {
         // Ensure the spine is large enough.
         while self.merging.len() <= index {
             self.merging.push(MergeState::Vacant);
@@ -1077,13 +1001,13 @@ impl<T: Timestamp + Lattice> Spine<T> {
                 let compaction_frontier = Some(self.since.borrow());
                 self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
-            MergeState::Double(_) => {
+            MergeState::Double(..) => {
                 panic!("Attempted to insert batch into incomplete merge!")
             }
         };
     }
 
-    /// Completes and extracts what ever is at layer `index`.
+    /// Completes and extracts what ever is at layer `index`, leaving this layer vacant.
     fn complete_at(&mut self, index: usize, log: &mut SpineLog<'_, T>) -> Option<SpineBatch<T>> {
         self.merging[index].complete(log)
     }
@@ -1111,14 +1035,14 @@ impl<T: Timestamp + Lattice> Spine<T> {
                 // Continue only as far as is appropriate
                 while appropriate_level < length - 1 {
                     match self.merging[length - 2].take() {
-                        // Vacant or structurally empty batches can be absorbed.
-                        MergeState::Vacant | MergeState::Single(None) => {
+                        // Vacant batches can be absorbed.
+                        MergeState::Vacant => {
                             self.merging.remove(length - 2);
                             length = self.merging.len();
                         }
                         // Single batches may initiate a merge, if sizes are
                         // within bounds, but terminate the loop either way.
-                        MergeState::Single(Some(batch)) => {
+                        MergeState::Single(batch) => {
                             // Determine the number of records that might lead
                             // to a merge. Importantly, this is not the number
                             // of actual records, but the sum of upper bounds
@@ -1130,7 +1054,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
                                     MergeState::Single(_) => {
                                         smaller += 1 << index;
                                     }
-                                    MergeState::Double(_) => {
+                                    MergeState::Double(..) => {
                                         smaller += 2 << index;
                                     }
                                 }
@@ -1138,15 +1062,15 @@ impl<T: Timestamp + Lattice> Spine<T> {
 
                             if smaller <= (1 << length) / 8 {
                                 self.merging.remove(length - 2);
-                                self.insert_at(Some(batch), length - 2);
+                                self.insert_at(batch, length - 2);
                             } else {
-                                self.merging[length - 2] = MergeState::Single(Some(batch));
+                                self.merging[length - 2] = MergeState::Single(batch);
                             }
                             return;
                         }
                         // If a merge is in progress there is nothing to do.
-                        MergeState::Double(state) => {
-                            self.merging[length - 2] = MergeState::Double(state);
+                        MergeState::Double(a, b, fuel) => {
+                            self.merging[length - 2] = MergeState::Double(a, b, fuel);
                             return;
                         }
                     }
@@ -1167,12 +1091,11 @@ impl<T: Timestamp + Lattice> Spine<T> {
         let mut frontier = Antichain::from_elem(T::minimum());
         for x in self.merging.iter().rev() {
             let batches = match x {
-                MergeState::Vacant
-                | MergeState::Single(None)
-                | MergeState::Double(MergeVariant::Complete(None)) => vec![],
-                MergeState::Single(Some(x))
-                | MergeState::Double(MergeVariant::Complete(Some(x))) => vec![x],
-                MergeState::Double(MergeVariant::InProgress(x0, x1, _m)) => {
+                MergeState::Vacant => vec![],
+                MergeState::Single(x) => {
+                    vec![x]
+                }
+                MergeState::Double(x0, x1, _m) => {
                     // TODO: Anything we can validate about remaining_work? It'd
                     // be nice to assert that it's bigger than the len of the
                     // two batches, but apply_merge_res might swap those lengths
@@ -1234,21 +1157,17 @@ enum MergeState<T> {
     /// An empty layer, containing no updates.
     Vacant,
     /// A layer containing a single batch.
-    ///
-    /// The `None` variant is used to represent a structurally empty batch
-    /// present to ensure the progress of maintenance work.
-    Single(Option<SpineBatch<T>>),
+    Single(SpineBatch<T>),
     /// A layer containing two batches, in the process of merging.
-    Double(MergeVariant<T>),
+    Double(SpineBatch<T>, SpineBatch<T>, FuelingMerge<T>),
 }
 
 impl<T: Timestamp + Lattice> MergeState<T> {
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {
         match self {
-            MergeState::Single(Some(b)) => b.len(),
-            MergeState::Double(MergeVariant::InProgress(b1, b2, _)) => b1.len() + b2.len(),
-            MergeState::Double(MergeVariant::Complete(Some(b))) => b.len(),
+            MergeState::Single(b) => b.len(),
+            MergeState::Double(b1, b2, _) => b1.len() + b2.len(),
             _ => 0,
         }
     }
@@ -1256,11 +1175,8 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     /// True if this merge state contains no updates.
     fn is_empty(&self) -> bool {
         match self {
-            MergeState::Single(Some(b)) => b.is_empty(),
-            MergeState::Double(MergeVariant::InProgress(b1, b2, _)) => {
-                b1.is_empty() && b2.is_empty()
-            }
-            MergeState::Double(MergeVariant::Complete(Some(b))) => b.is_empty(),
+            MergeState::Single(b) => b.is_empty(),
+            MergeState::Double(b1, b2, _) => b1.is_empty() && b2.is_empty(),
             _ => true,
         }
     }
@@ -1285,7 +1201,7 @@ impl<T: Timestamp + Lattice> MergeState<T> {
 
     /// True only for the MergeState::Double variant.
     fn is_double(&self) -> bool {
-        if let MergeState::Double(_) = self {
+        if let MergeState::Double(_, _, _) = self {
             true
         } else {
             false
@@ -1295,37 +1211,30 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     /// Immediately complete any merge.
     ///
     /// The result is either a batch, if there is a non-trivial batch to return
-    /// or `None` if there is no meaningful batch to return. This does not
-    /// distinguish between Vacant entries and structurally empty batches, which
-    /// should be done with the `is_complete()` method.
+    /// or `None` if there is no meaningful batch to return.
     ///
     /// There is the additional option of input batches.
     fn complete(&mut self, log: &mut SpineLog<'_, T>) -> Option<SpineBatch<T>> {
         match std::mem::replace(self, MergeState::Vacant) {
             MergeState::Vacant => None,
-            MergeState::Single(batch) => batch,
-            MergeState::Double(variant) => variant.complete(log),
+            MergeState::Single(batch) => Some(batch),
+            MergeState::Double(a, b, merge) => Some(merge.done(a, b, log)),
         }
     }
 
     /// True iff the layer is a complete merge, ready for extraction.
-    fn is_complete(&mut self) -> bool {
-        if let MergeState::Double(MergeVariant::Complete(_)) = self {
-            true
-        } else {
-            false
+    fn is_complete(&self) -> bool {
+        match self {
+            MergeState::Double(_, _, work) => work.remaining_work == 0,
+            _ => false,
         }
     }
 
     /// Performs a bounded amount of work towards a merge.
-    ///
-    /// If the merge completes, the resulting batch is returned. If a batch is
-    /// returned, it is the obligation of the caller to correctly install the
-    /// result.
-    fn work(&mut self, fuel: &mut isize, log: &mut SpineLog<'_, T>) {
+    fn work(&mut self, fuel: &mut isize) {
         // We only perform work for merges in progress.
-        if let MergeState::Double(layer) = self {
-            layer.work(fuel, log)
+        if let MergeState::Double(b1, b2, merge) = self {
+            merge.work(b1, b2, fuel);
         }
     }
 
@@ -1340,71 +1249,14 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     /// the new batch, with the resulting batch describing their composed
     /// interval, from the lower frontier of the old batch to the upper frontier
     /// of the new batch.
-    ///
-    /// Either batch may be `None` which corresponds to a structurally empty
-    /// batch whose upper and lower frontiers are equal. This option exists
-    /// purely for bookkeeping purposes, and no computation is performed to
-    /// merge the two batches.
     fn begin_merge(
-        batch1: Option<SpineBatch<T>>,
-        batch2: Option<SpineBatch<T>>,
+        batch1: SpineBatch<T>,
+        batch2: SpineBatch<T>,
         compaction_frontier: Option<AntichainRef<T>>,
     ) -> MergeState<T> {
-        let variant = match (batch1, batch2) {
-            (Some(batch1), Some(batch2)) => {
-                assert!(batch1.upper() == batch2.lower());
-                let begin_merge = SpineBatch::begin_merge(&batch1, &batch2, compaction_frontier);
-                MergeVariant::InProgress(batch1, batch2, begin_merge)
-            }
-            (None, Some(x)) => MergeVariant::Complete(Some(x)),
-            (Some(x), None) => MergeVariant::Complete(Some(x)),
-            (None, None) => MergeVariant::Complete(None),
-        };
-
-        MergeState::Double(variant)
-    }
-}
-
-#[derive(Debug, Clone)]
-enum MergeVariant<T> {
-    /// Describes an actual in-progress merge between two non-trivial batches.
-    InProgress(SpineBatch<T>, SpineBatch<T>, FuelingMerge<T>),
-    /// A merge that requires no further work. May or may not represent a
-    /// non-trivial batch.
-    Complete(Option<SpineBatch<T>>),
-}
-
-impl<T: Timestamp + Lattice> MergeVariant<T> {
-    /// Completes and extracts the batch, unless structurally empty.
-    ///
-    /// The result is either `None`, for structurally empty batches, or a batch
-    /// and optionally input batches from which it derived.
-    fn complete(mut self, log: &mut SpineLog<'_, T>) -> Option<SpineBatch<T>> {
-        let mut fuel = isize::max_value();
-        self.work(&mut fuel, log);
-        if let MergeVariant::Complete(batch) = self {
-            batch
-        } else {
-            panic!("Failed to complete a merge!");
-        }
-    }
-
-    /// Applies some amount of work, potentially completing the merge.
-    ///
-    /// In case the work completes, the source batches are returned. This allows
-    /// the caller to manage the released resources.
-    fn work(&mut self, fuel: &mut isize, log: &mut SpineLog<'_, T>) {
-        let variant = std::mem::replace(self, MergeVariant::Complete(None));
-        if let MergeVariant::InProgress(b1, b2, mut merge) = variant {
-            merge.work(&b1, &b2, fuel);
-            if *fuel > 0 {
-                *self = MergeVariant::Complete(Some(merge.done(b1, b2, log)));
-            } else {
-                *self = MergeVariant::InProgress(b1, b2, merge);
-            }
-        } else {
-            *self = variant;
-        }
+        assert_eq!(batch1.upper(), batch2.lower());
+        let begin_merge = SpineBatch::begin_merge(&batch1, &batch2, compaction_frontier);
+        MergeState::Double(batch1, batch2, begin_merge)
     }
 }
 

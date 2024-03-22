@@ -2595,6 +2595,15 @@ impl Coordinator {
     }
 
     #[instrument]
+    pub(super) async fn sequence_alter_retain_history(
+        &mut self,
+        _session: &mut Session,
+        _plan: plan::AlterRetainHistoryPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        unreachable!("should be unsupported during planning");
+    }
+
+    #[instrument]
     pub(super) async fn sequence_alter_schema_rename(
         &mut self,
         session: &mut Session,

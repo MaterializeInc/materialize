@@ -19,9 +19,7 @@ use differential_dataflow::trace::Description;
 use futures::stream::{FuturesUnordered, StreamExt};
 use mz_ore::task::RuntimeExt;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{
-    Atomicity, Blob, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
-};
+use mz_persist::location::{Blob, CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use mz_persist::workload::{self, DataGenerator};
 use mz_persist_client::internals_bench::trace_push_batch_one_iter;
 use mz_persist_client::ShardId;
@@ -142,7 +140,7 @@ pub fn bench_blob_get(
     bench_all_blob(&mut g, runtime, data, |b, blob| {
         let key = ShardId::new().to_string();
         runtime
-            .block_on(blob.set(&key, Bytes::clone(&payload), Atomicity::RequireAtomic))
+            .block_on(blob.set(&key, Bytes::clone(&payload)))
             .expect("failed to set blob");
         b.iter(|| {
             runtime
@@ -182,8 +180,7 @@ pub fn bench_blob_set(
 
 async fn bench_blob_set_one_iter(blob: &dyn Blob, payload: &Bytes) -> Result<(), ExternalError> {
     let key = ShardId::new().to_string();
-    blob.set(&key, Bytes::clone(payload), Atomicity::RequireAtomic)
-        .await
+    blob.set(&key, Bytes::clone(payload)).await
 }
 
 pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data: &DataGenerator) {

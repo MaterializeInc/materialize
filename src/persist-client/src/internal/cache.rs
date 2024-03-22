@@ -16,7 +16,7 @@ use bytes::Bytes;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_persist::location::{Atomicity, Blob, BlobMetadata, ExternalError};
+use mz_persist::location::{Blob, BlobMetadata, ExternalError};
 
 use crate::cfg::PersistConfig;
 use crate::internal::metrics::Metrics;
@@ -117,8 +117,8 @@ impl Blob for BlobMemCache {
         self.blob.list_keys_and_metadata(key_prefix, f).await
     }
 
-    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
-        let () = self.blob.set(key, value.clone(), atomic).await?;
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+        let () = self.blob.set(key, value.clone()).await?;
         let weight = value.len();
         let mut cache = self.cache.lock().expect("lock poisoned");
         // If the weight of this single blob is greater than the capacity of

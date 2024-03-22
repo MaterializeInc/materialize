@@ -251,7 +251,7 @@ impl Config {
                         // the TLS hostname back to the actual upstream host and not the hostname
                         // of the local SSH tunnel
                         opts_builder = opts_builder.ssl_opts(Some(
-                            ssl_opts.clone().with_tls_hostname_override(Some(
+                            ssl_opts.clone().with_danger_tls_hostname_override(Some(
                                 self.inner.ip_or_hostname().to_string(),
                             )),
                         ));
@@ -277,7 +277,7 @@ impl Config {
                         // the TLS hostname back to the actual upstream host and not the
                         // privatelink hostname.
                         opts_builder = opts_builder.ssl_opts(Some(
-                            ssl_opts.clone().with_tls_hostname_override(Some(
+                            ssl_opts.clone().with_danger_tls_hostname_override(Some(
                                 self.inner.ip_or_hostname().to_string(),
                             )),
                         ));

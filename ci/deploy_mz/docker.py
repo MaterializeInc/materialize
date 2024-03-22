@@ -10,6 +10,7 @@
 from pathlib import Path
 
 from materialize import mzbuild
+from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
 
 from . import deploy_util
@@ -18,8 +19,12 @@ from .deploy_util import MZ_CLI_VERSION
 
 def main() -> None:
     repos = [
-        mzbuild.Repository(Path("."), Arch.X86_64, coverage=False),
-        mzbuild.Repository(Path("."), Arch.AARCH64, coverage=False),
+        mzbuild.Repository(
+            Path("."), Arch.X86_64, coverage=False, sanitizer=Sanitizer.none
+        ),
+        mzbuild.Repository(
+            Path("."), Arch.AARCH64, coverage=False, sanitizer=Sanitizer.none
+        ),
     ]
 
     print("--- Tagging Docker images")

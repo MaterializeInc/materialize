@@ -35,7 +35,10 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     help2man \
     libc-dev \
     libncurses-dev \
+    libstdc++6 \
+    libstdc++-13-dev \
     libtool-bin \
+    llvm \
     make \
     patch \
     texinfo \
@@ -84,6 +87,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     binfmt-support \
     bsdmainutils \
     ca-certificates \
+    clang \
     cmake \
     curl \
     docker.io \
@@ -95,7 +99,9 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     jq \
     lcov \
     libc-dbg \
+    libclang-common-15-dev \
     libclang-dev \
+    libclang-rt-15-dev \
     libpq-dev \
     lld \
     llvm \
@@ -207,6 +213,9 @@ RUN mkdir rust \
 
 RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
     && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
+
+# Shims for sanitizers
+COPY sanshim/$ARCH_GCC /sanshim
 
 # Install the locked version of our typechecker -- it'll be invoked via `npx`,
 # so using the same command here should ensure it's installed and cached in the

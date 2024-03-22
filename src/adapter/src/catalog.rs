@@ -624,7 +624,12 @@ impl Catalog {
     }
 
     pub async fn allocate_user_id(&self) -> Result<GlobalId, Error> {
-        self.storage().await.allocate_user_id().await.err_into()
+        self.storage()
+            .await
+            .allocate_user_id()
+            .await
+            .maybe_terminate("allocating user ids")
+            .err_into()
     }
 
     #[cfg(test)]
@@ -634,6 +639,7 @@ impl Catalog {
             .await
             .allocate_system_ids(1)
             .await
+            .maybe_terminate("allocating system ids")
             .map(|ids| ids.into_element())
             .err_into()
     }
@@ -643,6 +649,7 @@ impl Catalog {
             .await
             .allocate_user_cluster_id()
             .await
+            .maybe_terminate("allocating user cluster ids")
             .err_into()
     }
 
@@ -651,6 +658,7 @@ impl Catalog {
             .await
             .allocate_user_replica_id()
             .await
+            .maybe_terminate("allocating user replica ids")
             .err_into()
     }
 
@@ -1076,7 +1084,10 @@ impl Catalog {
         let mut builtin_table_updates = vec![];
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
-        let mut tx = storage.transaction().await?;
+        let mut tx = storage
+            .transaction()
+            .await
+            .unwrap_or_terminate("starting catalog transaction");
         // Prepare a candidate catalog state.
         let mut state = self.state.clone();
 
@@ -5301,16 +5312,6 @@ mod tests {
                     }
                 }
             }
-        }
-        // Because the tests are run with one task per fn, these execution times go up compared to
-        // running them serially on a single task/thread. Thus choose a fairly high timeout.
-        // Additionally, CI infra has variable performance and we want to avoid flakes. This timeout
-        // is designed to detect something taking an unexpectedly long time, but that's hard to
-        // define. If this causes problems in CI it should probably be removed instead of getting
-        // bumped to a higher timeout.
-        let elapsed = start.elapsed();
-        if elapsed > Duration::from_millis(5_000) {
-            panic!("LONG EXECUTION ({elapsed:?}): {call_name}");
         }
     }
 

@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import subprocess
 
 from materialize import ui
@@ -31,6 +32,9 @@ class Application:
 
     def coverage_mode(self) -> bool:
         return ui.env_is_truthy("CI_COVERAGE_ENABLED")
+
+    def sanitizer_mode(self) -> str:
+        return os.getenv("CI_SANITIZER", "none")
 
     def acquire_images(self) -> None:
         raise NotImplementedError

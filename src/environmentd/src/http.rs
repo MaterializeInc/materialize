@@ -441,6 +441,10 @@ impl InternalHttpServer {
                 routing::get(catalog::handle_coordinator_check),
             )
             .route(
+                "/api/coordinator/dump",
+                routing::get(catalog::handle_coordinator_dump),
+            )
+            .route(
                 "/internal-console",
                 routing::get(|| async { Redirect::temporary("/internal-console/") }),
             )
