@@ -1076,7 +1076,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                             false
                         } else {
-                            expected_objects.insert(ingestion.id);
+                            expected_objects.extend(ingestion.description.subsource_ids());
 
                             let running_ingestion =
                                 self.storage_state.ingestions.get(&ingestion.id);
