@@ -730,7 +730,7 @@ impl std::fmt::Display for HumanBytes {
 mod tests {
     use crate::batch::BLOB_TARGET_SIZE;
     use bytes::Bytes;
-    use mz_persist::location::{Atomicity, SeqNo};
+    use mz_persist::location::SeqNo;
     use semver::Version;
     use timely::progress::Antichain;
 
@@ -1238,7 +1238,7 @@ mod tests {
         let key = key.complete(&shard_id);
         let () = client
             .blob
-            .set(&key, Bytes::from(vec![0, 1, 2]), Atomicity::RequireAtomic)
+            .set(&key, Bytes::from(vec![0, 1, 2]))
             .await
             .unwrap();
         let usage = StorageUsageClient::open(client);

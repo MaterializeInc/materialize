@@ -22,7 +22,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{
-    Atomicity, Blob, CaSResult, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
+    Blob, CaSResult, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
 };
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
@@ -771,7 +771,6 @@ impl StateVersions {
                 .set(
                     &rollup.key.complete(&rollup.shard_id),
                     Bytes::clone(&rollup.buf),
-                    Atomicity::RequireAtomic,
                 )
                 .await
         })

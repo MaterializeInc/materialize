@@ -29,7 +29,7 @@ use mz_ore::instrument;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, Blob};
+use mz_persist::location::Blob;
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
@@ -878,8 +878,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 let payload_len = buf.len();
                 let () = retry_external(&metrics.retries.external.batch_set, || async {
                     shard_metrics.blob_sets.inc();
-                    blob.set(&key, Bytes::clone(&buf), Atomicity::RequireAtomic)
-                        .await
+                    blob.set(&key, Bytes::clone(&buf)).await
                 })
                 .instrument(trace_span!("batch::set", payload_len))
                 .await;

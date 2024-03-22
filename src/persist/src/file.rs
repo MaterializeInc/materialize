@@ -18,11 +18,11 @@ use bytes::Bytes;
 use fail::fail_point;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use tokio::fs::{self, File, OpenOptions};
+use tokio::fs::{self, File};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, BlobMetadata, Determinate, ExternalError};
+use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 
 /// Configuration for opening a [FileBlob].
 #[derive(Debug, Clone)]
@@ -154,59 +154,41 @@ impl Blob for FileBlob {
         Ok(())
     }
 
-    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
-        match atomic {
-            Atomicity::RequireAtomic => {
-                // To implement require_atomic, write to a temp file and rename
-                // it into place.
-                let mut tmp_name = file_path.clone();
-                debug_assert_eq!(tmp_name.extension(), None);
-                tmp_name.set_extension("tmp");
-                // NB: Don't use create_new(true) for this so that if we have a
-                // partial one from a previous crash, it will just get
-                // overwritten (which is safe).
-                let mut file = File::create(&tmp_name).await?;
-                file.write_all(&value[..]).await?;
 
-                fail_point!("fileblob_set_sync", |_| {
-                    Err(ExternalError::from(anyhow!(
-                        "FileBlob::set_sync fail point reached for file {:?}",
-                        file_path
-                    )))
-                });
+        // To implement atomic set, write to a temp file and rename it into
+        // place.
+        let mut tmp_name = file_path.clone();
+        debug_assert_eq!(tmp_name.extension(), None);
+        tmp_name.set_extension("tmp");
+        // NB: Don't use create_new(true) for this so that if we have a partial
+        // one from a previous crash, it will just get overwritten (which is
+        // safe).
+        let mut file = File::create(&tmp_name).await?;
+        file.write_all(&value[..]).await?;
 
-                // fsync the file, so its contents are visible
-                file.sync_all().await?;
+        fail_point!("fileblob_set_sync", |_| {
+            Err(ExternalError::from(anyhow!(
+                "FileBlob::set_sync fail point reached for file {:?}",
+                file_path
+            )))
+        });
 
-                let parent_dir = File::open(&self.base_dir).await?;
-                // fsync the directory so it can guaranteed see the tmp file
-                parent_dir.sync_all().await?;
+        // fsync the file, so its contents are visible
+        file.sync_all().await?;
 
-                // atomically rename our file
-                fs::rename(tmp_name, &file_path).await?;
+        let parent_dir = File::open(&self.base_dir).await?;
+        // fsync the directory so it can guaranteed see the tmp file
+        parent_dir.sync_all().await?;
 
-                // fsync the directory once again to guarantee it can see the renamed file
-                parent_dir.sync_all().await?;
-            }
-            Atomicity::AllowNonAtomic => {
-                let mut file = OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .open(&file_path)
-                    .await?;
-                file.write_all(&value[..]).await?;
+        // atomically rename our file
+        fs::rename(tmp_name, &file_path).await?;
 
-                fail_point!("fileblob_set_sync", |_| {
-                    Err(ExternalError::from(anyhow!(
-                        "FileBlob::set_sync fail point reached for file {:?}",
-                        file_path
-                    )))
-                });
+        // fsync the directory once again to guarantee it can see the renamed
+        // file
+        parent_dir.sync_all().await?;
 
-                file.sync_all().await?;
-            }
-        }
         Ok(())
     }
 
