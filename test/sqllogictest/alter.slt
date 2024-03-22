@@ -15,6 +15,11 @@ ALTER SYSTEM SET enable_connection_validation_syntax TO true;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_index_options = on;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
@@ -84,3 +89,37 @@ ALTER MATERIALIZED VIEW v SET CLUSTER quickstart
 
 query error db error: ERROR: ALTER SINK SET CLUSTER not yet supported, see https://github\.com/MaterializeInc/materialize/issues/20841 for more details
 ALTER SINK v SET CLUSTER quickstart
+
+statement ok
+CREATE TABLE t (a INT)
+
+statement ok
+CREATE INDEX i ON t(a)
+
+statement ok
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER
+
+statement error db error: ERROR: ALTER RETAIN HISTORY not yet supported
+ALTER MATERIALIZED VIEW mv SET (RETAIN HISTORY FOR '1m')
+
+statement error db error: ERROR: ALTER RETAIN HISTORY not yet supported
+ALTER MATERIALIZED VIEW mv RESET (RETAIN HISTORY)
+
+statement error db error: ERROR: ALTER RETAIN HISTORY not yet supported
+ALTER TABLE t SET (RETAIN HISTORY FOR '1m')
+
+statement error db error: ERROR: ALTER RETAIN HISTORY not yet supported
+ALTER TABLE t RESET (RETAIN HISTORY)
+
+# TODO: Change all SOURCE RETAIN HISTORY tests to not use load generators.
+statement error db error: ERROR: s is a load\-generator source, which does not support ALTER SOURCE\.
+ALTER SOURCE s SET (RETAIN HISTORY FOR '1m')
+
+statement error db error: ERROR: s is a load\-generator source, which does not support ALTER SOURCE\.
+ALTER SOURCE s RESET (RETAIN HISTORY)
+
+statement ok
+ALTER INDEX i SET (RETAIN HISTORY FOR '1m')
+
+statement ok
+ALTER INDEX i RESET (RETAIN HISTORY)
