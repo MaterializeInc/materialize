@@ -2074,13 +2074,13 @@ impl AstDisplay for AlterObjectRenameStatement {
 }
 impl_display!(AlterObjectRenameStatement);
 
-/// `ALTER <OBJECT> ... RETAIN HISTORY FOR`
+/// `ALTER <OBJECT> ... [RE]SET (RETAIN HISTORY [FOR ...])`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterRetainHistoryStatement<T: AstInfo> {
     pub object_type: ObjectType,
     pub if_exists: bool,
     pub name: UnresolvedObjectName,
-    pub history: WithOptionValue<T>,
+    pub history: Option<WithOptionValue<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for AlterRetainHistoryStatement<T> {
@@ -2092,8 +2092,13 @@ impl<T: AstInfo> AstDisplay for AlterRetainHistoryStatement<T> {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&self.name);
-        f.write_str(" SET RETAIN HISTORY ");
-        f.write_node(&self.history);
+        if let Some(history) = &self.history {
+            f.write_str(" SET (RETAIN HISTORY ");
+            f.write_node(history);
+        } else {
+            f.write_str(" RESET (RETAIN HISTORY");
+        }
+        f.write_str(")");
     }
 }
 impl_display_t!(AlterRetainHistoryStatement);

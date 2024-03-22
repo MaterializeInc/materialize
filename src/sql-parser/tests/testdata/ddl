@@ -1431,16 +1431,16 @@ ALTER SOURCE IF EXISTS n ADD SOURCE a, b.c AS d
 parse-statement
 ALTER VIEW name SET (property = true)
 ----
-error: Expected one of CLUSTER or RETAIN, found left parenthesis
+error: Expected RETAIN, found identifier "property"
 ALTER VIEW name SET (property = true)
-                    ^
+                     ^
 
 parse-statement
 ALTER MATERIALIZED VIEW name SET (property = true)
 ----
-error: Expected one of CLUSTER or RETAIN, found left parenthesis
+error: Expected RETAIN, found identifier "property"
 ALTER MATERIALIZED VIEW name SET (property = true)
-                                 ^
+                                  ^
 
 parse-statement
 ALTER SINK name SET (property = true)
@@ -2915,8 +2915,62 @@ CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '1s')
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("s")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1s"))) }], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-ALTER MATERIALIZED VIEW mv SET RETAIN HISTORY FOR '3m'
+ALTER MATERIALIZED VIEW mv SET (RETAIN HISTORY FOR '3m')
 ----
-ALTER MATERIALIZED VIEW mv SET RETAIN HISTORY FOR '3m'
+ALTER MATERIALIZED VIEW mv SET (RETAIN HISTORY FOR '3m')
 =>
-AlterRetainHistory(AlterRetainHistoryStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("mv")])), history: RetainHistoryFor(String("3m")) })
+AlterRetainHistory(AlterRetainHistoryStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("mv")])), history: Some(RetainHistoryFor(String("3m"))) })
+
+parse-statement
+ALTER MATERIALIZED VIEW mv RESET (RETAIN HISTORY)
+----
+ALTER MATERIALIZED VIEW mv RESET (RETAIN HISTORY)
+=>
+AlterRetainHistory(AlterRetainHistoryStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("mv")])), history: None })
+
+parse-statement
+ALTER SOURCE n RESET (RETAIN HISTORY)
+----
+ALTER SOURCE n RESET (RETAIN HISTORY)
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: ResetOptions([RetainHistory]) })
+
+
+parse-statement
+ALTER SOURCE n SET (RETAIN HISTORY FOR '1m')
+----
+ALTER SOURCE n SET (RETAIN HISTORY = FOR '1m')
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: SetOptions([CreateSourceOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1m"))) }]) })
+
+
+parse-statement
+ALTER TABLE n RESET (RETAIN HISTORY)
+----
+ALTER TABLE n RESET (RETAIN HISTORY)
+=>
+AlterRetainHistory(AlterRetainHistoryStatement { object_type: Table, if_exists: false, name: Item(UnresolvedItemName([Ident("n")])), history: None })
+
+
+parse-statement
+ALTER TABLE n SET (RETAIN HISTORY FOR '1m')
+----
+ALTER TABLE n SET (RETAIN HISTORY FOR '1m')
+=>
+AlterRetainHistory(AlterRetainHistoryStatement { object_type: Table, if_exists: false, name: Item(UnresolvedItemName([Ident("n")])), history: Some(RetainHistoryFor(String("1m"))) })
+
+
+parse-statement
+ALTER INDEX n RESET (RETAIN HISTORY)
+----
+ALTER INDEX n RESET (RETAIN HISTORY)
+=>
+AlterIndex(AlterIndexStatement { index_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: ResetOptions([RetainHistory]) })
+
+
+parse-statement
+ALTER INDEX n SET (RETAIN HISTORY FOR '1m')
+----
+ALTER INDEX n SET (RETAIN HISTORY = FOR '1m')
+=>
+AlterIndex(AlterIndexStatement { index_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: SetOptions([IndexOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1m"))) }]) })
