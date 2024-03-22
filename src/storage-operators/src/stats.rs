@@ -46,6 +46,7 @@ impl StatsCursor {
             move |stats: &Option<LazyPartStats>| {
                 let Some(stats) = stats else { return true };
                 let stats = stats.decode();
+                let metrics = &metrics.pushdown.part_stats;
                 let relation_stats = RelationPartStats::new(name, metrics, desc, &stats);
                 count(&relation_stats).map_or(true, |n| n > 0)
             }

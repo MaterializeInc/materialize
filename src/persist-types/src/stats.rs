@@ -15,6 +15,8 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
+use mz_ore::metric;
+use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::ser::{SerializeMap, SerializeStruct};
@@ -23,10 +25,28 @@ use serde_json::json;
 use crate::columnar::Data;
 use crate::dyn_col::DynColumnRef;
 use crate::dyn_struct::ValidityRef;
+use crate::part::Part;
 use crate::stats::impls::any_struct_stats_cols;
 use crate::timestamp::try_parse_monotonic_iso8601_timestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_types.stats.rs"));
+
+/// Metrics for [PartStats].
+#[derive(Debug)]
+pub struct PartStatsMetrics {
+    pub mismatched_count: IntCounter,
+}
+
+impl PartStatsMetrics {
+    pub fn new(registry: &MetricsRegistry) -> Self {
+        PartStatsMetrics {
+            mismatched_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_mismatched_stats_count",
+                help: "number of parts read with unexpectedly the incorrect type of stats",
+            )),
+        }
+    }
+}
 
 /// The logic to use when computing stats for a column of `T: Data`.
 ///
@@ -114,6 +134,28 @@ pub trait DynStats: Debug + Send + Sync + 'static {
     fn into_proto(&self) -> ProtoDynStats;
     /// Formats these statistics for use in `INSPECT SHARD` and debugging.
     fn debug_json(&self) -> serde_json::Value;
+}
+
+/// Aggregate statistics about data contained in a [Part].
+#[derive(Arbitrary, Debug)]
+pub struct PartStats {
+    /// Aggregate statistics about key data contained in a [Part].
+    pub key: StructStats,
+}
+
+impl serde::Serialize for PartStats {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let PartStats { key } = self;
+        key.serialize(s)
+    }
+}
+
+impl PartStats {
+    /// Calculates and returns stats for the given [Part].
+    pub fn new(part: &Part) -> Result<Self, String> {
+        let key = part.key_stats()?;
+        Ok(PartStats { key })
+    }
 }
 
 /// Statistics about a column of some non-optional parquet type.

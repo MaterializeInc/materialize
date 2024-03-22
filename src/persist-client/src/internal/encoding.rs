@@ -18,7 +18,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::halt;
 use mz_persist::location::{SeqNo, VersionedData};
-use mz_persist_types::stats::ProtoStructStats;
+use mz_persist_types::stats::{PartStats, ProtoStructStats};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::Arbitrary;
@@ -49,7 +49,6 @@ use crate::internal::state_diff::{
 };
 use crate::internal::trace::Trace;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
-use crate::stats::PartStats;
 use crate::{cfg, PersistConfig, ShardId, WriterId};
 
 #[derive(Debug)]
@@ -182,19 +181,6 @@ pub(crate) fn check_data_version(code_version: &Version, data_version: &Version)
             panic!("{msg}");
         } else {
             halt!("{msg}");
-        }
-    }
-}
-
-impl RustType<String> for ShardId {
-    fn into_proto(&self) -> String {
-        self.to_string()
-    }
-
-    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        match proto.parse() {
-            Ok(x) => Ok(x),
-            Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
     }
 }

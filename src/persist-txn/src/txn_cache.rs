@@ -987,8 +987,8 @@ pub(crate) enum Unapplied<'a> {
 
 #[cfg(test)]
 mod tests {
-    use mz_persist_client::{PersistClient, ShardIdSchema};
-    use mz_persist_types::codec_impls::VecU8Schema;
+    use mz_persist_client::PersistClient;
+    use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
     use DataListenNext::*;
 
     use crate::operator::DataSubscribe;

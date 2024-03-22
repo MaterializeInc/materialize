@@ -343,7 +343,8 @@ where
             let time_range =
                 ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper));
             if let Some(plan) = &filter_plan {
-                let stats = RelationPartStats::new(&filter_name, &metrics, &desc, stats);
+                let metrics = &metrics.pushdown.part_stats;
+                let stats = RelationPartStats::new(&filter_name, metrics, &desc, stats);
                 filter_may_match(desc.typ(), time_range, stats, plan)
             } else {
                 true

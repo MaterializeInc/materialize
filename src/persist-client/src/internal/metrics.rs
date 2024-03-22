@@ -10,6 +10,7 @@
 //! Prometheus monitoring metrics.
 
 use async_stream::stream;
+use mz_persist_types::stats::PartStatsMetrics;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -2194,7 +2195,7 @@ pub struct PushdownMetrics {
     pub(crate) parts_audited_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
-    pub parts_mismatched_stats_count: IntCounter,
+    pub part_stats: PartStatsMetrics,
 }
 
 impl PushdownMetrics {
@@ -2232,10 +2233,7 @@ impl PushdownMetrics {
                 name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
                 help: "total bytes trimmed from part stats",
             )),
-            parts_mismatched_stats_count: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_mismatched_stats_count",
-                help: "number of parts read with unexpectedly the incorrect type of stats",
-            )),
+            part_stats: PartStatsMetrics::new(registry),
         }
     }
 }

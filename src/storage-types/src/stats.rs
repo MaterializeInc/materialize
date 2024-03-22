@@ -10,11 +10,11 @@
 //! Types and traits that connect up our mz-repr types with the stats that persist maintains.
 
 use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, UnmaterializableFunc};
-use mz_persist_client::metrics::Metrics;
-use mz_persist_client::stats::PartStats;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
-use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
+use mz_persist_types::stats::{
+    BytesStats, ColumnStats, DynStats, JsonStats, PartStats, PartStatsMetrics,
+};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{
     ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, RowArena, ScalarType,
@@ -26,7 +26,7 @@ use tracing::warn;
 #[derive(Debug)]
 pub struct RelationPartStats<'a> {
     pub(crate) name: &'a str,
-    pub(crate) metrics: &'a Metrics,
+    pub(crate) metrics: &'a PartStatsMetrics,
     pub(crate) desc: &'a RelationDesc,
     pub(crate) stats: &'a PartStats,
 }
@@ -34,7 +34,7 @@ pub struct RelationPartStats<'a> {
 impl<'a> RelationPartStats<'a> {
     pub fn new(
         name: &'a str,
-        metrics: &'a Metrics,
+        metrics: &'a PartStatsMetrics,
         desc: &'a RelationDesc,
         stats: &'a PartStats,
     ) -> Self {
@@ -48,7 +48,7 @@ impl<'a> RelationPartStats<'a> {
 }
 
 fn downcast_stats<'a, T: Data>(
-    metrics: &Metrics,
+    metrics: &PartStatsMetrics,
     name: &str,
     col_name: &str,
     stats: &'a dyn DynStats,
@@ -67,7 +67,7 @@ fn downcast_stats<'a, T: Data>(
                 std::any::type_name::<T::Stats>(),
                 stats.type_name()
             );
-            metrics.pushdown.parts_mismatched_stats_count.inc();
+            metrics.mismatched_count.inc();
             None
         }
     }
@@ -210,7 +210,7 @@ impl RelationPartStats<'_> {
 
     fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
         struct ColValues<'a>(
-            &'a Metrics,
+            &'a PartStatsMetrics,
             &'a str,
             &'a str,
             &'a dyn DynStats,
@@ -260,13 +260,11 @@ impl RelationPartStats<'_> {
 
 #[cfg(test)]
 mod tests {
-    use mz_persist_client::stats::PartStats;
+    use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{PartEncoder, Schema};
     use mz_persist_types::part::PartBuilder;
-
-    use mz_ore::metrics::MetricsRegistry;
-    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_types::stats::PartStats;
     use mz_repr::{
         is_no_stats_type, ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row,
         RowArena, ScalarType,
@@ -306,7 +304,7 @@ mod tests {
             let part = part.finish()?;
             let stats = part.key_stats()?;
 
-            let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());
+            let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
             let stats = RelationPartStats {
                 name: "test",
                 metrics: &metrics,

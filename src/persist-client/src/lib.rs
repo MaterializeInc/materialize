@@ -20,21 +20,14 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
 use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
 use mz_persist::location::{Blob, Consensus, ExternalError};
-use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
-use mz_persist_types::columnar::{ColumnPush, Schema};
-use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use mz_persist_types::{Codec, Codec64, Opaque};
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use uuid::Uuid;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::{PersistClientCache, StateCache};
@@ -144,80 +137,8 @@ mod internal {
 /// Persist build information.
 pub const BUILD_INFO: BuildInfo = build_info!();
 
-/// A location in s3, other cloud storage, or otherwise "durable storage" used
-/// by persist.
-///
-/// This structure can be durably written down or transmitted for use by other
-/// processes. This location can contain any number of persist shards.
-#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-pub struct PersistLocation {
-    /// Uri string that identifies the blob store.
-    pub blob_uri: String,
-
-    /// Uri string that identifies the consensus system.
-    pub consensus_uri: String,
-}
-
-impl PersistLocation {
-    /// Returns a PersistLocation indicating in-mem blob and consensus.
-    pub fn new_in_mem() -> Self {
-        PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
-        }
-    }
-}
-
-/// An opaque identifier for a persist durable TVC (aka shard).
-///
-/// The [std::string::ToString::to_string] format of this may be stored durably
-/// or otherwise used as an interchange format. It can be parsed back using
-/// [str::parse] or [std::str::FromStr::from_str].
-#[derive(Arbitrary, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct ShardId([u8; 16]);
-
-impl std::fmt::Display for ShardId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "s{}", Uuid::from_bytes(self.0))
-    }
-}
-
-impl std::fmt::Debug for ShardId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ShardId({})", Uuid::from_bytes(self.0))
-    }
-}
-
-impl std::str::FromStr for ShardId {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_id('s', "ShardId", s).map(ShardId)
-    }
-}
-
-impl From<ShardId> for String {
-    fn from(shard_id: ShardId) -> Self {
-        shard_id.to_string()
-    }
-}
-
-impl TryFrom<String> for ShardId {
-    type Error = String;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
-
-impl ShardId {
-    /// Returns a random [ShardId] that is reasonably likely to have never been
-    /// generated before.
-    pub fn new() -> Self {
-        ShardId(Uuid::new_v4().as_bytes().to_owned())
-    }
-}
+// Re-export for convenience.
+pub use mz_persist_types::{PersistLocation, ShardId};
 
 /// Additional diagnostic information used within Persist
 /// e.g. for logging, metric labels, etc.
@@ -734,53 +655,11 @@ impl PersistClient {
     }
 }
 
-impl Codec for ShardId {
-    type Storage = ();
-    type Schema = ShardIdSchema;
-    fn codec_name() -> String {
-        "ShardId".into()
-    }
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        buf.put(self.to_string().as_bytes())
-    }
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let shard_id = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
-        shard_id.parse()
-    }
-}
-
-/// An implementation of [Schema] for [ShardId].
-#[derive(Debug)]
-pub struct ShardIdSchema;
-
-impl Schema<ShardId> for ShardIdSchema {
-    type Encoder<'a> = SimpleEncoder<'a, ShardId, String>;
-
-    type Decoder<'a> = SimpleDecoder<'a, ShardId, String>;
-
-    fn columns(&self) -> DynStructCfg {
-        SimpleSchema::<ShardId, String>::columns(&())
-    }
-
-    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
-        SimpleSchema::<ShardId, String>::decoder(cols, |val, ret| {
-            *ret = val.parse().expect("should be valid ShardId")
-        })
-    }
-
-    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        SimpleSchema::<ShardId, String>::push_encoder(cols, |col, val| {
-            ColumnPush::<String>::push(col, &val.to_string())
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::future::Future;
     use std::mem;
     use std::pin::Pin;
-    use std::str::FromStr;
     use std::task::Context;
     use std::time::Duration;
 
@@ -794,7 +673,6 @@ mod tests {
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
     use serde::{Deserialize, Serialize};
-    use serde_json::json;
     use timely::order::{PartialOrder, Product};
     use timely::progress::timestamp::PathSummary;
     use timely::progress::Antichain;
@@ -1726,14 +1604,6 @@ mod tests {
     #[mz_ore::test]
     fn fmt_ids() {
         assert_eq!(
-            format!("{}", ShardId([0u8; 16])),
-            "s00000000-0000-0000-0000-000000000000"
-        );
-        assert_eq!(
-            format!("{:?}", ShardId([0u8; 16])),
-            "ShardId(00000000-0000-0000-0000-000000000000)"
-        );
-        assert_eq!(
             format!("{}", LeasedReaderId([0u8; 16])),
             "r00000000-0000-0000-0000-000000000000"
         );
@@ -1741,63 +1611,6 @@ mod tests {
             format!("{:?}", LeasedReaderId([0u8; 16])),
             "LeasedReaderId(00000000-0000-0000-0000-000000000000)"
         );
-
-        // ShardId can be parsed back from its Display/to_string format.
-        assert_eq!(
-            ShardId::from_str("s00000000-0000-0000-0000-000000000000"),
-            Ok(ShardId([0u8; 16]))
-        );
-        assert_eq!(
-            ShardId::from_str("x00000000-0000-0000-0000-000000000000"),
-            Err(
-                "invalid ShardId x00000000-0000-0000-0000-000000000000: incorrect prefix"
-                    .to_string()
-            )
-        );
-        assert_eq!(
-            ShardId::from_str("s0"),
-            Err(
-                "invalid ShardId s0: invalid length: expected length 32 for simple format, found 1"
-                    .to_string()
-            )
-        );
-        assert_eq!(
-            ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
-            Err("invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `O` at 38".to_string())
-        );
-    }
-
-    #[mz_ore::test]
-    fn shard_id_human_readable_serde() {
-        #[derive(Debug, Serialize, Deserialize)]
-        struct ShardIdContainer {
-            shard_id: ShardId,
-        }
-
-        // roundtrip id through json
-        let id =
-            ShardId::from_str("s00000000-1234-5678-0000-000000000000").expect("valid shard id");
-        assert_eq!(
-            id,
-            serde_json::from_value(serde_json::to_value(id).expect("serializable"))
-                .expect("deserializable")
-        );
-
-        // deserialize a serialized string directly
-        assert_eq!(
-            id,
-            serde_json::from_str("\"s00000000-1234-5678-0000-000000000000\"")
-                .expect("deserializable")
-        );
-
-        // roundtrip shard id through a container type
-        let json = json!({ "shard_id": id });
-        assert_eq!(
-            "{\"shard_id\":\"s00000000-1234-5678-0000-000000000000\"}",
-            &json.to_string()
-        );
-        let container: ShardIdContainer = serde_json::from_value(json).expect("deserializable");
-        assert_eq!(container.shard_id, id);
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
