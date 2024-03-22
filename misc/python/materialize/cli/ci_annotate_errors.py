@@ -289,7 +289,8 @@ def annotate_logged_errors(log_files: list[str]) -> int:
             else:
                 handle_error(msg.encode("utf-8"), error.testcase)
 
-    annotate_errors(unknown_errors, known_errors, get_failures_on_main())
+    failures_on_main = get_failures_on_main()
+    annotate_errors(unknown_errors, known_errors, failures_on_main)
 
     if unknown_errors:
         print(f"+++ Failing test because of {len(unknown_errors)} unknown error(s)")
@@ -307,7 +308,6 @@ def annotate_logged_errors(log_files: list[str]) -> int:
         and os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
         and get_job_state() not in ("canceling", "canceled")
     ):
-        failures_on_main = get_failures_on_main()
         text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> failed, but no error in logs found"
         if failures_on_main:
             text += ", " + failures_on_main
