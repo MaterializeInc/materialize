@@ -219,6 +219,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         conn_id: ConnectionId,
     },
     LinearizeReads,
+    StorageUsageSchedule,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
     RealTimeRecencyTimestamp {
@@ -298,6 +299,7 @@ impl Message {
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
+            Message::StorageUsageSchedule => "storage_usage_schedule",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
             Message::RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
