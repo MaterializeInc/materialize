@@ -30,7 +30,7 @@ _replica&lowbar;name_ | The cluster replica you want to drop. For available clus
 
 ## Examples
 
-```sql
+```mzsql
 SHOW CLUSTER REPLICAS WHERE cluster = 'auction_house';
 ```
 
@@ -40,7 +40,7 @@ SHOW CLUSTER REPLICAS WHERE cluster = 'auction_house';
  auction_house | bigger
 ```
 
-```sql
+```mzsql
 DROP CLUSTER REPLICA auction_house.bigger;
 ```
 

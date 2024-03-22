@@ -35,7 +35,7 @@ If you need additional time, please [chat with our team](http://materialize.com/
 
 To see your current credit consumption rate, measured in credits per hour, run the following query:
 
-```sql
+```mzsql
 SELECT sum(s.credits_per_hour) AS credit_consumption_rate
   FROM mz_cluster_replicas r
   JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size;

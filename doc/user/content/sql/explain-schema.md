@@ -36,7 +36,7 @@ This command shows what the generated schemas would look like, without creating 
 
 ## Examples
 
-```sql
+```mzsql
 CREATE TABLE t (c1 int, c2 text);
 COMMENT ON TABLE t IS 'materialize comment on t';
 COMMENT ON COLUMN t.c2 IS 'materialize comment on t.c2';

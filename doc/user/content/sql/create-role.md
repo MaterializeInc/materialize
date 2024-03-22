@@ -41,10 +41,10 @@ When RBAC is enabled a role must have the `CREATEROLE` system privilege to creat
 
 ## Examples
 
-```sql
+```mzsql
 CREATE ROLE db_reader;
 ```
-```sql
+```mzsql
 SELECT name FROM mz_roles;
 ```
 ```nofmt

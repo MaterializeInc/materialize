@@ -28,7 +28,7 @@ _variable&lowbar;value_ | The value to assign to the system variable.
 
 ### Enable RBAC
 
-```sql
+```mzsql
 SHOW enable_rbac_checks;
 
  enable_rbac_checks

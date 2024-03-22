@@ -34,7 +34,7 @@ canceling a query running on another connection.
 Materialize offers only limited support for these functions. They may be called
 only at the top level of a `SELECT` statement, like so:
 
-```sql
+```mzsql
 SELECT side_effecting_function(arg, ...);
 ```
 

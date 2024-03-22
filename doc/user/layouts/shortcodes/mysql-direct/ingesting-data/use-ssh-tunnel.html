@@ -2,7 +2,7 @@
    client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#ssh-tunnel)
    command to create an SSH tunnel connection:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION ssh_connection TO SSH TUNNEL (
         HOST '<SSH_BASTION_HOST>',
         PORT <SSH_BASTION_PORT>,
@@ -16,7 +16,7 @@
 
 1. Get Materialize's public keys for the SSH tunnel connection:
 
-    ```sql
+    ```mzsql
     SELECT * FROM mz_ssh_tunnel_connections;
     ```
 
@@ -30,7 +30,7 @@
 
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
-    ```sql
+    ```mzsql
     VALIDATE CONNECTION ssh_connection;
     ```
 
@@ -38,13 +38,13 @@
 
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` MySQL user you created [earlier](#step-2-create-a-user-for-replication):
 
-    ```sql
+    ```mzsql
     CREATE SECRET mysqlpass AS '<PASSWORD>';
     ```
 
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION mysql_connection TO MYSQL (
     HOST '<host>',
     SSH TUNNEL ssh_connection
@@ -55,7 +55,7 @@
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize to your Azure instance and start ingesting data:
 
-    ```sql
+    ```mzsql
     CREATE SOURCE mz_source
       FROM mysql CONNECTION mysql_connection
       FOR ALL TABLES;

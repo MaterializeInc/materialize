@@ -28,7 +28,7 @@ _schema&lowbar;name_ | The schema to show objects from. Defaults to first resolv
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SCHEMAS;
 ```
 ```nofmt
@@ -36,7 +36,7 @@ SHOW SCHEMAS;
 --------
  public
 ```
-```sql
+```mzsql
 SHOW OBJECTS FROM public;
 ```
 ```nofmt
@@ -47,7 +47,7 @@ my_source       | source
 my_view         | view
 my_other_source | source
 ```
-```sql
+```mzsql
 SHOW OBJECTS;
 ```
 ```nofmt

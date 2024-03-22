@@ -87,7 +87,7 @@ materialized view will produce an error until the offending row is deleted.
 
 ### Creating a materialized view
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW winning_bids AS
 SELECT auction_id,
        bid_id,
@@ -99,7 +99,7 @@ WHERE end_time < mz_now();
 
 ### Using non-null assertions
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW users_and_orders WITH (
   -- The semantics of a FULL OUTER JOIN guarantee that user_id is not null,
   -- because one of `users.id` or `orders.user_id` must be not null, but

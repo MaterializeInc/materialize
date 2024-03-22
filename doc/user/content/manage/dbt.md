@@ -135,7 +135,7 @@ Once created, a connection is **reusable** across multiple source models.
 Create a [Kafka source](/sql/create-source/kafka/).
 
 **Filename:** sources/kafka_topic_a.sql
-```sql
+```mzsql
 {{ config(materialized='source') }}
 
 CREATE SOURCE {{ this }}
@@ -153,7 +153,7 @@ database.schema.kafka_topic_a
 Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 **Filename:** sources/pg.sql
-```sql
+```mzsql
 {{ config(materialized='source') }}
 
 CREATE SOURCE {{ this }}
@@ -177,7 +177,7 @@ sources:
 Once a subsource has been defined this way, it can be referenced from another model using the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function. To ensure that dbt is able to determine the proper order to run the models in, you should additionally force a dependency on the parent source model (`pg`), as described in the [dbt documentation](https://docs.getdbt.com/reference/dbt-jinja-functions/ref#forcing-dependencies).
 
 **Filename:** staging/dep_subsources.sql
-```sql
+```mzsql
 -- depends_on: {{ ref('pg') }}
 {{ config(materialized='view') }}
 
@@ -213,7 +213,7 @@ When you use dbt with Materialize, **your models stay up-to-date** without manua
 dbt models are materialized as `views` by default, so to create a [view](/sql/create-view) in Materialize you can simply provide the SQL statement in the model (and skip the `materialized` configuration parameter).
 
 **Filename:** models/view_a.sql
-```sql
+```mzsql
 SELECT
     col_a, ...
 FROM {{ ref('kafka_topic_a') }}
@@ -227,7 +227,7 @@ One thing to note here is that the model depends on the Kafka source defined abo
 This is where Materialize goes beyond dbt's incremental models (and traditional databases), with [materialized views](/sql/create-materialized-view) that **continuously update** as the underlying data changes:
 
 **Filename:** models/materialized_view_a.sql
-```sql
+```mzsql
 {{ config(materialized='materialized_view') }}
 
 SELECT
@@ -246,7 +246,7 @@ In Materialize, a [sink](/sql/create-sink) describes an **external** system you 
 Create a [Kafka sink](/sql/create-sink).
 
 **Filename:** sinks/kafka_topic_c.sql
-```sql
+```mzsql
 {{ config(materialized='sink') }}
 
 CREATE SINK {{ this }}
@@ -271,7 +271,7 @@ database.schema.kafka_topic_c
 
 Use the `cluster` option to specify the [cluster](/sql/create-cluster/) in which a `materialized view` is created. If unspecified, the default cluster for the connection is used.
 
-```sql
+```mzsql
 {{ config(materialized='materialized_view', cluster='cluster_a') }}
 ```
 
@@ -279,7 +279,7 @@ Use the `cluster` option to specify the [cluster](/sql/create-cluster/) in which
 
 Use the `database` option to specify the [database](/sql/namespaces/#database-details) in which a `source`, `view`, `materialized view` or `sink` is created. If unspecified, the default database for the connection is used.
 
-```sql
+```mzsql
 {{ config(materialized='materialized_view', database='database_a') }}
 ```
 
@@ -296,14 +296,14 @@ Component                            | Value     | Description
 
 ##### Creating a multi-column index
 
-```sql
+```mzsql
 {{ config(materialized='view',
           indexes=[{'columns': ['col_a','col_b'], 'cluster': 'cluster_a'}]) }}
 ```
 
 ##### Creating a default index
 
-```sql
+```mzsql
 {{ config(materialized='view',
     indexes=[{'default': True}]) }}
 ```
@@ -362,7 +362,7 @@ types are supported.
 A `not_null` constraint will be compiled to an [`ASSERT NOT NULL`](/sql/create-materialized-view/#non-null-assertions)
 option for the specified columns of the materialize view.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW model_with_constraints
 WITH (
         ASSERT NOT NULL col_with_constraints
@@ -386,7 +386,7 @@ SELECT NULL AS col_with_constraints,
    SQL client connected to Materialize, double-check that all objects have been
    created:
 
-    ```sql
+    ```mzsql
     SHOW SOURCES [FROM database.schema];
            name
     -------------------
@@ -460,7 +460,7 @@ Using dbt in a streaming context means that you're able to run data quality and 
    SQL client connected to Materialize, that the schema storing the tests has been
    created, as well as the test materialized views:
 
-    ```sql
+    ```mzsql
     SHOW SCHEMAS;
            name
     -------------------
@@ -527,7 +527,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
 
     As an alternative, you can configure `persist-docs` in the config block of your models:
 
-    ```sql
+    ```mzsql
     {{ config(
         materialized=materialized_view,
         persist_docs={"relation": true, "columns": true}
@@ -538,7 +538,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
   files is persisted to Materialize in the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
   system catalog table on every `dbt run`:
 
-    ```sql
+    ```mzsql
       SELECT * FROM mz_internal.mz_comments;
 
         id  |    object_type    | object_sub_id |              comment

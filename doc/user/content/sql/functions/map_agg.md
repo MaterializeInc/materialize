@@ -47,7 +47,7 @@ Instead, we recommend that you materialize all components required for the
 `map_agg` on top of that. That pattern is illustrated in the following
 statements:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT key_col, val_col FROM foo;
 CREATE VIEW bar AS SELECT map_agg(key_col, val_col) FROM foo_view;
 ```
@@ -56,7 +56,7 @@ CREATE VIEW bar AS SELECT map_agg(key_col, val_col) FROM foo_view;
 
 Consider this query:
 
-```sql
+```mzsql
 SELECT
   map_agg(
     t.k,

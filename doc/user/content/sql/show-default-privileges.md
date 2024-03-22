@@ -22,7 +22,7 @@ _role_name_                                         | Only shows default privile
 
 ## Examples
 
-```sql
+```mzsql
 SHOW DEFAULT PRIVILEGES;
 ```
 
@@ -35,7 +35,7 @@ SHOW DEFAULT PRIVILEGES;
  mike         |          |        | table       | joe     | SELECT
 ```
 
-```sql
+```mzsql
 SHOW DEFAULT PRIVILEGES ON SCHEMAS;
 ```
 
@@ -45,7 +45,7 @@ SHOW DEFAULT PRIVILEGES ON SCHEMAS;
  PUBLIC       |          |        | schema      | mike    | CREATE
 ```
 
-```sql
+```mzsql
 SHOW DEFAULT PRIVILEGES FOR joe;
 ```
 

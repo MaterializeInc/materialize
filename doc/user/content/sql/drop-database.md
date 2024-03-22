@@ -27,20 +27,20 @@ _database&lowbar;name_ | The database you want to drop. For available databases,
 ### Remove a database containing schemas
 You can use either of the following commands:
 
-- ```sql
+- ```mzsql
   DROP DATABASE my_db;
   ```
-- ```sql
+- ```mzsql
   DROP DATABASE my_db CASCADE;
   ```
 
 ### Remove a database only if it contains no schemas
-```sql
+```mzsql
 DROP DATABASE my_db RESTRICT;
 ```
 
 ### Do not issue an error if attempting to remove a nonexistent database
-```sql
+```mzsql
 DROP DATABASE IF EXISTS my_db;
 ```
 

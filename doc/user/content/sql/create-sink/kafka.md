@@ -444,7 +444,7 @@ There are three ways to resolve this error:
 * Create a materialized view that deduplicates the input relation by the
   desired upsert key:
 
-  ```sql
+  ```mzsql
   -- For each row with the same key `k`, the `ORDER BY` clause ensures we
   -- keep the row with the largest value of `v`.
   CREATE MATERIALIZED VIEW deduped AS
@@ -469,7 +469,7 @@ There are three ways to resolve this error:
 * Use the `NOT ENFORCED` clause to disable Materialize's validation of the key's
   uniqueness:
 
-  ```sql
+  ```mzsql
   CREATE SINK s IN CLUSTER my_io_cluster
   FROM original_input
   INTO KAFKA CONNECTION kafka_connection (TOPIC 't')
@@ -504,7 +504,7 @@ Once created, a connection is **reusable** across multiple `CREATE SINK` stateme
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
 
-```sql
+```mzsql
 CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
 
@@ -518,7 +518,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< tab "SASL">}}
 
-```sql
+```mzsql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
@@ -537,7 +537,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
 
-```sql
+```mzsql
 CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
 CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
@@ -554,7 +554,7 @@ CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
 {{< /tab >}}
 {{< tab "Basic HTTP Authentication">}}
 
-```sql
+```mzsql
 CREATE SECRET IF NOT EXISTS csr_username AS '<CSR_USERNAME>';
 CREATE SECRET IF NOT EXISTS csr_password AS '<CSR_PASSWORD>';
 
@@ -575,7 +575,7 @@ CREATE CONNECTION csr_basic_http
 {{< tabs >}}
 {{< tab "Avro">}}
 
-```sql
+```mzsql
 CREATE SINK avro_sink
   IN CLUSTER my_io_cluster
   FROM <source, table or mview>
@@ -588,7 +588,7 @@ CREATE SINK avro_sink
 {{< /tab >}}
 {{< tab "JSON">}}
 
-```sql
+```mzsql
 CREATE SINK json_sink
   IN CLUSTER my_io_cluster
   FROM <source, table or mview>
@@ -606,7 +606,7 @@ CREATE SINK json_sink
 {{< tabs >}}
 {{< tab "Avro">}}
 
-```sql
+```mzsql
 CREATE SINK avro_sink
   IN CLUSTER my_io_cluster
   FROM <source, table or mview>
@@ -622,7 +622,7 @@ CREATE SINK avro_sink
 Consider the following sink, `docs_sink`, built on top of a relation `t` with
 several [SQL comments](/sql/comment-on) attached.
 
-```sql
+```mzsql
 CREATE TABLE t (key int NOT NULL, value text NOT NULL);
 COMMENT ON TABLE t IS 'SQL comment on t';
 COMMENT ON COLUMN t.value IS 'SQL comment on t.value';

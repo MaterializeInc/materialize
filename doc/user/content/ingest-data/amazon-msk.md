@@ -56,7 +56,7 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 
 In Materialize, create a source connection that uses the SSH tunnel connection you configured in the previous section:
 
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
   BROKER 'broker1:9092',
   SSH TUNNEL ssh_connection
@@ -201,7 +201,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
     e. Create a connection using the command below. The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` is from _Store a new secret_ under Step 2.
 
-      ```sql
+      ```mzsql
       CREATE SECRET msk_password AS '<your-password>';
 
       CREATE CONNECTION kafka_connection TO KAFKA (
@@ -226,7 +226,7 @@ multiple [`CREATE SOURCE`](/sql/create-source/kafka/) statements. By default,
 the source will be created in the active cluster; to use a different cluster,
 use the `IN CLUSTER` clause.
 
-```sql
+```mzsql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT JSON;

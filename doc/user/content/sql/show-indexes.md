@@ -39,7 +39,7 @@ Field | Meaning
 
 ## Examples
 
-```sql
+```mzsql
 SHOW VIEWS;
 ```
 ```nofmt
@@ -49,7 +49,7 @@ SHOW VIEWS;
  my_materialized_view
 ```
 
-```sql
+```mzsql
 SHOW INDEXES ON my_materialized_view;
 ```
 ```nofmt

@@ -26,13 +26,13 @@ _cluster&lowbar;name_ | The cluster you want to drop. For available clusters, se
 
 To drop an existing cluster, run:
 
-```sql
+```mzsql
 DROP CLUSTER auction_house;
 ```
 
 To avoid issuing an error if the specified cluster does not exist, use the `IF EXISTS` option:
 
-```sql
+```mzsql
 DROP CLUSTER IF EXISTS auction_house;
 ```
 
@@ -40,7 +40,7 @@ DROP CLUSTER IF EXISTS auction_house;
 
 If the cluster has dependencies, Materialize will throw an error similar to:
 
-```sql
+```mzsql
 DROP CLUSTER auction_house;
 ```
 
@@ -50,7 +50,7 @@ ERROR:  cannot drop cluster with active indexes or materialized views
 
 , and you'll have to explicitly ask to also remove any dependent objects using the `CASCADE` option:
 
-```sql
+```mzsql
 DROP CLUSTER auction_house CASCADE;
 ```
 

@@ -45,13 +45,13 @@ active cluster.
 
 To show your session's active cluster, use the [`SHOW`](/sql/show) command:
 
-```sql
+```mzsql
 SHOW cluster;
 ```
 
 To switch your session's active cluster, use the [`SET`](/sql/set) command:
 
-```sql
+```mzsql
 SET cluster = other_cluster;
 ```
 
@@ -246,7 +246,7 @@ We plan to remove these restrictions in future versions of Materialize.
 
 Create a cluster with two `medium` replicas:
 
-```sql
+```mzsql
 CREATE CLUSTER c1 (SIZE = 'medium', REPLICATION FACTOR = 2);
 ```
 
@@ -254,7 +254,7 @@ CREATE CLUSTER c1 (SIZE = 'medium', REPLICATION FACTOR = 2);
 
 Create a cluster with a single replica and introspection disabled:
 
-```sql
+```mzsql
 CREATE CLUSTER c (SIZE = 'xsmall', INTROSPECTION INTERVAL = 0);
 ```
 
@@ -266,7 +266,7 @@ that cluster replica.
 
 Create a cluster with no replicas:
 
-```sql
+```mzsql
 CREATE CLUSTER c1 (SIZE 'xsmall', REPLICATION FACTOR = 0);
 ```
 

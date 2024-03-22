@@ -53,7 +53,7 @@ These objects are not referenced by the standard SQL namespace.
 For example, to create a materialized view in a specific cluster, your SQL
 statement would be:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW mv IN CLUSTER cluster1 AS ...
 ```
 
@@ -62,13 +62,13 @@ Replicas are referenced as `<cluster-name>.<replica-name>`.
 For example, to delete replica `r1` in cluster `cluster1`, your SQL statement
 would be:
 
-```sql
+```mzsql
 DROP CLUSTER REPLICA cluster1.r1
 ```
 
 Roles are referenced by their name. For example, to alter the `manager` role, your SQL statement would be:
 
-```sql
+```mzsql
 ALTER ROLE manager ...
 ```
 

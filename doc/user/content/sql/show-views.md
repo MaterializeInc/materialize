@@ -34,7 +34,7 @@ Field | Meaning
 
 ## Examples
 
-```sql
+```mzsql
 SHOW VIEWS;
 ```
 ```nofmt

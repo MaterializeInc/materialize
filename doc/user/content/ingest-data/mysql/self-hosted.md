@@ -61,7 +61,7 @@ Select the option that works best for you.
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
-    ```sql
+    ```mzsql
     SELECT * FROM mz_egress_ips;
     ```
 
@@ -92,7 +92,7 @@ traffic from the bastion host.
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
-       ```sql
+       ```mzsql
        SELECT * FROM mz_egress_ips;
        ```
 

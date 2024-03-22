@@ -24,7 +24,7 @@ _len_ | [`int`](../../types/int) | The length of the substring you want to retur
 
 ## Examples
 
-```sql
+```mzsql
 SELECT substring('abcdefg', 3) AS substr;
 ```
 ```nofmt
@@ -35,7 +35,7 @@ SELECT substring('abcdefg', 3) AS substr;
 
  <hr/>
 
-```sql
+```mzsql
 SELECT substring('abcdefg', 3, 3) AS substr;
 ```
 ```nofmt

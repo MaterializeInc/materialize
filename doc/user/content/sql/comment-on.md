@@ -31,7 +31,7 @@ information on ownership and privileges, see [Role-based access control](/manage
 
 ## Examples
 
-```sql
+```mzsql
 --- Add comments.
 COMMENT ON TABLE foo IS 'this table is important';
 COMMENT ON COLUMN foo.x IS 'holds all of the important data';

@@ -20,7 +20,7 @@ menu:
 
 Move a materialized view to a specific cluster:
 
-```sql
+```mzsql
 ALTER MATERIALIZED VIEW mv1 SET CLUSTER c1;
 ```
 

@@ -75,7 +75,7 @@ By default, the message key is decoded using the same format as the message valu
 
 To create a source that uses the standard key-value convention to support inserts, updates, and deletes within Materialize, you can use `ENVELOPE UPSERT`:
 
-```sql
+```mzsql
 CREATE SOURCE kafka_upsert
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -111,7 +111,7 @@ echo ":" | kcat -b $BROKER -t $TOPIC -Z -K: \
 
 Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka messages produced by [Debezium](https://debezium.io/). To create a source that interprets Debezium messages:
 
-```sql
+```mzsql
 CREATE SOURCE kafka_repl
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -150,7 +150,7 @@ more details.
 To create a new cluster with spill to disk enabled, use a
 [disk-enabled size](/sql/create-cluster/#disk-enabled-sizes), for example:
 
-```sql
+```mzsql
 CREATE CLUSTER cluster_with_disk (
   SIZE = '100cc',
   DISK = true
@@ -160,7 +160,7 @@ CREATE CLUSTER cluster_with_disk (
 Alternatively, you can change an existing cluster to
 a disk-enabled size using the [`ALTER CLUSTER`](/sql/alter-cluster/) command:
 
-```sql
+```mzsql
 ALTER CLUSTER cluster_with_disk SET (SIZE = '100cc');
 ```
 
@@ -168,7 +168,7 @@ Once a cluster is configured to spill to disk, any Kafka source being maintained
 in that cluster that uses `ENVELOPE UPSERT` or `ENVELOPE DEBEZIUM` will
 automatically benefit from this feature:
 
-```sql
+```mzsql
 CREATE SOURCE kafka_repl
   IN CLUSTER cluster_with_disk
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
@@ -184,7 +184,7 @@ In addition to the message value, Materialize can expose the message key, header
 
 The message key is exposed via the `INCLUDE KEY` option. Composite keys are also supported {{% gh 7645 %}}.
 
-```sql
+```mzsql
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   KEY FORMAT TEXT
@@ -213,7 +213,7 @@ All of a message's headers can be exposed using `INCLUDE HEADERS`, followed by a
 
 This introduces column with the name specified or `headers` if none was specified. The column has the type `record(key: text, value: bytea?) list`, i.e. a list of records containing key-value pairs, where the keys are `text` and the values are nullable `bytea`s.
 
-```sql
+```mzsql
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -223,7 +223,7 @@ CREATE SOURCE kafka_metadata
 
 To simplify turning the headers column into a `map` (so individual headers can be searched), you can use the `map_build` function, e.g.
 
-```sql
+```mzsql
 SELECT
     id,
     seller,
@@ -245,7 +245,7 @@ Individual message headers can be exposed via the `INCLUDE HEADER key AS name` o
 
 The `bytea` value of the header is automatically parsed into an UTF-8 string. To expose the raw `bytea` instead, the `BYTES` option can be used.
 
-```sql
+```mzsql
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -255,7 +255,7 @@ CREATE SOURCE kafka_metadata
 
 Headers can be queried as any other column in the source:
 
-```sql
+```mzsql
 SELECT
     id,
     seller,
@@ -277,7 +277,7 @@ Note that:
 
 These metadata fields are exposed via the `INCLUDE PARTITION`, `INCLUDE OFFSET` and `INCLUDE TIMESTAMP` options.
 
-```sql
+```mzsql
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -285,7 +285,7 @@ CREATE SOURCE kafka_metadata
   ENVELOPE NONE;
 ```
 
-```sql
+```mzsql
 SELECT "offset" FROM kafka_metadata WHERE ts > '2021-01-01';
 
 offset
@@ -299,7 +299,7 @@ offset
 
 To start consuming a Kafka stream from a specific offset, you can use the `START OFFSET` option.
 
-```sql
+```mzsql
 CREATE SOURCE kafka_offset
   FROM KAFKA CONNECTION kafka_connection (
     TOPIC 'data',
@@ -353,7 +353,7 @@ Field          | Type                                     | Meaning
 
 And can be queried using:
 
-```sql
+```mzsql
 SELECT
   partition, "offset"
 FROM
@@ -406,7 +406,7 @@ The consumer group ID prefix for each Kafka source in the system is available in
 the `group_id_prefix` column of the [`mz_kafka_sources`] table. To look up the
 `group_id_prefix` for a source by name, use:
 
-```sql
+```mzsql
 SELECT group_id_prefix
 FROM mz_internal.mz_kafka_sources ks
 JOIN mz_sources s ON s.id = ks.id
@@ -435,7 +435,7 @@ Once created, a connection is **reusable** across multiple `CREATE SOURCE` state
 
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
-```sql
+```mzsql
 CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
 
@@ -448,7 +448,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< tab "SASL">}}
 
-```sql
+```mzsql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
@@ -468,14 +468,14 @@ If your Kafka broker is not exposed to the public internet, you can [tunnel the 
 
 {{< public-preview />}}
 
-```sql
+```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKERS (
         'broker1:9092' USING AWS PRIVATELINK privatelink_svc,
@@ -488,7 +488,7 @@ For step-by-step instructions on creating AWS PrivateLink connections and config
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
 
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST '<SSH_BASTION_HOST>',
     USER '<SSH_BASTION_USER>',
@@ -496,7 +496,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
 BROKERS (
     'broker1:9092' USING SSH TUNNEL ssh_connection,
@@ -513,7 +513,7 @@ For step-by-step instructions on creating SSH tunnel connections and configuring
 
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
-```sql
+```mzsql
 CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
 CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
@@ -528,7 +528,7 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 ```
 {{< /tab >}}
 {{< tab "Basic HTTP Authentication">}}
-```sql
+```mzsql
 CREATE SECRET IF NOT EXISTS csr_username AS '<CSR_USERNAME>';
 CREATE SECRET IF NOT EXISTS csr_password AS '<CSR_PASSWORD>';
 
@@ -546,14 +546,14 @@ If your Confluent Schema Registry server is not exposed to the public internet, 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
 
-```sql
+```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://my-confluent-schema-registry:8081',
     AWS PRIVATELINK privatelink_svc
@@ -563,7 +563,7 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST '<SSH_BASTION_HOST>',
     USER '<SSH_BASTION_USER>',
@@ -571,7 +571,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://my-confluent-schema-registry:8081',
     SSH TUNNEL ssh_connection
@@ -589,7 +589,7 @@ For step-by-step instructions on creating SSH tunnel connections and configuring
 
 **Using Confluent Schema Registry**
 
-```sql
+```mzsql
 CREATE SOURCE avro_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
@@ -598,13 +598,13 @@ CREATE SOURCE avro_source
 {{< /tab >}}
 {{< tab "JSON">}}
 
-```sql
+```mzsql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT JSON;
 ```
 
-```sql
+```mzsql
 CREATE VIEW typed_kafka_source AS
   SELECT
     (data->>'field1')::boolean AS field_1,
@@ -623,7 +623,7 @@ manually, you can use [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
 
 **Using Confluent Schema Registry**
 
-```sql
+```mzsql
 CREATE SOURCE proto_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
@@ -658,7 +658,7 @@ If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause
 * Create the source using the encoded descriptor bytes from the previous step
   (including the `\x` at the beginning):
 
-  ```sql
+  ```mzsql
   CREATE SOURCE proto_source
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
     FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...';
@@ -670,7 +670,7 @@ If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause
 {{< /tab >}}
 {{< tab "Text/bytes">}}
 
-```sql
+```mzsql
 CREATE SOURCE text_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT TEXT
@@ -680,7 +680,7 @@ CREATE SOURCE text_source
 {{< /tab >}}
 {{< tab "CSV">}}
 
-```sql
+```mzsql
 CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT CSV WITH 3 COLUMNS;

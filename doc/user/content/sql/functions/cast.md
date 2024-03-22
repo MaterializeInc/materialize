@@ -177,7 +177,7 @@ Source type                                | Return type                        
 
 ## Examples
 
-```sql
+```mzsql
 SELECT INT '4';
 ```
 ```nofmt
@@ -188,7 +188,7 @@ SELECT INT '4';
 
 <hr>
 
-```sql
+```mzsql
 SELECT CAST (CAST (100.21 AS numeric(10, 2)) AS float) AS dec_to_float;
 ```
 ```nofmt
@@ -199,7 +199,7 @@ SELECT CAST (CAST (100.21 AS numeric(10, 2)) AS float) AS dec_to_float;
 
 <hr/>
 
-```sql
+```mzsql
 SELECT 100.21::numeric(10, 2)::float AS dec_to_float;
 ```
 ```nofmt

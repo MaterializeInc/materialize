@@ -64,7 +64,7 @@ To work around this Power BI limitation, you can use one of the following option
 
     For example, if you have a materialized view called `my_view`, you can create a view called `my_view_bi` with the following SQL:
 
-    ```sql
+    ```mzsql
     CREATE VIEW my_view_bi AS SELECT * FROM my_view;
     ```
 

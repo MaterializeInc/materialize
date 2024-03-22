@@ -25,7 +25,7 @@ _schema&lowbar;name_ | The schema to show tables from. Defaults to first resolva
 ## Examples
 
 ### Show user-created tables
-```sql
+```mzsql
 SHOW TABLES;
 ```
 ```nofmt
@@ -36,7 +36,7 @@ SHOW TABLES;
 ```
 
 ### Show tables from specified schema
-```sql
+```mzsql
 SHOW SCHEMAS;
 ```
 ```nofmt
@@ -44,7 +44,7 @@ SHOW SCHEMAS;
 --------
  public
 ```
-```sql
+```mzsql
 SHOW TABLES FROM public;
 ```
 ```nofmt

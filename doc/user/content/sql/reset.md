@@ -24,7 +24,7 @@ _variable&lowbar;name_ | The session variable name.
 
 ### Reset search path
 
-```sql
+```mzsql
 SHOW search_path;
 
  search_path

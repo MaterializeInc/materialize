@@ -32,12 +32,12 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 
 1. In your `psql` terminal, create a new schema:
 
-    ```sql
+    ```mzsql
     CREATE SCHEMA shop;
     ```
 
 1. Create [a connection](/sql/create-connection/#confluent-schema-registry) to the Confluent Schema Registry:
-    ```sql
+    ```mzsql
     CREATE SECRET IF NOT EXISTS shop.csr_username AS '<TBD>';
     CREATE SECRET IF NOT EXISTS shop.csr_password AS '<TBD>';
 
@@ -50,7 +50,7 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 
 1. Create [a connection](/sql/create-connection/#kafka) to the Kafka broker:
 
-    ```sql
+    ```mzsql
     CREATE SECRET shop.kafka_password AS '<TBD>';
 
     CREATE CONNECTION shop.kafka_connection TO KAFKA (
@@ -63,7 +63,7 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 
 1. Create the sources, one per Kafka topic:
 
-    ```sql
+    ```mzsql
     CREATE SOURCE purchases
     FROM KAFKA CONNECTION shop.kafka_connection (TOPIC 'purchases')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION shop.csr_basic_http
@@ -87,28 +87,28 @@ Materialized views compute and maintain the results of a query incrementally. Us
 Reuse your `psql` session and build the analytics:
 
 1. The sum of purchases:
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW shop.total_purchases AS
     SELECT SUM(purchase_price * quantity) AS total_purchases
     FROM shop.purchases;
     ```
 
  1. The count of purchases:
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW shop.count_purchases AS
     SELECT COUNT(1) AS count_purchases
     FROM shop.purchases;
     ```
 
 1. The count of users:
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW shop.total_users AS
     SELECT COUNT(1) as total_users
     FROM shop.users;
     ```
 
 1. The best sellers items:
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW shop.best_sellers AS
     SELECT I.name, I.category, COUNT(1) as purchases
     FROM shop.purchases P
@@ -123,14 +123,14 @@ Reuse your `psql` session and build the analytics:
 `SUBSCRIBE` can stream updates from materialized views as they occur. Use it to verify how the analytics change over time.
 
 1. Subscribe to the best sellers items:
-    ```sql
+    ```mzsql
     COPY (SUBSCRIBE (SELECT * FROM shop.best_sellers)) TO STDOUT;
     ```
 
 1. Press `CTRL + C` to interrupt the subscription after a few changes.
 
 1. Subscribe to the best sellers items filtering by the `gadgets` category:
-    ```sql
+    ```mzsql
     COPY (SUBSCRIBE ( SELECT * FROM shop.best_sellers WHERE category = 'gadgets' )) TO STDOUT;
     ```
 

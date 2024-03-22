@@ -20,7 +20,7 @@ _cluster&lowbar;name_ | The cluster to show materialized views from. If omitted,
 
 ## Examples
 
-```sql
+```mzsql
 SHOW MATERIALIZED VIEWS;
 ```
 
@@ -30,7 +30,7 @@ SHOW MATERIALIZED VIEWS;
  winning_bids | quickstart
 ```
 
-```sql
+```mzsql
 SHOW MATERIALIZED VIEWS LIKE '%bid%';
 ```
 

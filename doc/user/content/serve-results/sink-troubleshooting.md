@@ -14,7 +14,7 @@ menu:
 ## Why isn't my sink exporting data?
 First, look for errors in [`mz_sink_statuses`](/sql/system-catalog/mz_internal/#mz_sink_statuses):
 
-```sql
+```mzsql
 SELECT * FROM mz_internal.mz_sink_statuses
 WHERE name = <SINK_NAME>;
 ```
@@ -31,7 +31,7 @@ Repeatedly query the
 [`mz_sink_statistics`](/sql/system-catalog/mz_internal/#mz_sink_statistics)
 table and look for ingestion statistics that advance over time:
 
-```sql
+```mzsql
 SELECT
     messages_staged,
     messages_committed,

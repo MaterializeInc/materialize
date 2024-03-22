@@ -71,19 +71,19 @@ type for sources, views, and materialized views, or omit the object type.
 
 ## Examples
 
-```sql
+```mzsql
 GRANT SELECT ON mv TO joe, mike;
 ```
 
-```sql
+```mzsql
 GRANT USAGE, CREATE ON DATABASE materialize TO joe;
 ```
 
-```sql
+```mzsql
 GRANT ALL ON CLUSTER dev TO joe;
 ```
 
-```sql
+```mzsql
 GRANT CREATEDB ON SYSTEM TO joe;
 ```
 
