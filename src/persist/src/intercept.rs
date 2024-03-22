@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 
-use crate::location::{Atomicity, Blob, BlobMetadata, ExternalError};
+use crate::location::{Blob, BlobMetadata, ExternalError};
 
 /// Post-op closure for [Blob::delete].
 pub type PostDeleteFn = Arc<
@@ -89,8 +89,8 @@ impl Blob for InterceptBlob {
         self.blob.list_keys_and_metadata(key_prefix, f).await
     }
 
-    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
-        self.blob.set(key, value, atomic).await
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+        self.blob.set(key, value).await
     }
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {

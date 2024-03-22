@@ -292,20 +292,6 @@ impl From<tokio::task::JoinError> for ExternalError {
     }
 }
 
-/// Configuration of whether a [Blob::set] must occur atomically.
-#[derive(Debug)]
-pub enum Atomicity {
-    /// Require the write be atomic and either succeed or leave the previous
-    /// value intact.
-    RequireAtomic,
-    /// Allow the write to leave partially written data in the event of an
-    /// interruption. This is a performance optimization allowable for
-    /// write-once modify-never blobs (everything but META). It's only exploited
-    /// in some Blob implementations (File), others are naturally always atomic
-    /// (S3, Mem).
-    AllowNonAtomic,
-}
-
 /// An abstraction for a single arbitrarily-sized binary blob and an associated
 /// version number (sequence number).
 #[derive(Debug, Clone, PartialEq)]
@@ -508,9 +494,9 @@ pub trait Blob: std::fmt::Debug {
 
     /// Inserts a key-value pair into the map.
     ///
-    /// When atomicity is required, writes must be atomic and either succeed or
-    /// leave the previous value intact.
-    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError>;
+    /// Writes must be atomic and either succeed or leave the previous value
+    /// intact.
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError>;
 
     /// Remove a key from the map.
     ///
@@ -557,15 +543,12 @@ impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
     }
 
     /// Inserts a key-value pair into the map.
-    ///
-    /// When atomicity is required, writes must be atomic and either succeed or
-    /// leave the previous value intact.
-    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
         mz_ore::task::spawn(
             || "persist::task::set",
-            async move { backing.set(&key, value, atomic).await }.instrument(Span::current()),
+            async move { backing.set(&key, value).await }.instrument(Span::current()),
         )
         .await?
     }
@@ -603,7 +586,6 @@ pub mod tests {
     use futures_util::TryStreamExt;
     use uuid::Uuid;
 
-    use crate::location::Atomicity::{AllowNonAtomic, RequireAtomic};
     use crate::location::Blob;
 
     use super::*;
@@ -661,10 +643,8 @@ pub mod tests {
         let empty_keys = get_keys(&blob1).await?;
         assert_eq!(empty_keys, Vec::<String>::new());
 
-        // Set a key with AllowNonAtomic and get it back.
-        blob0
-            .set(k0, values[0].clone().into(), AllowNonAtomic)
-            .await?;
+        // Set a key and get it back.
+        blob0.set(k0, values[0].clone().into()).await?;
         assert_eq!(
             blob0.get(k0).await?.map(|s| s.into_contiguous()),
             Some(values[0].clone())
@@ -674,10 +654,8 @@ pub mod tests {
             Some(values[0].clone())
         );
 
-        // Set a key with RequireAtomic and get it back.
-        blob0
-            .set("k0a", values[0].clone().into(), RequireAtomic)
-            .await?;
+        // Set another key and get it back.
+        blob0.set("k0a", values[0].clone().into()).await?;
         assert_eq!(
             blob0.get("k0a").await?.map(|s| s.into_contiguous()),
             Some(values[0].clone())
@@ -695,10 +673,8 @@ pub mod tests {
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&empty_keys, &[k0, "k0a"]));
 
-        // Can overwrite a key with AllowNonAtomic.
-        blob0
-            .set(k0, values[1].clone().into(), AllowNonAtomic)
-            .await?;
+        // Can overwrite a key.
+        blob0.set(k0, values[1].clone().into()).await?;
         assert_eq!(
             blob0.get(k0).await?.map(|s| s.into_contiguous()),
             Some(values[1].clone())
@@ -707,10 +683,8 @@ pub mod tests {
             blob1.get(k0).await?.map(|s| s.into_contiguous()),
             Some(values[1].clone())
         );
-        // Can overwrite a key with RequireAtomic.
-        blob0
-            .set("k0a", values[1].clone().into(), RequireAtomic)
-            .await?;
+        // Can overwrite another key.
+        blob0.set("k0a", values[1].clone().into()).await?;
         assert_eq!(
             blob0.get("k0a").await?.map(|s| s.into_contiguous()),
             Some(values[1].clone())
@@ -731,14 +705,12 @@ pub mod tests {
         assert_eq!(blob0.delete("nope").await, Ok(None));
         // Deleting a key with an empty value indicates it did work but deleted
         // no bytes.
-        blob0.set("empty", Bytes::new(), AllowNonAtomic).await?;
+        blob0.set("empty", Bytes::new()).await?;
         assert_eq!(blob0.delete("empty").await, Ok(Some(0)));
 
         // Attempt to restore a key. Not all backends will be able to restore, but
         // we can confirm that our data is visible iff restore reported success.
-        blob0
-            .set("undelete", Bytes::from("data"), AllowNonAtomic)
-            .await?;
+        blob0.set("undelete", Bytes::from("data")).await?;
         // Restoring should always succeed when the key exists.
         blob0.restore("undelete").await?;
         assert_eq!(blob0.delete("undelete").await?, Some("data".len()));
@@ -759,9 +731,7 @@ pub mod tests {
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
-        blob0
-            .set(k0, values[1].clone().into(), AllowNonAtomic)
-            .await?;
+        blob0.set(k0, values[1].clone().into()).await?;
         assert_eq!(
             blob1.get(k0).await?.map(|s| s.into_contiguous()),
             Some(values[1].clone())
@@ -776,9 +746,7 @@ pub mod tests {
         let mut expected_keys = empty_keys;
         for i in 1..=5 {
             let key = format!("k{}", i);
-            blob0
-                .set(&key, values[0].clone().into(), AllowNonAtomic)
-                .await?;
+            blob0.set(&key, values[0].clone().into()).await?;
             expected_keys.push(key);
         }
 
@@ -795,9 +763,7 @@ pub mod tests {
         let mut expected_prefix_keys = vec![];
         for i in 1..=3 {
             let key = format!("k-prefix-{}", i);
-            blob0
-                .set(&key, values[0].clone().into(), AllowNonAtomic)
-                .await?;
+            blob0.set(&key, values[0].clone().into()).await?;
             expected_prefix_keys.push(key);
         }
         let mut blob_keys = get_keys_with_prefix(&blob0, "k-prefix").await?;

@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream,
-    SeqNo, VersionedData,
+    Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream, SeqNo,
+    VersionedData,
 };
 use mz_repr::TimestampManipulation;
 use mz_timestamp_oracle::{TimestampOracle, WriteTimestamp};
@@ -211,9 +211,7 @@ impl Blob for MaelstromBlob {
         unimplemented!("not yet used")
     }
 
-    async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
-        // lin_kv_write is always atomic, so we're free to ignore the atomic
-        // param.
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let value = serde_json::to_string(value.as_ref()).expect("failed to serialize value");
         self.handle
             .lin_kv_write(Value::from(format!("blob/{}", key)), Value::from(value))
@@ -301,10 +299,10 @@ impl Blob for CachingBlob {
         self.blob.list_keys_and_metadata(key_prefix, f).await
     }
 
-    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         // Intentionally don't put this in the cache on set, so that this blob
         // gets fetched at least once (exercising those code paths).
-        self.blob.set(key, value, atomic).await
+        self.blob.set(key, value).await
     }
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {

@@ -348,7 +348,6 @@ mod tests {
 
     use crate::error::Error;
     use crate::indexed::columnar::ColumnarRecordsBuilder;
-    use crate::location::Atomicity;
     use crate::mem::{MemBlob, MemBlobConfig};
     use crate::metrics::ColumnarMetrics;
     use crate::workload::DataGenerator;
@@ -521,9 +520,7 @@ mod tests {
         batch.encode(&mut val);
         let val = Bytes::from(val);
         let val_len = u64::cast_from(val.len());
-        blob.set(key, val, Atomicity::AllowNonAtomic)
-            .await
-            .expect("failed to set trace batch");
+        blob.set(key, val).await.expect("failed to set trace batch");
         val_len
     }
 

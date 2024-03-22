@@ -41,7 +41,7 @@ use uuid::Uuid;
 
 use crate::cfg::BlobKnobs;
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, BlobMetadata, Determinate, ExternalError};
+use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
 
 /// Configuration for opening an [S3Blob].
@@ -579,8 +579,7 @@ impl Blob for S3Blob {
         Ok(())
     }
 
-    async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
-        // NB: S3 is always atomic, so we're free to ignore the atomic param.
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let value_len = value.len();
         if self
             .multipart_config

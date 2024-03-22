@@ -28,8 +28,7 @@ use mz_ore::metrics::{
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo,
-    VersionedData,
+    Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
 };
 use mz_persist::metrics::{ColumnarMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
@@ -2469,13 +2468,13 @@ impl Blob for MetricsBlob {
     }
 
     #[instrument(name = "blob::set", fields(shard=blob_key_shard_id(key)))]
-    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let bytes = value.len();
         let res = self
             .metrics
             .blob
             .set
-            .run_op(|| self.blob.set(key, value, atomic), Self::on_err)
+            .run_op(|| self.blob.set(key, value), Self::on_err)
             .await;
         if res.is_ok() {
             self.metrics.blob.set.bytes.inc_by(u64::cast_from(bytes));
