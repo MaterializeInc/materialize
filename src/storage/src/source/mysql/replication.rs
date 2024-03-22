@@ -48,6 +48,7 @@ use std::time::Duration;
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use itertools::Itertools;
+use mysql_async::binlog::RowsEventFlags;
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
@@ -351,12 +352,28 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             .as_ref()
                             .expect("gtid cap should be set by previous GtidEvent");
 
+                        let end_of_statement = data.flags().contains(RowsEventFlags::STMT_END);
                         events::handle_rows_event(data, &mut repl_context, new_gtid).await?;
 
-                        // Advance the frontier up to the point right before this GTID, since we
-                        // might still see other events that are part of this same GTID, such as
-                        // row events for multiple tables or large row events split into multiple.
-                        if let Err(err) = repl_partitions.update(new_gtid.clone()) {
+                        // If this is the last rows-event for this statement, we know there isn't
+                        // anymore data for this GTID, so we can advance beyond it.
+                        let update_gtid = if end_of_statement {
+                            let mut mut_gtid = next_gtid.take().expect("gtid cap should be set");
+                            // Increment the transaction-id to the next GTID we should see from this source-id
+                            match mut_gtid.timestamp_mut() {
+                                GtidState::Active(time) => {
+                                    *time = time.checked_add(1).unwrap();
+                                }
+                                _ => unreachable!(),
+                            }
+                            mut_gtid
+                        } else {
+                            // Advance the frontier up to the point right before this GTID, since we
+                            // might still see other events that are part of this same GTID, such as
+                            // row events for multiple tables or large row events split into multiple.
+                            new_gtid.clone()
+                        };
+                        if let Err(err) = repl_partitions.update(update_gtid) {
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
