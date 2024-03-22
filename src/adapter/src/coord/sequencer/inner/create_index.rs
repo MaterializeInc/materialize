@@ -20,6 +20,7 @@ use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
+use timely::progress::Timestamp as _;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -441,6 +442,17 @@ impl Coordinator {
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
+
+                // We're putting in place read holds, such that ship_dataflow,
+                // below, which calls update_read_capabilities, can successfully
+                // do so. Otherwise, the since of dependencies might move along
+                // concurrently, pulling the rug from under us!
+                //
+                // TODO: Maybe in the future, pass those holds on to compute, to
+                // hold on to them and downgrade when possible?
+                let read_holds = coord
+                    .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
+                    .expect("can acquire read holds");
                 let since = coord.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since);
 
@@ -478,6 +490,10 @@ impl Coordinator {
                 } else {
                     coord.ship_dataflow(df_desc, cluster_id).await;
                 }
+
+                // Drop read holds after the dataflow has been shipped, at which
+                // point compute will have put in its own read holds.
+                drop(read_holds);
 
                 coord.update_compute_base_read_policy(
                     cluster_id,

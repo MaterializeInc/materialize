@@ -30,6 +30,7 @@ use tracing::{event, Level};
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::read_policy::ReadHolds;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::Coordinator;
 use crate::optimize::dataflows::{prep_scalar_expr, ExprPrepStyle};
@@ -203,6 +204,18 @@ impl TimestampProvider for Coordinator {
             .expect("id does not exist")
             .write_frontier
     }
+
+    fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
+        let read_holds = self
+            .acquire_read_holds(mz_repr::Timestamp::minimum(), id_bundle, false)
+            .expect("can acquire read holds");
+
+        read_holds
+    }
+
+    fn catalog_state(&self) -> &CatalogState {
+        self.catalog().state()
+    }
 }
 
 #[async_trait(?Send)]
@@ -226,6 +239,8 @@ pub trait TimestampProvider {
     fn storage_read_capabilities<'a>(&'a self, id: GlobalId) -> AntichainRef<'a, Timestamp>;
     fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
     fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
+
+    fn catalog_state(&self) -> &CatalogState;
 
     fn get_timeline(timeline_context: &TimelineContext) -> Option<Timeline> {
         let timeline = match timeline_context {
@@ -266,8 +281,7 @@ pub trait TimestampProvider {
     ///
     /// The timeline that `id_bundle` belongs to is also returned, if one exists.
     async fn determine_timestamp_for(
-        &self,
-        catalog: &CatalogState,
+        &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
@@ -276,7 +290,13 @@ pub trait TimestampProvider {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
         isolation_level: &IsolationLevel,
-    ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
+    ) -> Result<
+        (
+            TimestampDetermination<mz_repr::Timestamp>,
+            ReadHolds<mz_repr::Timestamp>,
+        ),
+        AdapterError,
+    > {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -288,6 +308,10 @@ pub trait TimestampProvider {
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
+
+        // First, we acquire read holds that will ensure the queried collections
+        // stay queryable at the chosen timestamp.
+        let read_holds = self.acquire_read_holds(id_bundle);
 
         let since = self.least_valid_read(id_bundle);
         let upper = self.least_valid_write(id_bundle);
@@ -318,7 +342,8 @@ pub trait TimestampProvider {
         let mut candidate = Timestamp::minimum();
 
         if let Some(timestamp) = when.advance_to_timestamp() {
-            let ts = Coordinator::evaluate_when(catalog, timestamp, session)?;
+            let catalog_state = self.catalog_state();
+            let ts = Coordinator::evaluate_when(catalog_state, timestamp, session)?;
             candidate.join_assign(&ts);
         }
 
@@ -419,14 +444,16 @@ pub trait TimestampProvider {
             timeline_context,
         );
 
-        Ok(TimestampDetermination {
+        let determination = TimestampDetermination {
             timestamp_context,
             since,
             upper,
             largest_not_in_advance_of_upper,
             oracle_read_ts,
             session_oracle_read_ts,
-        })
+        };
+
+        Ok((determination, read_holds))
     }
 
     /// The smallest common valid read frontier among the specified collections.
@@ -446,6 +473,13 @@ pub trait TimestampProvider {
         }
         since
     }
+
+    /// Acquires [ReadHolds], for the given `id_bundle` at the earliest possible
+    /// times.
+    fn acquire_read_holds(
+        &mut self,
+        id_bundle: &CollectionIdBundle,
+    ) -> ReadHolds<mz_repr::Timestamp>;
 
     /// The smallest common valid write frontier among the specified collections.
     ///
@@ -542,10 +576,14 @@ impl Coordinator {
         oracle_read_ts
     }
 
-    /// Determines the timestamp for a query.
+    /// Determines the timestamp for a query, acquires read holds that ensure the
+    /// query remains executable at that time, and returns those.
+    ///
+    /// The caller is responsible for eventually dropping those read holds using
+    /// [Coordinator::release_read_hold]!
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn determine_timestamp(
-        &self,
+        &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
@@ -553,11 +591,16 @@ impl Coordinator {
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
-    ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
+    ) -> Result<
+        (
+            TimestampDetermination<mz_repr::Timestamp>,
+            ReadHolds<mz_repr::Timestamp>,
+        ),
+        AdapterError,
+    > {
         let isolation_level = session.vars().transaction_isolation();
-        let det = self
+        let (det, read_holds) = self
             .determine_timestamp_for(
-                self.catalog().state(),
                 session,
                 id_bundle,
                 when,
@@ -584,9 +627,8 @@ impl Coordinator {
             && real_time_recency_ts.is_none()
         {
             if let Some(strict) = det.timestamp_context.timestamp() {
-                let serializable_det = self
+                let (serializable_det, _tmp_read_holds) = self
                     .determine_timestamp_for(
-                        self.catalog().state(),
                         session,
                         id_bundle,
                         when,
@@ -597,6 +639,7 @@ impl Coordinator {
                         &IsolationLevel::Serializable,
                     )
                     .await?;
+
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     self.metrics
                         .timestamp_difference_for_strict_serializable_ms
@@ -607,7 +650,7 @@ impl Coordinator {
                 }
             }
         }
-        Ok(det)
+        Ok((det, read_holds))
     }
 
     /// The largest element not in advance of any object in the collection.

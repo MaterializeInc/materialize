@@ -13,6 +13,19 @@
 //! This module contains the API for read holds on collections. A "read hold" prevents
 //! the controller from compacting the associated collections, and ensures that they
 //! remain "readable" at a specific time, as long as the hold is held.
+//!
+//! The split into [InternalReadHolds] and [ReadHolds] makes a historically
+//! grown distinction explicit. The former is for use internal to the
+//! Coordinator: for each timeline we keep a [TimelineState], and when creating
+//! a collection a hold for it is added to that timeline-global
+//! [InternalReadHolds]. Likewise, when a collection is dropped its entry is
+//! removed from that [InternalReadHolds]. The timeline-global
+//! [InternalReadHolds] is never released, but it is continually downgraded
+//! using [Coordinator::update_read_holds].
+//!
+//! [ReadHolds] are used for short-lived read holds. For example, when
+//! processing peeks or rendering dataflows. These are never downgraded but they
+//! _are_ released automatically when being dropped.
 
 //! Allow usage of `std::collections::HashMap`.
 //! The code in this module deals with `Antichain`-keyed maps. `Antichain` does not implement
@@ -21,7 +34,9 @@
 #![allow(clippy::disallowed_types)]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Debug;
 use std::hash::Hash;
+use std::ops::Deref;
 
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
@@ -40,20 +55,23 @@ use crate::session::Session;
 use crate::util::ResultExt;
 
 /// Relevant information for acquiring or releasing a bundle of read holds.
+///
+/// See module-level documentation about the split between [InternalReadHolds]
+/// and [ReadHolds].
 #[derive(Debug, Serialize)]
-pub(crate) struct ReadHolds<T> {
-    holds: HashMap<Antichain<T>, CollectionIdBundle>,
+pub struct InternalReadHolds<T> {
+    pub holds: HashMap<Antichain<T>, CollectionIdBundle>,
 }
 
-impl<T: Eq + Hash + Ord> ReadHolds<T> {
+impl<T: Eq + Hash + Ord> InternalReadHolds<T> {
     /// Return empty `ReadHolds`.
     pub fn new() -> Self {
-        ReadHolds {
+        InternalReadHolds {
             holds: HashMap::new(),
         }
     }
 
-    /// Returns whether the `ReadHolds` is empty.
+    /// Returns whether the [InternalReadHolds] is empty.
     pub fn is_empty(&self) -> bool {
         self.holds.is_empty()
     }
@@ -63,7 +81,8 @@ impl<T: Eq + Hash + Ord> ReadHolds<T> {
         self.holds.keys()
     }
 
-    /// Return a `CollectionIdBundle` containing all the IDs in the `ReadHolds`.
+    /// Return a `CollectionIdBundle` containing all the IDs in the
+    /// [InternalReadHolds].
     pub fn id_bundle(&self) -> CollectionIdBundle {
         self.holds
             .values()
@@ -111,10 +130,11 @@ impl<T: Eq + Hash + Ord> ReadHolds<T> {
         })
     }
 
-    /// Extends a `ReadHolds` with the contents of another `ReadHolds`.
+    /// Extends a [InternalReadHolds] with the contents of another
+    /// [InternalReadHolds].
     /// Asserts that the newly added read holds don't coincide with any of the existing read holds in self.
-    pub fn extend_with_new(&mut self, other: ReadHolds<T>) {
-        for (time, other_id_bundle) in other.holds {
+    pub fn extend_with_new(&mut self, mut other: InternalReadHolds<T>) {
+        for (time, other_id_bundle) in other.holds.drain() {
             let self_id_bundle = self.holds.entry(time).or_default();
             assert!(
                 self_id_bundle.intersection(&other_id_bundle).is_empty(),
@@ -145,6 +165,65 @@ impl<T: Eq + Hash + Ord> ReadHolds<T> {
             }
         }
         self.holds.retain(|_, id_bundle| !id_bundle.is_empty());
+    }
+}
+
+impl<T> Default for InternalReadHolds<T> {
+    fn default() -> Self {
+        InternalReadHolds {
+            holds: Default::default(),
+        }
+    }
+}
+
+/// A wrapper around [InternalReadHolds] that will release it's holds when dropped.
+///
+/// See module-level documentation about the split between [InternalReadHolds]
+/// and [ReadHolds].
+pub struct ReadHolds<T> {
+    pub inner: InternalReadHolds<T>,
+    dropped_read_holds_tx: tokio::sync::mpsc::UnboundedSender<InternalReadHolds<T>>,
+}
+
+impl<T: Eq + Hash + Ord> ReadHolds<T> {
+    /// Return empty `ReadHolds`.
+    pub fn new(
+        read_holds: InternalReadHolds<T>,
+        dropped_read_holds_tx: tokio::sync::mpsc::UnboundedSender<InternalReadHolds<T>>,
+    ) -> Self {
+        ReadHolds {
+            inner: read_holds,
+            dropped_read_holds_tx,
+        }
+    }
+}
+
+impl<T> Deref for ReadHolds<T> {
+    type Target = InternalReadHolds<T>;
+
+    fn deref(&self) -> &InternalReadHolds<T> {
+        &self.inner
+    }
+}
+
+impl<T: Debug> Debug for ReadHolds<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadHolds")
+            .field("read_holds", &self.inner)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> Drop for ReadHolds<T> {
+    fn drop(&mut self) {
+        let inner_holds = std::mem::take(&mut self.inner);
+
+        tracing::debug!("dropping ReadHolds on {:?}", inner_holds.holds.values());
+
+        let res = self.dropped_read_holds_tx.send(inner_holds);
+        if let Err(e) = res {
+            tracing::warn!("error when trying to drop ReadHold: {:?}", e)
+        }
     }
 }
 
@@ -275,11 +354,11 @@ impl crate::coord::Coordinator {
             .set_read_policy(storage_policy_updates);
     }
 
-    // If there is not capability for the given object, initialize one at the
-    // earliest possible since. Return the capability.
+    /// If there is not capability for the given object, initialize one at the
+    /// earliest possible since. Return the capability.
     //
-    // When a `compaction_window` is given, this is installed as the policy of
-    // the collection, regardless if a capability existed before or not.
+    /// When a `compaction_window` is given, this is installed as the policy of
+    /// the collection, regardless if a capability existed before or not.
     fn ensure_compute_capability(
         &mut self,
         instance_id: &ComputeInstanceId,
@@ -317,11 +396,11 @@ impl crate::coord::Coordinator {
         entry
     }
 
-    // If there is not capability for the given object, initialize one at the
-    // earliest possible since. Return the capability.
-    //
-    // When a `compaction_window` is given, this is installed as the policy of
-    // the collection, regardless if a capability existed before or not.
+    /// If there is not capability for the given object, initialize one at the
+    /// earliest possible since. Return the capability.
+    ///
+    /// When a `compaction_window` is given, this is installed as the policy of
+    /// the collection, regardless if a capability existed before or not.
     fn ensure_storage_capability(
         &mut self,
         id: &GlobalId,
@@ -434,8 +513,8 @@ impl crate::coord::Coordinator {
         &mut self,
         time: mz_repr::Timestamp,
         id_bundle: &CollectionIdBundle,
-    ) -> ReadHolds<mz_repr::Timestamp> {
-        let mut read_holds = ReadHolds::new();
+    ) -> InternalReadHolds<mz_repr::Timestamp> {
+        let mut read_holds = InternalReadHolds::new();
         let time = Antichain::from_elem(time);
 
         for id in id_bundle.storage_ids.iter() {
@@ -488,6 +567,7 @@ impl crate::coord::Coordinator {
         precise: bool,
     ) -> Result<ReadHolds<Timestamp>, Vec<(Antichain<Timestamp>, CollectionIdBundle)>> {
         let read_holds = self.initialize_read_holds(time, id_bundle);
+
         if precise {
             // If we are not able to acquire read holds precisely at the specified time (only later), then error out.
             let too_late = read_holds
@@ -505,6 +585,7 @@ impl crate::coord::Coordinator {
                 return Err(too_late);
             }
         }
+
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
         for (time, id) in read_holds.storage_ids() {
@@ -527,6 +608,7 @@ impl crate::coord::Coordinator {
                 .unwrap_or_terminate("cannot fail to set read policy");
         }
 
+        let read_holds = ReadHolds::new(read_holds, self.dropped_read_holds_tx.clone());
         Ok(read_holds)
     }
 
@@ -564,18 +646,20 @@ impl crate::coord::Coordinator {
     /// `read_holds`, and its behavior will be erratic if called on anything else.
     pub(super) fn update_read_holds(
         &mut self,
-        read_holds: ReadHolds<mz_repr::Timestamp>,
+        mut read_holds: InternalReadHolds<mz_repr::Timestamp>,
         new_time: mz_repr::Timestamp,
-    ) -> ReadHolds<mz_repr::Timestamp> {
-        let mut new_read_holds = ReadHolds::new();
+    ) -> InternalReadHolds<mz_repr::Timestamp> {
+        // After this, read_holds.holds is initialized to an empty HashMap.
+        let old_holds = std::mem::take(&mut read_holds.holds);
+
         let mut storage_policy_changes = Vec::new();
         let mut compute_policy_changes: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let new_time = Antichain::from_elem(new_time);
 
-        for (old_time, id_bundle) in read_holds.holds {
+        for (old_time, id_bundle) in old_holds {
             let new_time = old_time.join(&new_time);
             if old_time != new_time {
-                new_read_holds
+                read_holds
                     .holds
                     .entry(new_time.clone())
                     .or_default()
@@ -637,7 +721,7 @@ impl crate::coord::Coordinator {
                     }
                 }
             } else {
-                new_read_holds
+                read_holds
                     .holds
                     .entry(old_time)
                     .or_default()
@@ -658,7 +742,7 @@ impl crate::coord::Coordinator {
                 .unwrap_or_terminate("cannot fail to set read policy");
         }
 
-        new_read_holds
+        read_holds
     }
 
     /// Release the given read holds.
@@ -667,7 +751,7 @@ impl crate::coord::Coordinator {
     /// `initialize_read_holds`, `acquire_read_holds`, or `update_read_hold` that returned
     /// `ReadHolds`, and its behavior will be erratic if called on anything else,
     /// or if called more than once on the same bundle of read holds.
-    pub(super) fn release_read_holds(&mut self, read_holdses: Vec<ReadHolds<Timestamp>>) {
+    pub(super) fn release_read_holds(&mut self, read_holdses: Vec<InternalReadHolds<Timestamp>>) {
         // Update STORAGE read policies.
         let mut storage_policy_changes = Vec::new();
         for read_holds in read_holdses.iter() {
