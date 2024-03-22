@@ -33,7 +33,7 @@ use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
     Database, DefaultPrivilege, Item, ReplicaConfig, ReplicaLocation, Role, Schema,
-    SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
+    SystemConfiguration, SystemObjectMapping,
 };
 use crate::durable::persist::UnopenedPersistCatalogState;
 pub use crate::durable::transaction::Transaction;
