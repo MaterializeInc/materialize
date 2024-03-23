@@ -52,6 +52,7 @@ use std::fmt::Debug;
 
 use crate::codec_impls::UnitSchema;
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
+use crate::dyn_array::DynArrayCfg;
 use crate::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use crate::part::PartBuilder;
 use crate::stats::{ColumnStats, StatsFrom};
@@ -122,6 +123,11 @@ pub trait ColumnGet<T: Data>: ColumnRef<T::Cfg> {
 pub trait ColumnPush<T: Data>: ColumnMut<T::Cfg> {
     /// Pushes a new value into this column.
     fn push<'a>(&mut self, val: T::Ref<'a>);
+
+    /// TODO(parkmycar): Expose this more cleanly.
+    fn cfg(&self) -> &T::Cfg {
+        ColumnMut::cfg(self)
+    }
 }
 
 pub(crate) mod sealed {
@@ -221,6 +227,8 @@ pub enum ColumnFormat {
     String,
     /// A column of type [crate::dyn_struct::DynStruct].
     Struct(DynStructCfg),
+    /// A column of type [crate::dyn_array::DynArray].
+    List(DynArrayCfg),
     // TODO: FixedSizedBytes for UUIDs?
 }
 

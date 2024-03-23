@@ -116,6 +116,11 @@ pub trait DynStats: Debug + Send + Sync + 'static {
     fn debug_json(&self) -> serde_json::Value;
 }
 
+/// Empty set of statistics.
+#[derive(Debug)]
+#[cfg_attr(any(test), derive(Clone))]
+pub struct NoneStats;
+
 /// Statistics about a column of some non-optional parquet type.
 #[cfg_attr(any(test), derive(Clone))]
 pub struct PrimitiveStats<T> {
@@ -713,10 +718,10 @@ mod impls {
     use crate::stats::{
         proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
         truncate_bytes, truncate_string, AtomicBytesStats, BytesStats, ColumnStats, DynStats,
-        JsonMapElementStats, JsonStats, OptionStats, PrimitiveStats, ProtoAtomicBytesStats,
-        ProtoBytesStats, ProtoDynStats, ProtoJsonMapElementStats, ProtoJsonMapStats,
-        ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats,
-        ProtoStructStats, StatsFrom, StructStats, TruncateBound, TRUNCATE_LEN,
+        JsonMapElementStats, JsonStats, NoneStats, OptionStats, PrimitiveStats,
+        ProtoAtomicBytesStats, ProtoBytesStats, ProtoDynStats, ProtoJsonMapElementStats,
+        ProtoJsonMapStats, ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveBytesStats,
+        ProtoPrimitiveStats, ProtoStructStats, StatsFrom, StructStats, TruncateBound, TRUNCATE_LEN,
     };
 
     impl<T: Serialize> Debug for PrimitiveStats<T>
@@ -753,6 +758,23 @@ mod impls {
     impl Debug for PrimitiveStats<Vec<u8>> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             Debug::fmt(&self.debug_json(), f)
+        }
+    }
+
+    impl DynStats for NoneStats {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn into_proto(&self) -> ProtoDynStats {
+            ProtoDynStats {
+                option: None,
+                kind: None,
+            }
+        }
+
+        fn debug_json(&self) -> serde_json::Value {
+            serde_json::Value::String("none".to_string())
         }
     }
 
@@ -900,6 +922,21 @@ mod impls {
     stats_primitive!(Vec<u8>, as_slice);
     stats_primitive!(String, as_str);
 
+    impl<T: Data> ColumnStats<T> for NoneStats {
+        fn lower<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+            None
+        }
+
+        fn upper<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+            None
+        }
+
+        fn none_count(&self) -> usize {
+            // TODO(parkmycar): This probably isn't right?
+            0
+        }
+    }
+
     impl ColumnStats<Vec<u8>> for BytesStats {
         fn lower<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
             match self {
@@ -955,6 +992,12 @@ mod impls {
         }
         fn none_count(&self) -> usize {
             self.none
+        }
+    }
+
+    impl<T> StatsFrom<T> for NoneStats {
+        fn stats_from(_col: &T, _validity: ValidityRef<'_>) -> Self {
+            NoneStats
         }
     }
 

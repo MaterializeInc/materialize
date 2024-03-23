@@ -17,11 +17,12 @@ use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::{ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType};
+use crate::dyn_array::DynArray;
 use crate::dyn_struct::{DynStruct, ValidityRef};
 use crate::stats::{DynStats, StatsFrom};
 
 /// A type-erased [crate::columnar::Data::Col].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DynColumnRef(DataType, Arc<dyn Any + Send + Sync>);
 
 impl DynColumnRef {
@@ -29,8 +30,8 @@ impl DynColumnRef {
         DynColumnRef(col.cfg().as_type(), Arc::new(col))
     }
 
-    #[cfg(debug_assertions)]
-    pub(crate) fn typ(&self) -> &DataType {
+    /// TODO
+    pub fn typ(&self) -> &DataType {
         &self.0
     }
 
@@ -113,10 +114,11 @@ pub struct DynColumnMut(DataType, Box<dyn Any + Send + Sync>);
 
 impl DynColumnMut {
     fn new<T: Data>(col: T::Mut) -> Self {
-        DynColumnMut(col.cfg().as_type(), Box::new(col))
+        DynColumnMut(ColumnMut::cfg(&col).as_type(), Box::new(col))
     }
 
-    pub(crate) fn new_untyped(typ: &DataType) -> Self {
+    /// Create a new [`DynColumnMut`] of the associated [`DataType`].
+    pub fn new_untyped(typ: &DataType) -> Self {
         struct NewUntypedDataFn;
         impl DataFn<DynColumnMut> for NewUntypedDataFn {
             fn call<T: Data>(self, cfg: &T::Cfg) -> DynColumnMut {
@@ -243,6 +245,8 @@ impl DataType {
             (true, ColumnFormat::String) => logic.call::<Option<String>>(&()),
             (false, ColumnFormat::Struct(cfg)) => logic.call::<DynStruct>(cfg),
             (true, ColumnFormat::Struct(cfg)) => logic.call::<Option<DynStruct>>(cfg),
+            (false, ColumnFormat::List(cfg)) => logic.call::<DynArray>(cfg),
+            (true, ColumnFormat::List(_)) => unreachable!("support nullable lists"),
         }
     }
 }

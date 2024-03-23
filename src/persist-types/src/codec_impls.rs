@@ -28,10 +28,11 @@ use crate::columnar::{
     ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder,
     Schema,
 };
+use crate::dyn_array::{DynArray, DynArrayCfg, DynArrayCol, DynArrayRef};
 use crate::dyn_struct::{
     ColumnsMut, ColumnsRef, DynStruct, DynStructCfg, DynStructCol, DynStructMut, DynStructRef,
 };
-use crate::stats::{BytesStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
+use crate::stats::{BytesStats, NoneStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
 use crate::{Codec, Codec64, Opaque};
 
 /// An implementation of [Schema] for [()].
@@ -445,6 +446,14 @@ impl ColumnCfg<Option<String>> for () {
             format: ColumnFormat::String,
         }
     }
+}
+
+impl Data for DynArray {
+    type Cfg = DynArrayCfg;
+    type Ref<'a> = DynArrayRef<'a>;
+    type Col = DynArrayCol;
+    type Mut = DynArrayCol;
+    type Stats = NoneStats;
 }
 
 impl Data for DynStruct {
