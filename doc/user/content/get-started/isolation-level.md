@@ -119,7 +119,8 @@ linearizable transactions, then you should downgrade to the Serializable isolati
 
 Strict Serializable provides stronger consistency guarantees but may have slower reads than Serializable. This is
 because Strict Serializable may need to wait for writes to propagate through materialized views and indexes, while
-Serializable does not.
+Serializable does not. For details about this behavior, consult the documentation
+on [logical timestamp selection](/sql/functions/now_and_mz_now#logical-timestamp-selection).
 
 In Serializable mode, a single auto-committed `SELECT` statement or a `SUBSCRIBE`
 statement that references a single object (which includes transactions against a single
