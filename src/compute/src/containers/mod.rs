@@ -10,4 +10,5 @@
 //! Reusable containers.
 
 pub mod array;
+pub mod fixed_stack;
 pub mod stack;
