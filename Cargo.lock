@@ -4499,6 +4499,7 @@ name = "mz-fivetran-destination"
 version = "0.0.0"
 dependencies = [
  "async-compression",
+ "bytes",
  "clap",
  "csv-async",
  "futures",

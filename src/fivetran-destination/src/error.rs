@@ -10,6 +10,8 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use crate::fivetran_sdk::Table;
+
 /// Error that gets returned by internal operations of our Fivetran connector.
 ///
 /// Note: We made our own error kind instead of using `anyhow::Error` because we want to internally
@@ -73,7 +75,13 @@ pub enum OpErrorKind {
     #[error("cryptography error: {0:?}")]
     Crypto(#[from] openssl::error::ErrorStack),
     #[error("failure when parsing csv: {0:?}")]
-    CSV(#[from] csv_async::Error),
+    CsvReader(#[from] csv_async::Error),
+    #[error("failed to map csv to table: {msg}\ntable: {table:?}\ncsv headers: {headers:?}")]
+    CsvMapping {
+        headers: csv_async::StringRecord,
+        table: Table,
+        msg: String,
+    },
     #[error("this feature is unsupported: {0}")]
     Unsupported(String),
     #[error("invalid identifier: {0:?}")]
@@ -117,12 +125,12 @@ impl OpErrorKind {
                     _ => false,
                 }
             }
-            e @ Filesystem(_) | e @ CSV(_) => {
+            e @ Filesystem(_) | e @ CsvReader(_) => {
                 use std::io::ErrorKind::*;
 
                 let io_error_kind = match e {
                     Filesystem(err) => err.kind(),
-                    CSV(err) => match err.kind() {
+                    CsvReader(err) => match err.kind() {
                         csv_async::ErrorKind::Io(io_err) => io_err.kind(),
                         _ => return false,
                     },
@@ -142,6 +150,7 @@ impl OpErrorKind {
             | PgTypeError(_)
             | MissingPrivilege { .. }
             | Crypto(_)
+            | CsvMapping { .. }
             | Unsupported(_)
             | IdentError(_)
             | UnknownTable { .. }
