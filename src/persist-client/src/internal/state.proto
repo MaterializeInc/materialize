@@ -35,6 +35,7 @@ message ProtoHollowBatch {
     ProtoU64Description desc = 1;
     repeated ProtoHollowBatchPart parts = 4;
     uint64 len = 3;
+    optional int64 diffs_sum = 6;
     repeated uint64 runs = 5;
 
     repeated string deprecated_keys = 2;

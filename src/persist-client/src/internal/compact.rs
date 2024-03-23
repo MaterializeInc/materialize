@@ -31,7 +31,7 @@ use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
+use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, MaybeDiff};
 use crate::cfg::MiB;
 use crate::fetch::FetchBatchFilter;
 use crate::internal::encoding::Schemas;
@@ -467,6 +467,7 @@ where
         let mut all_parts = vec![];
         let mut all_runs = vec![];
         let mut len = 0;
+        let mut diffs_sum = MaybeDiff::<D>::default();
 
         for (runs, run_chunk_max_memory_usage) in
             Self::chunk_runs(&req, &cfg, metrics.as_ref(), run_reserved_memory_bytes)
@@ -530,6 +531,7 @@ where
             all_runs.extend(runs.iter().map(|run_start| run_start + run_offset));
             all_parts.extend(parts);
             len += updates;
+            diffs_sum.add_encoded(batch.diffs_sum);
         }
 
         Ok(CompactRes {
@@ -538,6 +540,7 @@ where
                 parts: all_parts,
                 runs: all_runs,
                 len,
+                diffs_sum: diffs_sum.into_inner(),
             },
         })
     }

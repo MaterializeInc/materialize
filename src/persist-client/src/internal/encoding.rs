@@ -1091,6 +1091,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
             desc: Some(self.desc.into_proto()),
             parts: self.parts.into_proto(),
             len: self.len.into_proto(),
+            diffs_sum: self.diffs_sum.as_ref().map(|x| i64::from_le_bytes(*x)),
             runs: self.runs.into_proto(),
             deprecated_keys: vec![],
         }
@@ -1115,6 +1116,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
             desc: proto.desc.into_rust_if_some("desc")?,
             parts,
             len: proto.len.into_rust()?,
+            diffs_sum: proto.diffs_sum.map(i64::to_le_bytes),
             runs: proto.runs.into_rust()?,
         })
     }
@@ -1346,6 +1348,7 @@ mod tests {
                 Antichain::from_elem(3u64),
             ),
             len: 4,
+            diffs_sum: None,
             parts: vec![HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,

@@ -377,6 +377,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 desc: Description::new(lower, upper, since),
                 parts: vec![],
                 len: 0,
+                diffs_sum: None,
                 runs: vec![],
             },
         }))

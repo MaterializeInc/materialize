@@ -205,6 +205,8 @@ pub struct HollowBatch<T> {
     ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
     /// ```
     pub runs: Vec<usize>,
+    /// WIP
+    pub diffs_sum: Option<[u8; 8]>,
 }
 
 impl<T: Debug> Debug for HollowBatch<T> {
@@ -214,6 +216,7 @@ impl<T: Debug> Debug for HollowBatch<T> {
             parts,
             len,
             runs,
+            diffs_sum,
         } = self;
         f.debug_struct("HollowBatch")
             .field(
@@ -224,6 +227,7 @@ impl<T: Debug> Debug for HollowBatch<T> {
                     desc.since().elements(),
                 ),
             )
+            .field("diffs_sum", &diffs_sum)
             .field("parts", &parts)
             .field("len", &len)
             .field("runs", &runs)
@@ -239,12 +243,15 @@ impl<T: Serialize> serde::Serialize for HollowBatch<T> {
             // Both parts and runs are covered by the self.runs call.
             parts: _,
             runs: _,
+            diffs_sum,
         } = self;
         let mut s = s.serialize_struct("HollowBatch", 5)?;
         let () = s.serialize_field("lower", &desc.lower().elements())?;
         let () = s.serialize_field("upper", &desc.upper().elements())?;
         let () = s.serialize_field("since", &desc.since().elements())?;
         let () = s.serialize_field("len", len)?;
+        // This is only used for debugging, so hack that to assume D is i64.
+        let () = s.serialize_field("diffs_sum", &diffs_sum.as_ref().map(|x| i64::decode(*x)))?;
         let () = s.serialize_field("part_runs", &self.runs().collect::<Vec<_>>())?;
         s.end()
     }
@@ -264,12 +271,14 @@ impl<T: Ord> Ord for HollowBatch<T> {
             desc: self_desc,
             parts: self_parts,
             len: self_len,
+            diffs_sum: self_diffs_sum,
             runs: self_runs,
         } = self;
         let HollowBatch {
             desc: other_desc,
             parts: other_parts,
             len: other_len,
+            diffs_sum: other_diffs_sum,
             runs: other_runs,
         } = other;
         (
@@ -278,6 +287,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             self_desc.since().elements(),
             self_parts,
             self_len,
+            self_diffs_sum,
             self_runs,
         )
             .cmp(&(
@@ -286,6 +296,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
                 other_desc.since().elements(),
                 other_parts,
                 other_len,
+                other_diffs_sum,
                 other_runs,
             ))
     }
@@ -921,6 +932,7 @@ where
             parts: Vec::new(),
             runs: Vec::new(),
             len: 0,
+            diffs_sum: None,
         }
     }
 
@@ -979,6 +991,7 @@ where
                     parts: vec![],
                     len: 0,
                     runs: vec![],
+                    diffs_sum: None,
                 },
             };
             let result = self.trace.apply_merge_res(&fake_merge);
@@ -1528,9 +1541,10 @@ pub(crate) mod tests {
                 any::<T>(),
                 proptest::collection::vec(any::<HollowBatchPart>(), 0..3),
                 any::<usize>(),
+                any::<i64>(),
                 any::<bool>(),
             ),
-            |(t0, t1, since, parts, len, runs)| {
+            |(t0, t1, since, parts, len, diffs_sum, runs)| {
                 let (lower, upper) = if t0 <= t1 {
                     (Antichain::from_elem(t0), Antichain::from_elem(t1))
                 } else {
@@ -1538,11 +1552,13 @@ pub(crate) mod tests {
                 };
                 let since = Antichain::from_elem(since);
                 let runs = if runs { vec![parts.len()] } else { vec![] };
+                let len = len % 10;
                 HollowBatch {
                     desc: Description::new(lower, upper, since),
                     parts,
-                    len: len % 10,
+                    len,
                     runs,
+                    diffs_sum: (len > 0).then(|| i64::encode(&diffs_sum)),
                 }
             },
         )
@@ -1689,6 +1705,7 @@ pub(crate) mod tests {
                 })
                 .collect(),
             len,
+            diffs_sum: None,
             runs: vec![],
         }
     }

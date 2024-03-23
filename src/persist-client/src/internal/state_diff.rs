@@ -690,6 +690,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
                     ),
                     parts: vec![],
                     len: 0,
+                    diffs_sum: None,
                     runs: vec![],
                 });
                 metrics.state.apply_spine_fast_path.inc();
@@ -920,6 +921,7 @@ fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
                 desc,
                 parts: Vec::new(),
                 len: 0,
+                diffs_sum: None,
                 runs: Vec::new(),
             });
             metrics.state.apply_spine_slow_path_lenient_adjustment.inc();
@@ -950,6 +952,7 @@ fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
                 desc,
                 parts: Vec::new(),
                 len: 0,
+                diffs_sum: None,
                 runs: Vec::new(),
             });
             metrics.state.apply_spine_slow_path_lenient_adjustment.inc();
@@ -1203,6 +1206,7 @@ mod tests {
                 ),
                 parts: Vec::new(),
                 len,
+                diffs_sum: None,
                 runs: Vec::new(),
             }
         }
@@ -1308,6 +1312,7 @@ mod tests {
                     desc,
                     parts: Vec::new(),
                     len: *len,
+                    diffs_sum: None,
                     runs: Vec::new(),
                 }
             }
