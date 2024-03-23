@@ -105,7 +105,7 @@ pub static ALL_COLLECTIONS: &[&str] = &[
 ];
 
 #[derive(Debug)]
-enum PersistTxns<T> {
+enum PersistTxns<T: Clone> {
     EnabledEager {
         txns_id: ShardId,
         txns_client: PersistClient,
