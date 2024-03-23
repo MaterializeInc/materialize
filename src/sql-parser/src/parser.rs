@@ -2797,6 +2797,7 @@ impl<'a> Parser<'a> {
     fn parse_source_option(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
         let name = self.parse_source_option_name()?;
         if name == CreateSourceOptionName::RetainHistory {
+            let _ = self.consume_token(&Token::Eq);
             return Ok(CreateSourceOption {
                 name,
                 value: self.parse_option_retain_history()?,
@@ -3485,6 +3486,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_table_option_name(&mut self) -> Result<TableOptionName, ParserError> {
+        // this is only so we can test redacted values, of which no other
+        // examples exist as of its introduction.
+        if self.parse_keyword(REDACTED) {
+            return Ok(TableOptionName::RedactedTest);
+        }
         self.expect_keywords(&[RETAIN, HISTORY])?;
         Ok(TableOptionName::RetainHistory)
     }
@@ -3493,6 +3499,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_table_option_name()?;
         let value = match name {
             TableOptionName::RetainHistory => self.parse_option_retain_history(),
+            TableOptionName::RedactedTest => self.parse_optional_option_value(),
         }?;
         Ok(TableOption { name, value })
     }
@@ -3720,6 +3727,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_cluster_option_name()?;
 
         if name == ClusterOptionName::Replicas {
+            let _ = self.consume_token(&Token::Eq);
             return self.parse_cluster_option_replicas();
         }
 
@@ -4311,12 +4319,14 @@ impl<'a> Parser<'a> {
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
                 Ok(WithOptionValue::Secret(secret))
             } else {
-                Ok(WithOptionValue::Ident(ident!("secret")))
+                Ok(WithOptionValue::UnresolvedItemName(UnresolvedItemName(
+                    vec![ident!("secret")],
+                )))
             }
         } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
-        } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
-            Ok(WithOptionValue::Ident(ident))
+        } else if let Some(item_name) = self.maybe_parse(Parser::parse_item_name) {
+            Ok(WithOptionValue::UnresolvedItemName(item_name))
         } else {
             self.expected(self.peek_pos(), "option value", self.peek_token())
         }

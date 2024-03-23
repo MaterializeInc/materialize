@@ -22,10 +22,8 @@ use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::mem;
 
-use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, Ident, ShowStatement, WithOptionValue};
-
-use super::Function;
+use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
+use crate::ast::{AstInfo, Expr, Function, Ident, ShowStatement, WithOptionValue};
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
@@ -207,21 +205,28 @@ impl AstDisplay for SelectOptionName {
 }
 impl_display!(SelectOptionName);
 
+impl WithOptionName for SelectOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            SelectOptionName::ExpectedGroupSize
+            | SelectOptionName::AggregateInputGroupSize
+            | SelectOptionName::DistinctOnInputGroupSize
+            | SelectOptionName::LimitInputGroupSize => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SelectOption<T: AstInfo> {
     pub name: SelectOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for SelectOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(SelectOption);
 
 /// A restricted variant of `SELECT` (without CTEs/`ORDER BY`), which may
 /// appear either as the only body item of an `SQLQuery`, or as an operand
@@ -465,21 +470,27 @@ impl AstDisplay for MutRecBlockOptionName {
 }
 impl_display!(MutRecBlockOptionName);
 
+impl WithOptionName for MutRecBlockOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            MutRecBlockOptionName::RecursionLimit
+            | MutRecBlockOptionName::ErrorAtRecursionLimit
+            | MutRecBlockOptionName::ReturnAtRecursionLimit => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MutRecBlockOption<T: AstInfo> {
     pub name: MutRecBlockOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
-
-impl<T: AstInfo> AstDisplay for MutRecBlockOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
+impl_display_for_with_option!(MutRecBlockOption);
 
 /// One item of the comma-separated list following `SELECT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
