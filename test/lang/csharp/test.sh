@@ -21,3 +21,4 @@ cd test/lang/csharp
 
 dotnet test csharp-npgsql5.csproj
 dotnet test csharp-npgsql6.csproj
+dotnet test csharp-npgsql8.csproj
