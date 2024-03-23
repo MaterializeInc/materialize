@@ -697,7 +697,7 @@ mod impls {
     use std::collections::BTreeMap;
     use std::fmt::Debug;
 
-    use arrow2::array::{BinaryArray, BooleanArray, PrimitiveArray, Utf8Array};
+    use arrow2::array::{Array, BinaryArray, BooleanArray, PrimitiveArray, Utf8Array};
     use arrow2::bitmap::Bitmap;
     use arrow2::buffer::Buffer;
     use arrow2::compute::aggregate::SimdOrd;
@@ -708,6 +708,7 @@ mod impls {
     use proptest::{collection, prelude::*};
     use serde::Serialize;
 
+    use crate::codec_impls::UuidFixedSizeBinaryArray;
     use crate::columnar::Data;
     use crate::dyn_struct::{DynStruct, DynStructCol, ValidityRef};
     use crate::stats::{
@@ -770,6 +771,36 @@ mod impls {
                 })),
             }
         }
+        fn debug_json(&self) -> serde_json::Value {
+            serde_json::json!({
+                "lower": hex::encode(&self.lower),
+                "upper": hex::encode(&self.upper),
+            })
+        }
+    }
+
+    impl Debug for PrimitiveStats<uuid::Uuid> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Debug::fmt(&self.debug_json(), f)
+        }
+    }
+
+    impl DynStats for PrimitiveStats<uuid::Uuid> {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn into_proto(&self) -> ProtoDynStats {
+            ProtoDynStats {
+                option: None,
+                kind: Some(proto_dyn_stats::Kind::Bytes(ProtoBytesStats {
+                    kind: Some(proto_bytes_stats::Kind::Primitive(RustType::into_proto(
+                        self,
+                    ))),
+                })),
+            }
+        }
+
         fn debug_json(&self) -> serde_json::Value {
             serde_json::json!({
                 "lower": hex::encode(&self.lower),
@@ -899,6 +930,7 @@ mod impls {
     stats_primitive!(f64, clone);
     stats_primitive!(Vec<u8>, as_slice);
     stats_primitive!(String, as_str);
+    stats_primitive!(uuid::Uuid, clone);
 
     impl ColumnStats<Vec<u8>> for BytesStats {
         fn lower<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
@@ -1098,6 +1130,52 @@ mod impls {
                 // it's still too big (also this should be extremely rare in
                 // practice).
                 .unwrap_or_else(|| upper.to_owned());
+            let none = col.validity().map_or(0, |x| x.unset_bits());
+            OptionStats {
+                none,
+                some: PrimitiveStats { lower, upper },
+            }
+        }
+    }
+
+    impl StatsFrom<UuidFixedSizeBinaryArray> for PrimitiveStats<uuid::Uuid> {
+        fn stats_from(col: &UuidFixedSizeBinaryArray, validity: ValidityRef<'_>) -> Self {
+            assert!(col.validity().is_none());
+            let mut array = col.clone();
+            array.0.set_validity(validity.0.cloned());
+            let lower = array
+                .0
+                .values_iter()
+                .min()
+                .map(|l| uuid::Uuid::from_slice(l).expect("wrote invalid UUID"))
+                .unwrap_or_default();
+            let upper = array
+                .0
+                .values_iter()
+                .max()
+                .map(|u| uuid::Uuid::from_slice(u).expect("wrote invalid UUID"))
+                .unwrap_or_default();
+
+            PrimitiveStats { lower, upper }
+        }
+    }
+
+    impl StatsFrom<UuidFixedSizeBinaryArray> for OptionStats<PrimitiveStats<uuid::Uuid>> {
+        fn stats_from(col: &UuidFixedSizeBinaryArray, validity: ValidityRef<'_>) -> Self {
+            debug_assert!(validity.is_superset(col.validity()));
+            let lower = col
+                .0
+                .values_iter()
+                .min()
+                .map(|l| uuid::Uuid::from_slice(l).expect("wrote invalid UUID"))
+                .unwrap_or_default();
+            let upper = col
+                .0
+                .values_iter()
+                .max()
+                .map(|u| uuid::Uuid::from_slice(u).expect("wrote invalid UUID"))
+                .unwrap_or_default();
+
             let none = col.validity().map_or(0, |x| x.unset_bits());
             OptionStats {
                 none,
@@ -1404,6 +1482,21 @@ mod impls {
         fn from_proto(proto: ProtoPrimitiveBytesStats) -> Result<Self, TryFromProtoError> {
             let lower = proto.lower.into_rust()?;
             let upper = proto.upper.into_rust()?;
+            Ok(PrimitiveStats { lower, upper })
+        }
+    }
+
+    impl RustType<ProtoPrimitiveBytesStats> for PrimitiveStats<uuid::Uuid> {
+        fn into_proto(&self) -> ProtoPrimitiveBytesStats {
+            ProtoPrimitiveBytesStats {
+                lower: self.lower.as_bytes().to_vec().into_proto(),
+                upper: self.upper.as_bytes().to_vec().into_proto(),
+            }
+        }
+
+        fn from_proto(proto: ProtoPrimitiveBytesStats) -> Result<Self, TryFromProtoError> {
+            let lower = uuid::Uuid::from_slice(&proto.lower[..]).expect("wrote invalid data");
+            let upper = uuid::Uuid::from_slice(&proto.lower[..]).expect("wrote invalid data");
             Ok(PrimitiveStats { lower, upper })
         }
     }
