@@ -2797,6 +2797,7 @@ impl<'a> Parser<'a> {
     fn parse_source_option(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
         let name = self.parse_source_option_name()?;
         if name == CreateSourceOptionName::RetainHistory {
+            let _ = self.consume_token(&Token::Eq);
             return Ok(CreateSourceOption {
                 name,
                 value: self.parse_option_retain_history()?,
@@ -3720,6 +3721,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_cluster_option_name()?;
 
         if name == ClusterOptionName::Replicas {
+            let _ = self.consume_token(&Token::Eq);
             return self.parse_cluster_option_replicas();
         }
 
