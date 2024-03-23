@@ -768,12 +768,117 @@ impl MirRelationExpr {
                 }
             }
             Join { equivalences, .. } => {
-                // It is important the `new_from_input_arities` constructor is
-                // used. Otherwise, Materialize may potentially end up in an
-                // infinite loop.
-                let input_mapper = crate::JoinInputMapper::new_from_input_arities(input_arities);
+                // The keys of a cross join are the Cartesian product of the keys of each input,
+                // with columns adjusted appropriately to account for their new positionts.
+                //
+                // When subjected to equivalences, two things happen:
+                // 1. The distinct unique keys increase by substitution through each equivalence.
+                //    If we join A and B with columns (pka, fkb) and (pkb, b2) on fkb = pkb,
+                //    where pka and pkb are unique keys, then (pka, fkb) also becomes a unique key.
+                // 2. The presence of functional dependences can reduce some unique keys.
+                //    In the above example, pka functionally determines fkb, and the (pka, fkb)
+                //    unique key can be reduced to just pka.
+                //
+                // The number of unique keys may grow substiantially, and we should take care not
+                // to simply explode with too much information. In the future, we should maintain
+                // unique keys modulo equivalence and modulo functional dependencies.
 
-                input_mapper.global_keys(input_keys, equivalences)
+                let input_arities = input_arities.collect::<Vec<_>>();
+                let input_keys = input_keys.collect::<Vec<_>>();
+
+                // We first extract from `equivalences` columns equated to other expressions, noting
+                // for each the smallest (over equated expressions) greatest element of the support.
+                // For example, for literals this is `None` (the smallest), for column references it
+                // is the column itself, and for expressions it is the maximum column referenced by
+                // the expression.
+                // We can prune from keys any columns equated to expressions with support drawn from
+                // strictly prior inputs.
+                let mut replace = BTreeMap::new();
+                for class in equivalences.iter() {
+                    if let Some(min_sup) = class
+                        .iter()
+                        .map(|e| e.support().iter().cloned().max())
+                        .min()
+                    {
+                        for expr in class.iter() {
+                            if let MirScalarExpr::Column(c) = expr {
+                                replace.insert(c, min_sup);
+                            }
+                        }
+                    }
+                }
+
+                // We start with the keys and arity for the join identity.
+                let mut keys_so_far = vec![vec![]];
+                let mut arity_so_far = 0;
+
+                // Move through each input, expanding and reducing the key sets.
+                for (mut keys, arity) in input_keys
+                    .iter()
+                    .map(|x| (*x).clone())
+                    .zip_eq(input_arities.iter())
+                {
+                    let mut new_keys = Vec::with_capacity(keys_so_far.len());
+                    // Take the product of each key so far with each new key.
+                    // Each key in keys can have columns removed if either they
+                    // are equated to literals, or to an expression with support
+                    // strictly less than `arity_so_far`.
+                    // In some cases this may result in the `[]` key, which means
+                    // that we "retain" the unique keys when we join in the relation.
+                    // In other cases there may be non-trivial keys with which we
+                    // must take the Cartesian product.
+                    for key in keys.iter_mut() {
+                        for k in key.iter_mut() {
+                            *k += arity_so_far;
+                        }
+                        key.retain(|c| {
+                            replace
+                                .get(c)
+                                .map(|cp| cp.map(|cpp| cpp >= arity_so_far).unwrap_or(false))
+                                .unwrap_or(true)
+                        });
+                    }
+                    keys.sort();
+                    keys.dedup();
+                    // TODO: Remove dominated keys from `keys`.
+                    // If `keys` contains the key with no column, we leave `keys_so_far`
+                    // as it is and increment `arity_so_far`. This is just an optimization.
+                    if !keys.contains(&Vec::new()) {
+                        for k1 in keys_so_far.iter() {
+                            for k2 in keys.iter() {
+                                // NB: Our historic unique key logic only applied when k2 is [].
+                                let k1s = k1.iter().cloned();
+                                let k2s = k2.iter().cloned();
+                                new_keys.push(k1s.chain(k2s).collect::<Vec<_>>());
+                            }
+                        }
+
+                        // Update iterates and continue.
+                        keys_so_far = new_keys;
+                    }
+                    arity_so_far += arity;
+                }
+
+                let input_mapper =
+                    crate::JoinInputMapper::new_from_input_arities(input_arities.clone());
+                let old_keys =
+                    input_mapper.global_keys(input_keys.clone().into_iter(), equivalences);
+
+                for key in old_keys.iter() {
+                    if !keys_so_far
+                        .iter()
+                        .any(|key| key.iter().all(|k| key.contains(k)))
+                    {
+                        // if !keys_so_far.contains(key) {
+                        println!("Missing key: {:?} from {:?}", key, keys_so_far);
+                        println!("INPUTKEYS: {:?}", input_keys);
+                        println!("INPUTARITIES: {:?}", input_arities);
+                        println!("EQUIVALENCES: {:?}", equivalences);
+                        panic!();
+                    };
+                }
+
+                keys_so_far
             }
             Reduce { group_key, .. } => {
                 // The group key should form a key, but we might already have
