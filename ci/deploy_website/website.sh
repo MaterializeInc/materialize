@@ -34,6 +34,7 @@ declare -A shortlinks=(
     [aws-connection-role-trust-policy]="https://materialize.com/docs/sql/create-connection/#permissions"
     [chat]="https://join.slack.com/t/materializecommunity/shared_invite/zt-2bad5ce4i-ZsiPWI5jd7Q9pRDGYj3dkw"
     [pricing]="https://materialize.com/pdfs/pricing.pdf"
+    [auto-routing]="https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster"
 )
 
 cd doc/user
