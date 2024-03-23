@@ -695,6 +695,12 @@ where
         );
 
         let mut consolidator = Consolidator::new(
+            format!(
+                "{}[lower={:?},upper={:?}]",
+                shard_id,
+                desc.lower(),
+                desc.upper()
+            ),
             Arc::clone(&metrics),
             FetchBatchFilter::Compaction {
                 since: desc.since().clone(),

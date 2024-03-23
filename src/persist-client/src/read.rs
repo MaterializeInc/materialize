@@ -1044,6 +1044,7 @@ where
         let batches = self.machine.snapshot(&as_of).await?;
 
         let mut consolidator = Consolidator::new(
+            format!("{}[as_of={:?}]", self.shard_id(), as_of),
             Arc::clone(&self.metrics),
             FetchBatchFilter::Snapshot {
                 as_of: as_of.clone(),
