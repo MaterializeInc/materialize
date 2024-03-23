@@ -154,7 +154,7 @@ def toxiproxy_start(c: Composition) -> None:
         json={
             "name": "cockroach",
             "type": "latency",
-            "attributes": {"latency": 0, "jitter": 100},
+            "attributes": {"latency": 0, "jitter": 1000},
         },
     )
     assert r.status_code == 200, r
@@ -163,7 +163,7 @@ def toxiproxy_start(c: Composition) -> None:
         json={
             "name": "minio",
             "type": "latency",
-            "attributes": {"latency": 0, "jitter": 100},
+            "attributes": {"latency": 0, "jitter": 0},
         },
     )
     assert r.status_code == 200, r
