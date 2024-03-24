@@ -3644,11 +3644,15 @@ def workflow_test_http_race_condition(
     for thread in threads:
         thread.join()
 
-    time.sleep(10)
-
-    result = c.sql_query(
-        "SELECT * FROM mz_internal.mz_sessions WHERE now() - connected_at > '5s'"
-    )
-    assert (
-        not result
-    ), f"There are supposed to be now sessions remaining, but there are:\n{result}"
+    stopping_time = datetime.now() + timedelta(seconds=30)
+    while datetime.now() < stopping_time:
+        result = c.sql_query(
+            "SELECT * FROM mz_internal.mz_sessions WHERE id <> pg_backend_pid()"
+        )
+        if not result:
+            break
+        print(
+            f"There are supposed to be no sessions remaining, but there are:\n{result}"
+        )
+    else:
+        assert False, "Sessions did not clean up after 30s"
