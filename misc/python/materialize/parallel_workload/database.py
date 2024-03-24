@@ -1074,6 +1074,18 @@ class Database:
             )
             self.sqlsmith_state = result.stdout
 
+    def drop(self, exe: Executor) -> None:
+        for db in self.dbs:
+            print(f"Dropping database {db}")
+            db.drop(exe)
+
+        for src in self.kafka_sources:
+            src.executor.mz_conn.close()
+        for src in self.postgres_sources:
+            src.executor.mz_conn.close()
+        for src in self.mysql_sources:
+            src.executor.mz_conn.close()
+
     def update_sqlsmith_state(self, composition: Composition) -> None:
         if not self.fast_startup:
             result = composition.run(
