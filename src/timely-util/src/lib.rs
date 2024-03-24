@@ -28,3 +28,4 @@ pub mod panic;
 pub mod probe;
 pub mod progress;
 pub mod replay;
+pub mod scope;
