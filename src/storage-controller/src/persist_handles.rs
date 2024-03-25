@@ -280,7 +280,7 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Register(
         T,
         Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
-        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     DropHandles {
@@ -389,7 +389,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         &self,
         register_ts: T,
         ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
-    ) -> tokio::sync::oneshot::Receiver<()> {
+    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError<T>>> {
         // We expect this to be awaited, so keep the span connected.
         let span = info_span!("PersistTableWriteCmd::Register");
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -463,11 +463,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         while let Some((span, command)) = rx.recv().await {
             match command {
                 PersistTableWriteCmd::Register(register_ts, ids_handles, tx) => {
-                    self.register(register_ts, ids_handles)
+                    self.register(register_ts, ids_handles, tx)
                         .instrument(span)
-                        .await;
-                    // We don't care if our waiter has gone away.
-                    let _ = tx.send(());
+                        .await
                 }
                 PersistTableWriteCmd::Update(_id, _write_handle) => {
                     unimplemented!("TODO: Support migrations on persist-txn backed collections")
@@ -501,6 +499,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         &mut self,
         register_ts: T,
         ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, i64>)>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ) {
         for (id, write_handle) in ids_handles.iter() {
             debug!(
@@ -525,7 +524,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
             .collect();
         let handles = ids_handles.into_iter().map(|(_, handle)| handle);
         let res = self.txns.register(register_ts.clone(), handles).await;
-        match res {
+        let response = match res {
             Ok(tidy) => {
                 self.tidy.merge(tidy);
                 // If we using eager uppers, make sure to advance the physical
@@ -545,16 +544,22 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     PersistTxnTablesImpl::Lazy => {}
                 };
                 self.send_new_uppers(new_uppers);
+                Ok(())
             }
             Err(current) => {
-                panic!(
-                    "cannot register {:?} at {:?} because txns is at {:?}",
-                    new_uppers.iter().map(|(id, _)| id).collect::<Vec<_>>(),
-                    register_ts,
-                    current
-                );
+                let current_upper = Antichain::from_elem(current);
+                let invalid_uppers = new_uppers
+                    .into_iter()
+                    .map(|(id, _)| InvalidUpper {
+                        id,
+                        current_upper: current_upper.clone(),
+                    })
+                    .collect();
+                Err(StorageError::InvalidUppers(invalid_uppers))
             }
-        }
+        };
+        // It is not an error for the other end to hang up.
+        let _ = tx.send(response);
     }
 
     async fn drop_handles(&mut self, ids: Vec<GlobalId>) {

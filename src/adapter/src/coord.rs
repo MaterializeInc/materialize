@@ -99,12 +99,12 @@ use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
-use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::{spawn, JoinHandle};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_ore::{instrument, soft_assert_no_log};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_pgcopy::CopyFormatParams;
@@ -126,7 +126,7 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourc
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::controller::{PersistTxnTablesImpl, StorageError};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -166,6 +166,7 @@ use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::OpenableDurableCatalogState;
+use mz_ore::collections::CollectionExt;
 use mz_ore::future::TimeoutError;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
@@ -1987,15 +1988,7 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("cannot fail to migrate collections");
 
-        let register_ts = self.get_local_write_ts().await.timestamp;
-
-        self.controller
-            .storage
-            .create_collections(Some(register_ts), collections)
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
-
-        self.apply_local_write(register_ts).await;
+        self.create_collections_with_timestamp(collections).await;
     }
 
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
@@ -2704,6 +2697,64 @@ impl Coordinator {
 
         self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
             .await;
+    }
+
+    /// Creates the collections described by `collections` with an initial timestamp from the
+    /// timestamp oracle.
+    pub(crate) async fn create_collections_with_timestamp(
+        &mut self,
+        collections: Vec<(GlobalId, CollectionDescription<Timestamp>)>,
+    ) -> Timestamp {
+        loop {
+            let register_ts = self.get_local_write_ts().await.timestamp;
+            match self
+                .controller
+                .storage
+                .create_collections(Some(register_ts), collections.clone())
+                .await
+            {
+                Err(StorageError::InvalidUppers(mut invalid_uppers)) => {
+                    soft_assert_no_log!(
+                        invalid_uppers
+                            .windows(2)
+                            .all(|uppers| uppers[0].current_upper == uppers[1].current_upper),
+                        "tables should all share the same logical upper, {invalid_uppers:?}"
+                    );
+                    match invalid_uppers.as_mut_slice() {
+                        [] => {
+                            soft_panic_or_log!("tried to create no collections: {collections:?}");
+                            return register_ts;
+                        }
+                        [invalid_upper, ..] => {
+                            // Persist can sometimes advance the upper of a table, in response to
+                            // some command, without informing the timestamp oracle. For example,
+                            // when dropping a table persist txns will advance the upper of all
+                            // tables by 1. If some table's upper has advanced past the timestamp
+                            // oracle, then we advance the timestamp oracle to that upper.
+                            //
+                            // Since this all happens on the main coord task without any off-task
+                            // work, we can blindly retry the register with a new timestamp without
+                            // checking that the register is still valid at the new timestamp. Also,
+                            // since no other command can run in-between calls to
+                            // `create_collections`, we should only have to retry a maximum of once.
+                            //
+                            // Think very hard before pulling any of this work off of the main coord
+                            // task. You'll likely have to do some validation between every retry
+                            // and somehow deal with starvation.
+                            let current_upper =
+                                std::mem::take(&mut invalid_upper.current_upper).into_element();
+                            warn!("tried to register table at {register_ts} but current upper is {current_upper}");
+                            self.apply_local_write(current_upper).await;
+                        }
+                    }
+                }
+                res => {
+                    res.unwrap_or_terminate("cannot fail to create collections");
+                    self.apply_local_write(register_ts).await;
+                    return register_ts;
+                }
+            }
+        }
     }
 
     /// Returns the state of the [`Coordinator`] formatted as JSON.

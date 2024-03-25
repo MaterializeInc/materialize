@@ -176,7 +176,8 @@ pub enum StorageError<T> {
     UpdateBeyondUpper(GlobalId),
     /// The read was at a timestamp before the collection's since
     ReadBeforeSince(GlobalId),
-    /// The expected upper of one or more appends was different from the actual upper of the collection
+    /// The expected upper of one or more appends/registers was different from the actual upper of
+    /// the collection.
     InvalidUppers(Vec<InvalidUpper<T>>),
     /// An operation failed to read or write state
     IOError(StashError),

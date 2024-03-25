@@ -622,23 +622,17 @@ impl Coordinator {
 
         let catalog_result = self
             .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
-                // Determine the initial validity for the table.
-                let register_ts = coord.get_local_write_ts().await.timestamp;
-                if let Some(id) = ctx.extra().contents() {
-                    coord.set_statement_execution_timestamp(id, register_ts);
-                }
-
                 let collection_desc = CollectionDescription::from_desc(
                     table.desc.clone(),
                     DataSourceOther::TableWrites,
                 );
-                coord
-                    .controller
-                    .storage
-                    .create_collections(Some(register_ts), vec![(table_id, collection_desc)])
-                    .await
-                    .unwrap_or_terminate("cannot fail to create collections");
-                coord.apply_local_write(register_ts).await;
+                let register_ts = coord
+                    .create_collections_with_timestamp(vec![(table_id, collection_desc)])
+                    .await;
+
+                if let Some(id) = ctx.extra().contents() {
+                    coord.set_statement_execution_timestamp(id, register_ts);
+                }
 
                 coord
                     .initialize_storage_read_policies(
