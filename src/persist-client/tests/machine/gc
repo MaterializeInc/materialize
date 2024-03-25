@@ -7,6 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Disable inline writes so interesting things happen in Blob.
+dyncfg
+persist_inline_update_threshold_bytes 0
+persist_inline_update_max_bytes 0
+----
+ok
+
 # This test uses a simplifying assumption that a batch is
 # always made up of exactly 1 batch part. This is because
 # batch parts are given random UUID names, meaning we can't

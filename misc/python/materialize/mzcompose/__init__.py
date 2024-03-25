@@ -87,6 +87,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_worker_core_affinity": "true",
     "persist_batch_delete_enabled": "true",
     "persist_fast_path_limit": "1000",
+    "persist_inline_update_max_bytes": "1048576",
+    "persist_inline_update_threshold_bytes": "4096",
     "persist_pubsub_client_enabled": "true",
     "persist_pubsub_push_diff_enabled": "true",
     "persist_sink_minimum_batch_updates": "128",

@@ -88,6 +88,7 @@ pub(crate) async fn restore_blob(
                 for part in &batch.parts {
                     let key = match part {
                         BatchPart::Hollow(x) => x.key.complete(&shard_id),
+                        BatchPart::Inline { .. } => continue,
                     };
                     check_restored(&key, blob.restore(&key).await);
                 }
@@ -98,6 +99,7 @@ pub(crate) async fn restore_blob(
                 for part in &after.parts {
                     let key = match part {
                         BatchPart::Hollow(x) => x.key.complete(&shard_id),
+                        BatchPart::Inline { .. } => continue,
                     };
                     check_restored(&key, blob.restore(&key).await);
                 }

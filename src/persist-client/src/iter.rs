@@ -85,6 +85,9 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
             FetchData::Unleased { part, .. } => part.key.split().0 >= min_version,
             FetchData::Leased { part, .. } => match &part.part {
                 BatchPart::Hollow(x) => x.key.split().0 >= min_version,
+                // Inline parts are only written directly by the user and so may
+                // be unconsolidated.
+                BatchPart::Inline { .. } => true,
             },
             FetchData::AlreadyFetched => false,
         }
@@ -307,6 +310,21 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         },
                     };
                     (c_part, part.encoded_size_bytes)
+                }
+                BatchPart::Inline {
+                    updates,
+                    key_lower: _,
+                    ts_rewrite,
+                } => {
+                    let read_metrics = read_metrics(&metrics.read).clone();
+                    let part = EncodedPart::from_inline(
+                        read_metrics,
+                        desc.clone(),
+                        updates,
+                        ts_rewrite.as_ref(),
+                    );
+                    let c_part = ConsolidationPart::from_encoded(part, &self.filter, true);
+                    (c_part, updates.encoded_size_bytes())
                 }
             })
             .collect();

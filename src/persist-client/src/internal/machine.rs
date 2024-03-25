@@ -32,6 +32,7 @@ use timely::PartialOrder;
 use tracing::{debug, info, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
+use crate::batch::INLINE_UPDATE_MAX_BYTES;
 use crate::cache::StateCache;
 use crate::cfg::RetryParameters;
 use crate::critical::CriticalReaderId;
@@ -240,6 +241,9 @@ where
                 CompareAndAppendRes::InvalidUsage(x) => {
                     return CompareAndAppendRes::InvalidUsage(x)
                 }
+                CompareAndAppendRes::InlineBackpressure => {
+                    return CompareAndAppendRes::InlineBackpressure
+                }
                 CompareAndAppendRes::UpperMismatch(seqno, _current_upper) => {
                     // If the state machine thinks that the shard upper is not
                     // far enough along, it could be because the caller of this
@@ -376,7 +380,7 @@ where
         loop {
             let cmd_res = self
                 .applier
-                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, _, state| {
+                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, cfg, state| {
                     writer_was_present = state.writers.contains_key(writer_id);
                     state.compare_and_append(
                         batch,
@@ -385,6 +389,7 @@ where
                         lease_duration_ms,
                         idempotency_token,
                         debug_info,
+                        INLINE_UPDATE_MAX_BYTES.get(cfg),
                     )
                 })
                 .await;
@@ -450,6 +455,11 @@ where
                     // to commit it. No network, no Indeterminate.
                     assert!(indeterminate.is_none());
                     return CompareAndAppendRes::InvalidUsage(err);
+                }
+                Err(CompareAndAppendBreak::InlineBackpressure) => {
+                    // We tried to write an inline part, but there was already
+                    // too much in state. Flush it out to s3 and try again.
+                    return CompareAndAppendRes::InlineBackpressure;
                 }
                 Err(CompareAndAppendBreak::Upper {
                     shard_upper,
@@ -1008,6 +1018,7 @@ pub(crate) enum CompareAndAppendRes<T> {
     Success(SeqNo, WriterMaintenance<T>),
     InvalidUsage(InvalidUsage<T>),
     UpperMismatch(SeqNo, Antichain<T>),
+    InlineBackpressure,
 }
 
 #[cfg(test)]
@@ -1583,7 +1594,7 @@ pub mod datadriven {
             val: Arc::new(UnitSchema),
         };
         let builder = BatchBuilderInternal::new(
-            cfg,
+            cfg.clone(),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             schemas.clone(),
@@ -1599,18 +1610,32 @@ pub mod datadriven {
         );
         let mut builder = BatchBuilder {
             builder,
-            stats_schemas: schemas,
+            stats_schemas: schemas.clone(),
         };
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
         }
-        let batch = builder.finish(upper).await?.into_hollow_batch();
+        let mut batch = builder.finish(upper).await?;
+        // We can only reasonably use parts_size_override with hollow batches,
+        // so if it's set, flush any inline batches out.
+        if parts_size_override.is_some() {
+            batch
+                .flush_to_blob(
+                    &cfg,
+                    &datadriven.client.metrics.user,
+                    &datadriven.client.isolated_runtime,
+                    &schemas,
+                )
+                .await;
+        }
+        let batch = batch.into_hollow_batch();
 
         if let Some(size) = parts_size_override {
             let mut batch = batch.clone();
             for part in batch.parts.iter_mut() {
                 match part {
-                    BatchPart::Hollow(x) => x.encoded_size_bytes = size,
+                    BatchPart::Hollow(part) => part.encoded_size_bytes = size,
+                    BatchPart::Inline { .. } => unreachable!("flushed out above"),
                 }
             }
             datadriven.batches.insert(output.to_owned(), batch);
@@ -1651,6 +1676,7 @@ pub mod datadriven {
                         }
                     };
                 }
+                BatchPart::Inline { .. } => {}
             };
             let part = EncodedPart::fetch(
                 &datadriven.shard_id,
@@ -1717,7 +1743,10 @@ pub mod datadriven {
         let batch = datadriven.batches.get_mut(input).expect("unknown batch");
         for part in batch.parts.iter_mut() {
             match part {
-                BatchPart::Hollow(part) => part.encoded_size_bytes = size,
+                BatchPart::Hollow(x) => x.encoded_size_bytes = size,
+                BatchPart::Inline { .. } => {
+                    panic!("set_batch_parts_size only supports hollow parts")
+                }
             }
         }
         Ok("ok\n".to_string())

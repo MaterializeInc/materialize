@@ -16,6 +16,8 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
@@ -511,23 +513,47 @@ where
             )
             .await;
 
-        let maintenance = match res {
-            CompareAndAppendRes::Success(_seqno, maintenance) => {
-                self.upper = desc.upper().clone();
-                for batch in batches.iter_mut() {
-                    batch.mark_consumed();
+        let maintenance = loop {
+            match res {
+                CompareAndAppendRes::Success(_seqno, maintenance) => {
+                    self.upper = desc.upper().clone();
+                    for batch in batches.iter_mut() {
+                        batch.mark_consumed();
+                    }
+                    break maintenance;
                 }
-                maintenance
-            }
-            CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
-            CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
-                // We tried to to a compare_and_append with the wrong expected upper, that
-                // won't work. Update the cached upper to the current upper.
-                self.upper = current_upper.clone();
-                return Ok(Err(UpperMismatch {
-                    current: current_upper,
-                    expected: expected_upper,
-                }));
+                CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
+                CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
+                    // We tried to to a compare_and_append with the wrong expected upper, that
+                    // won't work. Update the cached upper to the current upper.
+                    self.upper = current_upper.clone();
+                    return Ok(Err(UpperMismatch {
+                        current: current_upper,
+                        expected: expected_upper,
+                    }));
+                }
+                CompareAndAppendRes::InlineBackpressure => {
+                    // We tried to write an inline part, but there was already
+                    // too much in state. Flush it out to s3 and try again.
+                    let cfg = BatchBuilderConfig::new(&self.cfg, &self.writer_id);
+                    // We could have a large number of inline parts (imagine the
+                    // sharded persist_sink), do this flushing concurrently.
+                    let batches = batches
+                        .iter_mut()
+                        .map(|batch| async {
+                            batch
+                                .flush_to_blob(
+                                    &cfg,
+                                    &self.metrics.inline.backpressure,
+                                    &self.isolated_runtime,
+                                    &self.schemas,
+                                )
+                                .await
+                        })
+                        .collect::<FuturesUnordered<_>>();
+                    let () = batches.collect::<()>().await;
+                    continue;
+                }
             }
         };
 

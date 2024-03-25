@@ -383,10 +383,13 @@ where
             for mut part_desc in parts {
                 // TODO: Push the filter down into the Subscribe?
                 if STATS_FILTER_ENABLED.get(&cfg) {
-                    let should_fetch = part_desc.part.stats().map_or(true, |stats| {
-                        should_fetch_part(&stats.decode(), current_frontier.borrow())
-                    });
-                    let bytes = u64::cast_from(part_desc.part.encoded_size_bytes());
+                    let should_fetch = match &part_desc.part {
+                        BatchPart::Hollow(x) => x.stats.as_ref().map_or(true, |stats| {
+                            should_fetch_part(&stats.decode(), current_frontier.borrow())
+                        }),
+                        BatchPart::Inline { .. } => true,
+                    };
+                    let bytes = u64::cast_from(part_desc.encoded_size_bytes());
                     if should_fetch {
                         audit_budget_bytes =
                             audit_budget_bytes.saturating_add(part_desc.part.encoded_size_bytes());
@@ -401,6 +404,7 @@ where
                                 x.key.hash(&mut h);
                                 usize::cast_from(h.finish()) % 100 < STATS_AUDIT_PERCENT.get(&cfg)
                             }
+                            BatchPart::Inline { .. } => false,
                         };
                         if should_audit && part_desc.part.encoded_size_bytes() < audit_budget_bytes
                         {

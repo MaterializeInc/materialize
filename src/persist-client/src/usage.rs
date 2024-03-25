@@ -454,6 +454,7 @@ impl StorageUsageClient {
                     for part in x.parts.iter() {
                         let part = match part {
                             BatchPart::Hollow(x) => x,
+                            BatchPart::Inline { .. } => continue,
                         };
                         let parsed = BlobKey::parse_ids(&part.key.complete(&shard_id));
                         if let Ok((_, PartialBlobKey::Batch(writer_id, _))) = parsed {
@@ -481,6 +482,7 @@ impl StorageUsageClient {
                 for part in x.parts.iter() {
                     let part = match part {
                         BatchPart::Hollow(x) => x,
+                        BatchPart::Inline { .. } => continue,
                     };
                     current_state_batches_bytes += u64::cast_from(part.encoded_size_bytes);
                 }
@@ -740,7 +742,7 @@ mod tests {
     use semver::Version;
     use timely::progress::Antichain;
 
-    use crate::batch::BLOB_TARGET_SIZE;
+    use crate::batch::{BLOB_TARGET_SIZE, INLINE_UPDATE_THRESHOLD_BYTES};
     use crate::internal::paths::{PartialRollupKey, RollupId};
     use crate::tests::new_test_client;
     use crate::ShardId;
@@ -758,6 +760,7 @@ mod tests {
         ];
 
         let client = new_test_client(&dyncfgs).await;
+        let inline_writes_enabled = INLINE_UPDATE_THRESHOLD_BYTES.get(&client.cfg) > 0;
         let build_version = client.cfg.build_version.clone();
         let shard_id_one = ShardId::new();
         let shard_id_two = ShardId::new();
@@ -818,7 +821,12 @@ mod tests {
 
         assert!(shard_one_size > 0);
         assert!(shard_two_size > 0);
-        assert!(shard_one_size < shard_two_size);
+        if inline_writes_enabled {
+            // Allow equality, but only if inline writes are enabled.
+            assert!(shard_one_size <= shard_two_size);
+        } else {
+            assert!(shard_one_size < shard_two_size);
+        }
         assert_eq!(
             shard_two_size,
             writer_one_size + writer_two_size + versioned_size + rollups_size
@@ -866,6 +874,7 @@ mod tests {
 
         let shard_id = ShardId::new();
         let mut client = new_test_client(&dyncfgs).await;
+        let inline_writes_enabled = INLINE_UPDATE_THRESHOLD_BYTES.get(&client.cfg) > 0;
 
         let (mut write0, _) = client
             .expect_open::<String, String, u64, i64>(shard_id)
@@ -901,9 +910,11 @@ mod tests {
         let usage = StorageUsageClient::open(client);
         let shard_usage_audit = usage.shard_usage_audit(shard_id).await;
         let shard_usage_referenced = usage.shard_usage_referenced(shard_id).await;
-        // We've written data.
-        assert!(shard_usage_audit.current_state_batches_bytes > 0);
-        assert!(shard_usage_referenced.batches_bytes > 0);
+        if !inline_writes_enabled {
+            // We've written data.
+            assert!(shard_usage_audit.current_state_batches_bytes > 0);
+            assert!(shard_usage_referenced.batches_bytes > 0);
+        }
         // There's always at least one rollup.
         assert!(shard_usage_audit.current_state_rollups_bytes > 0);
         assert!(shard_usage_referenced.rollup_bytes > 0);
@@ -914,8 +925,10 @@ mod tests {
         //
         // write0 wrote a batch, but never linked it in, but is still active.
         assert!(shard_usage_audit.not_leaked_not_referenced_bytes > 0);
-        // write0 wrote a batch, but never linked it in, and is now expired.
-        assert!(shard_usage_audit.leaked_bytes > 0);
+        if !inline_writes_enabled {
+            // write0 wrote a batch, but never linked it in, and is now expired.
+            assert!(shard_usage_audit.leaked_bytes > 0);
+        }
     }
 
     #[mz_persist_proc::test(tokio::test)]

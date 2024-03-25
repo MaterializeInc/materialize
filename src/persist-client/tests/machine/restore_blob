@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Disable inline writes so interesting things happen in Blob.
+dyncfg
+persist_inline_update_threshold_bytes 0
+persist_inline_update_max_bytes 0
+----
+ok
 
 # Pre-populate some non-trivial state in our shard.
 
