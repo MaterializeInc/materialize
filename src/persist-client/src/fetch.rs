@@ -36,7 +36,7 @@ use crate::batch::{
     ProtoLeasedBatchPart,
 };
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{LazyPartStats, LazyProto, Schemas};
+use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::BlobKey;
@@ -120,6 +120,15 @@ where
                     part: x.clone(),
                 }
             }
+            BatchPart::Inline {
+                updates,
+                key_lower: _,
+                ts_rewrite,
+            } => FetchedBlobBuf::Inline {
+                desc: part.desc.clone(),
+                updates: updates.clone(),
+                ts_rewrite: ts_rewrite.clone(),
+            },
         };
         let fetched_blob = FetchedBlob {
             metrics: Arc::clone(&self.metrics),
@@ -324,7 +333,7 @@ where
         read_metrics.part_goodbytes.inc_by(u64::cast_from(
             parsed.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
         ));
-        EncodedPart::new(read_metrics.clone(), registered_desc, part, parsed)
+        EncodedPart::from_hollow(read_metrics.clone(), registered_desc, part, parsed)
     })
 }
 
@@ -475,6 +484,11 @@ enum FetchedBlobBuf<T> {
         buf: SegmentedBytes,
         part: HollowBatchPart<T>,
     },
+    Inline {
+        desc: Description<T>,
+        updates: LazyInlineBatchPart,
+        ts_rewrite: Option<Antichain<T>>,
+    },
 }
 
 impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
@@ -505,6 +519,19 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                     buf,
                 );
                 (parsed, part.stats.as_ref())
+            }
+            FetchedBlobBuf::Inline {
+                desc,
+                updates,
+                ts_rewrite,
+            } => {
+                let parsed = EncodedPart::from_inline(
+                    self.read_metrics.clone(),
+                    desc.clone(),
+                    updates,
+                    ts_rewrite.as_ref(),
+                );
+                (parsed, None)
             }
         };
         FetchedPart::new(
@@ -711,13 +738,49 @@ where
                 )
                 .await
             }
+            BatchPart::Inline {
+                updates,
+                key_lower: _,
+                ts_rewrite,
+            } => Ok(EncodedPart::from_inline(
+                read_metrics.clone(),
+                registered_desc.clone(),
+                updates,
+                ts_rewrite.as_ref(),
+            )),
         }
+    }
+
+    pub(crate) fn from_inline(
+        metrics: ReadMetrics,
+        desc: Description<T>,
+        x: &LazyInlineBatchPart,
+        ts_rewrite: Option<&Antichain<T>>,
+    ) -> Self {
+        let parsed = x.decode().expect("valid inline part");
+        Self::new(metrics, desc, "inline", ts_rewrite, parsed)
+    }
+
+    pub(crate) fn from_hollow(
+        metrics: ReadMetrics,
+        registered_desc: Description<T>,
+        part: &HollowBatchPart<T>,
+        parsed: BlobTraceBatchPart<T>,
+    ) -> Self {
+        Self::new(
+            metrics,
+            registered_desc,
+            &part.key,
+            part.ts_rewrite.as_ref(),
+            parsed,
+        )
     }
 
     pub(crate) fn new(
         metrics: ReadMetrics,
         registered_desc: Description<T>,
-        part: &HollowBatchPart<T>,
+        key: &str,
+        ts_rewrite: Option<&Antichain<T>>,
         parsed: BlobTraceBatchPart<T>,
     ) -> Self {
         // There are two types of batches in persist:
@@ -738,11 +801,11 @@ where
             assert!(
                 PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
                 "key={} inline={:?} registered={:?}",
-                part.key,
+                key,
                 inline_desc,
                 registered_desc
             );
-            if part.ts_rewrite.is_none() {
+            if ts_rewrite.is_none() {
                 // The ts rewrite feature allows us to advance the registered
                 // upper of a batch that's already been staged (the inline
                 // upper), so if it's been used, then there's no useful
@@ -750,7 +813,7 @@ where
                 assert!(
                     PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
                     "key={} inline={:?} registered={:?}",
-                    part.key,
+                    key,
                     inline_desc,
                     registered_desc
                 );
@@ -763,7 +826,7 @@ where
                 inline_desc.since(),
                 &Antichain::from_elem(T::minimum()),
                 "key={} inline={:?} registered={:?}",
-                part.key,
+                key,
                 inline_desc,
                 registered_desc
             );
@@ -771,7 +834,7 @@ where
             assert_eq!(
                 inline_desc, &registered_desc,
                 "key={} inline={:?} registered={:?}",
-                part.key, inline_desc, registered_desc
+                key, inline_desc, registered_desc
             );
         }
 
@@ -780,7 +843,7 @@ where
             registered_desc,
             part: Arc::new(parsed),
             needs_truncation,
-            ts_rewrite: part.ts_rewrite.clone(),
+            ts_rewrite: ts_rewrite.cloned(),
         }
     }
 

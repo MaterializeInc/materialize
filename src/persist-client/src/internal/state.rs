@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{parse_id, LazyPartStats};
+use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};
@@ -176,12 +176,18 @@ pub struct HandleDebugState {
 #[serde(tag = "type")]
 pub enum BatchPart<T> {
     Hollow(HollowBatchPart<T>),
+    Inline {
+        updates: LazyInlineBatchPart,
+        key_lower: Vec<u8>,
+        ts_rewrite: Option<Antichain<T>>,
+    },
 }
 
 impl<T> BatchPart<T> {
     pub fn encoded_size_bytes(&self) -> usize {
         match self {
             BatchPart::Hollow(x) => x.encoded_size_bytes,
+            BatchPart::Inline { updates, .. } => updates.encoded_size_bytes(),
         }
     }
 
@@ -190,24 +196,28 @@ impl<T> BatchPart<T> {
     pub fn printable_name(&self) -> &str {
         match self {
             BatchPart::Hollow(x) => x.key.0.as_str(),
+            BatchPart::Inline { .. } => "<inline>",
         }
     }
 
     pub fn stats(&self) -> Option<&LazyPartStats> {
         match self {
             BatchPart::Hollow(x) => x.stats.as_ref(),
+            BatchPart::Inline { .. } => None,
         }
     }
 
     pub fn key_lower(&self) -> &[u8] {
         match self {
             BatchPart::Hollow(x) => x.key_lower.as_slice(),
+            BatchPart::Inline { key_lower, .. } => key_lower.as_slice(),
         }
     }
 
     pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
         match self {
             BatchPart::Hollow(x) => x.ts_rewrite.as_ref(),
+            BatchPart::Inline { ts_rewrite, .. } => ts_rewrite.as_ref(),
         }
     }
 }
@@ -222,6 +232,29 @@ impl<T: Ord> Ord for BatchPart<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (BatchPart::Hollow(s), BatchPart::Hollow(o)) => s.cmp(o),
+            (
+                BatchPart::Inline {
+                    updates: s_updates,
+                    key_lower: s_key_lower,
+                    ts_rewrite: s_ts_rewrite,
+                },
+                BatchPart::Inline {
+                    updates: o_updates,
+                    key_lower: o_key_lower,
+                    ts_rewrite: o_ts_rewrite,
+                },
+            ) => (
+                s_updates,
+                s_key_lower,
+                s_ts_rewrite.as_ref().map(|x| x.elements()),
+            )
+                .cmp(&(
+                    o_updates,
+                    o_key_lower,
+                    o_ts_rewrite.as_ref().map(|x| x.elements()),
+                )),
+            (BatchPart::Hollow(_), BatchPart::Inline { .. }) => Ordering::Less,
+            (BatchPart::Inline { .. }, BatchPart::Hollow(_)) => Ordering::Greater,
         }
     }
 }
@@ -363,6 +396,16 @@ impl<T> HollowBatch<T> {
             emitted_implicit: false,
         }
     }
+
+    pub(crate) fn inline_bytes(&self) -> usize {
+        self.parts
+            .iter()
+            .map(|x| match x {
+                BatchPart::Inline { updates, .. } => updates.encoded_size_bytes(),
+                BatchPart::Hollow(_) => 0,
+            })
+            .sum()
+    }
 }
 
 pub(crate) struct HollowBatchRunIter<'a, T> {
@@ -456,6 +499,7 @@ impl<T: Timestamp> HollowBatch<T> {
         for part in &mut self.parts {
             match part {
                 BatchPart::Hollow(part) => part.ts_rewrite = Some(frontier.clone()),
+                BatchPart::Inline { ts_rewrite, .. } => *ts_rewrite = Some(frontier.clone()),
             }
         }
         Ok(())
@@ -558,6 +602,7 @@ pub enum CompareAndAppendBreak<T> {
         writer_upper: Antichain<T>,
     },
     InvalidUsage(InvalidUsage<T>),
+    InlineBackpressure,
 }
 
 #[derive(Debug)]
@@ -699,6 +744,7 @@ where
         lease_duration_ms: u64,
         idempotency_token: &IdempotencyToken,
         debug_info: &HandleDebugState,
+        inline_update_max_bytes: usize,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -773,6 +819,16 @@ where
                 shard_upper: shard_upper.clone(),
                 writer_upper: writer_state.most_recent_write_upper.clone(),
             });
+        }
+
+        let new_inline_bytes = batch.inline_bytes();
+        if new_inline_bytes > 0 {
+            let mut existing_inline_bytes = 0;
+            self.trace
+                .map_batches(|x| existing_inline_bytes += x.inline_bytes());
+            if existing_inline_bytes + new_inline_bytes >= inline_update_max_bytes {
+                return Break(CompareAndAppendBreak::InlineBackpressure);
+            }
         }
 
         let merge_reqs = if batch.desc.upper() != batch.desc.lower() {
@@ -1391,6 +1447,13 @@ where
                     if x.ts_rewrite().is_some() {
                         ret.rewrite_part_count += 1;
                     }
+                    match x {
+                        BatchPart::Hollow(_) => {}
+                        BatchPart::Inline { updates, .. } => {
+                            ret.inline_part_count += 1;
+                            ret.inline_part_bytes += updates.encoded_size_bytes();
+                        }
+                    }
                 }
                 ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);
                 ret.state_batches_bytes += batch_size;
@@ -1655,6 +1718,8 @@ pub struct StateSizeMetrics {
     pub state_batches_bytes: usize,
     pub state_rollups_bytes: usize,
     pub state_rollup_count: usize,
+    pub inline_part_count: usize,
+    pub inline_part_bytes: usize,
 }
 
 #[derive(Default)]
@@ -1675,9 +1740,11 @@ pub struct Upper<T>(pub Antichain<T>);
 pub(crate) mod tests {
     use std::ops::Range;
 
+    use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::now::SYSTEM_TIME;
+    use mz_proto::RustType;
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
@@ -1705,7 +1772,7 @@ pub(crate) mod tests {
                 any::<T>(),
                 any::<T>(),
                 any::<T>(),
-                proptest::collection::vec(any_hollow_batch_part::<T>(), 0..3),
+                proptest::collection::vec(any_batch_part::<T>(), 0..3),
                 any::<usize>(),
                 any::<bool>(),
             ),
@@ -1716,13 +1783,36 @@ pub(crate) mod tests {
                     (Antichain::from_elem(t1), Antichain::from_elem(t0))
                 };
                 let since = Antichain::from_elem(since);
-                let parts = parts.into_iter().map(BatchPart::Hollow).collect::<Vec<_>>();
                 let runs = if runs { vec![parts.len()] } else { vec![] };
                 HollowBatch {
                     desc: Description::new(lower, upper, since),
                     parts,
                     len: len % 10,
                     runs,
+                }
+            },
+        )
+    }
+
+    pub fn any_batch_part<T: Arbitrary + Timestamp>() -> impl Strategy<Value = BatchPart<T>> {
+        Strategy::prop_map(
+            (
+                any::<bool>(),
+                any_hollow_batch_part(),
+                proptest::collection::vec(any::<u8>(), 0..3),
+                any::<Option<T>>(),
+            ),
+            |(is_hollow, hollow, key_lower, ts_rewrite)| {
+                if is_hollow {
+                    BatchPart::Hollow(hollow)
+                } else {
+                    let updates = LazyInlineBatchPart::from_proto(Bytes::new()).unwrap();
+                    let ts_rewrite = ts_rewrite.map(Antichain::from_elem);
+                    BatchPart::Inline {
+                        updates,
+                        key_lower,
+                        ts_rewrite,
+                    }
                 }
             },
         )
@@ -2073,6 +2163,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             ),
             Break(CompareAndAppendBreak::Upper {
                 shard_upper: Antichain::from_elem(0),
@@ -2089,6 +2180,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2101,6 +2193,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
@@ -2117,6 +2210,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidEmptyTimeInterval {
@@ -2136,6 +2230,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
     }
@@ -2180,6 +2275,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2250,6 +2346,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2278,6 +2375,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2338,6 +2436,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
         assert!(state
@@ -2349,6 +2448,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2403,6 +2503,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2421,6 +2522,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
     }
@@ -2453,6 +2555,7 @@ pub(crate) mod tests {
             LEASE_DURATION_MS,
             &IdempotencyToken::new(),
             &debug_state(),
+            0,
         );
         assert_eq!(state.maybe_gc(false), None);
 

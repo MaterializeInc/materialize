@@ -39,7 +39,7 @@ use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
-use crate::internal::state::{BatchPart, HollowBatchPart, ProtoRollup, ProtoStateDiff, State};
+use crate::internal::state::{BatchPart, ProtoRollup, ProtoStateDiff, State};
 use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId};
@@ -347,17 +347,11 @@ pub async fn blob_batch_part(
     let parsed = BlobTraceBatchPart::<u64>::decode(&buf, &metrics.columnar).expect("decodable");
     let desc = parsed.desc.clone();
 
-    let part = HollowBatchPart {
-        key,
-        encoded_size_bytes: 0,
-        key_lower: vec![],
-        stats: None,
-        ts_rewrite: None,
-    };
     let encoded_part = EncodedPart::new(
         metrics.read.snapshot.clone(),
         parsed.desc.clone(),
-        &part,
+        &key,
+        None,
         parsed,
     );
     let mut out = BatchPartOutput {
@@ -605,6 +599,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
             for batch_part in &batch.parts {
                 match batch_part {
                     BatchPart::Hollow(x) => known_parts.insert(x.key.clone()),
+                    BatchPart::Inline { .. } => continue,
                 };
             }
         }

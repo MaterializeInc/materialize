@@ -9,6 +9,12 @@
 
 mode cockroach
 
+# Disable persist inline writes so we get real part numbers below
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_inline_update_threshold_bytes = 0
+----
+COMPLETE 0
+
 # EXPLAIN FILTER PUSHDOWN statements are blocked by a feature flag
 statement ok
 CREATE TABLE numbers (
