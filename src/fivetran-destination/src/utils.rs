@@ -124,10 +124,10 @@ where
     pub async fn new(reader: R, table: &Table) -> Result<Self, OpError> {
         let mut csv_reader = csv_async::AsyncReaderBuilder::new().create_reader(reader);
         let csv_headers = csv_reader.headers().await?;
-        let csv_columns: BTreeMap<_, _> = csv_headers
+        let mut csv_columns: BTreeMap<_, _> = csv_headers
             .iter()
             .enumerate()
-            .map(|(idx, name)| (name.trim().to_string(), idx))
+            .map(|(idx, name)| (name, idx))
             .collect();
 
         // TODO(parkmycar): When we support the `mz_extras` column we'll need to handle this case.
@@ -150,7 +150,7 @@ where
             .columns
             .iter()
             .map(|col| {
-                csv_columns.get(&col.name).copied().ok_or_else(|| {
+                csv_columns.remove(col.name.as_str()).ok_or_else(|| {
                     let msg = format!("table header '{}' does not exist in csv", col.name);
                     OpErrorKind::CsvMapping {
                         headers: csv_headers.clone(),
@@ -160,6 +160,15 @@ where
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+
+        if !csv_columns.is_empty() {
+            return Err(OpErrorKind::CsvMapping {
+                headers: csv_headers.clone(),
+                table: table.clone(),
+                msg: format!("Not all CSV columns were used! remaining: {csv_columns:?}"),
+            }
+            .into());
+        }
 
         Ok(AsyncCsvReaderTableAdapter {
             csv_reader,
@@ -359,6 +368,61 @@ mod tests {
             },
             context: [],
         }
+        "###);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_column_names_with_leading_spaces() {
+        // Note: The CSV data has the "country" and "city" columns swapped w.r.t the table
+        // definition.
+        let data = " a,  a,a, \nfoo_bar,100,false,1.0";
+        let table = Table {
+            name: "stats".to_string(),
+            columns: vec![
+                Column {
+                    name: "a".to_string(),
+                    r#type: DataType::Boolean.into(),
+                    primary_key: true,
+                    decimal: None,
+                },
+                Column {
+                    name: " ".to_string(),
+                    r#type: DataType::Float.into(),
+                    primary_key: true,
+                    decimal: None,
+                },
+                Column {
+                    name: " a".to_string(),
+                    r#type: DataType::String.into(),
+                    primary_key: true,
+                    decimal: None,
+                },
+                Column {
+                    name: "  a".to_string(),
+                    r#type: DataType::Int.into(),
+                    primary_key: false,
+                    decimal: None,
+                },
+            ],
+        };
+
+        let mapped_reader = AsyncCsvReaderTableAdapter::new(data.as_bytes(), &table)
+            .await
+            .unwrap();
+        let mapped_rows = mapped_reader
+            .into_stream()
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map_ok(|record| StringRecord::from_byte_record(record).unwrap())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        // Note: We purposefully do not yield the header.
+        insta::assert_debug_snapshot!(mapped_rows, @r###"
+        [
+            StringRecord(["false", "1.0", "foo_bar", "100"]),
+        ]
         "###);
     }
 }
