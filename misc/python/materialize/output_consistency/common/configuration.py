@@ -29,7 +29,6 @@ class ConsistencyTestConfiguration:
         max_iterations: int,
         avoid_expressions_expecting_db_error: bool,
         postgres_compatible_mode: bool,
-        table_instances: int = 2,
     ):
         self.scenario = scenario
         self.queries_per_tx = queries_per_tx
@@ -46,7 +45,6 @@ class ConsistencyTestConfiguration:
         self.max_iterations = max_iterations
         self.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
         self.postgres_compatible_mode = postgres_compatible_mode
-        self.table_instances = table_instances
 
     def validate(self) -> None:
         if self.max_runtime_in_sec == 0 and self.max_iterations == 0:

@@ -63,22 +63,11 @@ class QueryExecutionManager:
     ) -> None:
         self.output_printer.start_section("Setup code", collapsed=True)
         for strategy in evaluation_strategies:
-            self.setup_database_objects_for_evaluation_strategy(input_data, strategy)
-
-    def setup_database_objects_for_evaluation_strategy(
-        self,
-        input_data: ConsistencyTestInputData,
-        strategy: EvaluationStrategy,
-    ) -> None:
-        self.output_printer.print_info(
-            f"Setup for evaluation strategy '{strategy.name}'"
-        )
-
-        for table_index in range(0, self.config.table_instances):
-            executor = self.executors.get_executor(strategy)
-            ddl_statements = strategy.generate_sources(
-                input_data.types_input, table_index
+            self.output_printer.print_info(
+                f"Setup for evaluation strategy '{strategy.name}'"
             )
+            executor = self.executors.get_executor(strategy)
+            ddl_statements = strategy.generate_sources(input_data.types_input)
 
             for sql_statement in ddl_statements:
                 self.output_printer.print_sql(sql_statement)

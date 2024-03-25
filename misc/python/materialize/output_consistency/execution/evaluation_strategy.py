@@ -62,15 +62,12 @@ class EvaluationStrategy:
         self.simple_db_object_name = simple_db_object_name
         self.sql_adjuster = sql_adjuster
 
-    def generate_sources(
-        self, types_input: ConsistencyTestTypesInput, table_index: int
-    ) -> list[str]:
+    def generate_sources(self, types_input: ConsistencyTestTypesInput) -> list[str]:
         statements = []
         statements.extend(
             self.generate_source_for_storage_layout(
                 types_input,
                 ValueStorageLayout.HORIZONTAL,
-                table_index,
                 ALL_ROWS_SELECTION,
                 ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
             )
@@ -79,7 +76,6 @@ class EvaluationStrategy:
             self.generate_source_for_storage_layout(
                 types_input,
                 ValueStorageLayout.VERTICAL,
-                table_index,
                 ALL_ROWS_SELECTION,
                 ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
             )
@@ -90,7 +86,6 @@ class EvaluationStrategy:
         self,
         types_input: ConsistencyTestTypesInput,
         storage_layout: ValueStorageLayout,
-        table_index: int,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
         override_db_object_name: str | None = None,
@@ -100,7 +95,6 @@ class EvaluationStrategy:
     def get_db_object_name(
         self,
         storage_layout: ValueStorageLayout,
-        table_index: int,
         override_db_object_name: str | None = None,
     ) -> str:
         if storage_layout == ValueStorageLayout.ANY:
@@ -110,10 +104,9 @@ class EvaluationStrategy:
             return override_db_object_name
 
         storage_suffix = (
-            "_horiz" if storage_layout == ValueStorageLayout.HORIZONTAL else "_vert"
+            "horiz" if storage_layout == ValueStorageLayout.HORIZONTAL else "vert"
         )
-        index_suffix = f"_{table_index}" if table_index > 1 else ""
-        return f"{self.object_name_base}{storage_suffix}{index_suffix}"
+        return f"{self.object_name_base}_{storage_suffix}"
 
     def __str__(self) -> str:
         return self.name
@@ -233,7 +226,6 @@ class DummyEvaluation(EvaluationStrategy):
     def generate_sources(
         self,
         types_input: ConsistencyTestTypesInput,
-        table_index: int,
     ) -> list[str]:
         return []
 
@@ -251,13 +243,12 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         self,
         types_input: ConsistencyTestTypesInput,
         storage_layout: ValueStorageLayout,
-        table_index: int,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
         override_db_object_name: str | None = None,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
-            storage_layout, table_index, override_db_object_name
+            storage_layout, override_db_object_name
         )
 
         statements = []
@@ -291,13 +282,12 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         self,
         types_input: ConsistencyTestTypesInput,
         storage_layout: ValueStorageLayout,
-        table_index: int,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
         override_db_object_name: str | None = None,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
-            storage_layout, table_index, override_db_object_name
+            storage_layout, override_db_object_name
         )
 
         column_specs = self._create_column_specs(
