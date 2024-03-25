@@ -17,7 +17,7 @@ use timely::progress::Antichain;
 use tokio::sync::Mutex;
 
 use crate::internal::paths::PartialBatchKey;
-use crate::internal::state::{HollowBatch, HollowBatchPart};
+use crate::internal::state::{BatchPart, HollowBatch, HollowBatchPart};
 
 /// A [datadriven::TestCase] wrapper with helpers for parsing.
 #[derive(Debug)]
@@ -103,12 +103,14 @@ impl<'a> DirectiveArgs<'a> {
             len,
             parts: keys
                 .iter()
-                .map(|x| HollowBatchPart {
-                    key: PartialBatchKey((*x).to_owned()),
-                    encoded_size_bytes: 0,
-                    key_lower: vec![],
-                    stats: None,
-                    ts_rewrite: None,
+                .map(|x| {
+                    BatchPart::Hollow(HollowBatchPart {
+                        key: PartialBatchKey((*x).to_owned()),
+                        encoded_size_bytes: 0,
+                        key_lower: vec![],
+                        stats: None,
+                        ts_rewrite: None,
+                    })
                 })
                 .collect(),
             runs: vec![],

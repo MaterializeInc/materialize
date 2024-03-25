@@ -38,7 +38,9 @@ use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
-use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
+use crate::internal::state::{
+    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
+};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -1121,13 +1123,17 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             .inc_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| &*x.key)
+            .map(|x| match x {
+                BatchPart::Hollow(x) => &x.key,
+            })
             .collect();
         let full_parts = self
             .full_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| &*x.key)
+            .map(|x| match x {
+                BatchPart::Hollow(x) => &x.key,
+            })
             .collect();
         assert_eq!(inc_parts, full_parts);
 

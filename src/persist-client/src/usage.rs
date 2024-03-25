@@ -21,7 +21,7 @@ use tracing::{error, info};
 
 use crate::cfg::PersistConfig;
 use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey, WriterKey};
-use crate::internal::state::HollowBlobRef;
+use crate::internal::state::{BatchPart, HollowBlobRef};
 use crate::internal::state_versions::StateVersions;
 use crate::write::WriterId;
 use crate::{retry_external, Metrics, PersistClient, ShardId};
@@ -215,7 +215,7 @@ impl StorageUsageClient {
             diff.referenced_blob_fn(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     for part in &batch.parts {
-                        batches_bytes += part.encoded_size_bytes;
+                        batches_bytes += part.encoded_size_bytes();
                     }
                 }
                 HollowBlobRef::Rollup(rollup) => {
@@ -452,6 +452,9 @@ impl StorageUsageClient {
             x.referenced_blob_fn(|x| match x {
                 HollowBlobRef::Batch(x) => {
                     for part in x.parts.iter() {
+                        let part = match part {
+                            BatchPart::Hollow(x) => x,
+                        };
                         let parsed = BlobKey::parse_ids(&part.key.complete(&shard_id));
                         if let Ok((_, PartialBlobKey::Batch(writer_id, _))) = parsed {
                             let writer_referenced_batches_bytes =
@@ -476,6 +479,9 @@ impl StorageUsageClient {
         states_iter.state().map_blobs(|x| match x {
             HollowBlobRef::Batch(x) => {
                 for part in x.parts.iter() {
+                    let part = match part {
+                        BatchPart::Hollow(x) => x,
+                    };
                     current_state_batches_bytes += u64::cast_from(part.encoded_size_bytes);
                 }
             }
@@ -942,12 +948,12 @@ mod tests {
             .batch
             .parts
             .iter()
-            .map(|x| u64::cast_from(x.encoded_size_bytes))
+            .map(|x| u64::cast_from(x.encoded_size_bytes()))
             .sum::<u64>()
             + b2.batch
                 .parts
                 .iter()
-                .map(|x| u64::cast_from(x.encoded_size_bytes))
+                .map(|x| u64::cast_from(x.encoded_size_bytes()))
                 .sum::<u64>();
 
         write

@@ -41,7 +41,7 @@ use crate::fetch::{
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{HollowBatch, HollowBatchPart};
+use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
 use crate::iter::Consolidator;
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
@@ -750,7 +750,7 @@ where
     fn lease_batch_part(
         &mut self,
         desc: Description<T>,
-        part: HollowBatchPart<T>,
+        part: BatchPart<T>,
         filter: FetchBatchFilter<T>,
     ) -> LeasedBatchPart<T> {
         LeasedBatchPart {
@@ -1033,7 +1033,7 @@ where
     pub async fn snapshot_cursor(
         &mut self,
         as_of: Antichain<T>,
-        should_fetch_part: impl for<'a> Fn(&'a Option<LazyPartStats>) -> bool,
+        should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
@@ -1053,7 +1053,7 @@ where
                     .map(|part| {
                         self.lease_batch_part(batch.desc.clone(), part.clone(), filter.clone())
                     })
-                    .filter(|p| should_fetch_part(&p.part.stats))
+                    .filter(|p| should_fetch_part(p.part.stats()))
                     .collect();
                 consolidator.enqueue_leased_run(
                     &self.blob,
@@ -1090,8 +1090,8 @@ where
             .into_iter()
             .flat_map(|b| b.parts)
             .map(|p| SnapshotPartStats {
-                encoded_size_bytes: p.encoded_size_bytes,
-                stats: p.stats,
+                encoded_size_bytes: p.encoded_size_bytes(),
+                stats: p.stats().cloned(),
             })
             .collect();
         Ok(SnapshotPartsStats {

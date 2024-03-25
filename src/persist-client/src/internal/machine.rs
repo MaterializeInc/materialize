@@ -1266,12 +1266,13 @@ pub mod datadriven {
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
         BLOB_TARGET_SIZE,
     };
-    use crate::fetch::{fetch_batch_part, Cursor};
+    use crate::fetch::{Cursor, EncodedPart};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
+    use crate::internal::state::BatchPart;
     use crate::internal::state_versions::EncodedRollup;
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
     use crate::rpc::NoopPubSubSender;
@@ -1608,7 +1609,9 @@ pub mod datadriven {
         if let Some(size) = parts_size_override {
             let mut batch = batch.clone();
             for part in batch.parts.iter_mut() {
-                part.encoded_size_bytes = size;
+                match part {
+                    BatchPart::Hollow(x) => x.encoded_size_bytes = size,
+                }
             }
             datadriven.batches.insert(output.to_owned(), batch);
         } else {
@@ -1628,31 +1631,35 @@ pub mod datadriven {
         let mut s = String::new();
         for (idx, part) in batch.parts.iter().enumerate() {
             write!(s, "<part {idx}>\n");
-            if stats == Some("lower") && !part.key_lower.is_empty() {
-                writeln!(s, "<key lower={}>", std::str::from_utf8(&part.key_lower)?)
+            if stats == Some("lower") && !part.key_lower().is_empty() {
+                writeln!(s, "<key lower={}>", std::str::from_utf8(part.key_lower())?)
             }
-            let blob_batch = datadriven
-                .client
-                .blob
-                .get(&part.key.complete(&datadriven.shard_id))
-                .await;
-            match blob_batch {
-                Ok(Some(_)) | Err(_) => {}
-                // don't try to fetch/print the keys of the batch part
-                // if the blob store no longer has it
-                Ok(None) => {
-                    s.push_str("<empty>\n");
-                    continue;
+            match part {
+                BatchPart::Hollow(part) => {
+                    let blob_batch = datadriven
+                        .client
+                        .blob
+                        .get(&part.key.complete(&datadriven.shard_id))
+                        .await;
+                    match blob_batch {
+                        Ok(Some(_)) | Err(_) => {}
+                        // don't try to fetch/print the keys of the batch part
+                        // if the blob store no longer has it
+                        Ok(None) => {
+                            s.push_str("<empty>\n");
+                            continue;
+                        }
+                    };
                 }
             };
-            let part = fetch_batch_part(
+            let part = EncodedPart::fetch(
                 &datadriven.shard_id,
                 datadriven.client.blob.as_ref(),
                 datadriven.client.metrics.as_ref(),
                 datadriven.machine.applier.shard_metrics.as_ref(),
                 &datadriven.client.metrics.read.batch_fetcher,
                 &batch.desc,
-                &part,
+                part,
             )
             .await
             .expect("invalid batch part");
@@ -1709,7 +1716,9 @@ pub mod datadriven {
         let size = args.expect("size");
         let batch = datadriven.batches.get_mut(input).expect("unknown batch");
         for part in batch.parts.iter_mut() {
-            part.encoded_size_bytes = size;
+            match part {
+                BatchPart::Hollow(part) => part.encoded_size_bytes = size,
+            }
         }
         Ok("ok\n".to_string())
     }
@@ -1884,14 +1893,14 @@ pub mod datadriven {
                 writeln!(result, "<run {run}>");
                 for (part_id, part) in parts.into_iter().enumerate() {
                     writeln!(result, "<part {part_id}>");
-                    let part = fetch_batch_part(
+                    let part = EncodedPart::fetch(
                         &datadriven.shard_id,
                         datadriven.client.blob.as_ref(),
                         datadriven.client.metrics.as_ref(),
                         datadriven.machine.applier.shard_metrics.as_ref(),
                         &datadriven.client.metrics.read.batch_fetcher,
                         &batch.desc,
-                        &part,
+                        part,
                     )
                     .await
                     .expect("invalid batch part");

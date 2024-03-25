@@ -480,7 +480,7 @@ where
 
         let any_batch_rewrite = batches
             .iter()
-            .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite.is_some()));
+            .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
         let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
         for batch in batches.iter() {
             let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
