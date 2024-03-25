@@ -57,7 +57,7 @@ The following table illustrates how we transform your Fivetran data types into M
 
 ## Schema changes
 
-Schema changes to existing tables is not currently supported, when creating a Connector you should select the option to "Block all" schema changes.
+Schema changes to existing tables is not currently supported. When creating a Connector you should select the option to "Block all" schema changes.
 
 | SCHEMA CHANGE      | SUPPORTED | NOTES                                                                                                     |
 |--------------------|-----------|-----------------------------------------------------------------------------------------------------------|
