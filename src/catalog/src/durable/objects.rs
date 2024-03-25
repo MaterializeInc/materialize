@@ -423,7 +423,7 @@ impl DurableType<ItemKey, ItemValue> for Item {
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SystemObjectDescription {
     pub schema_name: String,
     pub object_type: CatalogItemType,

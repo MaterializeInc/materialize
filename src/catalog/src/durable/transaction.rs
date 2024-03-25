@@ -44,7 +44,8 @@ use crate::durable::objects::{
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    SettingValue, StorageUsageKey, SystemObjectDescription, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue,
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -834,6 +835,49 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Removes all system object mappings in `descriptions` from the transaction.
+    ///
+    /// Returns an error if any description in `descriptions` is not found.
+    ///
+    /// NOTE: On error, there still may be some items removed from the transaction. It is
+    /// up to the called to either abort the transaction or commit.
+    pub fn remove_system_object_mappings(
+        &mut self,
+        descriptions: BTreeSet<SystemObjectDescription>,
+    ) -> Result<(), CatalogError> {
+        let n = self
+            .system_gid_mapping
+            .delete(|k, _v| {
+                descriptions.contains(&SystemObjectDescription {
+                    schema_name: k.schema_name.clone(),
+                    object_type: k.object_type.clone(),
+                    object_name: k.object_name.clone(),
+                })
+            })
+            .len();
+        if n == descriptions.len() {
+            Ok(())
+        } else {
+            let item_descriptions = self
+                .system_gid_mapping
+                .items()
+                .keys()
+                .map(|k| SystemObjectDescription {
+                    schema_name: k.schema_name.clone(),
+                    object_type: k.object_type.clone(),
+                    object_name: k.object_name.clone(),
+                })
+                .collect();
+            let mut unknown = descriptions.difference(&item_descriptions).map(|desc| {
+                format!(
+                    "{} {}.{}",
+                    desc.object_type, desc.schema_name, desc.object_name
+                )
+            });
+            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+        }
+    }
+
     /// Updates item `id` in the transaction to `item_name` and `item`.
     ///
     /// Returns an error if `id` is not found.
@@ -1359,7 +1403,7 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
-    pub fn get_system_items(&self) -> impl Iterator<Item = SystemObjectMapping> {
+    pub fn get_system_object_mappings(&self) -> impl Iterator<Item = SystemObjectMapping> {
         self.system_gid_mapping
             .items()
             .clone()
