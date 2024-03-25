@@ -15,15 +15,17 @@ use std::time::Duration;
 
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
-use mz_ore::instrument;
+use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsFutureExt;
-use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
+use mz_ore::{instrument, soft_panic_or_log};
+use mz_ore::{soft_assert_no_log, task};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TimestamplessUpdate;
+use mz_storage_types::controller::StorageError;
 use mz_timestamp_oracle::WriteTimestamp;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::{debug_span, warn, Instrument, Span};
@@ -353,6 +355,48 @@ impl Coordinator {
             })
             .collect();
 
+        let span = debug_span!(parent: None, "group_commit_apply");
+        self.group_commit_append(
+            span,
+            write_lock_guard,
+            permit,
+            timestamp,
+            advance_to,
+            appends,
+            responses,
+            notifies,
+        );
+    }
+
+    /// Tries to append `appends` at `timestamp`. On success all waiters will be notifed via
+    /// `responses` and `notifies`.
+    ///
+    /// If any append with `appends` is for a user table, then `write_lock_guard` must be `Some`.
+    #[instrument(
+        name = "coord::group_commit_append",
+        fields(
+            has_write_lock=write_lock_guard.is_some(),
+            has_permit=permit.is_some(),
+            timestamp,
+            advance_to,
+        )
+    )]
+    pub(crate) fn group_commit_append(
+        &mut self,
+        mut span: Span,
+        write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+        permit: Option<GroupCommitPermit>,
+        timestamp: Timestamp,
+        advance_to: Timestamp,
+        appends: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        responses: Vec<CompletedClientTransmitter>,
+        notifies: Vec<oneshot::Sender<()>>,
+    ) {
+        assert!(
+            appends.iter().all(|(id, _)| id.is_system()) || write_lock_guard.is_some(),
+            "write lock guard must be acquired if any of the appends are to user tables"
+        );
+
         // Instrument our table writes since they can block the coordinator.
         let histogram = self
             .metrics
@@ -361,7 +405,10 @@ impl Coordinator {
         let append_fut = self
             .controller
             .storage
-            .append_table(timestamp, advance_to, appends)
+            // TODO(jkosh44) cloning `appends` is very unfortunate because it contains all of the
+            // rows to append. We need a copy if this fails and we want to try again and there isn't
+            // a good way of getting the appends back on failure.
+            .append_table(timestamp, advance_to, appends.clone())
             .expect("invalid updates")
             .wall_time()
             .observe(histogram);
@@ -370,18 +417,67 @@ impl Coordinator {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let apply_write_fut = self.apply_local_write(timestamp);
 
-        let mut span = debug_span!(parent: None, "group_commit_apply");
         OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
+
         task::spawn(
-            || "group_commit_apply",
+            || "group_commit_append",
             async move {
                 // Wait for the writes to complete.
                 match append_fut
-                    .instrument(debug_span!("group_commit_apply::append_fut"))
+                    .instrument(debug_span!("group_commit_append::append_fut"))
                     .await
                 {
                     Ok(append_result) => {
-                        append_result.unwrap_or_terminate("cannot fail to apply appends")
+                        match append_result {
+                            Err(StorageError::InvalidUppers(mut invalid_uppers)) => {
+                                soft_assert_no_log!(
+                                    invalid_uppers
+                                        .windows(2)
+                                        .all(|uppers| uppers[0].current_upper == uppers[1].current_upper),
+                                    "tables should all share the same logical upper, {invalid_uppers:?}"
+                                );
+                                match invalid_uppers.as_mut_slice() {
+                                    [] => {
+                                        soft_panic_or_log!(
+                                            "tried to append no tables: {appends:?}"
+                                        );
+                                    }
+                                    [invalid_upper, ..] => {
+                                        let current_upper =
+                                            std::mem::take(&mut invalid_upper.current_upper)
+                                                .into_element();
+                                        warn!("tried to append tables at {advance_to} but current upper is {current_upper}");
+                                        // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
+                                        if let Err(e) =
+                                            // TODO(jkosh44) Explain why it's safe to retry this
+                                            // since we have the write lock if there's any user
+                                            // writes.
+                                            // TODO(jkosh44) This will cause a deadlock for DDL.
+                                            // The DDL command is on the main coord task waiting for
+                                            // this append to finish, so this message will never
+                                            // be processed.
+                                            internal_cmd_tx.send(
+                                                Message::GroupCommitAppend {
+                                                    span,
+                                                    write_lock_guard,
+                                                    permit,
+                                                    appends,
+                                                    current_upper,
+                                                    responses,
+                                                    notifies,
+                                                },
+                                            )
+                                        {
+                                            warn!("internal_cmd_rx dropped before we could send: {e:?}");
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                            append_result => {
+                                append_result.unwrap_or_terminate("cannot fail to apply appends")
+                            }
+                        }
                     }
                     Err(_) => warn!("Writer terminated with writes in indefinite state"),
                 };
@@ -413,8 +509,8 @@ impl Coordinator {
                     // We don't care if the listeners have gone away.
                     let _ = notify.send(());
                 }
-            }
-            .instrument(span),
+                // TODO(jkosh44) How do I reach these spans?
+            }, // .instrument(span),
         );
     }
 

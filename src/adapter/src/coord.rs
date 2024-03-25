@@ -168,6 +168,7 @@ use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::TimeoutError;
+use mz_storage_client::client::TimestamplessUpdate;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
@@ -203,6 +204,16 @@ pub enum Message<T = mz_repr::Timestamp> {
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
+    /// Appends rows from a group commit.
+    GroupCommitAppend {
+        span: Span,
+        write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+        permit: Option<GroupCommitPermit>,
+        appends: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        current_upper: Timestamp,
+        responses: Vec<CompletedClientTransmitter>,
+        notifies: Vec<oneshot::Sender<()>>,
+    },
     /// Makes a group commit visible to all clients.
     GroupCommitApply(
         /// Timestamp of the writes in the group commit.
@@ -295,6 +306,7 @@ impl Message {
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::WriteLockGrant(_) => "write_lock_grant",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
+            Message::GroupCommitAppend { .. } => "group_commit_append",
             Message::GroupCommitApply(..) => "group_commit_apply",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
@@ -1805,6 +1817,8 @@ impl Coordinator {
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
+            // TODO(jkosh44) We should retry invalid uppers, but it's rare on boot and it will fix
+            // itself when we reboot.
             .unwrap_or_terminate("cannot fail to append");
         self.apply_local_write(write_ts).await;
 
@@ -2743,7 +2757,7 @@ impl Coordinator {
                             // and somehow deal with starvation.
                             let current_upper =
                                 std::mem::take(&mut invalid_upper.current_upper).into_element();
-                            warn!("tried to register table at {register_ts} but current upper is {current_upper}");
+                            warn!("tried to register tables at {register_ts} but current upper is {current_upper}");
                             self.apply_local_write(current_upper).await;
                         }
                     }
