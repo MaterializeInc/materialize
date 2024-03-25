@@ -113,6 +113,7 @@ async fn check_coordinator(state: &State) -> Result<(), anyhow::Error> {
     .await?;
     // We allow NOT_FOUND to support upgrade tests where this endpoint doesn't yet exist.
     if !response.status().is_success() && response.status() != StatusCode::NOT_FOUND {
+        let response: Result<serde_json::Value, _> = response.json().await;
         bail!("Coordinator failed to dump state: {:?}", response);
     }
 
