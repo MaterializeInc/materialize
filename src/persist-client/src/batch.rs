@@ -47,7 +47,7 @@ use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
-use crate::internal::state::{HollowBatch, HollowBatchPart};
+use crate::internal::state::{BatchPart, HollowBatch, HollowBatchPart};
 use crate::stats::{
     part_stats_for_legacy_part, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
 };
@@ -96,7 +96,7 @@ where
                 self.batch
                     .parts
                     .iter()
-                    .map(|x| &x.key.0)
+                    .map(|x| &x.key().0)
                     .collect::<Vec<_>>(),
             );
         }
@@ -198,7 +198,7 @@ where
             let blob = Arc::clone(&self.blob);
             deletes.push(async move {
                 retry_external(&metrics.retries.external.batch_delete, || async {
-                    blob.delete(&part.key).await
+                    blob.delete(part.key()).await
                 })
                 .await;
             });
@@ -802,8 +802,8 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     isolated_runtime: Arc<IsolatedRuntime>,
-    writing_parts: VecDeque<JoinHandle<HollowBatchPart<T>>>,
-    finished_parts: Vec<HollowBatchPart<T>>,
+    writing_parts: VecDeque<JoinHandle<BatchPart<T>>>,
+    finished_parts: Vec<BatchPart<T>>,
     batch_metrics: BatchWriteMetrics,
 }
 
@@ -932,13 +932,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     stats
                 });
 
-                HollowBatchPart {
+                BatchPart::Hollow(HollowBatchPart {
                     key: partial_key,
                     encoded_size_bytes: payload_len,
                     key_lower,
                     stats,
                     ts_rewrite: None,
-                }
+                })
             }
             .instrument(write_span),
         );
@@ -959,7 +959,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<HollowBatchPart<T>> {
+    pub(crate) async fn finish(self) -> Vec<BatchPart<T>> {
         let mut parts = self.finished_parts;
         for handle in self.writing_parts {
             let part = handle.wait_and_assert_finished().await;
@@ -991,7 +991,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         // To prove that there is no data to truncate below the lower, require
         // that the lower is <= the rewrite ts.
         for part in batch.parts.iter() {
-            let part_lower_bound = part.ts_rewrite.as_ref().unwrap_or(batch.desc.lower());
+            let part_lower_bound = part.ts_rewrite().unwrap_or(batch.desc.lower());
             if !PartialOrder::less_equal(truncate.lower(), part_lower_bound) {
                 return Err(InvalidUsage::InvalidRewrite(format!(
                     "rewritten batch might have data below {:?} at {:?}",
@@ -1144,7 +1144,7 @@ mod tests {
 
         assert_eq!(batch.batch.parts.len(), 3);
         for part in &batch.batch.parts {
-            match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
+            match BlobKey::parse_ids(&part.key().complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
                     assert_eq!(writer, WriterKey::for_version(&cache.cfg.build_version));
@@ -1191,7 +1191,7 @@ mod tests {
 
         assert_eq!(batch.batch.parts.len(), 2);
         for part in &batch.batch.parts {
-            match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
+            match BlobKey::parse_ids(&part.key().complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
                     assert_eq!(writer, WriterKey::for_version(&cache.cfg.build_version));

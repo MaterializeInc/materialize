@@ -22,7 +22,10 @@ message ProtoU64Description {
 }
 
 message ProtoHollowBatchPart {
-    string key = 1;
+   oneof kind {
+        string key = 1;
+        bytes inline = 5;
+    }
     uint64 encoded_size_bytes = 2;
 
     bytes key_lower = 3;

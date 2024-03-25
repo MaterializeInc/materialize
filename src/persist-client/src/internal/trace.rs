@@ -526,7 +526,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 b.batch
                     .parts
                     .iter()
-                    .map(|x| format!(" {}", x.key))
+                    .map(|x| format!(" {}", x.key()))
                     .collect::<Vec<_>>()
                     .join(""),
             ),
@@ -551,7 +551,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                     parts
                         .iter()
                         .flat_map(|x| x.batch.parts.iter())
-                        .map(|x| format!(" {}", x.key))
+                        .map(|x| format!(" {}", x.key()))
                         .collect::<Vec<_>>()
                         .join("")
                 )
@@ -1337,7 +1337,7 @@ pub mod datadriven {
                     .inputs
                     .iter()
                     .flat_map(|x| x.batch.parts.iter())
-                    .map(|x| x.key.0.clone())
+                    .map(|x| x.key().0.clone())
                     .collect::<Vec<_>>()
                     .join(" ")
             );

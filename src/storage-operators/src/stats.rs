@@ -43,7 +43,7 @@ impl StatsCursor {
         as_of: Antichain<Timestamp>,
     ) -> Result<StatsCursor, Since<Timestamp>> {
         let should_fetch = |name: &'static str, count: fn(&RelationPartStats) -> Option<usize>| {
-            move |stats: &Option<LazyPartStats>| {
+            move |stats: Option<&LazyPartStats>| {
                 let Some(stats) = stats else { return true };
                 let stats = stats.decode();
                 let metrics = &metrics.pushdown.part_stats;

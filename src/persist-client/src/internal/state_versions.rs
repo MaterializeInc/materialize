@@ -1121,13 +1121,13 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             .inc_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| &*x.key)
+            .map(|x| &*x.key())
             .collect();
         let full_parts = self
             .full_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| &*x.key)
+            .map(|x| &*x.key())
             .collect();
         assert_eq!(inc_parts, full_parts);
 

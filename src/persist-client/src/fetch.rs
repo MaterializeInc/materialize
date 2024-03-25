@@ -40,7 +40,7 @@ use crate::internal::encoding::{LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::BlobKey;
-use crate::internal::state::HollowBatchPart;
+use crate::internal::state::{BatchPart, HollowBatchPart};
 use crate::read::LeasedReaderId;
 use crate::ShardId;
 
@@ -93,32 +93,39 @@ where
             });
         }
 
-        let buf = fetch_batch_part_blob(
-            &part.shard_id,
-            self.blob.as_ref(),
-            &self.metrics,
-            &self.shard_metrics,
-            &self.metrics.read.batch_fetcher,
-            &part.part,
-        )
-        .await
-        .unwrap_or_else(|blob_key| {
-            // Ideally, readers should never encounter a missing blob. They place a seqno
-            // hold as they consume their snapshot/listen, preventing any blobs they need
-            // from being deleted by garbage collection, and all blob implementations are
-            // linearizable so there should be no possibility of stale reads.
-            //
-            // If we do have a bug and a reader does encounter a missing blob, the state
-            // cannot be recovered, and our best option is to panic and retry the whole
-            // process.
-            panic!("batch fetcher could not fetch batch part: {}", blob_key)
-        });
+        let buf = match &part.part {
+            BatchPart::Hollow(x) => {
+                let buf = fetch_batch_part_blob(
+                    &part.shard_id,
+                    self.blob.as_ref(),
+                    &self.metrics,
+                    &self.shard_metrics,
+                    &self.metrics.read.batch_fetcher,
+                    x,
+                )
+                .await
+                .unwrap_or_else(|blob_key| {
+                    // Ideally, readers should never encounter a missing blob. They place a seqno
+                    // hold as they consume their snapshot/listen, preventing any blobs they need
+                    // from being deleted by garbage collection, and all blob implementations are
+                    // linearizable so there should be no possibility of stale reads.
+                    //
+                    // If we do have a bug and a reader does encounter a missing blob, the state
+                    // cannot be recovered, and our best option is to panic and retry the whole
+                    // process.
+                    panic!("batch fetcher could not fetch batch part: {}", blob_key)
+                });
+                FetchedBlobBuf::Hollow {
+                    buf,
+                    part: x.clone(),
+                }
+            }
+        };
         let fetched_blob = FetchedBlob {
             metrics: Arc::clone(&self.metrics),
             read_metrics: self.metrics.read.batch_fetcher.clone(),
             buf,
             registered_desc: part.desc.clone(),
-            part: part.part.clone(),
             schemas: self.schemas.clone(),
             filter: part.filter.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
@@ -234,7 +241,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let encoded_part = fetch_batch_part(
+    let encoded_part = EncodedPart::fetch(
         &part.shard_id,
         blob,
         &metrics,
@@ -261,7 +268,7 @@ where
         schemas,
         part.filter.clone(),
         part.filter_pushdown_audit,
-        part.part.stats.as_ref(),
+        part.part.stats(),
     )
 }
 
@@ -371,7 +378,7 @@ pub struct LeasedBatchPart<T> {
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) filter: FetchBatchFilter<T>,
     pub(crate) desc: Description<T>,
-    pub(crate) part: HollowBatchPart<T>,
+    pub(crate) part: BatchPart<T>,
     /// The `SeqNo` from which this part originated; we track this value as
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
@@ -397,7 +404,7 @@ where
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = self.leased_seqno.take();
         SerdeLeasedBatchPart {
-            encoded_size_bytes: self.part.encoded_size_bytes,
+            encoded_size_bytes: self.part.encoded_size_bytes(),
             proto: LazyProto::from(&proto),
         }
     }
@@ -422,7 +429,7 @@ where
 
     /// The encoded size of this part in bytes
     pub fn encoded_size_bytes(&self) -> usize {
-        self.part.encoded_size_bytes
+        self.part.encoded_size_bytes()
     }
 
     /// The filter has indicated we don't need this part, we can verify the
@@ -435,7 +442,7 @@ where
 
     /// Returns the pushdown stats for this part.
     pub fn stats(&self) -> Option<PartStats> {
-        self.part.stats.as_ref().map(|x| x.decode())
+        self.part.stats().map(|x| x.decode())
     }
 }
 
@@ -454,13 +461,20 @@ impl<T> Drop for LeasedBatchPart<T> {
 pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
     read_metrics: ReadMetrics,
-    buf: SegmentedBytes,
+    buf: FetchedBlobBuf<T>,
     registered_desc: Description<T>,
-    part: HollowBatchPart<T>,
     schemas: Schemas<K, V>,
     filter: FetchBatchFilter<T>,
     filter_pushdown_audit: bool,
     _phantom: PhantomData<fn() -> D>,
+}
+
+#[derive(Debug, Clone)]
+enum FetchedBlobBuf<T> {
+    Hollow {
+        buf: SegmentedBytes,
+        part: HollowBatchPart<T>,
+    },
 }
 
 impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
@@ -470,7 +484,6 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             read_metrics: self.read_metrics.clone(),
             buf: self.buf.clone(),
             registered_desc: self.registered_desc.clone(),
-            part: self.part.clone(),
             schemas: self.schemas.clone(),
             filter: self.filter.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
@@ -482,20 +495,25 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, T, D> {
     /// Partially decodes this blob into a [FetchedPart].
     pub fn parse(&self) -> FetchedPart<K, V, T, D> {
-        let part = decode_batch_part_blob(
-            &self.metrics,
-            &self.read_metrics,
-            self.registered_desc.clone(),
-            &self.part,
-            &self.buf,
-        );
+        let (part, stats) = match &self.buf {
+            FetchedBlobBuf::Hollow { buf, part } => {
+                let parsed = decode_batch_part_blob(
+                    &self.metrics,
+                    &self.read_metrics,
+                    self.registered_desc.clone(),
+                    part,
+                    buf,
+                );
+                (parsed, part.stats.as_ref())
+            }
+        };
         FetchedPart::new(
             Arc::clone(&self.metrics),
             part,
             self.schemas.clone(),
             self.filter.clone(),
             self.filter_pushdown_audit,
-            self.part.stats.as_ref(),
+            stats,
         )
     }
 }
@@ -671,6 +689,31 @@ impl<T> EncodedPart<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
+    pub async fn fetch(
+        shard_id: &ShardId,
+        blob: &(dyn Blob + Send + Sync),
+        metrics: &Metrics,
+        shard_metrics: &ShardMetrics,
+        read_metrics: &ReadMetrics,
+        registered_desc: &Description<T>,
+        part: &BatchPart<T>,
+    ) -> Result<Self, BlobKey> {
+        match part {
+            BatchPart::Hollow(x) => {
+                fetch_batch_part(
+                    shard_id,
+                    blob,
+                    metrics,
+                    shard_metrics,
+                    read_metrics,
+                    registered_desc,
+                    x,
+                )
+                .await
+            }
+        }
+    }
+
     pub(crate) fn new(
         metrics: ReadMetrics,
         registered_desc: Description<T>,

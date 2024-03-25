@@ -310,7 +310,7 @@ where
             let bytes = req
                 .inputs
                 .iter()
-                .flat_map(|x| x.parts.iter().map(|x| x.encoded_size_bytes))
+                .flat_map(|x| x.parts.iter().map(|x| x.encoded_size_bytes()))
                 .sum::<usize>();
             let start = Instant::now();
             info!(
@@ -351,7 +351,7 @@ where
                 res.output
                     .parts
                     .iter()
-                    .map(|x| x.encoded_size_bytes)
+                    .map(|x| x.encoded_size_bytes())
                     .sum::<usize>(),
                 start.elapsed(),
             );
