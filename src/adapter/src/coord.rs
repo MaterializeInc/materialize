@@ -2712,7 +2712,7 @@ impl Coordinator {
     pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Note: We purposefully use the `Debug` formatting for the value of all fields in the
         // returned object as a tradeoff between usability and stability. `serde_json` will fail
-        // to serailize an object if the keys aren't strings, so `Debug` formatting the values
+        // to serialize an object if the keys aren't strings, so `Debug` formatting the values
         // prevents a future unrelated change from silently breaking this method.
 
         let active_conns: BTreeMap<_, _> = self
