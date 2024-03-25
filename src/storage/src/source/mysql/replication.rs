@@ -332,7 +332,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 .await);
                             }
                             let new_upper = repl_partitions.frontier();
-                            repl_context.advance("xid", new_upper);
+                            repl_context.advance("xid_event", new_upper);
                         }
                     }
                     // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
@@ -374,7 +374,34 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             .as_ref()
                             .expect("gtid cap should be set by previous GtidEvent");
 
-                        events::handle_query_event(event, &mut repl_context, new_gtid).await?;
+                        let should_advance =
+                            events::handle_query_event(event, &mut repl_context, new_gtid).await?;
+
+                        if should_advance {
+                            if let Some(mut new_gtid) = next_gtid.take() {
+                                // Increment the transaction-id to the next GTID we should see from this source-id
+                                match new_gtid.timestamp_mut() {
+                                    GtidState::Active(time) => {
+                                        *time = time.checked_add(1).unwrap();
+                                    }
+                                    _ => unreachable!(),
+                                }
+
+                                if let Err(err) = repl_partitions.update(new_gtid) {
+                                    return Ok(return_definite_error(
+                                        err,
+                                        &output_indexes,
+                                        &mut data_output,
+                                        data_cap_set,
+                                        &mut definite_error_handle,
+                                        definite_error_cap_set,
+                                    )
+                                    .await);
+                                }
+                                let new_upper = repl_partitions.frontier();
+                                repl_context.advance("query_event", new_upper);
+                            }
+                        }
                     }
                     _ => {
                         // TODO: Handle other event types
