@@ -17,7 +17,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::{Datum, Row, RowPacker, ScalarType};
+use mz_repr::{Datum, Row, RowPacker, ScalarType, Timestamp};
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
 use mz_storage_types::controller::StorageError;
 
@@ -327,7 +327,7 @@ pub enum WebhookError {
     #[error("service unavailable")]
     Unavailable,
     #[error("internal storage failure! {0:?}")]
-    InternalStorageError(StorageError),
+    InternalStorageError(StorageError<Timestamp>),
     #[error("internal failure! {0:?}")]
     Internal(#[from] anyhow::Error),
 }
