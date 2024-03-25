@@ -17,7 +17,7 @@ use mz_catalog::durable::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_persist_client::PersistClient;
-use mz_repr::Diff;
+use mz_repr::{Diff, Timestamp};
 use std::fmt::{Debug, Formatter};
 use uuid::Uuid;
 
@@ -27,7 +27,7 @@ use uuid::Uuid;
 struct HiddenUserVersionTrace<'a>(&'a Trace);
 
 impl HiddenUserVersionTrace<'_> {
-    fn user_version(&self) -> Option<&((proto::ConfigKey, proto::ConfigValue), String, Diff)> {
+    fn user_version(&self) -> Option<&((proto::ConfigKey, proto::ConfigValue), Timestamp, Diff)> {
         self.0
             .configs
             .values
@@ -36,7 +36,7 @@ impl HiddenUserVersionTrace<'_> {
     }
 
     fn is_user_version(
-        ((key, _), _, _): &((proto::ConfigKey, proto::ConfigValue), String, Diff),
+        ((key, _), _, _): &((proto::ConfigKey, proto::ConfigValue), Timestamp, Diff),
     ) -> bool {
         key.key == USER_VERSION_KEY
     }
@@ -150,8 +150,8 @@ async fn test_debug(
             test_trace.user_version().unwrap();
         assert_eq!(user_version_key.key, USER_VERSION_KEY);
         assert_eq!(user_version_value.value, CATALOG_VERSION);
-        let expected_ts = "2";
-        assert_eq!(user_version_ts, expected_ts);
+        let expected_ts = Timestamp::new(2);
+        assert_eq!(user_version_ts, &expected_ts);
         assert_eq!(user_version_diff, &1);
         insta::assert_debug_snapshot!("opened_trace".to_string(), test_trace);
     }

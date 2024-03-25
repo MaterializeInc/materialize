@@ -44,7 +44,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
-use mz_repr::Diff;
+use mz_repr::{Diff, Timestamp};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
@@ -563,7 +563,7 @@ struct DumpedEntry {
     value: Box<dyn std::fmt::Debug>,
     key_json: UnescapedDebug,
     value_json: UnescapedDebug,
-    timestamp: String,
+    timestamp: Timestamp,
     diff: Diff,
 }
 

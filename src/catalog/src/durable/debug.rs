@@ -18,7 +18,7 @@ use serde_plain::{derive_display_from_serialize, derive_fromstr_from_deserialize
 
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::state_update::StateUpdateKind;
-use crate::durable::persist::UnopenedPersistCatalogState;
+use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
 use crate::durable::CatalogError;
 
 /// The contents of the catalog are logically separated into separate [`Collection`]s, which
@@ -258,7 +258,7 @@ collection_impl!({
 /// timestamp types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CollectionTrace<T: Collection + ?Sized> {
-    pub values: Vec<((T::Key, T::Value), String, Diff)>,
+    pub values: Vec<((T::Key, T::Value), Timestamp, Diff)>,
 }
 
 impl<T: Collection> CollectionTrace<T> {
