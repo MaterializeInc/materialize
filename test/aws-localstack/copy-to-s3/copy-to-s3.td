@@ -91,6 +91,10 @@ contains:MAX FILE SIZE cannot be less than 16MB
     FORMAT = 'csv'
   );
 
+> SELECT a FROM t
+1
+2
+
 > COPY (SELECT a FROM t) TO 's3://${arg.s3-prefix}/2/'
   WITH (
     AWS CONNECTION = aws_conn,
