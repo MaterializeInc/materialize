@@ -1738,6 +1738,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
     c.up("materialized")
     c.up("clusterd1")
+    c.up("clusterd2")
 
     c.sql(
         "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -1746,10 +1747,8 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     )
 
     # Helper function to get reconciliation metrics for clusterd.
-    def fetch_reconciliation_metrics() -> tuple[int, int]:
-        metrics = c.exec(
-            "clusterd1", "curl", "localhost:6878/metrics", capture=True
-        ).stdout
+    def fetch_reconciliation_metrics(process: str) -> tuple[int, int]:
+        metrics = c.exec(process, "curl", "localhost:6878/metrics", capture=True).stdout
 
         reused = 0
         replaced = 0
@@ -1779,19 +1778,70 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
         -- index on table
         CREATE TABLE t1 (a int);
-        CREATE DEFAULT INDEX on t1;
+        CREATE DEFAULT INDEX ON t1;
 
-        -- index on view
-        CREATE VIEW v AS SELECT a + 1 FROM t1;
-        CREATE DEFAULT INDEX on v;
+        -- index on index
+        CREATE VIEW v1 AS SELECT a + 1 AS a FROM t1;
+        CREATE DEFAULT INDEX ON v1;
+
+        -- index on index on index
+        CREATE VIEW v2 AS SELECT a + 1 AS a FROM v1;
+        CREATE DEFAULT INDEX ON v2;
 
         -- materialized view on table
         CREATE TABLE t2 (a int);
-        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
+        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 AS a FROM t2;
 
         -- materialized view on index
-        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
+        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 AS a FROM t1;
+
+        -- materialized view on index on index
+        CREATE MATERIALIZED VIEW mv3 AS SELECT a + 1 AS a FROM v1;
+
+        -- materialized view on index on index on index
+        CREATE MATERIALIZED VIEW mv4 AS SELECT a + 1 AS a FROM v2;
+
+        -- REFRESH materialized view on table
+        CREATE MATERIALIZED VIEW rmv1 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM t2;
+
+        -- REFRESH materialized view on index
+        CREATE MATERIALIZED VIEW rmv2 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM t1;
+
+        -- REFRESH materialized view on index on index
+        CREATE MATERIALIZED VIEW rmv3 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM v1;
+
+        -- REFRESH materialized view on index on index on index
+        CREATE MATERIALIZED VIEW rmv4 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM v2;
+
+        -- REFRESH materialized view on materialized view
+        CREATE MATERIALIZED VIEW rmv5 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM mv1;
+
+        -- REFRESH materialized view on REFRESH materialized view
+        CREATE MATERIALIZED VIEW rmv6 WITH (REFRESH EVERY '1m') AS SELECT a + 1 AS a FROM rmv1;
+
+        -- materialized view on REFRESH materialized view
+        CREATE MATERIALIZED VIEW mv5 AS SELECT a + 1 AS a FROM rmv1;
+
+        -- index on REFRESH materialized view
+        CREATE DEFAULT INDEX ON rmv1;
         """
+    )
+
+    # Replace the `mz_introspection` replica with an unorchestrated one so we
+    # can test reconciliation of system indexes too.
+    c.sql(
+        """
+        DROP CLUSTER REPLICA mz_introspection.r1;
+        CREATE CLUSTER REPLICA mz_introspection.replica2 (
+            STORAGECTL ADDRESSES ['clusterd2:2100'],
+            STORAGE ADDRESSES ['clusterd2:2103'],
+            COMPUTECTL ADDRESSES ['clusterd2:2101'],
+            COMPUTE ADDRESSES ['clusterd2:2102'],
+            WORKERS 1
+        );
+        """,
+        port=6877,
+        user="mz_system",
     )
 
     # Give the dataflows some time to make progress and get compacted.
@@ -1802,17 +1852,23 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     c.kill("materialized")
     c.up("materialized")
 
-    # Perform a query to ensure reconciliation has finished.
+    # Perform queries to ensure reconciliation has finished.
     c.sql(
         """
         SET cluster = cluster1;
-        SELECT * FROM v;
+        SELECT * FROM v1; -- cluster1
+        SHOW INDEXES;    -- mz_introspection
         """
     )
 
-    reused, replaced = fetch_reconciliation_metrics()
+    reused, replaced = fetch_reconciliation_metrics("clusterd1")
 
-    assert reused == 4
+    assert reused == 15
+    assert replaced == 0
+
+    reused, replaced = fetch_reconciliation_metrics("clusterd2")
+
+    assert reused > 10
     assert replaced == 0
 
 
