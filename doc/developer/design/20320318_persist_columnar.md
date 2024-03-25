@@ -291,17 +291,56 @@ the struct itself.
 <td> Jsonb </td>
 <td> 
 
-`TODO`
+```rust
+// JsonbRef<'a>(Datum<'a>)
+enum Value {
+  Null,
+  Boolean(bool),
+  Number(f64),
+  String(String),
+  Array(Vec<Value>),
+  Map(BTree<String, Value>),
+}
+```
 
 </td>
 <td>
 
-`TODO`
+`BinaryArray`
 
 </td>
 <td>
 
-TODO.
+Serialize JSON with the existing protobuf types, i.e. ProtoDatum, and store
+this binary blob.
+
+> **Structured Data:** An option is to structure the JSON data using an Arrow
+Union type. What is nice about this approach is it would allow us to do some
+form of projection pushdown on the JSON data. The main issue though is Arrow
+does not really support recursive data types. In fact, it is impossible to
+statically define the above `Value` enum in Arrow. The only option is to
+dynamically generate a DataType/schema given a column of values, see [1] for an
+example of this approach. I don't believe dynamically generating the schema is
+a good option because it is relatively complex, and we would end up with
+arbitrarily deep schemas based on user provided data. The arbitrarily deep
+schemas particularly concerns me because it would have unpredictable 
+performance.
+
+> **Alternative:** An alternative to fully structing the data is structuing it
+with a depth limit. For example, structuring up-to X levels deep, and then
+binary encoding the rest. This gets us predictable performance with the ability
+to do limited pushdown, at the cost of code complexity. I am not a fan of this
+approach because in my opinion the benefit of limited pushdown is not enough to
+justify the complexity.
+
+> **Alternative:** Instead of serializing the JSON data with protobuf, we could
+use a higher performance serialization format like [FlatBuffers](https://github.com/google/flatbuffers).
+I am leaning away from this approach because we already use protobuf internally
+so it's well understood, and there are a few tricks we can use to improve
+deserialization to greatly improve our performance, e.g. zero-copy strings,
+lazy deserialization, and skipping fields we don't care about.
+
+[1] https://gist.github.com/ParkMyCar/594f647a1bc5a146bb54ca46e6e95680
 
 </td>
 
@@ -383,12 +422,16 @@ Vec<(ColumnName, ColumnType)>
 </td>
 <td>
 
-`TODO`
+`BinaryArray`
 
 </td>
 <td>
 
-TODO
+Serialize JSON with the existing protobuf types, i.e. ProtoDatum, and store
+this binary blob.
+
+> **Alternative:** See "Notes" on JSON for alternative approaches. tl;dr Arrow
+does not support recursive types very well.
 
 </td>
 
@@ -552,6 +595,26 @@ Structure the data as it is in Rust.
 > **Alternative:** It would be relatively easy to stitch together the three
 values that make up an `AclItem` into a `FixedSizeBinary<16>`, it should even
 sort the same as its Rust counterpart.
+
+</td>
+
+<tr>
+<td> Int2Vector </td>
+<td> 
+
+```rust
+Vec<i16>
+``` 
+
+</td>
+<td>
+
+`VariableSizeList<i16>`
+
+</td>
+<td>
+
+Structure the data as it is in Rust.
 
 </td>
 
