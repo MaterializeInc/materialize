@@ -46,7 +46,9 @@ use url::Url;
 
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{AwsConnection, AwsConnectionValidationError};
+use crate::controller::AlterError;
 use crate::errors::{ContextCreationError, CsrConnectError};
+use crate::AlterCompatible;
 
 pub mod aws;
 pub mod inline;
@@ -311,10 +313,39 @@ impl ConnectionValidationError {
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
+    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+        match (self, other) {
+            (Self::Aws(s), Self::Aws(o)) => s.alter_compatible(id, o),
+            (Self::AwsPrivatelink(s), Self::AwsPrivatelink(o)) => s.alter_compatible(id, o),
+            (Self::Ssh(s), Self::Ssh(o)) => s.alter_compatible(id, o),
+            (Self::Csr(s), Self::Csr(o)) => s.alter_compatible(id, o),
+            (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
+            (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
+            (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            _ => {
+                tracing::warn!(
+                    "Connection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+                Err(AlterError { id })
+            }
+        }
+    }
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelinkConnection {
     pub service_name: String,
     pub availability_zones: Vec<String>,
+}
+
+impl AlterCompatible for AwsPrivatelinkConnection {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+        // Every element of the AwsPrivatelinkConnection connection is configurable.
+        Ok(())
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -674,6 +705,35 @@ impl KafkaConnection {
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for KafkaConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let KafkaConnection {
+            brokers: _,
+            default_tunnel: _,
+            progress_topic,
+            options: _,
+            tls: _,
+            sasl: _,
+        } = self;
+
+        let compatibility_checks = [(progress_topic == &other.progress_topic, "progress_topic")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "KafkaConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl RustType<ProtoKafkaConnectionTlsConfig> for KafkaTlsConfig {
     fn into_proto(&self) -> ProtoKafkaConnectionTlsConfig {
         ProtoKafkaConnectionTlsConfig {
@@ -956,6 +1016,34 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let CsrConnection {
+            tunnel,
+            // All non-tunnel fields may change
+            url: _,
+            tls_root_cert: _,
+            tls_identity: _,
+            http_auth: _,
+        } = self;
+
+        let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "CsrConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A TLS key pair used for client identity.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct TlsIdentity {
@@ -1154,6 +1242,38 @@ impl PostgresConnection<InlinedConnection> {
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let PostgresConnection {
+            tunnel,
+            // All non-tunnel options may change arbitrarily
+            host: _,
+            port: _,
+            database: _,
+            user: _,
+            password: _,
+            tls_mode: _,
+            tls_root_cert: _,
+            tls_identity: _,
+        } = self;
+
+        let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "PostgresConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
+    }
+}
+
 impl RustType<ProtoPostgresConnection> for PostgresConnection {
     fn into_proto(&self) -> ProtoPostgresConnection {
         ProtoPostgresConnection {
@@ -1231,6 +1351,27 @@ impl RustType<ProtoTunnel> for Tunnel<InlinedConnection> {
             Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh(ssh.into_rust()?),
             Some(ProtoTunnelField::AwsPrivatelink(aws)) => Tunnel::AwsPrivatelink(aws.into_rust()?),
         })
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for Tunnel<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let compatible = match (self, other) {
+            (Self::Ssh(s), Self::Ssh(o)) => s.alter_compatible(id, o).is_ok(),
+            (s, o) => s == o,
+        };
+
+        if !compatible {
+            tracing::warn!(
+                "Tunnel incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+
+            return Err(AlterError { id });
+        }
+
+        Ok(())
     }
 }
 
@@ -1487,6 +1628,37 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let MySqlConnection {
+            tunnel,
+            // All non-tunnel options may change arbitrarily
+            host: _,
+            port: _,
+            user: _,
+            password: _,
+            tls_mode: _,
+            tls_root_cert: _,
+            tls_identity: _,
+        } = self;
+
+        let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "MySqlConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A connection to a SSH tunnel.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshConnection {
@@ -1536,6 +1708,13 @@ impl RustType<ProtoSshConnection> for SshConnection {
     }
 }
 
+impl AlterCompatible for SshConnection {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+        // Every element of the SSH connection is configurable.
+        Ok(())
+    }
+}
+
 /// Specifies an AWS PrivateLink service for a [`Tunnel`].
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelink {
@@ -1565,6 +1744,32 @@ impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
             availability_zone: proto.availability_zone.into_rust()?,
             port: proto.port.into_rust()?,
         })
+    }
+}
+
+impl AlterCompatible for AwsPrivatelink {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let AwsPrivatelink {
+            connection_id,
+            availability_zone: _,
+            port: _,
+        } = self;
+
+        let compatibility_checks = [(connection_id == &other.connection_id, "connection_id")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "AwsPrivatelink incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1643,6 +1848,38 @@ impl SshTunnel<InlinedConnection> {
             .await
     }
 }
+
+impl<C: ConnectionAccess> AlterCompatible for SshTunnel<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let SshTunnel {
+            connection_id,
+            connection,
+        } = self;
+
+        let compatibility_checks = [
+            (connection_id == &other.connection_id, "connection_id"),
+            (
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
+            ),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "SshTunnel incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl SshConnection {
     #[allow(clippy::unused_async)]
     async fn validate(

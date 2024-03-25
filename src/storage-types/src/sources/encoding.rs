@@ -13,7 +13,7 @@ use anyhow::Context;
 use mz_interchange::{avro, protobuf};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::regex::any_regex;
-use mz_repr::{ColumnType, RelationDesc, ScalarType};
+use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +21,8 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
+use crate::controller::AlterError;
+use crate::AlterCompatible;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -70,6 +72,41 @@ impl RustType<ProtoSourceDataEncoding> for SourceDataEncoding {
             key: proto.key.into_rust()?,
             value: proto.value.into_rust_if_some("ProtoKeyValue::value")?,
         })
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for SourceDataEncoding<C> {
+    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let SourceDataEncoding { key, value } = self;
+
+        let compatibility_checks = [
+            (
+                match (key, &other.key) {
+                    (Some(s), Some(o)) => s.alter_compatible(id, o).is_ok(),
+                    (s, o) => s == o,
+                },
+                "key",
+            ),
+            (value.alter_compatible(id, &other.value).is_ok(), "value"),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "SourceDataEncoding incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -228,6 +265,33 @@ impl<C: ConnectionAccess> DataEncoding<C> {
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for DataEncoding<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let compatible = match (self, other) {
+            (DataEncoding::Avro(avro), DataEncoding::Avro(other_avro)) => {
+                avro.alter_compatible(id, other_avro).is_ok()
+            }
+            (s, o) => s == o,
+        };
+
+        if !compatible {
+            tracing::warn!(
+                "DataEncoding incompatible :\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+
+            return Err(AlterError { id });
+        }
+
+        Ok(())
+    }
+}
+
 /// Encoding in Avro format.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct AvroEncoding<C: ConnectionAccess = InlinedConnection> {
@@ -250,6 +314,49 @@ impl<R: ConnectionResolver> IntoInlineConnection<AvroEncoding, R>
             csr_connection: csr_connection.map(|csr| r.resolve_connection(csr).unwrap_csr()),
             confluent_wire_format,
         }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for AvroEncoding<C> {
+    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let AvroEncoding {
+            schema,
+            csr_connection,
+            confluent_wire_format,
+        } = self;
+
+        let compatibility_checks = [
+            (schema == &other.schema, "schema"),
+            (
+                match (csr_connection, &other.csr_connection) {
+                    (Some(s), Some(o)) => s.alter_compatible(id, o).is_ok(),
+                    (s, o) => s == o,
+                },
+                "csr_connection",
+            ),
+            (
+                confluent_wire_format == &other.confluent_wire_format,
+                "confluent_wire_format",
+            ),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "AvroEncoding incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
     }
 }
 
