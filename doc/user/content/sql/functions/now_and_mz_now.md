@@ -8,11 +8,15 @@ menu:
     parent: 'sql-functions'
 ---
 
-In Materialize, `now()` returns the value of the system clock with timezone when the transaction began. It cannot be used when creating materialized views.
+In Materialize, `now()` returns the value of the system clock when the
+transaction began as a [`timestamp with time zone`] value.
 
-By contrast, `mz_now()` returns the logical time at which the query was executed. This may be arbitrarily ahead of or behind the system clock.
+By contrast, `mz_now()` returns the logical time at which the query was executed
+as a [`mz_timestamp`] value.
 
-For example, at 9pm, Materialize may choose to execute a query as of logical time 8:30pm, perhaps because data for 8:30–9pm has not yet arrived. In this scenario, `now()` would return 9pm, while `mz_now()` would return 8:30pm.
+## Details
+
+### Common patterns
 
 The typical uses of `now()` and `mz_now()` are:
 
@@ -27,12 +31,35 @@ The typical uses of `now()` and `mz_now()` are:
   An ad hoc `SELECT` query with `now()` and `mz_now()` can be useful if you need to understand how up to date the data returned by a query is.
   The data returned by the query reflects the results as of the logical time returned by a call to `mz_now()` in that query.
 
+### Logical timestamp selection
 
-{{< warning >}}
-Queries that contain `now()` or `mz_now()` in the `SELECT` clause cannot be materialized.
-In other words, you cannot create an index or a materialized view on a query with `now()` or `mz_now()` in the `SELECT` clause.
-This is because `now()` and `mz_now()` change every millisecond, so if this materialization _were_ allowed, every record in the collection would be updated every millisecond, which would be resource prohibitive.
-{{< /warning >}}
+When using the [serializable](/get-started/isolation-level#serializable)
+isolation level, the logical timestamp may be arbitrarily ahead of or behind the
+system clock. For example, at a wall clock time of 9pm, Materialize may choose
+to execute a serializable query as of logical time 8:30pm, perhaps because data
+for 8:30–9pm has not yet arrived. In this scenario, `now()` would return 9pm,
+while `mz_now()` would return 8:30pm.
+
+When using the [strict serializable](/get-started/isolation-level#strict-serializable)
+isolation level, Materialize attempts to keep the logical timestamp reasonably
+close to wall clock time. In most cases, the logical timestamp of a query will
+be within a few seconds of the wall clock time. For example, when executing
+a strict serializable query at a wall clock time of 9pm, Materialize will choose
+a logical timestamp within a few seconds of 9pm, even if data for 8:30–9pm has
+not yet arrived and the query will need to block until the data for 9pm arrives.
+In this scenario, both `now()` and `mz_now()` would return 9pm.
+
+### Limitations
+
+  * Queries that use `now()` cannot be materialized. In other words, you cannot
+    create an index or a materialized view on a query that calls `now()`.
+
+  * Queries that use `mz_now()` can only be materialized if the call to
+    `mz_now()` is used in a [temporal filter](/sql/patterns/temporal-filters).
+
+These limitations are in place because `now()` changes every microsecond and
+`mz_now()` changes every millisecond. Allowing these functions to be
+materialized would be resource prohibitive.
 
 ## Examples
 
@@ -131,3 +158,6 @@ CREATE MATERIALIZED VIEW cant_materialize
 ERROR:  cannot materialize call to current_timestamp
 ERROR:  cannot materialize call to mz_now
 ```
+
+[`mz_timestamp`]: /sql/types/mz_timestamp
+[`timestamp with time zone`]: /sql/types/timestamptz
