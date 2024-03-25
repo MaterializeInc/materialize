@@ -25,6 +25,7 @@ use mz_persist_client::read::{Cursor, LazyPartStats, ListenEvent, ReadHandle, Si
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -33,7 +34,7 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::txn_cache::{TxnsCache, TxnsCacheState};
-use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
+use crate::TxnsCodecDefault;
 
 /// A token exchangeable for a data shard snapshot.
 ///

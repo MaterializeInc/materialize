@@ -12,3 +12,4 @@
 pub mod metrics;
 pub mod persist_source;
 pub mod s3_oneshot_sink;
+pub mod stats;

@@ -25,6 +25,7 @@ use differential_dataflow::Hashable;
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -43,7 +44,7 @@ use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::RetryParameters;
 use crate::fetch::{FetchedBlob, SerdeLeasedBatchPart};
 use crate::read::SubscriptionLeaseReturner;
-use crate::stats::{PartStats, STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
+use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work

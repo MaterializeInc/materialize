@@ -1092,12 +1092,14 @@ impl Drop for PubSubConnection {
 
 #[cfg(test)]
 mod pubsub_state {
+    use std::str::FromStr;
     use std::sync::Arc;
 
     use bytes::Bytes;
     use mz_ore::collections::HashSet;
     use mz_persist::location::{SeqNo, VersionedData};
     use mz_proto::RustType;
+    use once_cell::sync::Lazy;
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::Receiver;
     use tonic::Status;
@@ -1107,8 +1109,10 @@ mod pubsub_state {
     use crate::rpc::{PubSubSenderInternal, PubSubState};
     use crate::ShardId;
 
-    const SHARD_ID_0: ShardId = ShardId([0u8; 16]);
-    const SHARD_ID_1: ShardId = ShardId([1u8; 16]);
+    const SHARD_ID_0: Lazy<ShardId> =
+        Lazy::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
+    const SHARD_ID_1: Lazy<ShardId> =
+        Lazy::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
 
     const VERSIONED_DATA_0: VersionedData = VersionedData {
         seqno: SeqNo(0),
@@ -1191,7 +1195,7 @@ mod pubsub_state {
         connection.subscribe(&SHARD_ID_1);
         assert_eq!(
             state.subscriptions(connection.connection_id),
-            HashSet::from([SHARD_ID_0, SHARD_ID_1])
+            HashSet::from([*SHARD_ID_0, *SHARD_ID_1])
         );
 
         // and to a single shard many times idempotently
@@ -1199,7 +1203,7 @@ mod pubsub_state {
         connection.subscribe(&SHARD_ID_0);
         assert_eq!(
             state.subscriptions(connection.connection_id),
-            HashSet::from([SHARD_ID_0, SHARD_ID_1])
+            HashSet::from([*SHARD_ID_0, *SHARD_ID_1])
         );
 
         // dropping the connection should unsubscribe all shards and unregister the connection
@@ -1271,7 +1275,7 @@ mod pubsub_state {
         assert!(state.subscriptions(conn1_id).is_empty());
         assert_eq!(
             state.subscriptions(conn2.connection_id),
-            HashSet::from([SHARD_ID_0])
+            HashSet::from([*SHARD_ID_0])
         );
         assert_eq!(state.subscriptions(conn3.connection_id), HashSet::new());
         assert_eq!(
@@ -1305,6 +1309,7 @@ mod pubsub_state {
 #[cfg(test)]
 mod grpc {
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+    use std::str::FromStr;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -1314,6 +1319,7 @@ mod grpc {
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist::location::{SeqNo, VersionedData};
     use mz_proto::RustType;
+    use once_cell::sync::Lazy;
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
     use tokio_stream::StreamExt;
@@ -1328,8 +1334,10 @@ mod grpc {
     };
     use crate::ShardId;
 
-    const SHARD_ID_0: ShardId = ShardId([0u8; 16]);
-    const SHARD_ID_1: ShardId = ShardId([1u8; 16]);
+    static SHARD_ID_0: Lazy<ShardId> =
+        Lazy::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
+    static SHARD_ID_1: Lazy<ShardId> =
+        Lazy::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
     const VERSIONED_DATA_0: VersionedData = VersionedData {
         seqno: SeqNo(0),
         data: Bytes::from_static(&[0, 1, 2, 3]),
@@ -1385,7 +1393,7 @@ mod grpc {
             })
             .await;
             poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
-                server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 1)])
+                server_state.shard_subscription_counts() == HashMap::from([(*SHARD_ID_0, 1)])
             })
             .await
         });
@@ -1448,7 +1456,7 @@ mod grpc {
             // client rehydrated its subscriptions. notably, only includes the shard that
             // still has an active token
             poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
-                server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 1)])
+                server_state.shard_subscription_counts() == HashMap::from([(*SHARD_ID_0, 1)])
             })
             .await;
         });
@@ -1481,7 +1489,7 @@ mod grpc {
             // while the server was unavailable.
             poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
                 server_state.shard_subscription_counts()
-                    == HashMap::from([(SHARD_ID_0, 1), (SHARD_ID_1, 1)])
+                    == HashMap::from([(*SHARD_ID_0, 1), (*SHARD_ID_1, 1)])
             })
             .await;
         });
@@ -1516,7 +1524,7 @@ mod grpc {
         // we can subscribe to a shard, receiving back a token
         let token = Arc::clone(&client.sender).subscribe(&SHARD_ID_0);
         poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
-            server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 1)])
+            server_state.shard_subscription_counts() == HashMap::from([(*SHARD_ID_0, 1)])
         })
         .await;
 
@@ -1530,7 +1538,7 @@ mod grpc {
         // we can resubscribe to a shard
         let token = Arc::clone(&client.sender).subscribe(&SHARD_ID_0);
         poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
-            server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 1)])
+            server_state.shard_subscription_counts() == HashMap::from([(*SHARD_ID_0, 1)])
         })
         .await;
 
@@ -1539,7 +1547,7 @@ mod grpc {
         let token3 = Arc::clone(&client.sender).subscribe(&SHARD_ID_0);
         assert_eq!(Arc::strong_count(&token), 3);
         poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
-            server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 1)])
+            server_state.shard_subscription_counts() == HashMap::from([(*SHARD_ID_0, 1)])
         })
         .await;
 
@@ -1557,7 +1565,7 @@ mod grpc {
         let _token1 = Arc::clone(&client.sender).subscribe(&SHARD_ID_1);
         poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
             server_state.shard_subscription_counts()
-                == HashMap::from([(SHARD_ID_0, 1), (SHARD_ID_1, 1)])
+                == HashMap::from([(*SHARD_ID_0, 1), (*SHARD_ID_1, 1)])
         })
         .await;
     }
@@ -1618,7 +1626,7 @@ mod grpc {
         let _token_client_1 = Arc::clone(&client_1.sender).subscribe(&SHARD_ID_0);
         let _token_client_2 = Arc::clone(&client_2.sender).subscribe(&SHARD_ID_0);
         server_runtime.block_on(poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
-            server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 2)])
+            server_state.shard_subscription_counts() == HashMap::from([(*SHARD_ID_0, 2)])
         }));
 
         // the subscriber non-sender client receives the diff
@@ -1657,7 +1665,7 @@ mod grpc {
             })
             .await;
             poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
-                server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 2)])
+                server_state.shard_subscription_counts() == HashMap::from([(*SHARD_ID_0, 2)])
             })
             .await;
         });

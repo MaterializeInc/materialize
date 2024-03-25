@@ -995,7 +995,7 @@ impl Coordinator {
                                 let stats = stats.decode();
                                 let stats = RelationPartStats::new(
                                     name.as_str(),
-                                    &snapshot_stats.metrics,
+                                    &snapshot_stats.metrics.pushdown.part_stats,
                                     &relation_desc,
                                     &stats,
                                 );

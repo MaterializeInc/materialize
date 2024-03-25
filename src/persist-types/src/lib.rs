@@ -17,6 +17,10 @@
 )]
 
 use bytes::BufMut;
+use mz_proto::{RustType, TryFromProtoError};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::columnar::Schema;
 
@@ -28,6 +32,7 @@ pub mod parquet;
 pub mod part;
 pub mod stats;
 pub mod timestamp;
+pub mod txn;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.
@@ -116,6 +121,100 @@ pub trait Codec64: Sized + Clone + 'static {
     /// encode function for this codec ever changes, decode must be able to
     /// handle bytes output by all previous versions of encode.
     fn decode(buf: [u8; 8]) -> Self;
+}
+
+/// A location in s3, other cloud storage, or otherwise "durable storage" used
+/// by persist.
+///
+/// This structure can be durably written down or transmitted for use by other
+/// processes. This location can contain any number of persist shards.
+#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub struct PersistLocation {
+    /// Uri string that identifies the blob store.
+    pub blob_uri: String,
+
+    /// Uri string that identifies the consensus system.
+    pub consensus_uri: String,
+}
+
+impl PersistLocation {
+    /// Returns a PersistLocation indicating in-mem blob and consensus.
+    pub fn new_in_mem() -> Self {
+        PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        }
+    }
+}
+
+/// An opaque identifier for a persist durable TVC (aka shard).
+///
+/// The [std::string::ToString::to_string] format of this may be stored durably
+/// or otherwise used as an interchange format. It can be parsed back using
+/// [str::parse] or [std::str::FromStr::from_str].
+#[derive(Arbitrary, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct ShardId([u8; 16]);
+
+impl std::fmt::Display for ShardId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "s{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for ShardId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ShardId({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::str::FromStr for ShardId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let uuid_encoded = match s.strip_prefix('s') {
+            Some(x) => x,
+            None => return Err(format!("invalid ShardId {}: incorrect prefix", s)),
+        };
+        let uuid = Uuid::parse_str(uuid_encoded)
+            .map_err(|err| format!("invalid ShardId {}: {}", s, err))?;
+        Ok(ShardId(*uuid.as_bytes()))
+    }
+}
+
+impl From<ShardId> for String {
+    fn from(shard_id: ShardId) -> Self {
+        shard_id.to_string()
+    }
+}
+
+impl TryFrom<String> for ShardId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl ShardId {
+    /// Returns a random [ShardId] that is reasonably likely to have never been
+    /// generated before.
+    pub fn new() -> Self {
+        ShardId(Uuid::new_v4().as_bytes().to_owned())
+    }
+}
+
+impl RustType<String> for ShardId {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        match proto.parse() {
+            Ok(x) => Ok(x),
+            Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
+        }
+    }
 }
 
 /// An opaque fencing token used in compare_and_downgrade_since.

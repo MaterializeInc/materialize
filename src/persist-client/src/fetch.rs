@@ -22,6 +22,7 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
@@ -35,7 +36,6 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::{BlobKey, PartialBatchKey};
 use crate::read::LeasedReaderId;
-use crate::stats::PartStats;
 use crate::ShardId;
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.

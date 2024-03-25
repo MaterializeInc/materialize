@@ -11,13 +11,12 @@ use std::error::Error;
 use std::fmt::{self, Debug};
 
 use itertools::Itertools;
-use mz_persist_client::stats::PartStats;
-use mz_persist_client::{PersistLocation, ShardId};
-use mz_persist_txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
-use mz_persist_types::stats::StructStats;
+use mz_persist_types::stats::{PartStats, StructStats};
+use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
+use mz_persist_types::{PersistLocation, ShardId};
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_stash_types::StashError;

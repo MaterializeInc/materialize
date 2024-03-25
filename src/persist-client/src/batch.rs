@@ -48,7 +48,9 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
-use crate::stats::{untrimmable_columns, PartStats, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED};
+use crate::stats::{
+    part_stats_for_legacy_part, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
+};
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -836,7 +838,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     .spawn_named(|| "batch::encode_part", async move {
                         let stats = if stats_collection_enabled {
                             let stats_start = Instant::now();
-                            match PartStats::legacy_part_format(&schemas, &batch.updates) {
+                            match part_stats_for_legacy_part(&schemas, &batch.updates) {
                                 Ok(x) => {
                                     let mut trimmed_bytes = 0;
                                     let x = LazyPartStats::encode(&x, |s| {
