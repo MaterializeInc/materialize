@@ -105,8 +105,10 @@ IGNORE_RE = re.compile(
     # Fencing warnings are OK in fencing tests
     | persist-txn-fencing-mz_first-.* \| .*unexpected\ fence\ epoch
     | persist-txn-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ upper
+    | persist-txn-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ epoch
     | platform-checks-mz_txn_tables.* \| .*unexpected\ fence\ epoch
     | platform-checks-mz_txn_tables.* \| .*fenced\ by\ new\ catalog\ upper
+    | platform-checks-mz_txn_tables.* \| .*fenced\ by\ new\ catalog\ epoch
     # For platform-checks upgrade tests
     | platform-checks-clusterd.* \| .* received\ persist\ state\ from\ the\ future
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
