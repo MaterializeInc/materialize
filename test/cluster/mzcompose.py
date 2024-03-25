@@ -3520,3 +3520,88 @@ def workflow_test_refresh_mv_restart(
             )
         )
         check_frontier_is_not_stuck()
+
+
+def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Regression test for #26215."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_unorchestrated_cluster_replicas": "true",
+            },
+        ),
+        Testdrive(
+            no_reset=True,
+            default_timeout="10s",
+        ),
+    ):
+
+        def check_frontiers_advance():
+            c.testdrive(
+                dedent(
+                    r"""
+                $ set-regex match=0|\d{13,20} replacement=<TIMESTAMP>
+
+                -- Run the frontier query once to make `tokio-postgres` collect type information.
+                -- If we don't do this it will inject SELECTs into the transaction, making it fail.
+                > SELECT write_frontier FROM mz_internal.mz_frontiers WHERE false
+
+                > BEGIN
+                > DECLARE c CURSOR FOR SUBSCRIBE (
+                    SELECT write_frontier
+                    FROM mz_internal.mz_frontiers
+                    JOIN mz_sources ON (id = object_id)
+                    WHERE name = 'lineitem'
+                  )
+
+                > FETCH 1 c
+                <TIMESTAMP>  1 <TIMESTAMP>
+
+                > FETCH 2 c
+                <TIMESTAMP>  1 <TIMESTAMP>
+                <TIMESTAMP> -1 <TIMESTAMP>
+
+                > FETCH 2 c
+                <TIMESTAMP>  1 <TIMESTAMP>
+                <TIMESTAMP> -1 <TIMESTAMP>
+
+                > ROLLBACK
+                """
+                )
+            )
+
+        c.up("materialized")
+        c.up("clusterd1")
+        c.up("testdrive", persistent=True)
+
+        # Create an unmanaged cluster that isn't restarted together with materialized,
+        # and therein a source with subsources.
+        c.sql(
+            """
+            CREATE CLUSTER source REPLICAS (
+                replica1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+
+            CREATE SOURCE lgtpch
+            IN CLUSTER source
+            FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.001, TICK INTERVAL '1s')
+            FOR ALL TABLES;
+            """,
+        )
+
+        check_frontiers_advance()
+
+        # Restart envd to force a storage reconciliation.
+        c.kill("materialized")
+        c.up("materialized")
+
+        check_frontiers_advance()
