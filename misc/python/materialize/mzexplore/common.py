@@ -342,6 +342,43 @@ class ClonedItem:
         return f"{self.fqname_new(database, schema)} AS {self.name_old()}"
 
 
+@dataclass(frozen=True)
+class ArrangementSizesFile:
+    database: str
+    schema: str
+    name: str
+    item_type: ItemType
+    ext: str = "csv"
+
+    def file_name(self) -> str:
+        return f"{self.name}.arrangement-sizes.{self.ext}"
+
+    def folder(self) -> Path:
+        return Path(self.item_type.value, self.database, self.schema)
+
+    def path(self) -> Path:
+        return self.folder() / self.file_name()
+
+    def __str__(self) -> str:
+        return str(self.path())
+
+    def skip(self) -> bool:
+        # Skip items with database, schema, or item names that contain a `/`
+        # (not a valid UNIX folder character).
+        if "/" in self.database:
+            warn(f"Skip processing of item with bad database name: `{self.database}`")
+            return True
+        elif "/" in self.schema:
+            warn(f"Skip processing of item with bad schema name: `{self.schema}`")
+            return True
+        elif "/" in self.name:
+            warn(f"Skip processing of item with bad item name: `{self.name}`")
+            return True
+        else:
+            # Arrangements only exists for the following item types
+            return self.item_type not in {ItemType.MATERIALIZED_VIEW, ItemType.INDEX}
+
+
 def resource_path(name: str) -> Path:
     # NOTE: we have to do this cast because pyright is not comfortable with the
     # Traversable protocol.

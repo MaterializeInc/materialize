@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import contextlib
 import functools
 import logging
 import ssl
@@ -72,6 +73,10 @@ class Database:
             for row in cursor.fetchall():
                 yield {key: val for key, val in zip(cols, row)}
 
+    def execute(self, statement: str) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(statement)
+
     def catalog_items(
         self,
         database: str | None = None,
@@ -112,6 +117,27 @@ class Database:
                 cluster_id=literal(cluster_id),
             )
         )
+
+    def arrangement_sizes(self, id: str) -> DictGenerator:
+        p = resource_path("catalog/u_arrangement_sizes.sql")
+        q = parse_query(p)
+        yield from self.query_all(q.format(id=literal(id)))
+
+
+@contextlib.contextmanager
+def update_environment(
+    db: Database, env: dict[str, str]
+) -> Generator[Database, None, None]:
+    original = dict()
+    for e in db.query_all("SHOW ALL"):
+        key, old_value = e["name"], e["setting"]
+        if key in env:
+            original[key] = old_value
+            new_value = env[key]
+            db.execute(f"SET {identifier(key)} = {literal(new_value)}")
+    yield db
+    for key, old_value in original.items():
+        db.execute(f"SET {identifier(key)} = {literal(old_value)}")
 
 
 # Utility functions

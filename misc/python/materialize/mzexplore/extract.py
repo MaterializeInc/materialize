@@ -11,6 +11,8 @@
 Utilities to extract data from a Materialize catalog for exploration purposes.
 """
 
+import csv
+import dataclasses
 import json
 import string
 import textwrap
@@ -21,6 +23,7 @@ from pg8000.dbapi import DatabaseError
 
 from materialize.mzexplore import sql
 from materialize.mzexplore.common import (
+    ArrangementSizesFile,
     CreateFile,
     ExplaineeType,
     ExplainFile,
@@ -317,6 +320,114 @@ def plans(
                 # Write the plan into the file.
                 with (target / explain_file.path()).open("w") as file:
                     file.write(plan)
+
+
+def arrangement_sizes(
+    target: Path,
+    cluster: str,
+    cluster_replica: str,
+    database: str,
+    schema: str,
+    name: str,
+    db_port: int,
+    db_host: str,
+    db_user: str,
+    db_pass: str | None,
+    db_require_ssl: bool,
+    print_results: bool,
+) -> None:
+    """
+    Extract arrangement sizes for selected catalog items.
+    """
+
+    # Don't make pandas depedency for the entire module, but just for this
+    # command (otherwise all `extract` clients will have to install pandas, even
+    # if they will never call `extract.arrangement_sizes`).
+    import pandas as pd
+
+    # Ensure that the target dir exists.
+    target.mkdir(parents=True, exist_ok=True)
+
+    with closing(
+        sql.Database(
+            port=db_port,
+            host=db_host,
+            user=db_user,
+            database=None,
+            password=db_pass,
+            require_ssl=db_require_ssl,
+        )
+    ) as db:
+        # Extract materialized view definitions
+        # -------------------------------------
+
+        with sql.update_environment(
+            db,
+            env=dict(
+                cluster=cluster,
+                cluster_replica=cluster_replica,
+            ),
+        ) as db:
+            for item in db.catalog_items(database, schema, name, system=False):
+                item_database = sql.identifier(item["database"])
+                item_schema = sql.identifier(item["schema"])
+                item_name = sql.identifier(item["name"])
+                fqname = f"{item_database}.{item_schema}.{item_name}"
+
+                try:
+                    item_type = ItemType(item["type"])
+                except ValueError:
+                    warn(f"Unsupported item type `{item['type']}` for {fqname}")
+                    continue
+
+                csv_file = ArrangementSizesFile(
+                    database=item["database"],
+                    schema=item["schema"],
+                    name=item["name"],
+                    item_type=item_type,
+                )
+
+                if csv_file.skip():
+                    continue
+
+                try:
+                    info(
+                        f"Extracting arrangement sizes for {item_type.sql()} "
+                        f"in `{csv_file.path()}`"
+                    )
+
+                    # Extract arrangement sizes into a DataFrame.
+                    df = pd.DataFrame.from_records(
+                        db.arrangement_sizes(item["id"]),
+                        coerce_float=True,
+                    )
+
+                    if not df.empty:
+                        # Compute a `total` row of numeric columns.
+                        df.loc["total"] = df.sum(numeric_only=True)
+
+                    # Ensure that the parent folder exists.
+                    (target / csv_file.folder()).mkdir(parents=True, exist_ok=True)
+
+                    # Write CSV to the output file.
+                    with (target / csv_file.path()).open("w") as file:
+                        df.to_csv(file, index=False, quoting=csv.QUOTE_MINIMAL)
+
+                    if print_results:  # Print results if requested.
+                        float_format = lambda x: f"{x:_.3f}"
+                        with pd.option_context("display.float_format", float_format):
+                            print(df.to_string())
+
+                        # Write DataFrame string to the output file.
+                        txt_file = dataclasses.replace(csv_file, ext="txt")
+                        with (target / txt_file.path()).open("w") as file:
+                            file.write(df.to_string())
+
+                except DatabaseError as e:
+                    warn(
+                        f"Cannot extract arrangement sizes for {item_type.sql()} {fqname}: "
+                        f"{e}"
+                    )
 
 
 # Utility methods

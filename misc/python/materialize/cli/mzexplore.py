@@ -263,6 +263,58 @@ def extract_plans(
         raise click.ClickException(f"extract plans command failed: {e=}, {type(e)=}")
 
 
+@extract.command(name="arrangement-sizes")
+@click.argument("target", **Arg.repository)
+@click.argument("cluster", type=str)
+@click.argument("cluster_replica", type=str)
+@click.argument("database", type=str)
+@click.argument("schema", type=str)
+@click.argument("name", type=str)
+@click.option("--db-port", **Opt.db_port)
+@click.option("--db-host", **Opt.db_host)
+@click.option("--db-user", **Opt.db_user)
+@click.option("--db-pass", **Opt.db_pass)
+@click.option("--db-require-ssl", **Opt.db_require_ssl)
+@click.option("--print-results", is_flag=True, default=False)
+@is_documented_by(api.extract.arrangement_sizes)
+def extract_arrangement_sizes(
+    target: Path,
+    cluster: str,
+    cluster_replica: str,
+    database: str,
+    schema: str,
+    name: str,
+    db_port: int,
+    db_host: str,
+    db_user: str,
+    db_pass: str | None,
+    db_require_ssl: bool,
+    print_results: bool,
+) -> None:
+    try:
+        api.extract.arrangement_sizes(
+            target=target,
+            cluster=cluster,
+            cluster_replica=cluster_replica,
+            database=database,
+            schema=schema,
+            name=name,
+            db_port=db_port,
+            db_host=db_host,
+            db_user=db_user,
+            db_pass=db_pass,
+            db_require_ssl=db_require_ssl,
+            print_results=print_results,
+        )
+    except Exception as e:
+        import traceback
+
+        traceback.print_tb(e.__traceback__)
+        raise click.ClickException(
+            f"extract arrangement-sizes command failed: {e=}, {type(e)=}"
+        )
+
+
 @app.group()
 @is_documented_by(api.analyze)
 def analyze() -> None:
