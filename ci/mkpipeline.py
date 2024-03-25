@@ -197,8 +197,6 @@ so it is executed.""",
 
     if test_selection := os.getenv("CI_TEST_SELECTION"):
         trim_test_selection(pipeline, set(test_selection.split(",")))
-    else:
-        add_test_selection_block(pipeline, args.pipeline)
 
     check_depends_on(pipeline, args.pipeline)
 
@@ -358,40 +356,6 @@ def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
             and not step.get("async")
         ):
             step["skip"] = True
-
-
-def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
-    selection_step = {
-        "prompt": "What tests would you like to run? As a convenience, leaving all tests unchecked will run all tests.",
-        "blocked_state": "running",
-        "fields": [
-            {
-                "select": "Tests",
-                "key": "tests",
-                "options": [],
-                "multiple": True,
-                "required": False,
-            }
-        ],
-        "if": 'build.source == "ui"',
-    }
-
-    if pipeline_name == "nightly":
-        selection_step["block"] = "Nightly test selection"
-    elif pipeline_name == "release-qualification":
-        selection_step["block"] = "Release Qualification test selection"
-    else:
-        return
-
-    for step in steps(pipeline):
-        if (
-            "id" in step
-            and step["id"] not in ("analyze", "build-x86_64", "build-aarch64")
-            and "skip" not in step
-        ):
-            selection_step["fields"][0]["options"].append({"value": step["id"]})
-
-    pipeline["steps"].insert(0, selection_step)
 
 
 def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
