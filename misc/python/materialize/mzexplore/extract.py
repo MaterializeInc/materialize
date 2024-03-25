@@ -17,10 +17,12 @@ import textwrap
 from contextlib import closing
 from pathlib import Path
 
+import pandas as pd
 from pg8000.dbapi import DatabaseError
 
 from materialize.mzexplore import sql
 from materialize.mzexplore.common import (
+    ArrangementSizesFile,
     CreateFile,
     ExplaineeType,
     ExplainFile,
@@ -309,6 +311,100 @@ def plans(
                 # Write the plan into the file.
                 with (target / explain_file.path()).open("w") as file:
                     file.write(plan)
+
+
+def arrangement_sizes(
+    target: Path,
+    cluster: str,
+    cluster_replica: str,
+    database: str,
+    schema: str,
+    name: str,
+    db_port: int,
+    db_host: str,
+    db_user: str,
+    db_pass: str | None,
+    db_require_ssl: bool,
+    print_results: bool,
+) -> None:
+    """
+    Extract arrangement sizes for selected catalog items.
+    """
+
+    # Ensure that the target dir exists.
+    target.mkdir(parents=True, exist_ok=True)
+
+    with closing(
+        sql.Database(
+            port=db_port,
+            host=db_host,
+            user=db_user,
+            database=None,
+            password=db_pass,
+            require_ssl=db_require_ssl,
+        )
+    ) as db:
+        # Extract materialized view definitions
+        # -------------------------------------
+
+        with sql.update_environment(
+            db,
+            env=dict(
+                cluster=cluster,
+                cluster_replica=cluster_replica,
+            ),
+        ) as db:
+            for item in db.catalog_items(database, schema, name, system=False):
+                item_database = sql.identifier(item["database"])
+                item_schema = sql.identifier(item["schema"])
+                item_name = sql.identifier(item["name"])
+                fqname = f"{item_database}.{item_schema}.{item_name}"
+
+                try:
+                    item_type = ItemType(item["type"])
+                except ValueError:
+                    warn(f"Unsupported item type `{item['type']}` for {fqname}")
+                    continue
+
+                output_file = ArrangementSizesFile(
+                    database=item["database"],
+                    schema=item["schema"],
+                    name=item["name"],
+                    item_type=item_type,
+                )
+
+                if output_file.skip():
+                    continue
+
+                try:
+                    info(
+                        f"Extracting {item_type.sql()} arrangement sizes "
+                        f"in `{output_file.path()}`"
+                    )
+
+                    # Extract arrangement sizes into a DataFrame.
+                    df = pd.DataFrame.from_records(
+                        db.arrangement_sizes(item["id"]),
+                        coerce_float=True,
+                    )
+
+                    if not df.empty:
+                        # Compute a `total` row of numeric columns.
+                        df.loc["total"] = df.sum(numeric_only=True)
+
+                    if print_results:  # Print results if requested.
+                        print(df.to_string())
+
+                    # Ensure that the parent folder exists.
+                    (target / output_file.folder()).mkdir(parents=True, exist_ok=True)
+
+                    # Write CSV to the output file.
+                    with (target / output_file.path()).open("w") as file:
+                        file.write(df.to_string())
+                        # df.to_csv(file, index=False, quoting=csv.QUOTE_MINIMAL)
+
+                except DatabaseError as e:
+                    warn(f"Cannot export def {fqname}: {e}")
 
 
 # Utility methods

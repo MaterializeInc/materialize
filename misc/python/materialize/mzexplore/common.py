@@ -319,6 +319,29 @@ def explain_diff(base: ExplainFile, diff_suffix: str) -> ExplainFile:
     return replace(base, explainee_type=ExplaineeType.REPLAN_ITEM, suffix=diff_suffix)
 
 
+@dataclass(frozen=True)
+class ArrangementSizesFile:
+    database: str
+    schema: str
+    name: str
+    item_type: ItemType
+
+    def file_name(self) -> str:
+        return f"{self.name}.arrangement-sizes.txt"
+
+    def folder(self) -> Path:
+        return Path(self.item_type.value, self.database, self.schema)
+
+    def path(self) -> Path:
+        return self.folder() / self.file_name()
+
+    def __str__(self) -> str:
+        return str(self.path())
+
+    def skip(self) -> bool:
+        return self.item_type not in {ItemType.MATERIALIZED_VIEW, ItemType.INDEX}
+
+
 def resource_path(name: str) -> Path:
     # NOTE: we have to do this cast because pyright is not comfortable with the
     # Traversable protocol.
