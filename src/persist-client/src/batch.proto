@@ -20,3 +20,37 @@ message ProtoBatch {
 
     reserved 4;
 }
+
+// This is only to impl ExchangeData, and so used between processes running the
+// same version of code. It's not durably written down anywhere.
+message ProtoLeasedBatchPart {
+    string shard_id = 1;
+    ProtoFetchBatchFilter filter = 2;
+    mz_persist_client.internal.state.ProtoU64Description desc = 3;
+    mz_persist_client.internal.state.ProtoHollowBatchPart part = 4;
+    ProtoLease lease = 5;
+    bool filter_pushdown_audit = 6;
+}
+
+message ProtoFetchBatchFilter {
+    oneof kind {
+        // Apply snapshot-style semantics to the fetched batch part.
+        //
+        // Return all values with time leq `as_of`.
+        mz_persist_client.internal.state.ProtoU64Antichain snapshot = 1;
+        // Apply listen-style semantics to the fetched batch part.
+        ProtoFetchBatchFilterListen listen = 2;
+    }
+}
+
+message ProtoFetchBatchFilterListen {
+    // Return all values with time in advance of `as_of`.
+    mz_persist_client.internal.state.ProtoU64Antichain as_of = 1;
+    // Return all values with `lower` leq time.
+    mz_persist_client.internal.state.ProtoU64Antichain lower = 2;
+}
+
+message ProtoLease {
+    string reader_id = 1;
+    optional uint64 seqno = 2;
+}
