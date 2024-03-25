@@ -239,6 +239,7 @@ Logical
 Login
 Lowering
 Managed
+Manual
 Map
 Marketing
 Materialize
@@ -356,6 +357,7 @@ Row
 Rows
 Sasl
 Scale
+Schedule
 Schema
 Schemas
 Second

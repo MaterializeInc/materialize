@@ -1097,3 +1097,46 @@ SELECT mz_unsafe.mz_sleep(2);
 # This would fail to get read holds if it attempted to do so.
 statement ok
 EXPLAIN REPLAN MATERIALIZED VIEW mv8;
+
+# ----------------------------------------
+# Automated cluster scheduling for REFRESH
+# ----------------------------------------
+
+statement error db error: ERROR: Expected one of MANUAL or ON, found identifier "aaaaaaaa"
+CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = AAAAAAAA);
+
+statement error db error: ERROR: Expected one of MANUAL or ON, found number "42"
+CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = 42);
+
+statement error db error: ERROR: Expected one of MANUAL or ON, found REFRESH
+CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = REFRESH);
+
+statement ok
+CREATE CLUSTER c_schedule_1 (SIZE = '1', SCHEDULE = MANUAL);
+
+statement ok
+CREATE CLUSTER c_schedule_2 (SIZE = '1', SCHEDULE MANUAL);
+
+statement error cluster schedules other than MANUAL not yet supported
+CREATE CLUSTER c_schedule_3 (SIZE = '1', SCHEDULE = ON REFRESH);
+
+statement ok
+ALTER cluster c_schedule_1 RESET (SCHEDULE);
+
+statement ok
+ALTER cluster c_schedule_1 SET (SCHEDULE = MANUAL);
+
+statement error cluster schedules other than MANUAL not yet supported
+ALTER cluster c_schedule_1 SET (SCHEDULE = ON REFRESH);
+
+statement ok
+CREATE CLUSTER unmanaged1 (SCHEDULE = MANUAL, REPLICAS (r1 (SIZE '1')))
+
+statement ok
+ALTER cluster unmanaged1 SET (SCHEDULE = MANUAL);
+
+statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
+ALTER cluster unmanaged1 SET (SCHEDULE = ON REFRESH);
+
+statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
+CREATE CLUSTER unmanaged2 (SCHEDULE = ON REFRESH, REPLICAS (r1 (SIZE '1')))

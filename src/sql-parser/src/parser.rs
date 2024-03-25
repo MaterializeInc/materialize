@@ -3695,6 +3695,7 @@ impl<'a> Parser<'a> {
             REPLICAS,
             REPLICATION,
             SIZE,
+            SCHEDULE,
         ])?;
         let name = match option {
             AVAILABILITY => {
@@ -3718,6 +3719,7 @@ impl<'a> Parser<'a> {
                 ClusterOptionName::ReplicationFactor
             }
             SIZE => ClusterOptionName::Size,
+            SCHEDULE => ClusterOptionName::Schedule,
             _ => unreachable!(),
         };
         Ok(name)
@@ -3726,16 +3728,18 @@ impl<'a> Parser<'a> {
     fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         let name = self.parse_cluster_option_name()?;
 
-        if name == ClusterOptionName::Replicas {
-            let _ = self.consume_token(&Token::Eq);
-            return self.parse_cluster_option_replicas();
+        match name {
+            ClusterOptionName::Replicas => self.parse_cluster_option_replicas(),
+            ClusterOptionName::Schedule => self.parse_cluster_option_schedule(),
+            _ => {
+                let value = self.parse_optional_option_value()?;
+                Ok(ClusterOption { name, value })
+            }
         }
-
-        let value = self.parse_optional_option_value()?;
-        Ok(ClusterOption { name, value })
     }
 
     fn parse_cluster_option_replicas(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
         self.expect_token(&Token::LParen)?;
         let replicas = if self.consume_token(&Token::RParen) {
             vec![]
@@ -3753,6 +3757,23 @@ impl<'a> Parser<'a> {
         Ok(ClusterOption {
             name: ClusterOptionName::Replicas,
             value: Some(WithOptionValue::ClusterReplicas(replicas)),
+        })
+    }
+
+    fn parse_cluster_option_schedule(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        let kw = self.expect_one_of_keywords(&[MANUAL, ON])?;
+        let value = match kw {
+            MANUAL => ClusterScheduleOptionValue::Manual,
+            ON => {
+                self.expect_keyword(REFRESH)?;
+                ClusterScheduleOptionValue::Refresh
+            }
+            _ => unreachable!(),
+        };
+        Ok(ClusterOption {
+            name: ClusterOptionName::Schedule,
+            value: Some(WithOptionValue::ClusterScheduleOptionValue(value)),
         })
     }
 

@@ -1733,6 +1733,8 @@ pub enum ClusterOptionName {
     ReplicationFactor,
     /// The `SIZE` option.
     Size,
+    /// The `SCHEDULE` option.
+    Schedule,
 }
 
 impl AstDisplay for ClusterOptionName {
@@ -1749,6 +1751,7 @@ impl AstDisplay for ClusterOptionName {
             ClusterOptionName::Replicas => f.write_str("REPLICAS"),
             ClusterOptionName::ReplicationFactor => f.write_str("REPLICATION FACTOR"),
             ClusterOptionName::Size => f.write_str("SIZE"),
+            ClusterOptionName::Schedule => f.write_str("SCHEDULE"),
         }
     }
 }
@@ -1769,7 +1772,8 @@ impl WithOptionName for ClusterOptionName {
             | ClusterOptionName::Managed
             | ClusterOptionName::Replicas
             | ClusterOptionName::ReplicationFactor
-            | ClusterOptionName::Size => false,
+            | ClusterOptionName::Size
+            | ClusterOptionName::Schedule => false,
         }
     }
 }
@@ -3467,6 +3471,7 @@ pub enum WithOptionValue<T: AstInfo> {
     ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink<T>),
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
+    ClusterScheduleOptionValue(ClusterScheduleOptionValue),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -3489,7 +3494,8 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::Item(_)
                 | WithOptionValue::UnresolvedItemName(_)
                 | WithOptionValue::ConnectionAwsPrivatelink(_)
-                | WithOptionValue::ClusterReplicas(_) => {
+                | WithOptionValue::ClusterReplicas(_)
+                | WithOptionValue::ClusterScheduleOptionValue(_) => {
                     // These do not need redaction.
                 }
             }
@@ -3524,6 +3530,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_node(value);
             }
             WithOptionValue::Refresh(opt) => f.write_node(opt),
+            WithOptionValue::ClusterScheduleOptionValue(value) => f.write_node(value),
         }
     }
 }
@@ -3574,6 +3581,25 @@ impl<T: AstInfo> AstDisplay for RefreshOptionValue<T> {
                     f.write_str(" ALIGNED TO ");
                     f.write_node(aligned_to)
                 }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ClusterScheduleOptionValue {
+    Manual,
+    Refresh,
+}
+
+impl AstDisplay for ClusterScheduleOptionValue {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ClusterScheduleOptionValue::Manual => {
+                f.write_str("MANUAL");
+            }
+            ClusterScheduleOptionValue::Refresh => {
+                f.write_str("ON REFRESH");
             }
         }
     }
