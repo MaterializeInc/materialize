@@ -86,7 +86,10 @@ pub(crate) async fn restore_blob(
             }
             for batch in rollup_state.collections.trace.batches() {
                 for part in &batch.parts {
-                    let key = part.key().complete(&shard_id);
+                    let Some(key) = part.key() else {
+                        continue;
+                    };
+                    let key = key.complete(&shard_id);
                     check_restored(&key, blob.restore(&key).await);
                 }
             }
@@ -94,7 +97,10 @@ pub(crate) async fn restore_blob(
         for batch in diff.spine {
             if let Some(_) = after(batch.val) {
                 for part in batch.key.parts {
-                    let key = part.key().complete(&shard_id);
+                    let Some(key) = part.key() else {
+                        continue;
+                    };
+                    let key = key.complete(&shard_id);
                     check_restored(&key, blob.restore(&key).await);
                 }
             }

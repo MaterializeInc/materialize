@@ -17,6 +17,7 @@ use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::halt;
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist_types::stats::{PartStats, ProtoStructStats};
 use mz_persist_types::{Codec, Codec64};
@@ -25,6 +26,7 @@ use proptest::prelude::Arbitrary;
 use proptest::strategy::Strategy;
 use prost::Message;
 use semver::Version;
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -39,10 +41,10 @@ use crate::internal::state::{
     proto_hollow_batch_part, BatchPart, CriticalReaderState, HandleDebugState, HollowBatch,
     HollowBatchPart, HollowRollup, IdempotencyToken, LeasedReaderState, OpaqueState,
     ProtoCriticalReaderState, ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart,
-    ProtoHollowRollup, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoRollup, ProtoStateDiff,
-    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, State, StateCollections, TypedState,
-    WriterState,
+    ProtoHollowRollup, ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState,
+    ProtoRollup, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
+    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData, ProtoWriterState,
+    State, StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -1114,17 +1116,24 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 key_stats: x.stats.into_proto(),
                 ts_rewrite: x.ts_rewrite.as_ref().map(|x| x.into_proto()),
             },
+            BatchPart::Inline(x) => ProtoHollowBatchPart {
+                kind: Some(proto_hollow_batch_part::Kind::Inline(x.into_proto())),
+                encoded_size_bytes: x.encoded_size_bytes().into_proto(),
+                key_lower: Bytes::new(),
+                key_stats: None,
+                ts_rewrite: None,
+            },
         }
     }
 
     fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
-        let ts_rewrite = match proto.ts_rewrite {
-            Some(ts_rewrite) => Some(ts_rewrite.into_rust()?),
-            None => None,
-        };
         let encoded_size_bytes = proto.encoded_size_bytes.into_rust()?;
         match proto.kind {
             Some(proto_hollow_batch_part::Kind::Key(key)) => {
+                let ts_rewrite = match proto.ts_rewrite {
+                    Some(ts_rewrite) => Some(ts_rewrite.into_rust()?),
+                    None => None,
+                };
                 Ok(BatchPart::Hollow(HollowBatchPart {
                     key: key.into_rust()?,
                     encoded_size_bytes,
@@ -1133,7 +1142,12 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     ts_rewrite,
                 }))
             }
-            Some(proto_hollow_batch_part::Kind::Inline(_)) => unimplemented!("WIP"),
+            Some(proto_hollow_batch_part::Kind::Inline(x)) => {
+                assert_eq!(x.len(), encoded_size_bytes);
+                assert!(proto.key_stats.is_none());
+                assert!(proto.ts_rewrite.is_none());
+                Ok(BatchPart::Inline(LazyInlineBatchPart(x.into_rust()?)))
+            }
             None => Err(TryFromProtoError::unknown_enum_variant(
                 "ProtoHollowBatchPart::kind",
             )),
@@ -1202,6 +1216,81 @@ impl Arbitrary for LazyPartStats {
     }
 }
 
+impl<T: Timestamp + Codec64> RustType<ProtoInlineBatchPart> for BlobTraceBatchPart<T> {
+    fn into_proto(&self) -> ProtoInlineBatchPart {
+        // BlobTraceBatchPart has a Vec<ColumnarRecords>. Inline writes only
+        // needs one and it's nice to only have to model one at the
+        // ProtoInlineBatchPart level. I'm _pretty_ sure that the actual
+        // BlobTraceBatchPart we've serialized into parquet always have exactly
+        // one (_maaaaaybe_ zero or one), but that's a scary thing to start
+        // enforcing, so separate it out (so we can e.g. use sentry errors! to
+        // confirm before rolling anything out). In the meantime, just construct
+        // the ProtoInlineBatchPart directly in BatchParts where it still knows
+        // that it has exactly one ColumnarRecords.
+        unreachable!("unused")
+    }
+
+    fn from_proto(proto: ProtoInlineBatchPart) -> Result<Self, TryFromProtoError> {
+        Ok(BlobTraceBatchPart {
+            desc: proto.desc.into_rust_if_some("ProtoInlineBatchPart::desc")?,
+            index: proto.index.into_rust()?,
+            updates: vec![proto
+                .updates
+                .into_rust_if_some("ProtoInlineBatchPart::updates")?],
+        })
+    }
+}
+
+/// A batch part stored inlined in State.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LazyInlineBatchPart(LazyProto<ProtoInlineBatchPart>);
+
+impl From<&ProtoInlineBatchPart> for LazyInlineBatchPart {
+    fn from(value: &ProtoInlineBatchPart) -> Self {
+        LazyInlineBatchPart(value.into())
+    }
+}
+
+impl Serialize for LazyInlineBatchPart {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        // NB: This serialize impl is only used for QA and debugging, so emit a
+        // truncated version.
+        let proto = self.0.decode().expect("valid proto");
+        let mut s = s.serialize_struct("InlineBatchPart", 3)?;
+        let () = s.serialize_field("desc", &proto.desc)?;
+        let () = s.serialize_field("index", &proto.index)?;
+        let () = s.serialize_field("updates[len]", &proto.updates.map_or(0, |x| x.len))?;
+        s.end()
+    }
+}
+
+impl LazyInlineBatchPart {
+    pub(crate) fn encoded_size_bytes(&self) -> usize {
+        self.0.buf.len()
+    }
+
+    /// Decodes and returns PartStats from the encoded representation.
+    ///
+    /// This does not cache the returned value, it decodes each time it's
+    /// called.
+    pub fn decode<T: Timestamp + Codec64>(
+        &self,
+    ) -> Result<BlobTraceBatchPart<T>, TryFromProtoError> {
+        let proto = self.0.decode().expect("valid proto");
+        proto.into_rust()
+    }
+}
+
+impl RustType<Bytes> for LazyInlineBatchPart {
+    fn into_proto(&self) -> Bytes {
+        self.0.into_proto()
+    }
+
+    fn from_proto(proto: Bytes) -> Result<Self, TryFromProtoError> {
+        Ok(LazyInlineBatchPart(proto.into_rust()?))
+    }
+}
+
 impl RustType<ProtoHollowRollup> for HollowRollup {
     fn into_proto(&self) -> ProtoHollowRollup {
         ProtoHollowRollup {
@@ -1266,7 +1355,7 @@ mod tests {
 
     use crate::internal::paths::PartialRollupKey;
     use crate::internal::state::tests::any_state;
-    use crate::internal::state::HandleDebugState;
+    use crate::internal::state::{BatchPart, HandleDebugState};
     use crate::internal::state_diff::StateDiff;
     use crate::tests::new_test_client_cache;
     use crate::ShardId;

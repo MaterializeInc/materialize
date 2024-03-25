@@ -489,6 +489,8 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
 
     #[cfg(test)]
     fn describe(&self, extended: bool) -> String {
+        use crate::internal::state::BatchPart;
+
         match (extended, self) {
             (false, SpineBatch::Merged(x)) => format!(
                 "[{}-{}]{:?}{:?}{}",
@@ -526,7 +528,10 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 b.batch
                     .parts
                     .iter()
-                    .map(|x| format!(" {}", x.key()))
+                    .map(|x| match x {
+                        BatchPart::Hollow(x) => format!(" {}", x.key),
+                        BatchPart::Inline(_) => "inline".to_owned(),
+                    })
                     .collect::<Vec<_>>()
                     .join(""),
             ),
@@ -551,7 +556,10 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                     parts
                         .iter()
                         .flat_map(|x| x.batch.parts.iter())
-                        .map(|x| format!(" {}", x.key()))
+                        .map(|x| match x {
+                            BatchPart::Hollow(x) => format!(" {}", x.key),
+                            BatchPart::Inline(_) => "inline".to_owned(),
+                        })
                         .collect::<Vec<_>>()
                         .join("")
                 )
@@ -1337,7 +1345,8 @@ pub mod datadriven {
                     .inputs
                     .iter()
                     .flat_map(|x| x.batch.parts.iter())
-                    .map(|x| x.key().0.clone())
+                    .flat_map(|x| x.key())
+                    .map(|x| x.0.as_str())
                     .collect::<Vec<_>>()
                     .join(" ")
             );

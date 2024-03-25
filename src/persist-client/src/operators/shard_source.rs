@@ -43,6 +43,7 @@ use tracing::{debug, trace};
 use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::RetryParameters;
 use crate::fetch::{FetchedBlob, SerdeLeasedBatchPart};
+use crate::internal::state::BatchPart;
 use crate::read::SubscriptionLeaseReturner;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
@@ -378,10 +379,13 @@ where
             for mut part_desc in parts {
                 // TODO: Push the filter down into the Subscribe?
                 if STATS_FILTER_ENABLED.get(&cfg) {
-                    let should_fetch = part_desc.part.stats().map_or(true, |stats| {
-                        should_fetch_part(&stats.decode(), current_frontier.borrow())
-                    });
-                    let bytes = u64::cast_from(part_desc.part.encoded_size_bytes());
+                    let should_fetch = match &part_desc.part {
+                        BatchPart::Hollow(x) => x.stats.as_ref().map_or(true, |stats| {
+                            should_fetch_part(&stats.decode(), current_frontier.borrow())
+                        }),
+                        BatchPart::Inline(_) => true,
+                    };
+                    let bytes = u64::cast_from(part_desc.encoded_size_bytes());
                     if should_fetch {
                         audit_budget_bytes =
                             audit_budget_bytes.saturating_add(part_desc.part.encoded_size_bytes());
@@ -390,10 +394,13 @@ where
                     } else {
                         metrics.pushdown.parts_filtered_count.inc();
                         metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
-                        let should_audit = {
-                            let mut h = DefaultHasher::new();
-                            part_desc.part.key().hash(&mut h);
-                            usize::cast_from(h.finish()) % 100 < STATS_AUDIT_PERCENT.get(&cfg)
+                        let should_audit = match &part_desc.part {
+                            BatchPart::Inline(_) => false,
+                            BatchPart::Hollow(x) => {
+                                let mut h = DefaultHasher::new();
+                                x.key.hash(&mut h);
+                                usize::cast_from(h.finish()) % 100 < STATS_AUDIT_PERCENT.get(&cfg)
+                            }
                         };
                         if should_audit && part_desc.part.encoded_size_bytes() < audit_budget_bytes
                         {

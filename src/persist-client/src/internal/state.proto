@@ -11,6 +11,8 @@ syntax = "proto3";
 
 package mz_persist_client.internal.state;
 
+import "persist/src/persist.proto";
+
 message ProtoU64Antichain {
     repeated int64 elements = 1;
 }
@@ -33,6 +35,12 @@ message ProtoHollowBatchPart {
 
     optional bytes key_stats = 536870906;
     reserved 536870907 to 536870911;
+}
+
+message ProtoInlineBatchPart {
+    ProtoU64Description desc = 1;
+    uint64 index = 2;
+    mz_persist.gen.persist.ProtoColumnarRecords updates = 3;
 }
 
 message ProtoHollowBatch {

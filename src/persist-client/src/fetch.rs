@@ -36,10 +36,10 @@ use crate::batch::{
     ProtoLeasedBatchPart,
 };
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{LazyPartStats, LazyProto, Schemas};
+use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
-use crate::internal::paths::BlobKey;
+use crate::internal::paths::{BlobKey, PartialBatchKey};
 use crate::internal::state::{BatchPart, HollowBatchPart};
 use crate::read::LeasedReaderId;
 use crate::ShardId;
@@ -120,6 +120,7 @@ where
                     part: x.clone(),
                 }
             }
+            BatchPart::Inline(x) => FetchedBlobBuf::Inline(x.clone()),
         };
         let fetched_blob = FetchedBlob {
             metrics: Arc::clone(&self.metrics),
@@ -475,6 +476,7 @@ enum FetchedBlobBuf<T> {
         buf: SegmentedBytes,
         part: HollowBatchPart<T>,
     },
+    Inline(LazyInlineBatchPart),
 }
 
 impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
@@ -505,6 +507,10 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                     buf,
                 );
                 (parsed, part.stats.as_ref())
+            }
+            FetchedBlobBuf::Inline(x) => {
+                let parsed = EncodedPart::from_inline(self.read_metrics.clone(), x);
+                (parsed, None)
             }
         };
         FetchedPart::new(
@@ -711,7 +717,27 @@ where
                 )
                 .await
             }
+            BatchPart::Inline(x) => Ok(EncodedPart::from_inline(read_metrics.clone(), x)),
         }
+    }
+
+    // WIP oof
+    pub(crate) fn from_inline(metrics: ReadMetrics, x: &LazyInlineBatchPart) -> Self {
+        let parsed = x.decode().expect("WIP");
+        let key_lower = parsed
+            .updates
+            .first()
+            .and_then(|x| x.get(0))
+            .map_or_else(|| vec![], |((k, _), _, _)| k.to_vec());
+        // WIP
+        let hack = HollowBatchPart {
+            key: PartialBatchKey("inline".into()),
+            encoded_size_bytes: x.encoded_size_bytes(),
+            key_lower,
+            stats: None,
+            ts_rewrite: None,
+        };
+        Self::new(metrics, parsed.desc.clone(), &hack, parsed)
     }
 
     pub(crate) fn new(

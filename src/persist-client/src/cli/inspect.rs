@@ -403,7 +403,7 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
                 &*state_versions.blob,
                 &state_versions.metrics,
                 &shard_metrics,
-                &state_versions.metrics.read.snapshot,
+                &state_versions.metrics.read.batch_fetcher,
                 &batch.desc,
                 part,
             )
@@ -603,7 +603,9 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
         }
         for batch in v.collections.trace.batches() {
             for batch_part in &batch.parts {
-                known_parts.insert(batch_part.key().clone());
+                if let Some(key) = batch_part.key() {
+                    known_parts.insert(key.clone());
+                }
             }
         }
         for rollup in v.collections.rollups.values() {

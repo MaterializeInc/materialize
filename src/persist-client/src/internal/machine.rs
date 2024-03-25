@@ -32,6 +32,7 @@ use timely::PartialOrder;
 use tracing::{debug, info, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
+use crate::batch::INLINE_UPDATE_MAX_BYTES;
 use crate::cache::StateCache;
 use crate::cfg::RetryParameters;
 use crate::critical::CriticalReaderId;
@@ -240,6 +241,9 @@ where
                 CompareAndAppendRes::InvalidUsage(x) => {
                     return CompareAndAppendRes::InvalidUsage(x)
                 }
+                CompareAndAppendRes::InlineBackpressure(x) => {
+                    return CompareAndAppendRes::InlineBackpressure(x)
+                }
                 CompareAndAppendRes::UpperMismatch(seqno, _current_upper) => {
                     // If the state machine thinks that the shard upper is not
                     // far enough along, it could be because the caller of this
@@ -376,7 +380,7 @@ where
         loop {
             let cmd_res = self
                 .applier
-                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, _, state| {
+                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, cfg, state| {
                     writer_was_present = state.writers.contains_key(writer_id);
                     state.compare_and_append(
                         batch,
@@ -385,6 +389,7 @@ where
                         lease_duration_ms,
                         idempotency_token,
                         debug_info,
+                        INLINE_UPDATE_MAX_BYTES.get(cfg),
                     )
                 })
                 .await;
@@ -446,6 +451,11 @@ where
                     // to commit it. No network, no Indeterminate.
                     assert!(indeterminate.is_none());
                     return CompareAndAppendRes::InvalidUsage(err);
+                }
+                Err(CompareAndAppendBreak::InlineBackpressure(bytes)) => {
+                    // We tried to write an inline part, but there was already
+                    // too much in state. Flush it out to s3 and try again.
+                    return CompareAndAppendRes::InlineBackpressure(bytes);
                 }
                 Err(CompareAndAppendBreak::Upper {
                     shard_upper,
@@ -1004,6 +1014,7 @@ pub(crate) enum CompareAndAppendRes<T> {
     Success(SeqNo, WriterMaintenance<T>),
     InvalidUsage(InvalidUsage<T>),
     UpperMismatch(SeqNo, Antichain<T>),
+    InlineBackpressure(usize),
 }
 
 #[cfg(test)]
@@ -1259,7 +1270,7 @@ pub mod datadriven {
 
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BLOB_TARGET_SIZE,
+        BLOB_TARGET_SIZE, INLINE_UPDATE_THRESHOLD_BYTES,
     };
     use crate::fetch::{Cursor, EncodedPart};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
@@ -1299,6 +1310,7 @@ pub mod datadriven {
             client
                 .cfg
                 .set_config(&BLOB_TARGET_SIZE, *BLOB_TARGET_SIZE.default());
+            client.cfg.set_config(&INLINE_UPDATE_THRESHOLD_BYTES, 0);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
@@ -1575,7 +1587,8 @@ pub mod datadriven {
             let mut batch = batch.clone();
             for part in batch.parts.iter_mut() {
                 match part {
-                    BatchPart::Hollow(x) => x.encoded_size_bytes = size,
+                    BatchPart::Hollow(part) => part.encoded_size_bytes = size,
+                    BatchPart::Inline(_) => {}
                 }
             }
             datadriven.batches.insert(output.to_owned(), batch);
@@ -1596,7 +1609,6 @@ pub mod datadriven {
         let mut s = String::new();
         for (idx, part) in batch.parts.iter().enumerate() {
             write!(s, "<part {idx}>\n");
-            #[allow(irrefutable_let_patterns)] // WIP
             if let BatchPart::Hollow(part) = part {
                 if stats == Some("lower") && !part.key_lower.is_empty() {
                     writeln!(s, "<key lower={}>", std::str::from_utf8(&part.key_lower)?)
@@ -1681,7 +1693,8 @@ pub mod datadriven {
         let batch = datadriven.batches.get_mut(input).expect("unknown batch");
         for part in batch.parts.iter_mut() {
             match part {
-                BatchPart::Hollow(part) => part.encoded_size_bytes = size,
+                BatchPart::Hollow(x) => x.encoded_size_bytes = size,
+                BatchPart::Inline(_) => panic!("set_batch_parts_size only supports hollow parts"),
             }
         }
         Ok("ok\n".to_string())
@@ -2033,7 +2046,11 @@ pub mod datadriven {
                     true,
                     Arc::clone(&datadriven.client.metrics),
                     Arc::clone(&datadriven.client.blob),
-                    datadriven.shard_id,
+                    datadriven
+                        .client
+                        .metrics
+                        .shards
+                        .shard(&datadriven.shard_id, "test"),
                     datadriven.client.cfg.build_version.clone(),
                     hollow,
                 )

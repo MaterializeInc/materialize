@@ -77,12 +77,16 @@ pub(crate) enum FetchData<T> {
     },
     AlreadyFetched,
 }
+
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     fn maybe_unconsolidated(&self) -> bool {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
         match self {
             FetchData::Unleased { part, .. } => part.key.split().0 >= min_version,
-            FetchData::Leased { part, .. } => part.part.key().split().0 >= min_version,
+            FetchData::Leased { part, .. } => match part.part.key() {
+                Some(key) => key.split().0 >= min_version,
+                None => false,
+            },
             FetchData::AlreadyFetched => false,
         }
     }
@@ -304,6 +308,16 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         },
                     };
                     (c_part, part.encoded_size_bytes)
+                }
+                BatchPart::Inline(inline) => {
+                    // WIP do we feel okay about doing the decode step here?
+                    let read_metrics = read_metrics(&metrics.read).clone();
+                    let part = EncodedPart::from_inline(read_metrics, inline);
+                    let c_part = ConsolidationPart::Encoded {
+                        part,
+                        cursor: Cursor::default(),
+                    };
+                    (c_part, inline.encoded_size_bytes())
                 }
             })
             .collect();

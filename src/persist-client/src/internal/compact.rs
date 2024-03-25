@@ -375,7 +375,11 @@ where
                         }
                         metrics.compaction.noop.inc();
                         for part in res.output.parts {
-                            let key = part.key().complete(&machine.shard_id());
+                            let part = match part {
+                                BatchPart::Hollow(x) => x,
+                                BatchPart::Inline(_) => continue,
+                            };
+                            let key = part.key.complete(&machine.shard_id());
                             retry_external(
                                 &metrics.retries.external.compaction_noop_delete,
                                 || blob.delete(&key),
@@ -686,7 +690,7 @@ where
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
             Arc::clone(&blob),
-            isolated_runtime,
+            Arc::clone(&isolated_runtime),
             shard_id.clone(),
             cfg.version.clone(),
             desc.since().clone(),
@@ -737,7 +741,17 @@ where
             }
             tokio::task::yield_now().await;
         }
-        let batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
+        let mut batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
+        // Use compaction as a method of getting inline writes out of state, to
+        // make room for more inline writes.
+        let () = batch
+            .flush_to_blob(
+                &cfg.batch,
+                &metrics.compaction.batch,
+                &isolated_runtime,
+                &real_schemas,
+            )
+            .await;
         let hollow_batch = batch.into_hollow_batch();
 
         timings.record(&metrics);
@@ -873,6 +887,7 @@ mod tests {
         assert_eq!(res.output.parts.len(), 1);
         let part = match &res.output.parts[0] {
             BatchPart::Hollow(x) => x,
+            BatchPart::Inline(_) => panic!("test outputs a hollow part"),
         };
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
@@ -958,6 +973,7 @@ mod tests {
         assert_eq!(res.output.parts.len(), 1);
         let part = match &res.output.parts[0] {
             BatchPart::Hollow(x) => x,
+            BatchPart::Inline(_) => panic!("test outputs a hollow part"),
         };
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),

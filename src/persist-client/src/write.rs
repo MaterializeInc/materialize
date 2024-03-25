@@ -16,6 +16,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
@@ -511,23 +512,48 @@ where
             )
             .await;
 
-        let maintenance = match res {
-            CompareAndAppendRes::Success(_seqno, maintenance) => {
-                self.upper = desc.upper().clone();
-                for batch in batches.iter_mut() {
-                    batch.mark_consumed();
+        let maintenance = loop {
+            match res {
+                CompareAndAppendRes::Success(_seqno, maintenance) => {
+                    self.upper = desc.upper().clone();
+                    for batch in batches.iter_mut() {
+                        batch.mark_consumed();
+                    }
+                    break maintenance;
                 }
-                maintenance
-            }
-            CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
-            CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
-                // We tried to to a compare_and_append with the wrong expected upper, that
-                // won't work. Update the cached upper to the current upper.
-                self.upper = current_upper.clone();
-                return Ok(Err(UpperMismatch {
-                    current: current_upper,
-                    expected: expected_upper,
-                }));
+                CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
+                CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
+                    // We tried to to a compare_and_append with the wrong expected upper, that
+                    // won't work. Update the cached upper to the current upper.
+                    self.upper = current_upper.clone();
+                    return Ok(Err(UpperMismatch {
+                        current: current_upper,
+                        expected: expected_upper,
+                    }));
+                }
+                CompareAndAppendRes::InlineBackpressure(bytes) => {
+                    // We tried to write an inline part, but there was already
+                    // too much in state. Flush it out to s3 and try again.
+                    self.metrics.inline.backpressure_count.inc();
+                    self.metrics
+                        .inline
+                        .backpressure_bytes
+                        .inc_by(u64::cast_from(bytes));
+                    // WIP WriterId
+                    let cfg = BatchBuilderConfig::new(&self.cfg, &WriterId::new());
+                    for batch in batches.iter_mut() {
+                        // WIP concurrency?
+                        let () = batch
+                            .flush_to_blob(
+                                &cfg,
+                                &self.metrics.inline.backpressure_write,
+                                &self.isolated_runtime,
+                                &self.schemas,
+                            )
+                            .await;
+                    }
+                    continue;
+                }
             }
         };
 
@@ -539,13 +565,16 @@ where
     /// Turns the given [`ProtoBatch`] back into a [`Batch`] which can be used
     /// to append it to this shard.
     pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
+        let shard_id: ShardId = batch
+            .shard_id
+            .into_rust()
+            .expect("valid transmittable batch");
+        assert_eq!(shard_id, self.machine.shard_id());
+
         let ret = Batch {
             batch_delete_enabled: BATCH_DELETE_ENABLED.get(&self.cfg),
             metrics: Arc::clone(&self.metrics),
-            shard_id: batch
-                .shard_id
-                .into_rust()
-                .expect("valid transmittable batch"),
+            shard_metrics: Arc::clone(&self.machine.applier.shard_metrics),
             version: Version::parse(&batch.version).expect("valid transmittable batch"),
             batch: batch
                 .batch
@@ -554,7 +583,7 @@ where
             blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
         };
-        assert_eq!(ret.shard_id, self.machine.shard_id());
+        assert_eq!(ret.shard_id(), self.machine.shard_id());
         ret
     }
 

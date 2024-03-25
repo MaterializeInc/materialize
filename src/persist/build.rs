@@ -14,6 +14,11 @@ fn main() {
 
     prost_build::Config::new()
         .btree_map(["."])
+        .type_attribute(
+            ".mz_persist.gen.persist.ProtoColumnarRecords",
+            "#[derive(serde::Serialize)]",
+        )
+        .bytes([".mz_persist.gen.persist.ProtoColumnarRecords"])
         .compile_protos(&["persist/src/persist.proto"], &[".."])
         .unwrap_or_else(|e| panic!("{e}"))
 }

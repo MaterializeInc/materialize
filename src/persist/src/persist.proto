@@ -64,3 +64,13 @@ enum ProtoBatchFormat {
     // with a trie-like column structure.
     ParquetKvtd = 2;
 }
+
+message ProtoColumnarRecords {
+    uint64 len = 1;
+    repeated int32 key_offsets = 2;
+    bytes key_data = 3;
+    repeated int32 val_offsets = 4;
+    bytes val_data = 5;
+    repeated int64 timestamps = 6;
+    repeated int64 diffs = 7;
+}
