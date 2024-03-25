@@ -257,6 +257,28 @@ just can't detect them for some reason. In this case, you can just run
 `confluent local services schema-registry start` 3 times, and then everything
 is up.
 
+## Running and connecting to local Materialize
+
+Once things are built and CockroachDB is running, you can start Materialize:
+
+```shell
+bin/environmentd --reset -- --all-features --unsafe mode
+```
+
+This should bootstrap a fresh Materialize instance. Once you see the logline
+"environmentd v<version> listening...", you can connect to the database via:
+
+```shell
+psql -U materialize -h localhost -p 6875 materialize
+```
+
+This uses the external SQL port. If you wish to connect using a system account,
+you can use the internal port with the `mz_system` user:
+
+```shell
+psql -U mz_system -h localhost -p 6877 materialize
+```
+
 ## Web UI
 
 Materialize embeds a web UI, which it serves from port 6876. If you're running
