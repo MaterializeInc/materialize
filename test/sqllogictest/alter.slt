@@ -150,7 +150,7 @@ ALTER INDEX i SET (RETAIN HISTORY FOR '1m')
 query T
 SELECT create_sql FROM (SHOW CREATE INDEX i)
 ----
-CREATE INDEX "i" IN CLUSTER "quickstart" ON "materialize"."public"."t" ("a")
+CREATE INDEX "i" IN CLUSTER "quickstart" ON "materialize"."public"."t" ("a") WITH (RETAIN HISTORY = FOR '1m')
 
 statement ok
 ALTER INDEX i RESET (RETAIN HISTORY)

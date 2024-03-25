@@ -120,12 +120,11 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalDuration, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
-    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan,
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
-    AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
-    AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSourcePlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan,
-    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
+    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
+    AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan,
+    AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan,
+    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
+    CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
     CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
@@ -4655,34 +4654,50 @@ pub fn plan_alter_index_options(
     AlterIndexStatement {
         index_name,
         if_exists,
-        action: actions,
+        action,
     }: AlterIndexStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let object_type = ObjectType::Index;
-    let id = match resolve_item_or_type(scx, object_type, index_name.clone(), if_exists)? {
-        Some(entry) => entry.id(),
-        None => {
-            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: index_name.to_string(),
-                object_type,
-            });
-
-            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
-        }
-    };
-
-    match actions {
+    match action {
         AlterIndexAction::ResetOptions(options) => {
-            Ok(Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan {
-                id,
-                options: options.into_iter().collect(),
-            }))
+            let mut options = options.into_iter();
+            if let Some(opt) = options.next() {
+                match opt {
+                    IndexOptionName::RetainHistory => {
+                        if options.next().is_some() {
+                            sql_bail!("RETAIN HISTORY must be only option");
+                        }
+                        return alter_retain_history(
+                            scx,
+                            object_type,
+                            if_exists,
+                            UnresolvedObjectName::Item(index_name),
+                            None,
+                        );
+                    }
+                }
+            }
+            sql_bail!("expected option");
         }
         AlterIndexAction::SetOptions(options) => {
-            Ok(Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan {
-                id,
-                options: plan_index_options(scx, options)?,
-            }))
+            let mut options = options.into_iter();
+            if let Some(opt) = options.next() {
+                match opt.name {
+                    IndexOptionName::RetainHistory => {
+                        if options.next().is_some() {
+                            sql_bail!("RETAIN HISTORY must be only option");
+                        }
+                        return alter_retain_history(
+                            scx,
+                            object_type,
+                            if_exists,
+                            UnresolvedObjectName::Item(index_name),
+                            opt.value,
+                        );
+                    }
+                }
+            }
+            sql_bail!("expected option");
         }
     }
 }
@@ -5301,7 +5316,16 @@ pub fn plan_alter_retain_history(
         history,
     }: AlterRetainHistoryStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let object_type = object_type.into();
+    alter_retain_history(scx, object_type.into(), if_exists, name, history)
+}
+
+fn alter_retain_history(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: UnresolvedObjectName,
+    history: Option<WithOptionValue<Aug>>,
+) -> Result<Plan, PlanError> {
     let name = match (object_type, name) {
         (
             // View gets a special error below.

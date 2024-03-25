@@ -56,8 +56,8 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, Raw, Statement,
-    StatementKind, TransactionAccessMode,
+    ExplainStage, Expr, FetchDirection, NoticeSeverity, Raw, Statement, StatementKind,
+    TransactionAccessMode,
 };
 use crate::catalog::{
     CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
@@ -151,8 +151,6 @@ pub enum Plan {
     AlterCluster(AlterClusterPlan),
     AlterClusterSwap(AlterClusterSwapPlan),
     AlterNoop(AlterNoopPlan),
-    AlterIndexSetOptions(AlterIndexSetOptionsPlan),
-    AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSetCluster(AlterSetClusterPlan),
     AlterConnection(AlterConnectionPlan),
     AlterSource(AlterSourcePlan),
@@ -201,11 +199,7 @@ impl Plan {
             StatementKind::AlterCluster => &[PlanKind::AlterNoop, PlanKind::AlterCluster],
             StatementKind::AlterConnection => &[PlanKind::AlterNoop, PlanKind::AlterConnection],
             StatementKind::AlterDefaultPrivileges => &[PlanKind::AlterDefaultPrivileges],
-            StatementKind::AlterIndex => &[
-                PlanKind::AlterIndexResetOptions,
-                PlanKind::AlterIndexSetOptions,
-                PlanKind::AlterNoop,
-            ],
+            StatementKind::AlterIndex => &[PlanKind::AlterRetainHistory, PlanKind::AlterNoop],
             StatementKind::AlterObjectRename => &[
                 PlanKind::AlterClusterRename,
                 PlanKind::AlterClusterReplicaRename,
@@ -379,8 +373,6 @@ impl Plan {
             Plan::AlterClusterSwap(_) => "alter cluster swap",
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
-            Plan::AlterIndexSetOptions(_) => "alter index",
-            Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterConnection(_) => "alter connection",
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
@@ -976,18 +968,6 @@ pub struct AlterRetainHistoryPlan {
     pub value: Option<Value>,
     pub window: CompactionWindow,
     pub object_type: ObjectType,
-}
-
-#[derive(Debug)]
-pub struct AlterIndexSetOptionsPlan {
-    pub id: GlobalId,
-    pub options: Vec<IndexOption>,
-}
-
-#[derive(Debug)]
-pub struct AlterIndexResetOptionsPlan {
-    pub id: GlobalId,
-    pub options: BTreeSet<IndexOptionName>,
 }
 
 #[derive(Debug, Clone)]
