@@ -2193,10 +2193,11 @@ impl Coordinator {
                 }
 
                 for dep_id in idx_deps {
-                    if let Some(ids) = dependants.get_mut(dep_id) {
-                        changed |= mv_ids.iter().any(|mv_id| ids.insert(*mv_id));
-                    } else {
-                        // `dep_id` references a source import.
+                    let Some(ids) = dependants.get_mut(dep_id) else {
+                        continue; // `dep_id` references a source import
+                    };
+                    for mv_id in &mv_ids {
+                        changed |= ids.insert(*mv_id);
                     }
                 }
             }
