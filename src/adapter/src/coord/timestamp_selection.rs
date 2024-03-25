@@ -238,36 +238,24 @@ pub trait TimestampProvider {
         timeline
     }
 
-    /// Returns a `Timeline` whose timestamp oracle we have to use to get a
-    /// linearized read timestamp, _iff_ linearization is needed.
-    fn get_linearized_timeline(
-        isolation_level: &IsolationLevel,
-        when: &QueryWhen,
-        timeline_context: &TimelineContext,
-    ) -> Option<Timeline> {
-        let timeline = Self::get_timeline(timeline_context);
-
-        // In order to use a timestamp oracle, we must be in the context of some timeline. In that
-        // context we would use the timestamp oracle in the following scenarios:
+    /// Returns true if-and-only-if the given configuration needs a linearized
+    /// read timetamp from a timestamp oracle.
+    ///
+    /// This assumes that the query happens in the context of a timeline. If
+    /// there is no timeline, we cannot and don't have to get a linearized read
+    /// timestamp.
+    fn needs_linearized_read_ts(isolation_level: &IsolationLevel, when: &QueryWhen) -> bool {
+        // When we're in the context of a timline (assumption) and one of these
+        // scenarios hold, we need to use a linearized read timestamp:
         // - The isolation level is Strict Serializable and the `when` allows us to use the
         //   the timestamp oracle (ex: queries with no AS OF).
         // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
-        let linearized_timeline = match &timeline {
-            Some(timeline)
-                if when.must_advance_to_timeline_ts()
-                    || (when.can_advance_to_timeline_ts()
-                        && matches!(
-                            isolation_level,
-                            IsolationLevel::StrictSerializable
-                                | IsolationLevel::StrongSessionSerializable
-                        )) =>
-            {
-                Some(timeline.clone())
-            }
-            _ => None,
-        };
-
-        linearized_timeline
+        when.must_advance_to_timeline_ts()
+            || (when.can_advance_to_timeline_ts()
+                && matches!(
+                    isolation_level,
+                    IsolationLevel::StrictSerializable | IsolationLevel::StrongSessionSerializable
+                ))
     }
 
     /// Determines the timestamp for a query.
@@ -306,23 +294,24 @@ pub trait TimestampProvider {
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
         let timeline = Self::get_timeline(timeline_context);
-        let linearized_timeline =
-            Self::get_linearized_timeline(isolation_level, when, timeline_context);
-        // TODO: We currently split out getting the oracle timestamp because
-        // it's a potentially expensive call, but a call that can be done in an
-        // async task. TimestampProvider is not Send (nor Sync), so we cannot do
-        // the call to `determine_timestamp_for` (including the oracle call) on
-        // an async task. If/when TimestampProvider can become Send, we can fold
-        // the call to the TimestampOracle back into this function.
-        //
-        // We assert here that the logic that determines the oracle timestamp
-        // matches our expectations.
-        if linearized_timeline.is_some() {
-            assert!(
-                oracle_read_ts.is_some(),
-                "should get a timestamp from the oracle for linearized timeline {:?} but didn't",
-                timeline
-            );
+
+        {
+            // TODO: We currently split out getting the oracle timestamp because
+            // it's a potentially expensive call, but a call that can be done in an
+            // async task. TimestampProvider is not Send (nor Sync), so we cannot do
+            // the call to `determine_timestamp_for` (including the oracle call) on
+            // an async task. If/when TimestampProvider can become Send, we can fold
+            // the call to the TimestampOracle back into this function.
+            //
+            // We assert here that the logic that determines the oracle timestamp
+            // matches our expectations.
+
+            if timeline.is_some() && Self::needs_linearized_read_ts(isolation_level, when) {
+                assert!(
+                    oracle_read_ts.is_some(),
+                    "should get a timestamp from the oracle for linearized timeline {:?} but didn't",
+                    timeline);
+            }
         }
 
         // Initialize candidate to the minimum correct time.
@@ -538,14 +527,16 @@ impl Coordinator {
         when: &QueryWhen,
     ) -> Option<Timestamp> {
         let isolation_level = session.vars().transaction_isolation().clone();
-        let linearized_timeline =
-            Coordinator::get_linearized_timeline(&isolation_level, when, timeline_ctx);
-        let oracle_read_ts = match linearized_timeline {
-            Some(timeline) => {
+        let timeline = Coordinator::get_timeline(timeline_ctx);
+        let needs_linearized_read_ts =
+            Coordinator::needs_linearized_read_ts(&isolation_level, when);
+
+        let oracle_read_ts = match timeline {
+            Some(timeline) if needs_linearized_read_ts => {
                 let timestamp_oracle = self.get_timestamp_oracle(&timeline);
                 Some(timestamp_oracle.read_ts().await)
             }
-            None => None,
+            Some(_) | None => None,
         };
 
         oracle_read_ts
