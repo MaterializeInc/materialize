@@ -1,0 +1,6 @@
+name: private-networking
+description: AWS private networking test
+runtime:
+  name: python
+  options:
+      virtualenv: venv
