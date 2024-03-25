@@ -11,4 +11,4 @@
 #
 # buildkite-step-insights - buildkite step analysis
 
-exec "$(dirname "$0")"/pyactivate -m materialize.buildkite_insights.step_durations.analysis "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.buildkite_insights.step_analysis.analysis "$@"

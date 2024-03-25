@@ -27,7 +27,7 @@ from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
 )
-from materialize.buildkite_insights.step_durations.build_step import (
+from materialize.buildkite_insights.steps.build_step import (
     BuildStepMatcher,
     extract_build_step_outcomes,
 )

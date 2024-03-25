@@ -13,6 +13,14 @@ import argparse
 import re
 from typing import Any
 
+from materialize.buildkite_insights.annotation_search.search_result_presentation import (
+    print_before_search_results,
+    print_match,
+    print_summary,
+)
+from materialize.buildkite_insights.annotation_search.search_utility import (
+    _search_value_to_pattern,
+)
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_COMPLETED_BUILD_STATES,
@@ -22,14 +30,6 @@ from materialize.buildkite_insights.cache import annotations_cache, builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
     FetchMode,
-)
-from materialize.buildkite_insights.failure_search.search_result_presentation import (
-    print_before_search_results,
-    print_match,
-    print_summary,
-)
-from materialize.buildkite_insights.failure_search.search_utility import (
-    _search_value_to_pattern,
 )
 
 

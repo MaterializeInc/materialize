@@ -11,7 +11,7 @@
 
 from typing import Any
 
-from materialize.buildkite_insights.failure_search.search_utility import (
+from materialize.buildkite_insights.annotation_search.search_utility import (
     _search_value_to_pattern,
 )
 from materialize.terminal import (
