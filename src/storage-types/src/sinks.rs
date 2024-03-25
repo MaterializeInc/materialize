@@ -475,7 +475,10 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
 
         let compatibility_checks = [
             (connection_id == &other.connection_id, "connection_id"),
-            (connection == &other.connection, "connection"),
+            (
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
+            ),
             (format.alter_compatible(id, &other.format).is_ok(), "format"),
             (
                 relation_key_indices == &other.relation_key_indices,

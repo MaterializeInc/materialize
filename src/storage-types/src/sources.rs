@@ -125,7 +125,7 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
         } = self;
 
         let compatibility_checks = [
-            (self.desc.alter_compatible(id, desc).is_ok(), "desc"),
+            (desc.alter_compatible(id, &other.desc).is_ok(), "desc"),
             (
                 ingestion_metadata == &other.ingestion_metadata,
                 "ingestion_metadata",
