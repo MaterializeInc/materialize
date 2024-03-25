@@ -135,9 +135,9 @@ where
     }
 
     /// Fetches the latest state from Consensus and passes its `upper` to the provided closure.
-    pub async fn fetch_upper<R, F: FnMut(&Antichain<T>) -> R>(&mut self, f: F) -> R {
+    pub async fn fetch_upper<R, F: FnMut(&Antichain<T>) -> R>(&mut self, mut f: F) -> R {
         self.fetch_and_update_state(None).await;
-        self.upper(f)
+        self.upper(|_seqno, upper| f(upper))
     }
 
     /// A point-in-time read/clone of `upper` from the current state.
@@ -147,13 +147,13 @@ where
     /// updated to the latest state. Successive calls will always return values such that
     /// `PartialOrder::less_equal(call1, call2)` hold true.
     pub fn clone_upper(&self) -> Antichain<T> {
-        self.upper(|upper| upper.clone())
+        self.upper(|_seqno, upper| upper.clone())
     }
 
-    fn upper<R, F: FnMut(&Antichain<T>) -> R>(&self, mut f: F) -> R {
+    pub(crate) fn upper<R, F: FnMut(SeqNo, &Antichain<T>) -> R>(&self, mut f: F) -> R {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, move |state| {
-                f(state.upper())
+                f(state.seqno, state.upper())
             })
     }
 

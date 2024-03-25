@@ -37,9 +37,9 @@ use crate::batch::{
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::{check_data_version, Schemas};
-use crate::internal::machine::Machine;
+use crate::internal::machine::{CompareAndAppendRes, Machine};
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{HandleDebugState, HollowBatch, Upper};
+use crate::internal::state::{HandleDebugState, HollowBatch};
 use crate::read::ReadHandle;
 use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
@@ -512,15 +512,15 @@ where
             .await;
 
         let maintenance = match res {
-            Ok(Ok((_seqno, maintenance))) => {
+            CompareAndAppendRes::Success(_seqno, maintenance) => {
                 self.upper = desc.upper().clone();
                 for batch in batches.iter_mut() {
                     batch.mark_consumed();
                 }
                 maintenance
             }
-            Ok(Err(invalid_usage)) => return Err(invalid_usage),
-            Err(Upper(current_upper)) => {
+            CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
+            CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
                 // We tried to to a compare_and_append with the wrong expected upper, that
                 // won't work. Update the cached upper to the current upper.
                 self.upper = current_upper.clone();

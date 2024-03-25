@@ -220,7 +220,7 @@ where
         writer_id: &WriterId,
         debug_info: &HandleDebugState,
         heartbeat_timestamp_ms: u64,
-    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
+    ) -> CompareAndAppendRes<T> {
         let idempotency_token = IdempotencyToken::new();
         loop {
             let res = self
@@ -234,8 +234,13 @@ where
                 )
                 .await;
             match res {
-                Ok(x) => return Ok(x),
-                Err((seqno, _current_upper)) => {
+                CompareAndAppendRes::Success(seqno, maintenance) => {
+                    return CompareAndAppendRes::Success(seqno, maintenance)
+                }
+                CompareAndAppendRes::InvalidUsage(x) => {
+                    return CompareAndAppendRes::InvalidUsage(x)
+                }
+                CompareAndAppendRes::UpperMismatch(seqno, _current_upper) => {
                     // If the state machine thinks that the shard upper is not
                     // far enough along, it could be because the caller of this
                     // method has found out that it advanced via some some
@@ -243,12 +248,13 @@ where
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
                     self.applier.fetch_and_update_state(Some(seqno)).await;
-                    let current_upper = self.applier.clone_upper();
+                    let (current_seqno, current_upper) =
+                        self.applier.upper(|seqno, upper| (seqno, upper.clone()));
 
                     // We tried to to a compare_and_append with the wrong
                     // expected upper, that won't work.
                     if &current_upper != batch.desc.lower() {
-                        return Err(Upper(current_upper));
+                        return CompareAndAppendRes::UpperMismatch(current_seqno, current_upper);
                     } else {
                         // The upper stored in state was outdated. Retry after
                         // updating.
@@ -269,7 +275,7 @@ where
         // making it a parameter allows us to simulate hitting an indeterminate
         // error on the first attempt in tests.
         mut indeterminate: Option<Indeterminate>,
-    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, (SeqNo, Upper<T>)> {
+    ) -> CompareAndAppendRes<T> {
         let metrics = Arc::clone(&self.applier.metrics);
         let lease_duration_ms = self
             .applier
@@ -424,7 +430,7 @@ where
                     if !writer_was_present {
                         metrics.state.writer_added.inc();
                     }
-                    return Ok(Ok((seqno, writer_maintenance)));
+                    return CompareAndAppendRes::Success(seqno, writer_maintenance);
                 }
                 Err(CompareAndAppendBreak::AlreadyCommitted) => {
                     // A previous iteration through this loop got an
@@ -435,7 +441,7 @@ where
                     if !writer_was_present {
                         metrics.state.writer_added.inc();
                     }
-                    return Ok(Ok((seqno, WriterMaintenance::default())));
+                    return CompareAndAppendRes::Success(seqno, WriterMaintenance::default());
                 }
                 Err(CompareAndAppendBreak::InvalidUsage(err)) => {
                     // InvalidUsage is (or should be) a deterministic function
@@ -443,7 +449,7 @@ where
                     // state. It's handed back via a Break, so we never even try
                     // to commit it. No network, no Indeterminate.
                     assert!(indeterminate.is_none());
-                    return Ok(Err(err));
+                    return CompareAndAppendRes::InvalidUsage(err);
                 }
                 Err(CompareAndAppendBreak::Upper {
                     shard_upper,
@@ -463,14 +469,14 @@ where
                         // No way this could have committed in some previous
                         // attempt of this loop: the upper of the writer is
                         // strictly less than the proposed new upper.
-                        return Err((seqno, Upper(shard_upper)));
+                        return CompareAndAppendRes::UpperMismatch(seqno, shard_upper);
                     }
                     if indeterminate.is_none() {
                         // No way this could have committed in some previous
                         // attempt of this loop: we never saw an indeterminate
                         // error (thus there was no previous iteration of the
                         // loop).
-                        return Err((seqno, Upper(shard_upper)));
+                        return CompareAndAppendRes::UpperMismatch(seqno, shard_upper);
                     }
                     // This is the bad case. We can't distinguish if some
                     // previous attempt that got an Indeterminate error
@@ -993,6 +999,23 @@ where
                     continue;
                 }
             }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum CompareAndAppendRes<T> {
+    Success(SeqNo, WriterMaintenance<T>),
+    InvalidUsage(InvalidUsage<T>),
+    UpperMismatch(SeqNo, Antichain<T>),
+}
+
+#[cfg(test)]
+impl<T: Debug> CompareAndAppendRes<T> {
+    fn unwrap(self) -> (SeqNo, WriterMaintenance<T>) {
+        match self {
+            CompareAndAppendRes::Success(seqno, maintenance) => (seqno, maintenance),
+            x => panic!("{:?}", x),
         }
     }
 }
@@ -2080,7 +2103,7 @@ pub mod datadriven {
             .optional::<String>("prev_indeterminate")
             .map(|x| Indeterminate::new(anyhow::Error::msg(x)));
         let now = (datadriven.client.cfg.now)();
-        let (_, maintenance) = datadriven
+        let res = datadriven
             .machine
             .compare_and_append_idempotent(
                 &batch,
@@ -2090,9 +2113,14 @@ pub mod datadriven {
                 &HandleDebugState::default(),
                 indeterminate,
             )
-            .await
-            .map_err(|(_seqno, upper)| anyhow!("{:?}", upper))?
-            .expect("invalid usage");
+            .await;
+        let maintenance = match res {
+            CompareAndAppendRes::Success(_, x) => x,
+            CompareAndAppendRes::UpperMismatch(_seqno, upper) => {
+                return Err(anyhow!("{:?}", Upper(upper)))
+            }
+            _ => panic!("{:?}", res),
+        };
         // TODO: Don't throw away writer maintenance. It's slightly tricky
         // because we need a WriterId for Compactor.
         datadriven.routine.push(maintenance.routine);
@@ -2190,8 +2218,7 @@ pub mod tests {
                     (write.cfg.now)(),
                 )
                 .await
-                .expect("invalid usage")
-                .expect("unexpected upper");
+                .unwrap();
             writer_maintenance
                 .perform(&write.machine, &write.gc, write.compact.as_ref())
                 .await;
