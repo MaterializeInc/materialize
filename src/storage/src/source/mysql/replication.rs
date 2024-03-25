@@ -308,11 +308,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 metrics.total.inc();
 
                 match event_data {
-                    Some(EventData::HeartbeatEvent) => {
-                        // The upstream MySQL source only emits a heartbeat when there are no other events
-                        // sent within the heartbeat interval. This means that we can safely advance the
-                        // frontier once since we know there were no more events for the last sent GTID.
-                        // See: https://dev.mysql.com/doc/refman/8.0/en/replication-administration-status.html
+                    Some(EventData::XidEvent(_)) => {
+                        // We've received a transaction commit event, which means that we've seen
+                        // all events for the current GTID and we can advance the frontier beyond.
                         if let Some(mut new_gtid) = next_gtid.take() {
                             // Increment the transaction-id to the next GTID we should see from this source-id
                             match new_gtid.timestamp_mut() {
@@ -334,7 +332,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 .await);
                             }
                             let new_upper = repl_partitions.frontier();
-                            repl_context.advance("heartbeat", new_upper);
+                            repl_context.advance("xid", new_upper);
                         }
                     }
                     // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
@@ -450,8 +448,10 @@ async fn raw_stream<'a>(
         })
         .collect::<Vec<_>>();
 
-    // Request that the stream provide us with a heartbeat message when no other messages have been sent
-    let heartbeat = Duration::from_secs(3);
+    // Request that the stream provide us with a heartbeat message when no other messages have
+    // been sent. This isn't strictly necessary, but is a lightweight additional general
+    // health-check for the replication stream
+    let heartbeat = Duration::from_secs(30);
     conn.query_drop(format!(
         "SET @master_heartbeat_period = {};",
         heartbeat.as_nanos()
