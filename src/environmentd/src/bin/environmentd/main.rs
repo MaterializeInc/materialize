@@ -325,7 +325,7 @@ pub struct Args {
     clusterd_image: Option<String>,
     /// If set, a role with the provided name will be created with `CREATEDB` and `CREATECLUSTER`
     /// attributes. It will also have `CREATE` privileges on the `materialize` database,
-    /// `materialize.public` schema, and `default` cluster.
+    /// `materialize.public` schema, and `quickstart` cluster.
     ///
     /// This option is meant for local development and testing to simplify the initial process of
     /// granting attributes and privileges to some default role.
