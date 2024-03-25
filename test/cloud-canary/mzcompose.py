@@ -51,6 +51,7 @@ SERVICES = [
         external_cockroach=True,
         persist_blob_url="file:///mzdata/persist/blob",
         options=[
+            "--orchestrator=process",
             "--orchestrator-process-secrets-directory=/mzdata/secrets",
             "--orchestrator-process-scratch-directory=/scratch",
         ],
