@@ -259,3 +259,22 @@ cluster to stop and memory/CPU to go down, or switch to a different cluster.
 
 If you've gone through the dataflow troubleshooting and do not want to make
 any changes to your query, consider [sizing up your cluster](/sql/create-cluster/#size). A larger size cluster will provision more memory and CPU resources.
+
+## How can I see which queries were slow?
+
+Materialize collects a sampled log of the SQL statements that have been issued to your Materialize
+environment in the last three days, along with various metadata about them. You can access this log
+via the **"Query History"** page in the Materialize console, accessible via the side navigation bar.
+This page supports sorting by statement duration.
+
+This data is also available via the
+[mz_internal.mz_recent_activity_log](/sql/system-catalog/mz_internal/#mz_recent_activity_log)
+catalog table.
+
+The default (and max) sample rate for most accounts is 99%. Materialize controls the
+maximum rate, and may change it at any time. As such, not all queries will be present in this
+log.
+
+Note: because of sampling in this table, if you're looking for a complete audit history, you'll
+want to use the [mz_audit_events](/sql/system-catalog/mz_catalog/#mz_audit_events)
+catalog table, which records all create, alter, and drop events.
