@@ -231,6 +231,16 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
     pub fn decode(buf: &SegmentedBytes, metrics: &ColumnarMetrics) -> Result<Self, Error> {
         decode_trace_parquet(&mut buf.clone().reader(), metrics)
     }
+
+    /// Scans the part and returns a lower bound on the contained keys.
+    pub fn key_lower(&self) -> &[u8] {
+        self.updates
+            .iter()
+            .flat_map(|x| x.iter())
+            .map(|((key, _), _, _)| key)
+            .min()
+            .unwrap_or(&[])
+    }
 }
 
 #[derive(PartialOrd, Ord, PartialEq, Eq)]
