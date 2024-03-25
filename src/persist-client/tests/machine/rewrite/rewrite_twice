@@ -1,0 +1,63 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+write-batch output=b0 lower=0 upper=2
+k1 0 1
+----
+parts=1 len=1
+
+# Rewrite to the same frontier is okay
+rewrite-ts input=b0 frontier=1 upper=2
+----
+ok
+
+rewrite-ts input=b0 frontier=1 upper=2
+----
+ok
+
+# Try to CaA it and fail (simulate txn conflict)
+compare-and-append-batches expected_upper=0 new_upper=1 batches=()
+----
+ok
+
+compare-and-append-batches expected_upper=0 new_upper=2 batches=(b0)
+----
+error: upper mismatch: UpperMismatch { expected: Antichain { elements: [0] }, current: Antichain { elements: [1] } }
+
+# Now rewrite a second time and succeed the CaA this time
+rewrite-ts input=b0 frontier=2 upper=4
+----
+ok
+
+compare-and-append-batches expected_upper=1 new_upper=4 batches=(b0)
+----
+ok
+
+# Read at as_of < rewrite frontier
+snapshot as_of=0
+----
+<batch [0]-[1]>
+
+# Read at as_of == rewrite frontier
+snapshot as_of=2
+----
+<batch [0]-[1]>
+<batch [1]-[4]>
+<run 0>
+<part 0>
+k1 2 1
+
+# Read at as_of > rewrite frontier
+snapshot as_of=3
+----
+<batch [0]-[1]>
+<batch [1]-[4]>
+<run 0>
+<part 0>
+k1 3 1

@@ -1,0 +1,76 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Rewrite upper == rewrite frontier
+write-batch output=b2 lower=2 upper=4
+k1 2 1
+----
+parts=1 len=1
+
+rewrite-ts input=b2 frontier=5 upper=4
+----
+error: invalid rewrite: rewrite frontier [5] !< rewrite upper [4]
+
+# Rewrite upper < rewrite frontier
+write-batch output=b2 lower=2 upper=4
+k1 2 1
+----
+parts=1 len=1
+
+rewrite-ts input=b2 frontier=5 upper=5
+----
+error: invalid rewrite: rewrite frontier [5] !< rewrite upper [5]
+
+# Rewrite upper < batch upper
+write-batch output=b2 lower=2 upper=4
+k1 2 1
+----
+parts=1 len=1
+
+rewrite-ts input=b2 frontier=2 upper=3
+----
+error: invalid rewrite: rewrite upper [3] < batch upper [4]
+
+# Rewrite frontier < batch lower
+write-batch output=b3 lower=2 upper=4
+k1 2 1
+----
+parts=1 len=1
+
+rewrite-ts input=b3 frontier=1 upper=4
+----
+error: invalid rewrite: rewrite frontier [1] < batch lower [2]
+
+# Rewrite frontier < previous rewrite frontier
+write-batch output=b4 lower=2 upper=4
+k1 2 1
+----
+parts=1 len=1
+
+rewrite-ts input=b4 frontier=3 upper=4
+----
+ok
+
+rewrite-ts input=b4 frontier=2 upper=4
+----
+error: invalid rewrite: rewrite frontier [2] < batch rewrite [3]
+
+# Batch since != minimum antichain
+write-batch output=b5 lower=2 upper=4
+k1 2 1
+----
+parts=1 len=1
+
+compact output=b5_1 inputs=(b5) lower=2 upper=4 since=1
+----
+parts=1 len=1
+
+rewrite-ts input=b5_1 frontier=3 upper=4
+----
+error: invalid rewrite: batch since [1] != minimum antichain [0]

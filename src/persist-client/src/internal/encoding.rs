@@ -1083,7 +1083,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     }
 
     fn from_proto(proto: ProtoHollowBatch) -> Result<Self, TryFromProtoError> {
-        let mut parts: Vec<HollowBatchPart> = proto.parts.into_rust()?;
+        let mut parts: Vec<HollowBatchPart<T>> = proto.parts.into_rust()?;
         // MIGRATION: We used to just have the keys instead of a more structured
         // part.
         parts.extend(
@@ -1095,6 +1095,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                     encoded_size_bytes: 0,
                     key_lower: vec![],
                     stats: None,
+                    ts_rewrite: None,
                 }),
         );
         Ok(HollowBatch {
@@ -1106,22 +1107,28 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     }
 }
 
-impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowBatchPart<T> {
     fn into_proto(&self) -> ProtoHollowBatchPart {
         ProtoHollowBatchPart {
             key: self.key.into_proto(),
             encoded_size_bytes: self.encoded_size_bytes.into_proto(),
             key_lower: Bytes::copy_from_slice(&self.key_lower),
             key_stats: self.stats.into_proto(),
+            ts_rewrite: self.ts_rewrite.as_ref().map(|x| x.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        let ts_rewrite = match proto.ts_rewrite {
+            Some(ts_rewrite) => Some(ts_rewrite.into_rust()?),
+            None => None,
+        };
         Ok(HollowBatchPart {
             key: proto.key.into_rust()?,
             encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
             key_lower: proto.key_lower.into(),
             stats: proto.key_stats.into_rust()?,
+            ts_rewrite,
         })
     }
 }
@@ -1169,6 +1176,7 @@ impl RustType<Bytes> for LazyPartStats {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn any_some_lazy_part_stats() -> impl Strategy<Value = Option<LazyPartStats>> {
     proptest::prelude::any::<LazyPartStats>().prop_map(Some)
 }
@@ -1337,6 +1345,7 @@ mod tests {
                 encoded_size_bytes: 5,
                 key_lower: vec![],
                 stats: None,
+                ts_rewrite: None,
             }],
             runs: vec![],
         };
@@ -1356,6 +1365,7 @@ mod tests {
             encoded_size_bytes: 0,
             key_lower: vec![],
             stats: None,
+            ts_rewrite: None,
         });
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }

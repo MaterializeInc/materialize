@@ -144,6 +144,37 @@ where
         self.batch.desc.lower()
     }
 
+    /// Efficiently rewrites the timestamps in this not-yet-committed batch.
+    ///
+    /// This [Batch] represents potentially large amounts of data, which may
+    /// have partly or entirely been spilled to s3. This call bulk edits the
+    /// timestamps of all data in this batch in a metadata-only operation (i.e.
+    /// without network calls).
+    ///
+    /// Specifically, every timestamp in the batch is logically advanced_by the
+    /// provided `frontier`.
+    ///
+    /// This method may be called multiple times, with later calls overriding
+    /// previous ones, but the rewrite frontier may not regress across calls.
+    ///
+    /// When this batch was created, it was given an `upper`, which bounds the
+    /// staged data it represents. To allow rewrite past this original `upper`,
+    /// this call accepts a new `upper` which replaces the previous one. Like
+    /// the rewrite frontier, the upper may not regress across calls.
+    ///
+    /// Multiple batches with various rewrite frontiers may be used in a single
+    /// [crate::write::WriteHandle::compare_and_append_batch] call. This is an
+    /// expected usage.
+    pub fn rewrite_ts(
+        &mut self,
+        frontier: &Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<(), InvalidUsage<T>> {
+        self.batch
+            .rewrite_ts(frontier, new_upper)
+            .map_err(InvalidUsage::InvalidRewrite)
+    }
+
     /// Marks the blobs that this batch handle points to as consumed, likely
     /// because they were appended to a shard.
     ///
@@ -771,8 +802,8 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     isolated_runtime: Arc<IsolatedRuntime>,
-    writing_parts: VecDeque<JoinHandle<HollowBatchPart>>,
-    finished_parts: Vec<HollowBatchPart>,
+    writing_parts: VecDeque<JoinHandle<HollowBatchPart<T>>>,
+    finished_parts: Vec<HollowBatchPart<T>>,
     batch_metrics: BatchWriteMetrics,
 }
 
@@ -906,6 +937,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     encoded_size_bytes: payload_len,
                     key_lower,
                     stats,
+                    ts_rewrite: None,
                 }
             }
             .instrument(write_span),
@@ -927,7 +959,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<HollowBatchPart> {
+    pub(crate) async fn finish(self) -> Vec<HollowBatchPart<T>> {
         let mut parts = self.finished_parts;
         for handle in self.writing_parts {
             let part = handle.wait_and_assert_finished().await;
@@ -938,9 +970,39 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 }
 
 pub(crate) fn validate_truncate_batch<T: Timestamp>(
-    batch: &Description<T>,
+    batch: &HollowBatch<T>,
     truncate: &Description<T>,
+    any_batch_rewrite: bool,
 ) -> Result<(), InvalidUsage<T>> {
+    // If rewrite_ts is used, we don't allow truncation, to keep things simpler
+    // to reason about.
+    if any_batch_rewrite {
+        // We allow a new upper to be specified at rewrite time, so that's easy:
+        // it must match exactly. This is both consistent with the upper
+        // requirement below and proves that there is no data to truncate past
+        // the upper.
+        if truncate.upper() != batch.desc.upper() {
+            return Err(InvalidUsage::InvalidRewrite(format!(
+                "rewritten batch might have data past {:?} up to {:?}",
+                truncate.upper().elements(),
+                batch.desc.upper().elements(),
+            )));
+        }
+        // To prove that there is no data to truncate below the lower, require
+        // that the lower is <= the rewrite ts.
+        for part in batch.parts.iter() {
+            let part_lower_bound = part.ts_rewrite.as_ref().unwrap_or(batch.desc.lower());
+            if !PartialOrder::less_equal(truncate.lower(), part_lower_bound) {
+                return Err(InvalidUsage::InvalidRewrite(format!(
+                    "rewritten batch might have data below {:?} at {:?}",
+                    truncate.lower().elements(),
+                    part_lower_bound.elements(),
+                )));
+            }
+        }
+    }
+
+    let batch = &batch.desc;
     if !PartialOrder::less_equal(batch.lower(), truncate.lower())
         || PartialOrder::less_than(batch.upper(), truncate.upper())
     {
@@ -958,7 +1020,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 mod tests {
     use crate::cache::PersistClientCache;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
-    use crate::tests::{all_ok, CodecProduct};
+    use crate::tests::{all_ok, new_test_client, CodecProduct};
     use crate::PersistLocation;
 
     use super::*;
@@ -1166,5 +1228,33 @@ mod tests {
         assert!(untrimmable.should_retain("ijk_xyZ"));
         assert!(untrimmable.should_retain("ww-XYZ"));
         assert!(!untrimmable.should_retain("xya"));
+    }
+
+    // NB: Most edge cases are exercised in datadriven tests.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn rewrite_ts_example() {
+        let client = new_test_client().await;
+        let (mut write, read) = client
+            .expect_open::<String, (), u64, i64>(ShardId::new())
+            .await;
+
+        let mut batch = write.builder(Antichain::from_elem(0));
+        batch.add(&"foo".to_owned(), &(), &0, &1).await.unwrap();
+        let batch = batch.finish(Antichain::from_elem(1)).await.unwrap();
+
+        // Roundtrip through a transmittable batch.
+        let batch = batch.into_transmittable_batch();
+        let mut batch = write.batch_from_transmittable_batch(batch);
+        batch
+            .rewrite_ts(&Antichain::from_elem(2), Antichain::from_elem(3))
+            .unwrap();
+        write
+            .expect_compare_and_append_batch(&mut [&mut batch], 0, 3)
+            .await;
+
+        let (actual, _) = read.expect_listen(0).await.read_until(&3).await;
+        let expected = vec![(((Ok("foo".to_owned())), Ok(())), 2, 1)];
+        assert_eq!(actual, expected);
     }
 }

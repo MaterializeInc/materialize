@@ -78,6 +78,8 @@ pub enum InvalidUsage<T> {
     },
     /// The requested codecs don't match the actual ones in durable storage.
     CodecMismatch(Box<CodecMismatch>),
+    /// An invalid usage of [crate::batch::Batch::rewrite_ts].
+    InvalidRewrite(String),
 }
 
 impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
@@ -123,8 +125,8 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
                     "finalized without fully advancing since {since:?} and upper {upper:?}"
                 )
             }
-
             InvalidUsage::CodecMismatch(err) => std::fmt::Display::fmt(err, f),
+            InvalidUsage::InvalidRewrite(err) => write!(f, "invalid rewrite: {err}"),
         }
     }
 }
