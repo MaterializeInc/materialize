@@ -18,7 +18,7 @@
       }
     },
     {
-      "delete": {
+      "soft_delete": {
         "test_deletes_no_primary": [
           {"v1": "2", "v2": "a", "_fivetran_id": "2a"}
         ]

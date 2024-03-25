@@ -10,9 +10,9 @@
 > SELECT k, v1, v2, _fivetran_deleted FROM test.tester.green
 k   v1       v2             _fivetran_deleted
 ---------------------------------------------
-1   "hello"  "world"        false
+1   "hello"  "world"        <null>
 2   "foo"    "bar"          true
-3   "bing!"  "whomp whomp"  false
+3   "bing!"  "whomp whomp"  <null>
 
 > SELECT a, b, c, _fivetran_deleted FROM test.tester.blue
 a     b       c             _fivetran_deleted

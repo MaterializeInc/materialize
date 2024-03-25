@@ -11,4 +11,4 @@
 #       and decouple ourselves from Fivetran's Dockerhub, incase Fivetran removes the image that we
 #       depend on.
 
-FROM fivetrandocker/sdk-destination-tester:024.0222.002
+FROM fivetrandocker/sdk-destination-tester:024.0314.001
