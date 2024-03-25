@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
-use std::pin::{self};
+use std::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -21,6 +21,7 @@ use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
+use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{org_id_conn_bits, IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID};
 use mz_ore::instrument;
@@ -165,10 +166,23 @@ impl Client {
         let notice_tx = session.retain_notice_transmitter();
 
         let (tx, rx) = oneshot::channel();
+
+        // ~~SPOOKY ZONE~~
+        //
+        // This guard prevents a race where the startup command finishes, but the Future returned
+        // by this function is concurrently dropped, so we never create a `SessionClient` and thus
+        // never cleanup the initialized Session.
+        let rx = rx.with_guard(|_| {
+            self.send(Command::Terminate {
+                conn_id: conn_id.clone(),
+                tx: None,
+            });
+        });
+
         self.send(Command::Startup {
             tx,
             user,
-            conn_id,
+            conn_id: conn_id.clone(),
             secret_key,
             uuid,
             application_name,
@@ -552,6 +566,8 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
+    ///
+    /// Note: the provided `cancel_future` must be cancel-safe as it's polled in a `select!` loop.
     #[mz_ore::instrument(level = "debug")]
     pub async fn execute(
         &mut self,
@@ -778,6 +794,9 @@ impl SessionClient {
         self.send_with_cancel(f, futures::future::pending()).await
     }
 
+    /// Send a [`Command`] to the Coordinator, with the ability to cancel the command.
+    ///
+    /// Note: the provided `cancel_future` must be cancel-safe as it's polled in a `select!` loop.
     #[instrument(level = "debug")]
     async fn send_with_cancel<T, F>(
         &mut self,
@@ -791,9 +810,31 @@ impl SessionClient {
         let mut typ = None;
         let application_name = session.application_name();
         let name_hint = ApplicationNameHint::from_str(application_name);
-        let (tx, mut rx) = oneshot::channel();
         let conn_id = session.conn_id().clone();
-        self.inner().send({
+        let (tx, rx) = oneshot::channel();
+
+        // Destructure self so we can hold a mutable reference to the inner client and session at
+        // the same time.
+        let Self {
+            inner: inner_client,
+            session: client_session,
+            ..
+        } = self;
+
+        // TODO(parkmycar): Leaking this invariant here doesn't feel great, but calling
+        // `self.client()` doesn't work because then Rust takes a borrow on the entirity of self.
+        let inner_client = inner_client.as_ref().expect("inner invariant violated");
+
+        // ~~SPOOKY ZONE~~
+        //
+        // This guard prevents a race where a `Session` is returned on `rx` but never placed
+        // back in `self` because the Future returned by this function is concurrently dropped
+        // with the Coordinator sending a response.
+        let mut guarded_rx = rx.with_guard(|response: Response<_>| {
+            *client_session = Some(response.session);
+        });
+
+        inner_client.send({
             let cmd = f(tx, session);
             // Measure the success and error rate of certain commands:
             // - declare reports success of SQL statement planning
@@ -820,7 +861,10 @@ impl SessionClient {
         let mut cancelled = false;
         loop {
             tokio::select! {
-                res = &mut rx => {
+                res = &mut guarded_rx => {
+                    // We received a result, so drop our guard to drop our borrows.
+                    drop(guarded_rx);
+
                     let res = res.expect("sender dropped");
                     let status = if res.result.is_ok() {
                         "success"
@@ -828,18 +872,18 @@ impl SessionClient {
                         "error"
                     };
                     if let Some(typ) = typ {
-                        self.inner()
+                        inner_client
                             .metrics
                             .commands
                             .with_label_values(&[typ, status, name_hint.as_str()])
                             .inc();
                     }
-                    self.session = Some(res.session);
-                    return res.result
+                    *client_session = Some(res.session);
+                    return res.result;
                 },
                 _err = &mut cancel_future, if !cancelled => {
                     cancelled = true;
-                    self.inner().send(Command::PrivilegedCancelRequest {
+                    inner_client.send(Command::PrivilegedCancelRequest {
                         conn_id: conn_id.clone(),
                     });
                 }

@@ -114,3 +114,5 @@ class Worker:
                     self.failed_query_error = e
                     print(f"+++ [{thread_name}] Query failed: {e.query} {e.msg}")
                     raise
+
+        self.exe.cur._c.close()

@@ -361,10 +361,23 @@ def run(
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
-        exe = Executor(rng, cur, database)
-        for db in database.dbs:
-            print(f"Dropping database {db}")
-            db.drop(exe)
+        # Dropping the database also releases the long running connections
+        # used by database objects.
+        database.drop(Executor(rng, cur, database))
+
+        stopping_time = datetime.datetime.now() + datetime.timedelta(seconds=30)
+        while datetime.datetime.now() < stopping_time:
+            cur.execute(
+                "SELECT * FROM mz_internal.mz_sessions WHERE id <> pg_backend_pid()"
+            )
+            sessions = cur.fetchall()
+            if len(sessions) == 0:
+                break
+            print(
+                f"Sessions are still running even though all threads are done: {sessions}"
+            )
+        else:
+            raise ValueError("Sessions did not clean up within 30s of threads stopping")
     conn.close()
 
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
