@@ -898,6 +898,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> 
         let r = match (self, other) {
             (Self::Kafka(conn), Self::Kafka(other)) => conn.alter_compatible(id, other),
             (Self::Postgres(conn), Self::Postgres(other)) => conn.alter_compatible(id, other),
+            (Self::MySql(conn), Self::MySql(other)) => conn.alter_compatible(id, other),
             (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
                 conn.alter_compatible(id, other)
             }
