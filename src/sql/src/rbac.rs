@@ -888,20 +888,6 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
-        Plan::AlterIndexSetOptions(plan::AlterIndexSetOptionsPlan { id, options: _ }) => {
-            RbacRequirements {
-                ownership: vec![ObjectId::Item(*id)],
-                item_usage: &CREATE_ITEM_USAGE,
-                ..Default::default()
-            }
-        }
-        Plan::AlterIndexResetOptions(plan::AlterIndexResetOptionsPlan { id, options: _ }) => {
-            RbacRequirements {
-                ownership: vec![ObjectId::Item(*id)],
-                item_usage: &CREATE_ITEM_USAGE,
-                ..Default::default()
-            }
-        }
         Plan::AlterSetCluster(plan::AlterSetClusterPlan { id, set_cluster }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             privileges: vec![(

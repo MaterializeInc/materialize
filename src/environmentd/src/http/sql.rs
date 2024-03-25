@@ -1142,7 +1142,6 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::StartedTransaction { .. }
         | ExecuteResponse::Updated(_)
         | ExecuteResponse::AlteredObject(_)
-        | ExecuteResponse::AlteredIndexLogicalCompaction
         | ExecuteResponse::AlteredRole
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }

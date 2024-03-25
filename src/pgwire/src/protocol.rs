@@ -1661,7 +1661,6 @@ where
             }
 
             ExecuteResponse::AlteredDefaultPrivileges
-            | ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredObject(..)
             | ExecuteResponse::AlteredRole
             | ExecuteResponse::AlteredSystemConfiguration
