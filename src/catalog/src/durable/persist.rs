@@ -124,7 +124,7 @@ pub(crate) enum Mode {
 
 /// Enum representing a potentially fenced epoch.
 #[derive(Debug)]
-enum FenceableEpoch {
+pub enum FenceableEpoch {
     /// The current epoch, if one exists, has not been fenced.
     Unfenced(Option<Epoch>),
     /// The current epoch has been fenced.
@@ -158,11 +158,48 @@ impl FenceableEpoch {
             } => Some(current_epoch.clone()),
         }
     }
+
+    /// Returns `Err` if `epoch` fences out `self`, `Ok` otherwise.
+    fn maybe_fence(&mut self, epoch: Epoch) -> Result<(), DurableCatalogError> {
+        match self {
+            FenceableEpoch::Unfenced(Some(current_epoch)) => {
+                if epoch > *current_epoch {
+                    *self = FenceableEpoch::Fenced {
+                        current_epoch: *current_epoch,
+                        fence_epoch: epoch,
+                    };
+                    self.validate()?;
+                } else if epoch < *current_epoch {
+                    panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
+                }
+            }
+            FenceableEpoch::Unfenced(None) => {
+                *self = FenceableEpoch::Unfenced(Some(epoch));
+            }
+            FenceableEpoch::Fenced { .. } => {
+                self.validate()?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
+    /// Process and apply `update`.
+    ///
+    /// Returns `Some` if `update` should be cached in memory and `None` otherwise.
+    fn apply_update(
+        &mut self,
+        update: StateUpdate<T>,
+        current_epoch: &mut FenceableEpoch,
+        metrics: &Arc<Metrics>,
+    ) -> Result<Option<StateUpdate<T>>, DurableCatalogError>;
 }
 
 /// A handle for interacting with the persist catalog shard.
 #[derive(Debug)]
-pub struct PersistHandle<T: TryIntoStateUpdateKind> {
+pub struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
@@ -177,6 +214,8 @@ pub struct PersistHandle<T: TryIntoStateUpdateKind> {
     ///
     /// We use a tuple instead of [`StateUpdate`] to make consolidation easier.
     pub(crate) snapshot: Vec<(T, Timestamp, Diff)>,
+    /// Applies custom processing, filtering, and fencing for each individual update.
+    update_applier: U,
     /// The current upper of the persist shard.
     pub(crate) upper: Timestamp,
     /// The epoch of the catalog, if one exists.
@@ -185,7 +224,7 @@ pub struct PersistHandle<T: TryIntoStateUpdateKind> {
     metrics: Arc<Metrics>,
 }
 
-impl<T: TryIntoStateUpdateKind> PersistHandle<T> {
+impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Increment the version in the catalog upgrade shard to the code's current version.
     async fn increment_catalog_upgrade_shard_version(&mut self, organization_id: Uuid) {
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
@@ -230,9 +269,9 @@ impl<T: TryIntoStateUpdateKind> PersistHandle<T> {
     /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
     /// iff the current global upper of the catalog is `current_upper`.
     #[mz_ore::instrument]
-    pub(crate) async fn compare_and_append<U: IntoStateUpdateKindRaw>(
+    pub(crate) async fn compare_and_append<S: IntoStateUpdateKindRaw>(
         &mut self,
-        updates: Vec<(U, Diff)>,
+        updates: Vec<(S, Diff)>,
     ) -> Result<(), CatalogError> {
         let updates = updates
             .into_iter()
@@ -316,9 +355,39 @@ impl<T: TryIntoStateUpdateKind> PersistHandle<T> {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn apply_updates(
         &mut self,
-        updates: Vec<StateUpdate<T>>,
+        updates: impl IntoIterator<Item = StateUpdate<T>>,
     ) -> Result<(), DurableCatalogError> {
-        todo!()
+        let mut updates: Vec<_> = updates
+            .into_iter()
+            .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
+            .collect();
+
+        // This helps guarantee that for a single key, there is at most a single retraction and a
+        // single insertion per timestamp. Otherwise, we would need to match the retractions and
+        // insertions up by value and manually figure out what the end value should be.
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+
+        // Updates must be applied in timestamp order. Within a timestamp retractions must be
+        // applied before insertions, or we might end up retracting the wrong value.
+        updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
+
+        for (kind, ts, diff) in updates {
+            if diff != 1 && diff != -1 {
+                panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
+            }
+
+            if let Some(StateUpdate { kind, ts, diff }) = self.update_applier.apply_update(
+                StateUpdate { kind, ts, diff },
+                &mut self.epoch,
+                &self.metrics,
+            )? {
+                self.snapshot.push((kind, ts, diff));
+            }
+        }
+
+        self.consolidate();
+
+        Ok(())
     }
 
     #[mz_ore::instrument]
@@ -376,7 +445,7 @@ impl<T: TryIntoStateUpdateKind> PersistHandle<T> {
     }
 }
 
-impl PersistHandle<StateUpdateKind> {
+impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
     /// Execute and return the results of `f` on the current catalog snapshot.
     ///
     /// Will return an error if the catalog has been fenced out.
