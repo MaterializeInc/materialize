@@ -176,8 +176,8 @@ class QueryGenerator:
                 storage_layout,
                 contains_aggregations,
                 row_selection,
-                offset=self._generate_offset(storage_layout),
-                limit=self._generate_limit(storage_layout),
+                offset=self._generate_offset(storage_layout, contains_aggregations),
+                limit=self._generate_limit(storage_layout, contains_aggregations),
             )
 
             queries.append(query)
@@ -205,16 +205,18 @@ class QueryGenerator:
                 self._log_skipped_expression(logger, expression, ignore_verdict.reason)
                 continue
 
+            contains_aggregation = expression.is_aggregate
+
             queries.append(
                 QueryTemplate(
                     expression.is_expect_error,
                     [expression],
                     None,
                     storage_layout,
-                    expression.is_aggregate,
+                    contains_aggregation,
                     row_selection,
-                    offset=self._generate_offset(storage_layout),
-                    limit=self._generate_limit(storage_layout),
+                    offset=self._generate_offset(storage_layout, contains_aggregation),
+                    limit=self._generate_limit(storage_layout, contains_aggregation),
                 )
             )
 
@@ -267,19 +269,25 @@ class QueryGenerator:
 
         return expressions
 
-    def _generate_offset(self, storage_layout: ValueStorageLayout) -> int | None:
-        return self._generate_offset_or_limit(storage_layout)
+    def _generate_offset(
+        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+    ) -> int | None:
+        return self._generate_offset_or_limit(storage_layout, contains_aggregations)
 
-    def _generate_limit(self, storage_layout: ValueStorageLayout) -> int | None:
-        return self._generate_offset_or_limit(storage_layout)
+    def _generate_limit(
+        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+    ) -> int | None:
+        return self._generate_offset_or_limit(storage_layout, contains_aggregations)
 
     def _generate_offset_or_limit(
-        self, storage_layout: ValueStorageLayout
+        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
     ) -> int | None:
         if storage_layout != ValueStorageLayout.VERTICAL:
             return None
 
-        if self.randomized_picker.random_boolean(0.75):
+        likelihood_of_offset_or_limit = 0.025 if contains_aggregations else 0.25
+
+        if not self.randomized_picker.random_boolean(likelihood_of_offset_or_limit):
             # do not apply it
             return None
 
