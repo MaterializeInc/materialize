@@ -18,6 +18,7 @@ use crate::fivetran_sdk::form_field::Type;
 use crate::fivetran_sdk::{
     ConfigurationFormResponse, ConfigurationTest, FormField, TestRequest, TextField,
 };
+use crate::utils;
 
 pub const FIVETRAN_DESTINATION_APPLICATION_NAME: &str = "materialize_fivetran_destination";
 
@@ -156,8 +157,8 @@ pub async fn connect(
     let mut builder = SslConnector::builder(SslMethod::tls_client())?;
     builder.set_verify_cert_store(cert_store.build())?;
 
-    let options = if let Some(cluster) = cluster {
-        format!("--cluster={cluster}")
+    let options = if let Some(cluster) = cluster.as_ref() {
+        format!("--cluster={}", utils::escape_options(cluster))
     } else {
         String::new()
     };

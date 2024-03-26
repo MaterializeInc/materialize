@@ -3,5 +3,5 @@
   "user": "materialize",
   "app_password": "ignored",
   "dbname": "test",
-  "cluster": "quickstart"
+  "cluster": "name with space"
 }

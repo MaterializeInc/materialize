@@ -104,6 +104,36 @@ pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DecimalParams>), O
     }
 }
 
+/// Escapes a string `s` so it can be used in a value in the `options` argument when connecting to
+/// Materialize.
+///
+/// See the [Postgres Docs](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNECT-OPTIONS)
+/// for characters that need to be escaped.
+///
+/// ```
+/// use mz_fivetran_destination::utils::escape_options;
+///
+/// assert_eq!(escape_options("foo"), "foo");
+/// assert_eq!(escape_options("name with space"), r#"name\ with\ space"#);
+/// assert_eq!(escape_options(r#"\"#), r#"\\"#);
+/// assert_eq!(escape_options(r#"\ "#), r#"\\\ "#);
+/// ```
+pub fn escape_options(s: &str) -> String {
+    let mut escaped = String::with_capacity(s.len());
+
+    for c in s.chars() {
+        match c {
+            '\\' => escaped.push_str(r#"\\"#),
+            ' ' => {
+                escaped.push_str(r#"\ "#);
+            }
+            other => escaped.push(other),
+        }
+    }
+
+    escaped
+}
+
 /// Maps the column ordering of a CSV file, to the ordering of the provided table.
 ///
 /// The column ordering of a CSV provided by Fivetran is not guaranteed to match the column
