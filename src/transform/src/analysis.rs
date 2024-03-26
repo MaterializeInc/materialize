@@ -532,7 +532,8 @@ mod non_negative {
                     Id::Local(id) => depends
                         .bindings()
                         .get(id)
-                        .map(|off| results[*off])
+                        .and_then(|off| results.get(*off))
+                        .cloned()
                         .unwrap_or(false),
                     Id::Global(_) => true,
                 },
@@ -540,6 +541,8 @@ mod non_negative {
                 MirRelationExpr::Negate { .. } => false,
                 // Threshold ensures non-negativity.
                 MirRelationExpr::Threshold { .. } => true,
+                // Reduce errors on negative input.
+                MirRelationExpr::Reduce { .. } => true,
                 MirRelationExpr::Join { .. } | MirRelationExpr::Union { .. } => {
                     // These two cases require all of their inputs to be non-negative.
                     let position = results.len();

@@ -40,12 +40,10 @@ Explained Query:
       Map (42) // { arity: 2 }
         Distinct project=[#0] // { arity: 1 }
           Union // { arity: 1 }
-            Distinct project=[#0] // { arity: 1 }
-              Union // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Get l0 // { arity: 2 }
-                Project (#0) // { arity: 1 }
-                  ReadStorage materialize.public.t1 // { arity: 2 }
+            Project (#0) // { arity: 1 }
+              Get l0 // { arity: 2 }
+            Project (#0) // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 2 }
             Project (#1) // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 2 }
 
