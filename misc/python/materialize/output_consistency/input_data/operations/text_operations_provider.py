@@ -291,7 +291,7 @@ TEXT_OPERATION_TYPES.append(
     DbFunction(
         "regexp_replace",
         [TextOperationParam(), REGEX_PARAM, TextOperationParam()],
-        ArrayReturnTypeSpec(DataTypeCategory.TEXT),
+        TextReturnTypeSpec(),
         tags={TAG_REGEX},
     )
 )
