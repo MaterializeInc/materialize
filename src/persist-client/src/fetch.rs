@@ -120,7 +120,7 @@ where
                     part: x.clone(),
                 }
             }
-            BatchPart::Inline(x) => FetchedBlobBuf::Inline(x.clone()),
+            BatchPart::Inline(x) => FetchedBlobBuf::Inline(part.desc.clone(), x.clone()),
         };
         let fetched_blob = FetchedBlob {
             metrics: Arc::clone(&self.metrics),
@@ -476,7 +476,7 @@ enum FetchedBlobBuf<T> {
         buf: SegmentedBytes,
         part: HollowBatchPart<T>,
     },
-    Inline(LazyInlineBatchPart),
+    Inline(Description<T>, LazyInlineBatchPart),
 }
 
 impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
@@ -508,8 +508,8 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                 );
                 (parsed, part.stats.as_ref())
             }
-            FetchedBlobBuf::Inline(x) => {
-                let parsed = EncodedPart::from_inline(self.read_metrics.clone(), x);
+            FetchedBlobBuf::Inline(desc, x) => {
+                let parsed = EncodedPart::from_inline(self.read_metrics.clone(), desc.clone(), x);
                 (parsed, None)
             }
         };
@@ -601,7 +601,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
 pub(crate) struct EncodedPart<T> {
     metrics: ReadMetrics,
     registered_desc: Description<T>,
-    part: Arc<BlobTraceBatchPart<T>>,
+    pub(crate) part: Arc<BlobTraceBatchPart<T>>,
     needs_truncation: bool,
     ts_rewrite: Option<Antichain<T>>,
 }
@@ -717,12 +717,20 @@ where
                 )
                 .await
             }
-            BatchPart::Inline(x) => Ok(EncodedPart::from_inline(read_metrics.clone(), x)),
+            BatchPart::Inline(x) => Ok(EncodedPart::from_inline(
+                read_metrics.clone(),
+                registered_desc.clone(),
+                x,
+            )),
         }
     }
 
     // WIP oof
-    pub(crate) fn from_inline(metrics: ReadMetrics, x: &LazyInlineBatchPart) -> Self {
+    pub(crate) fn from_inline(
+        metrics: ReadMetrics,
+        desc: Description<T>,
+        x: &LazyInlineBatchPart,
+    ) -> Self {
         let parsed = x.decode().expect("WIP");
         let key_lower = parsed
             .updates
@@ -737,7 +745,7 @@ where
             stats: None,
             ts_rewrite: None,
         };
-        Self::new(metrics, parsed.desc.clone(), &hack, parsed)
+        Self::new(metrics, desc, &hack, parsed)
     }
 
     pub(crate) fn new(

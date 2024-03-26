@@ -10,6 +10,7 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::anyhow;
+use std::borrow::Cow;
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -85,7 +86,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
             FetchData::Unleased { part, .. } => part.key.split().0 >= min_version,
             FetchData::Leased { part, .. } => match part.part.key() {
                 Some(key) => key.split().0 >= min_version,
-                None => false,
+                None => true,
             },
             FetchData::AlreadyFetched => false,
         }
@@ -95,11 +96,11 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         mem::replace(self, FetchData::AlreadyFetched)
     }
 
-    fn key_lower(&self) -> &[u8] {
+    fn key_lower<'a>(&'a self) -> Cow<'a, [u8]> {
         match self {
-            FetchData::Unleased { part, .. } => part.key_lower.as_slice(),
+            FetchData::Unleased { part, .. } => Cow::Borrowed(part.key_lower.as_slice()),
             FetchData::Leased { part, .. } => part.part.key_lower(),
-            FetchData::AlreadyFetched => &[],
+            FetchData::AlreadyFetched => Cow::Borrowed(&[]),
         }
     }
 
@@ -196,19 +197,19 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
         Self::Sorted { data, index: 0 }
     }
 
-    fn kvt_lower(&mut self) -> Option<(&[u8], &[u8], T)> {
+    fn kvt_lower(&mut self) -> Option<(Cow<'_, [u8]>, &[u8], T)> {
         match self {
             ConsolidationPart::Queued { data } => Some((data.key_lower(), &[], T::minimum())),
             ConsolidationPart::Prefetched { key_lower, .. } => {
-                Some((key_lower.as_slice(), &[], T::minimum()))
+                Some((Cow::Borrowed(key_lower.as_slice()), &[], T::minimum()))
             }
             ConsolidationPart::Encoded { part, cursor } => {
                 let (k, v, t, _) = cursor.peek(part)?;
-                Some((k, v, t))
+                Some((Cow::Borrowed(k), v, t))
             }
             ConsolidationPart::Sorted { data, index } => {
                 let ((k, v), t, _) = data.get(*index)?;
-                Some((k.as_slice(), v.as_slice(), t.clone()))
+                Some((Cow::Borrowed(k.as_slice()), v.as_slice(), t.clone()))
             }
         }
     }
@@ -241,7 +242,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 #[derive(Debug)]
 pub(crate) struct Consolidator<T, D> {
     metrics: Arc<Metrics>,
-    runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
+    pub(crate) runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
     // NB: this is the tricky part!
@@ -312,11 +313,8 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                 BatchPart::Inline(inline) => {
                     // WIP do we feel okay about doing the decode step here?
                     let read_metrics = read_metrics(&metrics.read).clone();
-                    let part = EncodedPart::from_inline(read_metrics, inline);
-                    let c_part = ConsolidationPart::Encoded {
-                        part,
-                        cursor: Cursor::default(),
-                    };
+                    let part = EncodedPart::from_inline(read_metrics, desc.clone(), inline);
+                    let c_part = ConsolidationPart::from_encoded(part, &self.filter, true);
                     (c_part, inline.encoded_size_bytes())
                 }
             })
@@ -426,7 +424,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
             return Ok(());
         };
         let (k, v) = (k.to_vec(), v.to_vec());
-        let global_lower = (k.as_slice(), v.as_slice(), t);
+        let global_lower = (Cow::Owned(k), v.as_slice(), t);
 
         let mut ready_futures: FuturesUnordered<_> = self
             .runs
@@ -725,7 +723,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
 pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
     parts: Vec<ConsolidationPartIter<'a, T, D>>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
-    upper_bound: Option<(&'a [u8], &'a [u8], T)>,
+    upper_bound: Option<(Cow<'a, [u8]>, &'a [u8], T)>,
     state: Option<TupleRef<'a, T, D>>,
     drop_stash: &'a mut Option<Tuple<T, D>>,
 }
@@ -762,7 +760,7 @@ where
 
     /// Set an upper bound based on the stats from an unfetched part. If there's already
     /// an upper bound set, keep the most conservative / smallest one.
-    fn push_upper(&mut self, upper: (&'a [u8], &'a [u8], T)) {
+    fn push_upper(&mut self, upper: (Cow<'a, [u8]>, &'a [u8], T)) {
         let update_bound = self
             .upper_bound
             .as_ref()
@@ -786,6 +784,16 @@ where
                         Ordering::Greater => {
                             // Don't want to log the entire KV, but it's interesting to know
                             // whether it's KVs going backwards or 'just' timestamps.
+                            tracing::info!(
+                                "WIP out of order\n  ({:?},{:?},{:?})\n  ({:?},{:?},{:?})\n  {:?}",
+                                *k0,
+                                *v0,
+                                *t0,
+                                *k1,
+                                *v1,
+                                *t1,
+                                part
+                            );
                             panic!(
                                 "data arrived at the consolidator out of order (kvs equal? {})",
                                 (*k0, *v0) == (*k1, *v1)
@@ -804,7 +812,7 @@ where
                     // Don't start consolidating a new KVT that's past our provided upper bound,
                     // since that data may also live in some unfetched part.
                     if let Some((k0, v0, t0)) = &self.upper_bound {
-                        if (k0, v0, t0) <= (k1, v1, t1) {
+                        if (k0, v0, t0) <= (&Cow::Borrowed(k1), v1, t1) {
                             return None;
                         }
                     }

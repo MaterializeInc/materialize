@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -22,6 +23,7 @@ use differential_dataflow::trace::Description;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
@@ -201,18 +203,26 @@ impl<T> BatchPart<T> {
         }
     }
 
-    pub fn key_lower(&self) -> &[u8] {
-        match self {
-            BatchPart::Hollow(x) => x.key_lower.as_slice(),
-            // WIP real key_lower
-            BatchPart::Inline(_) => &[],
-        }
-    }
-
     pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
         match self {
             BatchPart::Hollow(x) => x.ts_rewrite.as_ref(),
             BatchPart::Inline(_) => None,
+        }
+    }
+}
+
+impl<T: Timestamp + Codec64> BatchPart<T> {
+    pub fn key_lower<'a>(&'a self) -> Cow<'a, [u8]> {
+        match self {
+            BatchPart::Hollow(x) => Cow::Borrowed(x.key_lower.as_slice()),
+            BatchPart::Inline(x) => {
+                // WIP decoding this whole thing seems pretty inefficient!
+                let x: BlobTraceBatchPart<T> = x.decode().expect("WIP");
+                let x = x.updates.first().expect("WIP");
+                let ((key, _), _, _) = x.get(0).expect("WIP");
+                tracing::info!("WIP key_lower {:?}: {:?}", key, x);
+                return Cow::Owned(key.to_owned());
+            }
         }
     }
 }

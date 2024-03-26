@@ -1146,6 +1146,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 assert_eq!(x.len(), encoded_size_bytes);
                 assert!(proto.key_stats.is_none());
                 assert!(proto.ts_rewrite.is_none());
+                assert!(proto.key_lower.is_empty());
                 Ok(BatchPart::Inline(LazyInlineBatchPart(x.into_rust()?)))
             }
             None => Err(TryFromProtoError::unknown_enum_variant(
@@ -1243,7 +1244,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoInlineBatchPart> for BlobTraceBatchPa
 
 /// A batch part stored inlined in State.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LazyInlineBatchPart(LazyProto<ProtoInlineBatchPart>);
+pub struct LazyInlineBatchPart(pub(crate) LazyProto<ProtoInlineBatchPart>);
 
 impl From<&ProtoInlineBatchPart> for LazyInlineBatchPart {
     fn from(value: &ProtoInlineBatchPart) -> Self {

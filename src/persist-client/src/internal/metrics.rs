@@ -673,13 +673,19 @@ pub struct BatchPartReadMetrics {
     pub(crate) compaction: ReadMetrics,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ReadMetrics {
     pub(crate) part_bytes: IntCounter,
     pub(crate) part_goodbytes: IntCounter,
     pub(crate) part_count: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) ts_rewrite: IntCounter,
+}
+
+impl std::fmt::Debug for ReadMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadMetrics").finish_non_exhaustive()
+    }
 }
 
 // This one is Clone in contrast to the others because it has to get moved into

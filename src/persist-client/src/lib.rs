@@ -1381,7 +1381,6 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    #[ignore] // WIP fix truncation + inline write
     async fn overlapping_append() {
         mz_ore::test::init_logging_default("info");
 
