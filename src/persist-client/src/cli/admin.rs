@@ -304,7 +304,11 @@ where
             let req = CompactReq {
                 shard_id,
                 desc: req.desc,
-                inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
+                inputs: req
+                    .inputs
+                    .into_iter()
+                    .map(|b| Arc::unwrap_or_clone(b.batch))
+                    .collect(),
             };
             let parts = req.inputs.iter().map(|x| x.parts.len()).sum::<usize>();
             let bytes = req

@@ -408,7 +408,11 @@ where
                         let req = CompactReq {
                             shard_id: self.shard_id(),
                             desc: req.desc,
-                            inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
+                            inputs: req
+                                .inputs
+                                .into_iter()
+                                .map(|b| Arc::unwrap_or_clone(b.batch))
+                                .collect(),
                         };
                         compact_reqs.push(req);
                     }

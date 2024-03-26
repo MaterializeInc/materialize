@@ -64,7 +64,7 @@ use crate::internal::state::HollowBatch;
 #[derive(Debug, Clone, PartialEq)]
 pub struct FueledMergeReq<T> {
     pub desc: Description<T>,
-    pub inputs: Vec<Arc<IdHollowBatch<T>>>,
+    pub inputs: Vec<IdHollowBatch<T>>,
 }
 
 #[derive(Debug)]
@@ -279,16 +279,16 @@ pub struct SpineId(pub usize, pub usize);
 #[derive(Debug, Clone, PartialEq)]
 pub struct IdHollowBatch<T> {
     pub id: SpineId,
-    pub batch: HollowBatch<T>,
+    pub batch: Arc<HollowBatch<T>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum SpineBatch<T> {
-    Merged(Arc<IdHollowBatch<T>>),
+    Merged(IdHollowBatch<T>),
     Fueled {
         id: SpineId,
         desc: Description<T>,
-        parts: Vec<Arc<IdHollowBatch<T>>>,
+        parts: Vec<IdHollowBatch<T>>,
         // A cached version of parts.iter().map(|x| x.len).sum()
         len: usize,
     },
@@ -371,15 +371,15 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         upper: Antichain<T>,
         since: Antichain<T>,
     ) -> Self {
-        SpineBatch::Merged(Arc::new(IdHollowBatch {
+        SpineBatch::Merged(IdHollowBatch {
             id,
-            batch: HollowBatch {
+            batch: Arc::new(HollowBatch {
                 desc: Description::new(lower, upper, since),
                 parts: vec![],
                 len: 0,
                 runs: vec![],
-            },
-        }))
+            }),
+        })
     }
 
     pub fn begin_merge(
@@ -422,10 +422,10 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             if res.output.len > self.len() {
                 return ApplyMergeResult::NotAppliedTooManyUpdates;
             }
-            *self = SpineBatch::Merged(Arc::new(IdHollowBatch {
+            *self = SpineBatch::Merged(IdHollowBatch {
                 id: self.id(),
-                batch: res.output.clone(),
-            }));
+                batch: Arc::new(res.output.clone()),
+            });
             return ApplyMergeResult::AppliedExact;
         }
 
@@ -463,10 +463,10 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                     (Some((lower, id_lower)), Some((upper, id_upper))) => {
                         let mut new_parts = vec![];
                         new_parts.extend_from_slice(&parts[..lower]);
-                        new_parts.push(Arc::new(IdHollowBatch {
+                        new_parts.push(IdHollowBatch {
                             id: SpineId(id_lower, id_upper),
-                            batch: res.output.clone(),
-                        }));
+                            batch: Arc::new(res.output.clone()),
+                        });
                         new_parts.extend_from_slice(&parts[upper + 1..]);
                         let new_spine_batch = SpineBatch::Fueled {
                             id: *id,
@@ -774,7 +774,10 @@ impl<T: Timestamp + Lattice> Spine<T> {
             self.next_id += 1;
             SpineId(id, self.next_id)
         };
-        let batch = SpineBatch::Merged(Arc::new(IdHollowBatch { id, batch }));
+        let batch = SpineBatch::Merged(IdHollowBatch {
+            id,
+            batch: Arc::new(batch),
+        });
 
         self.upper.clone_from(batch.upper());
 
