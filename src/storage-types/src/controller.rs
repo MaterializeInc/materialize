@@ -20,6 +20,7 @@ use mz_persist_types::{PersistLocation, ShardId};
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_stash_types::StashError;
+use mz_timely_util::antichain::AntichainExt;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
@@ -206,7 +207,7 @@ pub enum StorageError<T> {
     Generic(anyhow::Error),
 }
 
-impl<T: Debug + Display> Error for StorageError<T> {
+impl<T: Debug + Display + 'static> Error for StorageError<T> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::SourceIdReused(_) => None,
@@ -229,7 +230,7 @@ impl<T: Debug + Display> Error for StorageError<T> {
     }
 }
 
-impl<T: fmt::Display + fmt::Debug> fmt::Display for StorageError<T> {
+impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("storage error: ")?;
         match self {
@@ -257,7 +258,9 @@ impl<T: fmt::Display + fmt::Debug> fmt::Display for StorageError<T> {
                     f,
                     "expected upper was different from the actual upper for: {}",
                     id.iter()
-                        .map(|invalid_upper| format!("{invalid_upper:?}"))
+                        .map(|InvalidUpper { id, current_upper }| {
+                            format!("(id: {}; actual upper: {})", id, current_upper.pretty())
+                        })
                         .join(", ")
                 )
             }
