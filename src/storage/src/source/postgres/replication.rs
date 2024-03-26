@@ -364,6 +364,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     .give(&data_cap_set[0], (data, commit_lsn, diff))
                                     .await;
                             }
+                            data_cap_set.downgrade([&new_upper]);
                         }
                         _ => return Err(TransientError::BareTransactionEvent),
                     },
