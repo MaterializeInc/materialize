@@ -64,8 +64,9 @@ impl Default for SshTimeoutConfig {
 /// Specifies an SSH tunnel.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SshTunnelConfig {
-    /// The hostname of the SSH bastion server.
-    pub host: String,
+    /// The hostname/IP of the SSH bastion server.
+    /// If multiple hosts are specified, they are tried in order.
+    pub host: Vec<String>,
     /// The port to connect to.
     pub port: u16,
     /// The name of the user to connect as.
@@ -108,7 +109,11 @@ impl SshTunnelConfig {
     ) -> Result<SshTunnelHandle, anyhow::Error> {
         let tunnel_id = format!(
             "{}:{} via {}@{}:{}",
-            remote_host, remote_port, self.user, self.host, self.port,
+            remote_host,
+            remote_port,
+            self.user,
+            self.host.join(","),
+            self.port,
         );
 
         // N.B.
@@ -236,31 +241,44 @@ async fn connect(
     // Mostly helpful to ensure the file is not accidentally overwritten.
     tempfile.set_permissions(std::fs::Permissions::from_mode(0o400))?;
 
-    // Bastion hosts (and therefore keys) tend to change, so we don't want
-    // to lock ourselves into trusting only the first we see. In any case,
-    // recording a known host would only last as long as the life of a
-    // storage pod, so it doesn't offer any protection.
-    let session = openssh::SessionBuilder::default()
-        .known_hosts_check(openssh::KnownHosts::Accept)
-        .user_known_hosts_file("/dev/null")
-        .user(config.user.clone())
-        .port(config.port)
-        .keyfile(&path)
-        .server_alive_interval(timeout_config.keepalives_idle)
-        .connect_timeout(timeout_config.connect_timeout)
-        .connect_mux(config.host.clone())
-        .await?;
+    // Try connecting to each host in turn.
+    let mut connect_err = None;
+    for host in &config.host {
+        // Bastion hosts (and therefore keys) tend to change, so we don't want
+        // to lock ourselves into trusting only the first we see. In any case,
+        // recording a known host would only last as long as the life of a
+        // storage pod, so it doesn't offer any protection.
+        match openssh::SessionBuilder::default()
+            .known_hosts_check(openssh::KnownHosts::Accept)
+            .user_known_hosts_file("/dev/null")
+            .user(config.user.clone())
+            .port(config.port)
+            .keyfile(&path)
+            .server_alive_interval(timeout_config.keepalives_idle)
+            .connect_timeout(timeout_config.connect_timeout)
+            .connect_mux(host.clone())
+            .await
+        {
+            Ok(session) => {
+                // Delete the private key for safety: since `ssh` still has an open
+                // handle to it, it still has access to the key.
+                drop(tempfile);
+                fs::remove_file(&path)?;
+                drop(tempdir);
 
-    // Delete the private key for safety: since `ssh` still has an open
-    // handle to it, it still has access to the key.
-    drop(tempfile);
-    fs::remove_file(&path)?;
-    drop(tempdir);
+                // Ensure session is healthy.
+                session.check().await?;
 
-    // Ensure session is healthy.
-    session.check().await?;
-
-    Ok(session)
+                return Ok(session);
+            }
+            Err(err) => {
+                connect_err = Some(err);
+            }
+        }
+    }
+    Err(connect_err
+        .map(Into::into)
+        .unwrap_or_else(|| anyhow::anyhow!("no hosts to connect to")))
 }
 
 async fn port_forward(session: &Session, host: &str, port: u16) -> Result<u16, anyhow::Error> {

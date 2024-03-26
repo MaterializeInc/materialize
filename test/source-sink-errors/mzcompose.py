@@ -45,7 +45,8 @@ SERVICES = [
 class Disruption(Protocol):
     name: str
 
-    def run_test(self, c: Composition) -> None: ...
+    def run_test(self, c: Composition) -> None:
+        ...
 
 
 @dataclass

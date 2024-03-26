@@ -22,7 +22,7 @@ use mz_kafka_util::client::{
     BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
 use mz_ore::error::ErrorExt;
-use mz_ore::netio::resolve_external_address;
+use mz_ore::netio::resolve_address;
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -548,13 +548,13 @@ impl KafkaConnection {
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
 
                 // Ensure any ssh-bastion address we connect to is resolved to an external address.
-                let resolved = resolve_external_address(
+                let resolved = resolve_address(
                     &ssh_tunnel.connection.host,
                     ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                 )
                 .await?;
                 context.set_default_tunnel(TunnelConfig::Ssh(SshTunnelConfig {
-                    host: resolved.to_string(),
+                    host: resolved.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
                     port: ssh_tunnel.connection.port,
                     user: ssh_tunnel.connection.user.clone(),
                     key_pair,
@@ -583,7 +583,7 @@ impl KafkaConnection {
                     // - Not doing so makes it easier to test the `FailedDefaultSshTunnel` path
                     // in the `TunnelingClientContext`.
                     //
-                    // NOTE that we do not need to use the `resolve_external_address` method to
+                    // NOTE that we do not need to use the `resolve_address` method to
                     // validate the broker address here since it will be validated when the
                     // connection is established in `src/kafka-util/src/client.rs`, and we do not
                     // want to specify any BrokerRewrite that would override any default-tunnel
@@ -605,7 +605,7 @@ impl KafkaConnection {
                 }
                 Tunnel::Ssh(ssh_tunnel) => {
                     // Ensure any SSH bastion address we connect to is resolved to an external address.
-                    let ssh_host_resolved = resolve_external_address(
+                    let ssh_host_resolved = resolve_address(
                         &ssh_tunnel.connection.host,
                         ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                     )
@@ -614,7 +614,10 @@ impl KafkaConnection {
                         .add_ssh_tunnel(
                             addr,
                             SshTunnelConfig {
-                                host: ssh_host_resolved.to_string(),
+                                host: ssh_host_resolved
+                                    .iter()
+                                    .map(|a| a.to_string())
+                                    .collect::<Vec<_>>(),
                                 port: ssh_tunnel.connection.port,
                                 user: ssh_tunnel.connection.user.clone(),
                                 key_pair: SshKeyPair::from_bytes(
@@ -872,13 +875,18 @@ impl CsrConnection {
         match &self.tunnel {
             Tunnel::Direct => {
                 // Ensure any host we connect to is resolved to an external address.
-                let resolved = resolve_external_address(
+                let resolved = resolve_address(
                     host,
                     ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                 )
                 .await?;
-                client_config =
-                    client_config.resolve_to_addrs(host, &[SocketAddr::new(resolved, DUMMY_PORT)])
+                client_config = client_config.resolve_to_addrs(
+                    host,
+                    &resolved
+                        .iter()
+                        .map(|addr| SocketAddr::new(*addr, DUMMY_PORT))
+                        .collect::<Vec<_>>(),
+                )
             }
             Tunnel::Ssh(ssh_tunnel) => {
                 let ssh_tunnel = ssh_tunnel
@@ -1124,13 +1132,13 @@ impl PostgresConnection<InlinedConnection> {
         let tunnel = match &self.tunnel {
             Tunnel::Direct => {
                 // Ensure any host we connect to is resolved to an external address.
-                let resolved = resolve_external_address(
+                let resolved = resolve_address(
                     &self.host,
                     ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                 )
                 .await?;
                 mz_postgres_util::TunnelConfig::Direct {
-                    tcp_host_override: Some(resolved.to_string()),
+                    resolved_ips: Some(resolved),
                 }
             }
             Tunnel::Ssh(SshTunnel {
@@ -1140,14 +1148,14 @@ impl PostgresConnection<InlinedConnection> {
                 let secret = secrets_reader.read(*connection_id).await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
                 // Ensure any ssh-bastion host we connect to is resolved to an external address.
-                let resolved = resolve_external_address(
+                let resolved = resolve_address(
                     &connection.host,
                     ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                 )
                 .await?;
                 mz_postgres_util::TunnelConfig::Ssh {
                     config: SshTunnelConfig {
-                        host: resolved.to_string(),
+                        host: resolved.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
                         port: connection.port,
                         user: connection.user.clone(),
                         key_pair,
@@ -1441,13 +1449,13 @@ impl MySqlConnection<InlinedConnection> {
         let tunnel = match &self.tunnel {
             Tunnel::Direct => {
                 // Ensure any host we connect to is resolved to an external address.
-                let resolved = resolve_external_address(
+                let resolved = resolve_address(
                     &self.host,
                     ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                 )
                 .await?;
                 mz_mysql_util::TunnelConfig::Direct {
-                    tcp_host_override: Some(resolved.to_string()),
+                    resolved_ips: Some(resolved),
                 }
             }
             Tunnel::Ssh(SshTunnel {
@@ -1457,14 +1465,14 @@ impl MySqlConnection<InlinedConnection> {
                 let secret = secrets_reader.read(*connection_id).await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
                 // Ensure any ssh-bastion host we connect to is resolved to an external address.
-                let resolved = resolve_external_address(
+                let resolved = resolve_address(
                     &connection.host,
                     ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                 )
                 .await?;
                 mz_mysql_util::TunnelConfig::Ssh {
                     config: SshTunnelConfig {
-                        host: resolved.to_string(),
+                        host: resolved.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
                         port: connection.port,
                         user: connection.user.clone(),
                         key_pair,
@@ -1677,7 +1685,7 @@ impl SshTunnel<InlinedConnection> {
         remote_port: u16,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
         // Ensure any ssh-bastion host we connect to is resolved to an external address.
-        let resolved = resolve_external_address(
+        let resolved = resolve_address(
             &self.connection.host,
             ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
         )
@@ -1687,7 +1695,7 @@ impl SshTunnel<InlinedConnection> {
             .ssh_tunnel_manager
             .connect(
                 SshTunnelConfig {
-                    host: resolved.to_string(),
+                    host: resolved.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
                     port: self.connection.port,
                     user: self.connection.user.clone(),
                     key_pair: SshKeyPair::from_bytes(
@@ -1720,14 +1728,14 @@ impl SshConnection {
         let key_pair = SshKeyPair::from_bytes(&secret)?;
 
         // Ensure any ssh-bastion host we connect to is resolved to an external address.
-        let resolved = resolve_external_address(
+        let resolved = resolve_address(
             &self.host,
             ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
         )
         .await?;
 
         let config = SshTunnelConfig {
-            host: resolved.to_string(),
+            host: resolved.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
             port: self.port,
             user: self.user.clone(),
             key_pair,
