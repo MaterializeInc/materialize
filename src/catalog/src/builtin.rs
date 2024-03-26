@@ -6116,9 +6116,9 @@ subsources_with_clusters AS (
     SELECT ss.id, ps.cluster_id
     FROM mz_sources ss
     JOIN mz_internal.mz_object_dependencies d
-        ON (d.referenced_object_id = ss.id)
+        ON (d.object_id = ss.id)
     JOIN sources_maintained_by_dataflows ps
-        ON (ps.id = d.object_id)
+        ON (ps.id = d.referenced_object_id)
     WHERE ss.type = 'subsource'
 ),
 sources_with_clusters AS (
