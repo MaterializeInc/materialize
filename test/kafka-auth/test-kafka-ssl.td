@@ -44,7 +44,7 @@ contains:Invalid CA certificate
     BROKER 'kafka:9093',
     SSL CERTIFICATE AUTHORITY = 'this is garbage'
   )
-contains:ssl.ca.pem failed: not in PEM format?
+contains:failed to read certificate #0 from ssl.ca.pem: not in PEM format?
 
 # ==> Test without an SSH tunnel. <==
 
