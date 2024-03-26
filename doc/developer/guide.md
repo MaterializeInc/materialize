@@ -262,7 +262,7 @@ is up.
 Once things are built and CockroachDB is running, you can start Materialize:
 
 ```shell
-bin/environmentd --reset -- --all-features --unsafe mode
+bin/environmentd --reset -- --all-features --unsafe-mode
 ```
 
 This should bootstrap a fresh Materialize instance. Once you see the logline
