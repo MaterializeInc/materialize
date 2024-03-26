@@ -359,7 +359,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &config.config.connection_context.ssh_tunnel_manager,
                 &connection_config,
                 &connection.publication,
-                None,
             )
             .await
             {

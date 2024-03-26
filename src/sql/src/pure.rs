@@ -715,7 +715,6 @@ async fn purify_create_source(
                 &storage_configuration.connection_context.ssh_tunnel_manager,
                 &config,
                 &publication,
-                None,
             )
             .await?;
 
@@ -1393,7 +1392,6 @@ async fn purify_alter_source(
         &storage_configuration.connection_context.ssh_tunnel_manager,
         &config,
         &pg_source_connection.publication,
-        None,
     )
     .await?;
 
