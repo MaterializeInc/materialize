@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
@@ -483,12 +483,9 @@ sqlfunc!(
                 .ok_or(EvalError::TimestampOutOfRange)?;
             nanosecs %= NANO_SECONDS_PER_SECOND;
             let nanosecs = u32::try_from(nanosecs).map_err(|_| EvalError::TimestampOutOfRange)?;
-            match NaiveDateTime::from_timestamp_opt(secs, nanosecs) {
-                Some(ts) => {
-                    let dt = DateTime::<Utc>::from_utc(ts, Utc);
-                    CheckedTimestamp::from_timestamplike(dt)
-                        .map_err(|_| EvalError::TimestampOutOfRange)
-                }
+            match DateTime::from_timestamp(secs, nanosecs) {
+                Some(dt) => CheckedTimestamp::from_timestamplike(dt)
+                    .map_err(|_| EvalError::TimestampOutOfRange),
                 None => Err(EvalError::TimestampOutOfRange),
             }
         }

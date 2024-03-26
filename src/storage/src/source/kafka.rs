@@ -16,7 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime};
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use maplit::btreemap;
@@ -1133,9 +1133,10 @@ fn construct_source_message(
                     .to_millis()
                     .expect("kafka sources always have upstream_time");
 
-                let d: Datum = NaiveDateTime::from_timestamp_millis(ts)
+                let d: Datum = DateTime::from_timestamp_millis(ts)
                     .and_then(|dt| {
-                        let ct: Option<CheckedTimestamp<NaiveDateTime>> = dt.try_into().ok();
+                        let ct: Option<CheckedTimestamp<NaiveDateTime>> =
+                            dt.naive_utc().try_into().ok();
                         ct
                     })
                     .into();

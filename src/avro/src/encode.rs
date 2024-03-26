@@ -76,13 +76,14 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
                 other => panic!("Invalid schema for timestamp: {:?}", other),
             };
             let ts_seconds = d
+                .and_utc()
                 .timestamp()
                 .checked_mul(mult)
                 .expect("All chrono dates can be converted to timestamps");
             let sub_part: i64 = if mult == 1_000 {
-                d.timestamp_subsec_millis().into()
+                d.and_utc().timestamp_subsec_millis().into()
             } else {
-                d.timestamp_subsec_micros().into()
+                d.and_utc().timestamp_subsec_micros().into()
             };
             let ts = if ts_seconds >= 0 {
                 ts_seconds + sub_part

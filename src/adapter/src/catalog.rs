@@ -4134,7 +4134,6 @@ impl SessionCatalog for ConnCatalog<'_> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
     use std::{env, iter};
 
     use itertools::Itertools;
@@ -5247,7 +5246,6 @@ mod tests {
 
         // Execute the function as much as possible, ensuring no panics occur, but
         // otherwise ignoring eval errors. We also do various other checks.
-        let start = Instant::now();
         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
         if let Ok(hir) = res {
             if let Ok(mut mir) = hir.lower_uncorrelated() {
