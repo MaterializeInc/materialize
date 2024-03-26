@@ -14,14 +14,44 @@ from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
+# Set the max slot WAL keep size to 10MB
+DEFAULT_PG_EXTRA_COMMAND = ["-c", "max_slot_wal_keep_size=10"]
+
+
+def create_postgres(
+    pg_version: str | None, extra_command: list[str] = DEFAULT_PG_EXTRA_COMMAND
+) -> Postgres:
+    if pg_version is None:
+        image = None
+    else:
+        image = f"postgres:{pg_version}"
+
+    return Postgres(image=image, extra_command=extra_command)
+
+
 SERVICES = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),
     Testdrive(),
     TestCerts(),
     Toxiproxy(),
-    # Set the max slot WAL keep size to 10MB
-    Postgres(extra_command=["-c", "max_slot_wal_keep_size=10"]),
+    create_postgres(pg_version=None),
 ]
+
+
+def get_targeted_pg_version(parser: WorkflowArgumentParser) -> str | None:
+    parser.add_argument(
+        "--pg-version",
+        type=str,
+    )
+
+    args, _ = parser.parse_known_args()
+    pg_version = args.pg_version
+
+    if pg_version is not None:
+        print(f"Running with Postgres version {pg_version}")
+
+    return pg_version
+
 
 # TODO: redesign ceased status #25768
 # Test that how subsource statuses work across a variety of scenarios
@@ -42,21 +72,28 @@ SERVICES = [
 
 
 def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:
-    with c.override(Postgres(extra_command=["-c", "max_replication_slots=3"])):
+    pg_version = get_targeted_pg_version(parser)
+    with c.override(
+        create_postgres(
+            pg_version=pg_version, extra_command=["-c", "max_replication_slots=3"]
+        )
+    ):
         c.up("materialized", "postgres")
         c.run_testdrive_files("override/replication-slots.td")
 
 
 def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
+    pg_version = get_targeted_pg_version(parser)
     for wal_level in ["replica", "minimal"]:
         with c.override(
-            Postgres(
+            create_postgres(
+                pg_version=pg_version,
                 extra_command=[
                     "-c",
                     "max_wal_senders=0",
                     "-c",
                     f"wal_level={wal_level}",
-                ]
+                ],
             )
         ):
             c.up("materialized", "postgres")
@@ -66,7 +103,12 @@ def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_replication_disabled(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
-    with c.override(Postgres(extra_command=["-c", "max_wal_senders=0"])):
+    pg_version = get_targeted_pg_version(parser)
+    with c.override(
+        create_postgres(
+            pg_version=pg_version, extra_command=["-c", "max_wal_senders=0"]
+        )
+    ):
         c.up("materialized", "postgres")
         c.run_testdrive_files("override/replication-disabled.td")
 
@@ -90,22 +132,26 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-certs", "cat", "/secrets/postgres.key", capture=True
     ).stdout
 
-    c.up("materialized", "test-certs", "postgres")
-    c.run_testdrive_files(
-        f"--var=ssl-ca={ssl_ca}",
-        f"--var=ssl-cert={ssl_cert}",
-        f"--var=ssl-key={ssl_key}",
-        f"--var=ssl-wrong-cert={ssl_wrong_cert}",
-        f"--var=ssl-wrong-key={ssl_wrong_key}",
-        f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-        f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-        *args.filter,
-    )
+    pg_version = get_targeted_pg_version(parser)
+    with c.override(create_postgres(pg_version=pg_version)):
+        c.up("materialized", "test-certs", "postgres")
+        c.run_testdrive_files(
+            f"--var=ssl-ca={ssl_ca}",
+            f"--var=ssl-cert={ssl_cert}",
+            f"--var=ssl-key={ssl_key}",
+            f"--var=ssl-wrong-cert={ssl_wrong_cert}",
+            f"--var=ssl-wrong-key={ssl_wrong_key}",
+            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            *args.filter,
+        )
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    remaining_args = [arg for arg in parser.args if not arg.startswith("--pg-version")]
+
     # If args were passed then we are running the main CDC workflow
-    if parser.args:
+    if remaining_args:
         workflow_cdc(c, parser)
     else:
         # Otherwise we are running all workflows
