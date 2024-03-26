@@ -176,6 +176,8 @@ class QueryGenerator:
                 storage_layout,
                 contains_aggregations,
                 row_selection,
+                offset=self._generate_offset(storage_layout),
+                limit=self._generate_limit(storage_layout),
             )
 
             queries.append(query)
@@ -211,6 +213,8 @@ class QueryGenerator:
                     storage_layout,
                     expression.is_aggregate,
                     row_selection,
+                    offset=self._generate_offset(storage_layout),
+                    limit=self._generate_limit(storage_layout),
                 )
             )
 
@@ -262,6 +266,37 @@ class QueryGenerator:
             del expressions[index_to_remove]
 
         return expressions
+
+    def _generate_offset(self, storage_layout: ValueStorageLayout) -> int | None:
+        return self._generate_offset_or_limit(storage_layout)
+
+    def _generate_limit(self, storage_layout: ValueStorageLayout) -> int | None:
+        return self._generate_offset_or_limit(storage_layout)
+
+    def _generate_offset_or_limit(
+        self, storage_layout: ValueStorageLayout
+    ) -> int | None:
+        if storage_layout != ValueStorageLayout.VERTICAL:
+            return None
+
+        if self.randomized_picker.random_boolean(0.75):
+            # do not apply it
+            return None
+
+        max_value = self.vertical_storage_row_count + 1
+
+        if self.randomized_picker.random_boolean(0.7):
+            # prefer lower numbers since queries may already contain where conditions or apply aggregations
+            # (or contain offsets when generating a limit)
+            max_value = int(max_value / 3)
+
+        value = self.randomized_picker.random_number(0, max_value)
+
+        if value == 0 and self.randomized_picker.random_boolean(0.95):
+            # drop most 0 values for readability (but keep a few)
+            value = None
+
+        return value
 
     def _log_skipped_expression(
         self,
