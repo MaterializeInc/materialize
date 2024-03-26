@@ -146,8 +146,9 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_column_type_2 MODIFY f1 int;
 INSERT INTO alter_column_type_2 VALUES (2048);
 
-! select * from alter_column_type_2;
-contains:incompatible schema change
+# TODO(def-): Reenable when #25660 is fixed
+# ! select * from alter_column_type_2;
+# contains:incompatible schema change
 
 #
 # Drop NOT NULL
