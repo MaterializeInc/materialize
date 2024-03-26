@@ -59,30 +59,30 @@ where
             }
         };
 
-        // Splitting the data across a known number of buckets to distribute load across the cluster.
-        // Each worker will be handling data belonging to 0 or more buckets. We are doing this so that
+        // Splitting the data across a known number of batches to distribute load across the cluster.
+        // Each worker will be handling data belonging to 0 or more batches. We are doing this so that
         // we can write files to s3 deterministically across different replicas of different sizes
-        // using the bucket ID. Each worker will split a bucket's data into 1 or more
+        // using the batch ID. Each worker will split a batch's data into 1 or more
         // files based on the user provided `MAX_FILE_SIZE`.
-        let bucket_count = self.output_bucket_count;
+        let batch_count = self.output_batch_count;
 
         // TODO(#25835): Note, even though we do get deterministic output currently
         // after the exchange below, it's not explicitly supported and we should change it.
         let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
             &sinked_collection.map(move |row| {
-                let bucket = row.hashed() % bucket_count;
-                ((row, bucket), ())
+                let batch = row.hashed() % batch_count;
+                ((row, batch), ())
             }),
-            Exchange::new(move |(((_, bucket), _), _, _)| *bucket),
+            Exchange::new(move |(((_, batch), _), _, _)| *batch),
             "Consolidated COPY TO S3 input",
         );
 
         let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
             &err_collection.map(move |row| {
-                let bucket = row.hashed() % bucket_count;
-                ((row, bucket), ())
+                let batch = row.hashed() % batch_count;
+                ((row, batch), ())
             }),
-            Exchange::new(move |(((_, bucket), _), _, _)| *bucket),
+            Exchange::new(move |(((_, batch), _), _, _)| *batch),
             "Consolidated COPY TO S3 error",
         );
 

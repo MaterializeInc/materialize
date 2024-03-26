@@ -110,12 +110,14 @@ contains:MAX FILE SIZE cannot be less than 16MB
     FORMAT = 'csv'
   );
 
-> COPY (SELECT a FROM t) TO 's3://copytos3'
-  WITH (
-    AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
-    FORMAT = 'csv'
-  );
+# TODO: #25857 (detect non-empty s3 path)
+# ! COPY (SELECT a FROM t) TO 's3://copytos3'
+#   WITH (
+#     AWS CONNECTION = aws_conn,
+#     MAX FILE SIZE = "100MB",
+#     FORMAT = 'csv'
+#   );
+
 
 > COPY (SELECT * FROM generate_series(1, 1000000)) TO 's3://copytos3/test/4'
   WITH (
@@ -137,7 +139,3 @@ $ s3-verify-data bucket=copytos3 key=test/2
 
 $ s3-verify-data bucket=copytos3 key=test/3
 "{1,2}",f,Infinity,"{""s"":""abc""}",1,32767,2147483647,9223372036854775807,12345678901234567890123.4567890123456789,2010-10-10,10:10:10,2010-10-10 10:10:10,00:00:00,aaaa,\x5c7841414141,това е,\xd182d0b5d0bad181d182
-
-$ s3-verify-data bucket=copytos3 key=
-1
-2

@@ -184,9 +184,9 @@ pub struct CopyToS3OneshotSinkConnection {
     /// The ID of the Connection object, used to generate the External ID when
     /// using AssumeRole with AWS connection.
     pub connection_id: GlobalId,
-    /// The number of buckets the COPY TO output will be divided into
-    /// where each worker will process 0 or more buckets of data.
-    pub output_bucket_count: u64,
+    /// The number of batches the COPY TO output will be divided into
+    /// where each worker will process 0 or more batches of data.
+    pub output_batch_count: u64,
 }
 
 impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnection {
@@ -195,7 +195,7 @@ impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnect
             upload_info: Some(self.upload_info.into_proto()),
             aws_connection: Some(self.aws_connection.into_proto()),
             connection_id: Some(self.connection_id.into_proto()),
-            output_bucket_count: self.output_bucket_count,
+            output_batch_count: self.output_batch_count,
         }
     }
 
@@ -210,7 +210,7 @@ impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnect
             connection_id: proto
                 .connection_id
                 .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::connection_id")?,
-            output_bucket_count: proto.output_bucket_count,
+            output_batch_count: proto.output_batch_count,
         })
     }
 }

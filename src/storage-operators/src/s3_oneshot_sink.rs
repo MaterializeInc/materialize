@@ -86,13 +86,13 @@ pub fn copy_to<G, F>(
             }
         };
 
-        // Map of an uploader per bucket.
+        // Map of an uploader per batch.
         let mut s3_uploaders: BTreeMap<u64, CopyToS3Uploader> = BTreeMap::new();
         let mut row_count = 0;
         while let Some(event) = input_handle.next().await {
             match event {
                 AsyncEvent::Data(_ts, data) => {
-                    for (((row, bucket), ()), ts, diff) in data {
+                    for (((row, batch), ()), ts, diff) in data {
                         if !up_to.less_equal(&ts) {
                             if diff < 0 {
                                 onetime_callback(Err(format!(
@@ -102,10 +102,10 @@ pub fn copy_to<G, F>(
                             }
                             row_count += u64::try_from(diff).unwrap();
                             let uploader = s3_uploaders
-                                .entry(bucket)
+                                .entry(batch)
                                 .or_insert_with(|| {
-                                    info!("worker_id: {} will be handling bucket: {}", worker_id, bucket);
-                                    let file_name_prefix = format!("part-bucket-{:04}", bucket);
+                                    info!("worker_id: {} will be handling batch: {}", worker_id, batch);
+                                    let file_name_prefix = format!("batch-{:04}", batch);
                                     CopyToS3Uploader::new(sdk_config.clone(), connection_details.clone(), file_name_prefix)
                                 });
                             for _ in 0..diff {

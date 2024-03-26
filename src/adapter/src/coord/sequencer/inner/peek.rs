@@ -144,7 +144,7 @@ impl Coordinator {
                     format_params,
                     max_file_size,
                     // This will be set in `peek_stage_validate` stage below.
-                    output_bucket_count: None,
+                    output_batch_count: None,
                 }),
                 explain_ctx: ExplainContext::None,
             }),
@@ -328,15 +328,21 @@ impl Coordinator {
             }
             Some(mut copy_to_ctx) => {
                 // Getting the max worker count across replicas
-                // and using that value for the number of buckets to
-                // divide the copy to output into.
-                let max_worker_count = cluster
+                // and using that value for the number of batches to
+                // divide the copy output into.
+                let max_worker_count = match cluster
                     .replicas()
                     .map(|r| r.config.location.workers())
                     .max()
-                    .map(u64::cast_from);
-                assert!(max_worker_count.is_some());
-                copy_to_ctx.output_bucket_count = max_worker_count;
+                {
+                    Some(count) => u64::cast_from(count),
+                    None => {
+                        return Err(AdapterError::NoClusterReplicasAvailable(
+                            cluster.name.clone(),
+                        ))
+                    }
+                };
+                copy_to_ctx.output_batch_count = Some(max_worker_count);
                 // Build an optimizer for this COPY TO.
                 Either::Right(optimize::copy_to::Optimizer::new(
                     Arc::clone(&catalog),

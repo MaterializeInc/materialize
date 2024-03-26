@@ -242,10 +242,10 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                     },
                     aws_connection: aws_connection.clone(),
                     connection_id: self.copy_to_context.connection_id,
-                    output_bucket_count: self
+                    output_batch_count: self
                         .copy_to_context
-                        .output_bucket_count
-                        .expect("output_bucket_count should be set in sequencer"),
+                        .output_batch_count
+                        .expect("output_batch_count should be set in sequencer"),
                 })
             }
             _ => {
