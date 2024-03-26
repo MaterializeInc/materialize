@@ -72,7 +72,7 @@
             }
         },
         {
-            "truncate": [
+            "soft_truncate_before": [
                 "blue"
             ]
         },
