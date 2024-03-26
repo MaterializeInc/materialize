@@ -1296,17 +1296,15 @@ Explained Query:
     cte l6 =
       Distinct project=[#0..=#2]
         Union
-          Distinct project=[#0..=#2]
-            Union
-              Project (#6, #4, #5)
-                Map (regexp_split_to_array[" ", case_insensitive=false](btrim(#0)), (2 * #1), text_to_bigint(array_index(#2, integer_to_bigint((#3 - 1)))), (#4 + text_to_bigint(array_index(#2, integer_to_bigint(#3)))), "seed")
-                  FlatMap generate_series(1, ((regexp_split_to_array[" ", case_insensitive=false](btrim(#0)) array_length 1) / 2), 1)
-                    Project (#1)
-                      Filter (#0 = "seeds")
-                        Get l0
-              Project (#1, #10, #11)
-                Map ((#8 - #4), (#6 + #9), (#7 + #9))
-                  Get l8
+          Project (#6, #4, #5)
+            Map (regexp_split_to_array[" ", case_insensitive=false](btrim(#0)), (2 * #1), text_to_bigint(array_index(#2, integer_to_bigint((#3 - 1)))), (#4 + text_to_bigint(array_index(#2, integer_to_bigint(#3)))), "seed")
+              FlatMap generate_series(1, ((regexp_split_to_array[" ", case_insensitive=false](btrim(#0)) array_length 1) / 2), 1)
+                Project (#1)
+                  Filter (#0 = "seeds")
+                    Get l0
+          Project (#1, #10, #11)
+            Map ((#8 - #4), (#6 + #9), (#7 + #9))
+              Get l8
           Get l16
     cte l5 =
       Reduce aggregates=[min(#0)]

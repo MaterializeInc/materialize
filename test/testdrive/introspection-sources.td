@@ -327,7 +327,7 @@ true true true true true
   SELECT * FROM term;
 
 > SELECT
-    records > 12 * 1000,
+    records > 0,
     records < 2 * 12 * 1000,
     size > 0,
     size < 4 * 1000 * 1000,

@@ -365,18 +365,16 @@ Explained Query:
     cte l2 =
       Distinct project=[#0, #1] monotonic
         Union
-          Distinct project=[#0, #1] monotonic
-            Union
-              Project (#0, #2)
-                Filter (#1 > 0)
-                  Map ((#1 - 1))
-                    Get l2
-              Constant
-                - (1, 1)
+          Project (#0, #2)
+            Filter (#1 > 0)
+              Map ((#1 - 1))
+                Get l2
           Project (#2, #3)
             Filter (#1 = 0) AND (#0 < 4100)
               Map ((#0 + 1), 20)
                 Get l2
+          Constant
+            - (1, 1)
     cte l1 =
       Project (#3, #4)
         Map (regexp_split_to_array[" ", case_insensitive=false](#0), substr(array_index(#2, 1), 2), btrim(array_index(#2, integer_to_bigint(#1)), ","))

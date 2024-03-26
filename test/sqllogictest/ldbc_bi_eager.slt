@@ -2890,23 +2890,21 @@ Explained Query:
     cte l7 =
       Distinct project=[#0{person2id}, #1] // { arity: 2 }
         Union // { arity: 2 }
-          Distinct project=[#0{person2id}, #1] // { arity: 2 }
-            Union // { arity: 2 }
-              Project (#1, #0{person2id}) // { arity: 2 }
-                CrossJoin type=differential // { arity: 2 }
-                  implementation
-                    %0:l4[×] » %1[×]
-                  ArrangeBy keys=[[]] // { arity: 2 }
-                    Get l4 // { arity: 2 }
-                  ArrangeBy keys=[[]] // { arity: 0 }
-                    Union // { arity: 0 }
-                      Negate // { arity: 0 }
-                        Get l6 // { arity: 0 }
-                      Constant // { arity: 0 }
-                        - ()
-              Project (#1, #0) // { arity: 2 }
-                Map (true, -1) // { arity: 2 }
-                  Get l6 // { arity: 0 }
+          Project (#1, #0{person2id}) // { arity: 2 }
+            CrossJoin type=differential // { arity: 2 }
+              implementation
+                %0:l4[×] » %1[×]
+              ArrangeBy keys=[[]] // { arity: 2 }
+                Get l4 // { arity: 2 }
+              ArrangeBy keys=[[]] // { arity: 0 }
+                Union // { arity: 0 }
+                  Negate // { arity: 0 }
+                    Get l6 // { arity: 0 }
+                  Constant // { arity: 0 }
+                    - ()
+          Project (#1, #0) // { arity: 2 }
+            Map (true, -1) // { arity: 2 }
+              Get l6 // { arity: 0 }
           Constant // { arity: 2 }
             - (1450, true)
             - (15393162796819, false)
