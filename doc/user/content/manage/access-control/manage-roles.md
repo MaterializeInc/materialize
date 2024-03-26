@@ -5,6 +5,8 @@ menu:
   main:
     parent: access-control
     weight: 20
+aliases:
+  - /sql/builtin-roles/
 ---
 
 This page outlines how to create and manage roles in Materialize.
