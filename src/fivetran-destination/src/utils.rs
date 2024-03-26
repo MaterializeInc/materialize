@@ -7,10 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::error::{OpError, OpErrorKind};
-use crate::fivetran_sdk::{DataType, DecimalParams};
+use std::collections::BTreeMap;
 
+use crate::error::{OpError, OpErrorKind};
+use crate::fivetran_sdk::{DataType, DecimalParams, Table};
+
+use csv_async::ByteRecord;
+use futures::{Stream, StreamExt};
 use mz_pgrepr::Type;
+use tokio::io::AsyncRead;
 
 /// According to folks from Fivetran, checking if a column name is prefixed with a specific
 /// string is enough to determine if it's a system column.
@@ -96,5 +101,328 @@ pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DecimalParams>), O
             let msg = format!("no mapping to Fivetran data type for OID {}", ty.oid());
             Err(OpErrorKind::Unsupported(msg).into())
         }
+    }
+}
+
+/// Maps the column ordering of a CSV file, to the ordering of the provided table.
+///
+/// The column ordering of a CSV provided by Fivetran is not guaranteed to match the column
+/// ordering of the destination table, so based on column name we re-map the CSV.
+#[derive(Debug)]
+pub struct AsyncCsvReaderTableAdapter<R> {
+    /// Async CSV reader.
+    csv_reader: csv_async::AsyncReader<R>,
+    /// The `i`th column in a table, exists at the `tbl_to_csv[i]` position in a CSV record.
+    tbl_to_csv: Vec<usize>,
+}
+
+impl<R> AsyncCsvReaderTableAdapter<R>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    /// Creates a new [`AsyncCsvReaderTableAdapter`] from an [`AsyncRead`]-er and a [`Table`].
+    pub async fn new(reader: R, table: &Table) -> Result<Self, OpError> {
+        let mut csv_reader = csv_async::AsyncReaderBuilder::new().create_reader(reader);
+        let csv_headers = csv_reader.headers().await?;
+        let mut csv_columns: BTreeMap<_, _> = csv_headers
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| (name, idx))
+            .collect();
+
+        // TODO(parkmycar): When we support the `mz_extras` column we'll need to handle this case.
+        if table.columns.len() != csv_columns.len() {
+            let msg = format!(
+                "number of columns do not match: table {}, csv {}",
+                table.columns.len(),
+                csv_columns.len()
+            );
+            return Err(OpErrorKind::CsvMapping {
+                headers: csv_headers.clone(),
+                table: table.clone(),
+                msg,
+            }
+            .into());
+        }
+
+        // Create our column mapping.
+        let tbl_to_csv = table
+            .columns
+            .iter()
+            .map(|col| {
+                csv_columns.remove(col.name.as_str()).ok_or_else(|| {
+                    let msg = format!("table header '{}' does not exist in csv", col.name);
+                    OpErrorKind::CsvMapping {
+                        headers: csv_headers.clone(),
+                        table: table.clone(),
+                        msg,
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if !csv_columns.is_empty() {
+            return Err(OpErrorKind::CsvMapping {
+                headers: csv_headers.clone(),
+                table: table.clone(),
+                msg: format!("Not all CSV columns were used! remaining: {csv_columns:?}"),
+            }
+            .into());
+        }
+
+        Ok(AsyncCsvReaderTableAdapter {
+            csv_reader,
+            tbl_to_csv,
+        })
+    }
+
+    /// Consumes `self` returning a [`Stream`] of [`ByteRecord`]s whose columns have been mapped to
+    /// match the order of the provided table.
+    ///
+    /// TODO(parkmycar): Ideally there would be a "Lending Stream" of sorts so we could have a
+    /// single `ByteRecord` buffer we map into and then yield references for. This is possible with
+    /// GATs but the trait doesn't exist yet.
+    pub fn into_stream(self) -> impl Stream<Item = Result<ByteRecord, OpError>> {
+        let AsyncCsvReaderTableAdapter {
+            csv_reader,
+            tbl_to_csv,
+        } = self;
+
+        csv_reader.into_byte_records().map(move |record| {
+            let record = record?;
+
+            // Create a new properly sized record we can map into.
+            let mut mapped_record = record.clone();
+            mapped_record.clear();
+
+            for idx in &tbl_to_csv {
+                let field = record.get(*idx).ok_or_else(|| {
+                    OpErrorKind::InvariantViolated(format!(
+                        "invariant violated, {idx} does not exist"
+                    ))
+                })?;
+                mapped_record.push_field(field);
+            }
+
+            Ok::<ByteRecord, OpError>(mapped_record)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use csv_async::StringRecord;
+    use itertools::Itertools;
+
+    use crate::fivetran_sdk::{Column, DataType};
+
+    use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn smoketest_csv_table_adapter() {
+        // Note: The CSV data has the "country" and "city" columns swapped w.r.t the table
+        // definition.
+        let data = "country,city,pop\nUnited States,New York,9000000";
+        let table = Table {
+            name: "stats".to_string(),
+            columns: vec![
+                Column {
+                    name: "city".to_string(),
+                    r#type: DataType::String.into(),
+                    primary_key: true,
+                    decimal: None,
+                },
+                Column {
+                    name: "country".to_string(),
+                    r#type: DataType::String.into(),
+                    primary_key: false,
+                    decimal: None,
+                },
+                Column {
+                    name: "pop".to_string(),
+                    r#type: DataType::Int.into(),
+                    primary_key: false,
+                    decimal: None,
+                },
+            ],
+        };
+
+        let mapped_reader = AsyncCsvReaderTableAdapter::new(data.as_bytes(), &table)
+            .await
+            .unwrap();
+        let mapped_rows = mapped_reader
+            .into_stream()
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map_ok(|record| StringRecord::from_byte_record(record).unwrap())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        // Note: We purposefully do not yield the header.
+        insta::assert_debug_snapshot!(mapped_rows, @r###"
+        [
+            StringRecord(["New York", "United States", "9000000"]),
+        ]
+        "###);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_incorrect_number_of_columns() {
+        let data = "country,city,pop\nUnited States,New York,9000000";
+        let table = Table {
+            name: "stats".to_string(),
+            columns: vec![
+                Column {
+                    name: "city".to_string(),
+                    r#type: DataType::String.into(),
+                    primary_key: true,
+                    decimal: None,
+                },
+                Column {
+                    name: "country".to_string(),
+                    r#type: DataType::String.into(),
+                    primary_key: false,
+                    decimal: None,
+                },
+            ],
+        };
+
+        let error = AsyncCsvReaderTableAdapter::new(data.as_bytes(), &table)
+            .await
+            .unwrap_err();
+        insta::assert_debug_snapshot!(error, @r###"
+        OpError {
+            kind: CsvMapping {
+                headers: StringRecord(["country", "city", "pop"]),
+                table: Table {
+                    name: "stats",
+                    columns: [
+                        Column {
+                            name: "city",
+                            r#type: String,
+                            primary_key: true,
+                            decimal: None,
+                        },
+                        Column {
+                            name: "country",
+                            r#type: String,
+                            primary_key: false,
+                            decimal: None,
+                        },
+                    ],
+                },
+                msg: "number of columns do not match: table 2, csv 3",
+            },
+            context: [],
+        }
+        "###);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_missing_column() {
+        let data = "non_existant,city\nUnited States,New York";
+        let table = Table {
+            name: "stats".to_string(),
+            columns: vec![
+                Column {
+                    name: "city".to_string(),
+                    r#type: DataType::String.into(),
+                    primary_key: true,
+                    decimal: None,
+                },
+                Column {
+                    name: "country".to_string(),
+                    r#type: DataType::String.into(),
+                    primary_key: false,
+                    decimal: None,
+                },
+            ],
+        };
+
+        let error = AsyncCsvReaderTableAdapter::new(data.as_bytes(), &table)
+            .await
+            .unwrap_err();
+        insta::assert_debug_snapshot!(error, @r###"
+        OpError {
+            kind: CsvMapping {
+                headers: StringRecord(["non_existant", "city"]),
+                table: Table {
+                    name: "stats",
+                    columns: [
+                        Column {
+                            name: "city",
+                            r#type: String,
+                            primary_key: true,
+                            decimal: None,
+                        },
+                        Column {
+                            name: "country",
+                            r#type: String,
+                            primary_key: false,
+                            decimal: None,
+                        },
+                    ],
+                },
+                msg: "table header 'country' does not exist in csv",
+            },
+            context: [],
+        }
+        "###);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_column_names_with_leading_spaces() {
+        // Note: The CSV data has the "country" and "city" columns swapped w.r.t the table
+        // definition.
+        let data = " a,  a,a, \nfoo_bar,100,false,1.0";
+        let table = Table {
+            name: "stats".to_string(),
+            columns: vec![
+                Column {
+                    name: "a".to_string(),
+                    r#type: DataType::Boolean.into(),
+                    primary_key: true,
+                    decimal: None,
+                },
+                Column {
+                    name: " ".to_string(),
+                    r#type: DataType::Float.into(),
+                    primary_key: true,
+                    decimal: None,
+                },
+                Column {
+                    name: " a".to_string(),
+                    r#type: DataType::String.into(),
+                    primary_key: true,
+                    decimal: None,
+                },
+                Column {
+                    name: "  a".to_string(),
+                    r#type: DataType::Int.into(),
+                    primary_key: false,
+                    decimal: None,
+                },
+            ],
+        };
+
+        let mapped_reader = AsyncCsvReaderTableAdapter::new(data.as_bytes(), &table)
+            .await
+            .unwrap();
+        let mapped_rows = mapped_reader
+            .into_stream()
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map_ok(|record| StringRecord::from_byte_record(record).unwrap())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        // Note: We purposefully do not yield the header.
+        insta::assert_debug_snapshot!(mapped_rows, @r###"
+        [
+            StringRecord(["false", "1.0", "foo_bar", "100"]),
+        ]
+        "###);
     }
 }
