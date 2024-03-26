@@ -70,6 +70,9 @@ class Worker:
         cur.execute("SET auto_route_introspection_queries TO false")
         cur.execute("SELECT pg_backend_pid()")
         self.exe.pg_pid = cur.fetchall()[0][0]
+        self.exe.log(
+            f"Connection for worker initialized, pg_backend_pid: {self.exe.pg_pid}"
+        )
 
         while time.time() < self.end_time:
             action = self.rng.choices(self.actions, self.weights)[0]

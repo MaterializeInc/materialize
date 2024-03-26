@@ -356,13 +356,57 @@ class HttpSelectAction(Action):
         query += " LIMIT 1"
 
         try:
+            exe.log(f"HTTP SQL Query {query}")
             result = requests.post(
                 f"http://{exe.db.host}:{exe.db.ports['http']}/api/sql",
-                data=json.dumps({"query": query}),
+                data=json.dumps(
+                    {"query": f"BEGIN; SELECT pg_backend_pid(); COMMIT; {query}"}
+                ),
                 headers={"content-type": "application/json"},
                 timeout=self.rng.uniform(0, 10),
             )
-            print(result.status_code)
+            exe.log(
+                f"HTTP select pg_backend_pid {result.json()['results'][1]['rows'][0][0]}"
+            )
+            if result.status_code != 200:
+                raise QueryError(
+                    f"{result.status_code}: {result.text}", f"HTTP query: {query}"
+                )
+        except requests.exceptions.ReadTimeout:
+            return False
+        except requests.exceptions.ConnectionError:
+            # Expected when Mz is killed
+            if exe.db.scenario not in (
+                Scenario.Kill,
+                Scenario.TogglePersistTxn,
+                Scenario.BackupRestore,
+            ):
+                raise
+
+        return True
+
+
+class HttpSQLsmithAction(SQLsmithAction):
+    def run(self, exe: Executor) -> bool:
+        if exe.db.fast_startup:
+            return False
+
+        while not self.queries:
+            self.refill_sqlsmith(exe)
+        query = self.queries.pop()
+        try:
+            exe.log(f"HTTP SQLsmith Query {query}")
+            result = requests.post(
+                f"http://{exe.db.host}:{exe.db.ports['http']}/api/sql",
+                data=json.dumps(
+                    {"query": f"BEGIN; SELECT pg_backend_pid(); COMMIT; {query}"}
+                ),
+                headers={"content-type": "application/json"},
+                timeout=self.rng.uniform(0, 10),
+            )
+            exe.log(
+                f"HTTP select pg_backend_pid {result.json()['results'][1]['rows'][0][0]}"
+            )
             if result.status_code != 200:
                 raise QueryError(
                     f"{result.status_code}: {result.text}", f"HTTP query: {query}"
@@ -1247,6 +1291,9 @@ class ReconnectAction(Action):
                 exe.set_isolation("SERIALIZABLE")
                 cur.execute("SELECT pg_backend_pid()")
                 exe.pg_pid = cur.fetchall()[0][0]
+                exe.log(
+                    f"Connection for worker reconnected, pg_backend_pid: {exe.pg_pid}"
+                )
             except Exception as e:
                 if i < NUM_ATTEMPTS - 1 and (
                     "network error" in str(e)
@@ -1798,6 +1845,7 @@ read_action_list = ActionList(
         (SelectOneAction, 1),
         (SQLsmithAction, 30),
         (HttpSelectAction, 100),
+        (HttpSQLsmithAction, 30),
         (CopyToS3Action, 100),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 30),
