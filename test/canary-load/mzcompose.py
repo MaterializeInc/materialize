@@ -15,8 +15,10 @@ import urllib.parse
 from textwrap import dedent
 
 import pg8000
+import requests
 from pg8000.exceptions import InterfaceError
 
+from materialize.cloudtest.util.jwt_key import fetch_jwt
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -30,8 +32,9 @@ SERVICES = [
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     REGION = "aws/us-east-1"
     ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
-    USERNAME = os.getenv("PRODUCTION_SANDBOX_USERNAME", "infra+bot@materialize.com")
-    APP_PASSWORD = os.environ["PRODUCTION_SANDBOX_APP_PASSWORD"]
+    USERNAME = os.getenv("CANARY_LOADTEST_USERNAME", "infra+qanaryload@materialize.io")
+    PASSWORD = os.environ["CANARY_LOADTEST_PASSWORD"]
+    APP_PASSWORD = os.environ["CANARY_LOADTEST_APP_PASSWORD"]
 
     parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
     args = parser.parse_args()
@@ -42,6 +45,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         Mz(region=REGION, environment=ENVIRONMENT, app_password=APP_PASSWORD)
     ):
         host = c.cloud_hostname()
+
+        token = fetch_jwt(
+            email=USERNAME,
+            password=PASSWORD,
+            host="admin.cloud.materialize.com/frontegg",
+            scheme="https",
+            max_tries=1,
+        )
+
+        def http_sql_query(query: str) -> list[list[str]]:
+            try:
+                r = requests.post(
+                    f'https://{host}/api/sql?options={{"application_name":"canary-load","cluster":"qa_canary_environment_compute"}}',
+                    headers={"authorization": f"Bearer {token}"},
+                    json={"queries": [{"params": [], "query": query}]},
+                )
+            except requests.exceptions.HTTPError as e:
+                res = e.response
+                print(f"{e}\n{res}\n{res.text}")
+                raise
+            assert r.status_code == 200
+            results = r.json()["results"]
+            assert len(results) == 1, results
+            return results[0]["rows"]
 
         with c.override(
             Testdrive(
@@ -107,10 +134,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                                     > SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'
                                     0
 
-                                    > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 3
+                                    > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 10
                                     0
 
-                                    > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.mysql_wmr WHERE degree > 3
+                                    > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.mysql_wmr WHERE degree > 10
                                     0
 
                                     > SELECT COUNT(DISTINCT count_star) FROM qa_canary_environment.public_loadgen.sales_product_product_category WHERE count_distinct_product_id < 0
@@ -159,6 +186,43 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         assert (
                             int(r[-1][2]) == (i + 1) * 100 - 1
                         ), f"Unexpected results: {r}"
+
+                        result = http_sql_query("SELECT 1")
+                        assert result == [["1"]]
+                        result = http_sql_query(
+                            "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0"
+                        )
+                        assert result == [["0"]]
+
+                        result = http_sql_query(
+                            "SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'"
+                        )
+                        assert result == [["0"]]
+
+                        result = http_sql_query(
+                            "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 10"
+                        )
+                        assert result == [["0"]]
+
+                        result = http_sql_query(
+                            "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.mysql_wmr WHERE degree > 10"
+                        )
+                        assert result == [["0"]]
+
+                        result = http_sql_query(
+                            "SELECT COUNT(DISTINCT count_star) FROM qa_canary_environment.public_loadgen.sales_product_product_category WHERE count_distinct_product_id < 0"
+                        )
+                        assert result == [["0"]]
+
+                        result = http_sql_query(
+                            "SELECT * FROM qa_canary_environment.public_table.table_mv"
+                        )
+                        assert result == [[f"{i * 100 + 99}"]]
+
+                        result = http_sql_query(
+                            "SELECT min(c), max(c), count(*) FROM qa_canary_environment.public_table.table"
+                        )
+                        assert result == [["0", f"{i * 100 + 99}", f"{(i + 1) * 100}"]]
 
                         i += 1
 
