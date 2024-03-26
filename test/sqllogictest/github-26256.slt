@@ -24,3 +24,12 @@ SELECT NULL AS "a", CAST(NULL AS int2vector) AS "b";
 ----
 NULL
 NULL
+
+statement ok
+CREATE TYPE t AS (x float, y text);
+
+query TT
+SELECT NULL, NULL::t;
+----
+NULL
+NULL
