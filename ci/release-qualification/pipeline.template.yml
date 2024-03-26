@@ -201,8 +201,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
               args: [ "--mysql-version=5.7.44" ]
-      - id: mysql-cdc-8_3_0
-        label: "MySQL CDC tests w/ 8.3.0"
+      - id: mysql-cdc-8_0_36
+        label: "MySQL CDC tests w/ 8.0.36"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
@@ -210,4 +210,4 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
-              args: [ "--mysql-version=8.3.0" ]
+              args: [ "--mysql-version=8.0.36" ]
