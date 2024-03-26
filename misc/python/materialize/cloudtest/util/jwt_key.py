@@ -42,5 +42,6 @@ def fetch_jwt(email: str, password: str, host: str, scheme: str) -> str:
         )
         raise
 
+    print(res)
     access_token: str = res.json()["accessToken"]
     return access_token
