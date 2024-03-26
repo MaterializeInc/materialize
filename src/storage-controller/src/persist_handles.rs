@@ -284,6 +284,7 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     ),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     DropHandles {
+        forget_ts: T,
         /// Tables that we want to drop our handle for.
         ids: Vec<GlobalId>,
         /// Notifies us when all resources have been cleaned up.
@@ -436,9 +437,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     ///
     /// Note that this does not perform any other cleanup, such as finalizing
     /// the handle's shard.
-    pub(crate) fn drop_handles(&self, ids: Vec<GlobalId>) -> BoxFuture<'static, ()> {
+    pub(crate) fn drop_handles(&self, ids: Vec<GlobalId>, forget_ts: T) -> BoxFuture<'static, ()> {
         let (tx, rx) = oneshot::channel();
-        self.send(PersistTableWriteCmd::DropHandles { ids, tx });
+        self.send(PersistTableWriteCmd::DropHandles { forget_ts, ids, tx });
         Box::pin(rx.map(|_| ()))
     }
 
@@ -472,8 +473,8 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 PersistTableWriteCmd::Update(_id, _write_handle) => {
                     unimplemented!("TODO: Support migrations on persist-txn backed collections")
                 }
-                PersistTableWriteCmd::DropHandles { ids, tx } => {
-                    self.drop_handles(ids).instrument(span).await;
+                PersistTableWriteCmd::DropHandles { forget_ts, ids, tx } => {
+                    self.drop_handles(ids, forget_ts).instrument(span).await;
                     // We don't care if our waiter has gone away.
                     let _ = tx.send(());
                 }
@@ -557,27 +558,26 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         }
     }
 
-    async fn drop_handles(&mut self, ids: Vec<GlobalId>) {
+    async fn drop_handles(&mut self, ids: Vec<GlobalId>, forget_ts: T) {
         tracing::info!(?ids, "drop tables");
         let data_ids = ids
-            .into_iter()
+            .iter()
             // n.b. this should only remove the handle from the persist
             // worker and not take any additional action such as closing
             // the shard it's connected to because dataflows might still
             // be using it.
-            .filter_map(|id| self.write_handles.remove(&id))
+            .filter_map(|id| self.write_handles.remove(id))
             .collect::<Vec<_>>();
         if !data_ids.is_empty() {
-            // We don't currently get a timestamp allocated for this, thread one
-            // through if inventing one here becomes an issue.
-            let mut ts = T::minimum();
-            loop {
-                match self.txns.forget(ts, data_ids.clone()).await {
-                    Ok(tidy) => {
-                        self.tidy.merge(tidy);
-                        break;
-                    }
-                    Err(new_ts) => ts = new_ts,
+            match self.txns.forget(forget_ts.clone(), data_ids.clone()).await {
+                Ok(tidy) => {
+                    self.tidy.merge(tidy);
+                }
+                Err(current) => {
+                    panic!(
+                        "cannot forget {:?} at {:?} because txns is at {:?}",
+                        ids, forget_ts, current
+                    );
                 }
             }
         }

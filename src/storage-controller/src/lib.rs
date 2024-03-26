@@ -1164,6 +1164,38 @@ where
         Ok(())
     }
 
+    fn drop_tables(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+        ts: Self::Timestamp,
+    ) -> Result<(), StorageError> {
+        assert!(
+            identifiers
+                .iter()
+                .all(|id| self.collections[id].description.is_table()),
+            "identifiers contain non-tables: {:?}",
+            identifiers
+                .iter()
+                .filter(|id| !self.collections[id].description.is_table())
+                .collect::<Vec<_>>()
+        );
+        let drop_notif = self
+            .persist_table_worker
+            .drop_handles(identifiers.clone(), ts);
+        let internal_response_sender = self.internal_response_sender.clone();
+        let dropped_ids = identifiers.clone().into_iter().collect();
+        mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
+            // Await the drop before triggering finalization. Persist may attempt to write directly
+            // to the shard as part of dropping it, which would fail if the shard is finalized.
+            drop_notif.await;
+            // Notify that this ID has been dropped, which will start finalization of
+            // the shard. We don't need to wait for the shard to be downgraded because shard
+            // finalization is designed to queue shards that aren't downgraded for later.
+            let _ = internal_response_sender.send(StorageResponse::DroppedIds(dropped_ids));
+        });
+        self.drop_sources(identifiers)
+    }
+
     fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
         self.validate_collection_ids(identifiers.iter().cloned())?;
         self.drop_sources_unvalidated(identifiers);
@@ -1780,8 +1812,7 @@ where
                 let drop_notif = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) if read_frontier.is_empty() => {
                         pending_collection_drops.push(id);
-                        // TODO(jkosh44) Batch all table drops into single call to `drop_handles`.
-                        Some(self.persist_table_worker.drop_handles(vec![id]))
+                        None
                     }
                     DataSource::Webhook | DataSource::Introspection(_)
                         if read_frontier.is_empty() =>

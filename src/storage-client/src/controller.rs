@@ -160,6 +160,14 @@ impl<T> CollectionDescription<T> {
             status_collection_id: None,
         }
     }
+
+    /// Returns true if `self` is a table, false otherwise.
+    pub fn is_table(&self) -> bool {
+        matches!(
+            self.data_source,
+            DataSource::Other(DataSourceOther::TableWrites)
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -327,6 +335,13 @@ pub trait StorageController: Debug {
     async fn update_export_connection(
         &mut self,
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
+    ) -> Result<(), StorageError>;
+
+    /// Drops the read capability for the tables and allows their resources to be reclaimed.
+    fn drop_tables(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+        ts: Self::Timestamp,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
