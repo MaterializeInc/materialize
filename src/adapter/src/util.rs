@@ -337,7 +337,7 @@ impl ShouldHalt for mz_catalog::durable::DurableCatalogError {
     }
 }
 
-impl ShouldHalt for StorageError {
+impl<T> ShouldHalt for StorageError<T> {
     fn should_halt(&self) -> bool {
         match self {
             StorageError::ResourceExhausted(_) => true,

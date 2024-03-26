@@ -39,7 +39,10 @@ const CHANNEL_CAPACITY: usize = 4096;
 // Default rate at which we advance the uppers of managed collections.
 const DEFAULT_TICK_MS: u64 = 1_000;
 
-type WriteChannel = mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>;
+type WriteChannel<T> = mpsc::Sender<(
+    Vec<(Row, Diff)>,
+    oneshot::Sender<Result<(), StorageError<T>>>,
+)>;
 type WriteTask = AbortOnDropHandle<()>;
 type ShutdownSender = oneshot::Sender<()>;
 
@@ -48,7 +51,7 @@ pub struct CollectionManager<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
-    collections: Arc<Mutex<BTreeMap<GlobalId, (WriteChannel, WriteTask, ShutdownSender)>>>,
+    collections: Arc<Mutex<BTreeMap<GlobalId, (WriteChannel<T>, WriteTask, ShutdownSender)>>>,
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
     /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
     /// collections.
@@ -178,7 +181,7 @@ where
     pub(super) fn monotonic_appender(
         &self,
         id: GlobalId,
-    ) -> Result<MonotonicAppender, StorageError> {
+    ) -> Result<MonotonicAppender<T>, StorageError<T>> {
         let guard = self.collections.lock().expect("CollectionManager panicked");
         let tx = guard
             .get(&id)
@@ -200,7 +203,7 @@ fn write_task<T>(
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
     user_batch_duration_ms: Arc<AtomicU64>,
     now: NowFn,
-) -> (WriteChannel, WriteTask, ShutdownSender)
+) -> (WriteChannel<T>, WriteTask, ShutdownSender)
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
@@ -335,13 +338,13 @@ where
                                         // timestamp.
 
                                         assert_eq!(failed_ids.len(), 1, "received errors for more than one collection");
-                                        assert_eq!(failed_ids[0], id, "received errors for a different collection");
+                                        assert_eq!(failed_ids[0].id, id, "received errors for a different collection");
 
                                         // We've exhausted all of our retries, notify listeners
                                         // and break out of the retry loop so we can wait for more
                                         // data.
                                         if retries.next().await.is_none() {
-                                            notify_listeners(responders, || Err(StorageError::InvalidUppers(vec![id])));
+                                            notify_listeners(responders, || Err(StorageError::InvalidUppers(failed_ids.clone())));
                                             error!("exhausted retries when appending to managed collection {failed_ids:?}");
                                             break 'append_retry;
                                         }

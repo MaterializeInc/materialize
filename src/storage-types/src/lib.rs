@@ -34,11 +34,11 @@ pub trait AlterCompatible: std::fmt::Debug + PartialEq {
         &self,
         id: mz_repr::GlobalId,
         other: &Self,
-    ) -> Result<(), controller::StorageError> {
+    ) -> Result<(), controller::AlterError> {
         if self == other {
             Ok(())
         } else {
-            Err(controller::StorageError::InvalidAlter { id })
+            Err(controller::AlterError { id })
         }
     }
 }

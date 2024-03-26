@@ -31,7 +31,7 @@ use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
 use mz_storage_client::client::{StorageResponse, TimestamplessUpdate, Update};
-use mz_storage_types::controller::{PersistTxnTablesImpl, TxnsCodecRow};
+use mz_storage_types::controller::{InvalidUpper, PersistTxnTablesImpl, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -74,14 +74,14 @@ enum PersistReadWorkerCmd<T: Timestamp + Lattice + Codec64> {
     SnapshotStats(
         GlobalId,
         SnapshotStatsAsOf<T>,
-        oneshot::Sender<SnapshotStatsRes>,
+        oneshot::Sender<SnapshotStatsRes<T>>,
     ),
 }
 
 /// A newtype wrapper to hang a Debug impl off of.
-pub(crate) struct SnapshotStatsRes(BoxFuture<'static, Result<SnapshotStats, StorageError>>);
+pub(crate) struct SnapshotStatsRes<T>(BoxFuture<'static, Result<SnapshotStats, StorageError<T>>>);
 
-impl Debug for SnapshotStatsRes {
+impl<T> Debug for SnapshotStatsRes<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SnapshotStatsRes").finish_non_exhaustive()
     }
@@ -129,7 +129,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
                                 Some(x) => {
                                     let fut: BoxFuture<
                                         'static,
-                                        Result<SnapshotStats, StorageError>,
+                                        Result<SnapshotStats, StorageError<T>>,
                                     > = match as_of {
                                         SnapshotStatsAsOf::Direct(as_of) => {
                                             Box::pin(x.snapshot_stats(Some(as_of)).map(move |x| {
@@ -249,7 +249,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
         &self,
         id: GlobalId,
         as_of: SnapshotStatsAsOf<T>,
-    ) -> Result<SnapshotStats, StorageError> {
+    ) -> Result<SnapshotStats, StorageError<T>> {
         // TODO: Pull this out of PersistReadWorker. Unlike the other methods,
         // the caller of this one drives it to completion.
         //
@@ -280,7 +280,7 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Register(
         T,
         Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
-        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     DropHandles {
@@ -293,7 +293,7 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
         write_ts: T,
         advance_to: T,
         updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
-        tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     },
     Shutdown,
 }
@@ -314,7 +314,7 @@ async fn append_work<T2: Timestamp + Lattice + Codec64>(
     frontier_responses: &tokio::sync::mpsc::UnboundedSender<StorageResponse<T2>>,
     write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, Diff>>,
     mut commands: BTreeMap<GlobalId, (tracing::Span, Vec<Update<T2>>, Antichain<T2>)>,
-) -> Result<(), Vec<GlobalId>> {
+) -> Result<(), Vec<(GlobalId, Antichain<T2>)>> {
     let futs = FuturesUnordered::new();
 
     // We cannot iterate through the updates and then set off a persist call
@@ -338,9 +338,9 @@ async fn append_work<T2: Timestamp + Lattice + Codec64>(
                     .instrument(span.clone())
                     .await
                     .expect("cannot append updates")
-                    .or(Err(*id))?;
+                    .or_else(|upper_mismatch| Err((*id, upper_mismatch.current)))?;
 
-                Ok::<_, GlobalId>((*id, new_upper))
+                Ok::<_, (GlobalId, Antichain<T2>)>((*id, new_upper))
             })
         }
     }
@@ -389,7 +389,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         &self,
         register_ts: T,
         ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
-    ) -> tokio::sync::oneshot::Receiver<()> {
+    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError<T>>> {
         // We expect this to be awaited, so keep the span connected.
         let span = info_span!("PersistTableWriteCmd::Register");
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -415,7 +415,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         write_ts: T,
         advance_to: T,
         updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
-    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
+    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError<T>>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         if updates.is_empty() {
             tx.send(Ok(()))
@@ -463,11 +463,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         while let Some((span, command)) = rx.recv().await {
             match command {
                 PersistTableWriteCmd::Register(register_ts, ids_handles, tx) => {
-                    self.register(register_ts, ids_handles)
+                    self.register(register_ts, ids_handles, tx)
                         .instrument(span)
-                        .await;
-                    // We don't care if our waiter has gone away.
-                    let _ = tx.send(());
+                        .await
                 }
                 PersistTableWriteCmd::Update(_id, _write_handle) => {
                     unimplemented!("TODO: Support migrations on persist-txn backed collections")
@@ -501,6 +499,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         &mut self,
         register_ts: T,
         ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, i64>)>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ) {
         for (id, write_handle) in ids_handles.iter() {
             debug!(
@@ -525,7 +524,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
             .collect();
         let handles = ids_handles.into_iter().map(|(_, handle)| handle);
         let res = self.txns.register(register_ts.clone(), handles).await;
-        match res {
+        let response = match res {
             Ok(tidy) => {
                 self.tidy.merge(tidy);
                 // If we using eager uppers, make sure to advance the physical
@@ -545,16 +544,22 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     PersistTxnTablesImpl::Lazy => {}
                 };
                 self.send_new_uppers(new_uppers);
+                Ok(())
             }
             Err(current) => {
-                panic!(
-                    "cannot register {:?} at {:?} because txns is at {:?}",
-                    new_uppers.iter().map(|(id, _)| id).collect::<Vec<_>>(),
-                    register_ts,
-                    current
-                );
+                let current_upper = Antichain::from_elem(current);
+                let invalid_uppers = new_uppers
+                    .into_iter()
+                    .map(|(id, _)| InvalidUpper {
+                        id,
+                        current_upper: current_upper.clone(),
+                    })
+                    .collect();
+                Err(StorageError::InvalidUppers(invalid_uppers))
             }
-        }
+        };
+        // It is not an error for the other end to hang up.
+        let _ = tx.send(response);
     }
 
     async fn drop_handles(&mut self, ids: Vec<GlobalId>) {
@@ -588,7 +593,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         write_ts: T,
         advance_to: T,
         updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
-        tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ) {
         debug!(
             "tables append timestamp={:?} advance_to={:?} len={} ids={:?}{}",
@@ -670,7 +675,14 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     write_ts, current
                 );
                 Err(StorageError::InvalidUppers(
-                    self.write_handles.keys().copied().collect(),
+                    self.write_handles
+                        .keys()
+                        .copied()
+                        .map(|id| InvalidUpper {
+                            id,
+                            current_upper: Antichain::from_elem(current.clone()),
+                        })
+                        .collect(),
                 ))
             }
         };
@@ -753,13 +765,13 @@ enum PersistMonotonicWriteCmd<T: Timestamp + Lattice + Codec64> {
     },
     Append(
         Vec<(GlobalId, Vec<Update<T>>, T)>,
-        tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+        tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ),
     /// Appends `Vec<TimelessUpdate>` to `GlobalId` at, essentially,
     /// `max(write_frontier, T)`.
     MonotonicAppend(
         Vec<(GlobalId, Vec<TimestamplessUpdate>, T)>,
-        tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+        tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ),
     Shutdown,
 }
@@ -890,8 +902,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                         Err(bad_ids) => {
                             let filtered: Vec<_> = bad_ids
                                 .iter()
-                                .filter(|id| ids.contains(id))
-                                .copied()
+                                .filter(|(id, _)| ids.contains(id))
+                                .cloned()
+                                .map(|(id, current_upper)| InvalidUpper { id, current_upper })
                                 .collect();
                             if filtered.is_empty() {
                                 Ok(())
@@ -959,7 +972,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
     pub(crate) fn monotonic_append(
         &self,
         updates: Vec<(GlobalId, Vec<TimestamplessUpdate>, T)>,
-    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
+    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError<T>>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         if updates.is_empty() {
             tx.send(Ok(()))

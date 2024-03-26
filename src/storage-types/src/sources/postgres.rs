@@ -26,7 +26,7 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::controller::StorageError;
+use crate::controller::AlterError;
 use crate::sources::SourceConnection;
 
 include!(concat!(
@@ -106,7 +106,7 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -149,7 +149,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C>
                     other
                 );
 
-                return Err(StorageError::InvalidAlter { id });
+                return Err(AlterError { id });
             }
         }
 

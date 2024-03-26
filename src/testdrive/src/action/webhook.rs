@@ -34,9 +34,21 @@ pub async fn run_append(
 
     println!("$ webhook-append {database}.{schema}.{name}\n{body}\n{headers:?}");
 
-    let client = reqwest::Client::new();
+    let client = if state.materialize_use_https {
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap()
+    } else {
+        reqwest::Client::new()
+    };
     let url = format!(
-        "http://{}/api/webhook/{database}/{schema}/{name}",
+        "{}://{}/api/webhook/{database}/{schema}/{name}",
+        if state.materialize_use_https {
+            "https"
+        } else {
+            "http"
+        },
         state.materialize_http_addr
     );
     let mut builder = client.post(url).body(body);

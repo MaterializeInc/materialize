@@ -27,6 +27,7 @@ use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_timestamp_oracle::WriteTimestamp;
 use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, info_span, warn, Instrument, Level};
@@ -92,6 +93,33 @@ impl Coordinator {
                 }
                 Message::WriteLockGrant(write_lock_guard) => {
                     self.message_write_lock_grant(write_lock_guard).await;
+                }
+                Message::GroupCommitAppend {
+                    span,
+                    write_lock_guard,
+                    permit,
+                    appends,
+                    current_upper,
+                    responses,
+                    notifies,
+                } => {
+                    // Add an OpenTelemetry link to our current span.
+                    tracing::Span::current().add_link(span.context().span().span_context().clone());
+                    self.apply_local_write(current_upper).await;
+                    let WriteTimestamp {
+                        timestamp,
+                        advance_to,
+                    } = self.get_local_write_ts().await;
+                    self.group_commit_append(
+                        span,
+                        write_lock_guard,
+                        permit,
+                        timestamp,
+                        advance_to,
+                        appends,
+                        responses,
+                        notifies,
+                    );
                 }
                 Message::GroupCommitInitiate(span, permit) => {
                     // Add an OpenTelemetry link to our current span.
