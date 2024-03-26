@@ -56,10 +56,10 @@
     {% if not schema_exists(deploy_schema) %}
         {{ exceptions.raise_compiler_error("Deployment schema " ~ deploy_schema ~ " does not exist") }}
     {% endif %}
-    {% if schema_contains_sources_or_sinks(deploy_schema) %}
+    {% if schema_contains_sinks(deploy_schema) %}
         {{ exceptions.raise_compiler_error("""
-        Deployment schema " ~ deploy_schema ~ " contains sources or sinks. This is not currently
-        supported by dbt run-operation deploy_promote.
+        Deployment schema " ~ deploy_schema ~ " contains sinks. This is not currently
+        supported by the deploy_promote macro.
 
         If this feature is important to you, please reach out!
         """) }}
@@ -74,10 +74,10 @@
     {% if not cluster_exists(deploy_cluster) %}
         {{ exceptions.raise_compiler_error("Deployment cluster " ~ deploy_cluster ~ " does not exist") }}
     {% endif %}
-    {% if cluster_contains_sources_or_sinks(deploy_cluster) %}
+    {% if cluster_contains_sinks(deploy_cluster) %}
         {{ exceptions.raise_compiler_error("""
-        Deployment cluster " ~ deploy_cluster ~ " contains sources or sinks. This is not currently
-        supported by dbt run-operation deploy_promote.
+        Deployment cluster " ~ deploy_cluster ~ " contains sinks. This is not currently
+        supported by the deploy_promote macro.
 
         If this feature is important to you, please reach out!
         """) }}
@@ -107,21 +107,11 @@ COMMIT;
 {%- endcall %}
 {% endmacro %}
 
-{% macro cluster_contains_sources_or_sinks(cluster) %}
+{% macro cluster_contains_sinks(cluster) %}
     {% set query %}
-        WITH sources_and_sinks AS (
-            SELECT cluster_id
-            FROM mz_sources
-
-            UNION ALL
-
-            SELECT cluster_id
-            FROM mz_sinks
-        )
-
         SELECT count(*) > 0
-        FROM sources_and_sinks
-        JOIN mz_clusters ON sources_and_sinks.cluster_id = mz_clusters.id
+        FROM mz_sinks
+        JOIN mz_clusters ON mz_sinks.cluster_id = mz_clusters.id
         WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
     {% endset %}
 
@@ -131,21 +121,11 @@ COMMIT;
     {% endif %}
 {% endmacro %}
 
-{% macro schema_contains_sources_or_sinks(schema) %}
+{% macro schema_contains_sinks(schema) %}
     {% set query %}
-        WITH sources_and_sinks AS (
-            SELECT schema_id
-            FROM mz_sources
-
-            UNION ALL
-
-            SELECT schema_id
-            FROM mz_sinks
-        )
-
         SELECT count(*) > 0
-        FROM sources_and_sinks
-        JOIN mz_schemas ON sources_and_sinks.schema_id = mz_schemas.id
+        FROM mz_sinks
+        JOIN mz_schemas ON mz_sinks.schema_id = mz_schemas.id
         JOIN mz_databases ON mz_schemas.database_id = mz_databases.id
         WHERE mz_schemas.name = {{ dbt.string_literal(schema) }}
             AND mz_databases.name = current_database()

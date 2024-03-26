@@ -39,7 +39,7 @@
   {{ run_hooks(pre_hooks, inside_transaction=True) }}
 
   {% call statement('main') -%}
-    {{ materialize__create_arbitrary_object(sql) }}
+    {{ materialize__create_source(target_relation, sql) }}
   {%- endcall %}
 
   {{ create_indexes(target_relation) }}

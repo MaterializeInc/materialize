@@ -22,13 +22,8 @@ from fixtures import (
     test_materialized_view_index,
     test_relation_name_length,
     test_sink,
-    test_sinkv2,
-    test_sinkv2_cluster,
     test_source,
     test_source_index,
-    test_sourcev2,
-    test_sourcev2_cluster,
-    test_sourcev2_index,
     test_subsources,
     test_table_index,
     test_view_index,
@@ -54,14 +49,9 @@ class TestCustomMaterializations:
             "test_materialized_view_index.sql": test_materialized_view_index,
             "test_relation_name_loooooooooooooooooonger_than_postgres_63_limit.sql": test_relation_name_length,
             "test_source.sql": test_source,
-            "test_sourcev2.sql": test_sourcev2,
-            "test_sourcev2_cluster.sql": test_sourcev2_cluster,
-            "test_sourcev2_index.sql": test_sourcev2_index,
             "test_source_index.sql": test_source_index,
             "test_subsources.sql": test_subsources,
             "test_sink.sql": test_sink,
-            "test_sinkv2.sql": test_sinkv2,
-            "test_sinkv2_cluster": test_sinkv2_cluster,
             "test_table_index.sql": test_table_index,
             "test_view_index.sql": test_view_index,
         }
@@ -74,12 +64,12 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 15
+        assert len(results) == 10
         # re-run models to ensure there are no lingering errors in recreating
         # the materializations
         results = run_dbt(["run"])
         # re-run result length
-        assert len(results) == 15
+        assert len(results) == 10
         # relations_equal
         check_relations_equal(
             project.adapter,

@@ -92,7 +92,7 @@
     {{exceptions.warn("Model contracts cannot be enforced for custom materializations (see dbt-core #7213)")}}
   {%- endif %}
 
-  {%- set cluster = config.get('cluster', target.cluster) -%}
+  {%- set cluster = generate_cluster_name(config.get('cluster', target.cluster)) -%}
 
   create source {{ relation }}
   {% if cluster %}
@@ -109,7 +109,7 @@
     {{exceptions.warn("Model contracts cannot be enforced for custom materializations (see dbt-core #7213)")}}
   {%- endif %}
 
-  {%- set cluster = config.get('cluster', target.cluster) -%}
+  {%- set cluster = generate_cluster_name(config.get('cluster', target.cluster)) -%}
 
   create sink {{ relation }}
   {% if cluster %}

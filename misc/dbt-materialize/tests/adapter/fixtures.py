@@ -68,19 +68,6 @@ test_source = """
     pre_hook="CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}', SECURITY PROTOCOL PLAINTEXT)"
     )
 }}
-
-CREATE SOURCE {{ this }}
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
-FORMAT BYTES
-"""
-
-test_sourcev2 = """
-{{ config(
-    materialized='sourcev2',
-    database='materialize',
-    pre_hook="CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}', SECURITY PROTOCOL PLAINTEXT)"
-    )
-}}
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
 FORMAT BYTES
 """
@@ -90,24 +77,13 @@ test_source_index = """
     materialized='source',
     indexes=[{'columns': ['data']}]
 ) }}
-
-CREATE SOURCE {{ this }}
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
 FORMAT BYTES
 """
 
-test_sourcev2_index = """
+test_source_cluster = """
 {{ config(
-    materialized='sourcev2',
-    indexes=[{'columns': ['data']}]
-) }}
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
-FORMAT BYTES
-"""
-
-test_sourcev2_cluster = """
-{{ config(
-    materialized='sourcev2',
+    materialized='source',
     cluster='quickstart'
 ) }}
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
@@ -120,8 +96,6 @@ test_subsources = """
     database='materialize'
     )
 }}
-
-CREATE SOURCE {{ this }}
 FROM LOAD GENERATOR AUCTION
 FOR ALL TABLES;
 """
@@ -131,25 +105,13 @@ test_sink = """
     materialized='sink'
     )
 }}
- CREATE SINK {{ this }}
  FROM {{ ref('test_materialized_view') }}
  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink')
  FORMAT JSON
  ENVELOPE DEBEZIUM
 """
 
-test_sinkv2 = """
-{{ config(
-    materialized='sink'
-    )
-}}
- FROM {{ ref('test_materialized_view') }}
- INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink')
- FORMAT JSON
- ENVELOPE DEBEZIUM
-"""
-
-test_sinkv2_cluster = """
+test_sink_cluster = """
 {{ config(
     materialized='sink',
     cluster='quickstart'
@@ -179,7 +141,6 @@ object_name,index_position,on_position,on_expression,index_name
 test_materialized_view_index,1,1,,a_idx
 test_materialized_view_index,2,,pg_catalog.length(a),a_idx
 test_source_index,1,1,,test_source_index_data_idx
-test_sourcev2_index,1,1,,test_sourcev2_index_data_idx,
 test_view_index,1,1,,test_view_index_primary_idx
 test_table_index,1,1,,test_table_index_a_idx
 test_table_index,2,,pg_catalog.length(a),test_table_index_a_idx
