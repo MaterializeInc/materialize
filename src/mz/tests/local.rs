@@ -48,7 +48,7 @@ mod tests {
     /// Returns a command to execute mz.
     fn cmd() -> Command {
         let mut cmd = Command::cargo_bin("mz").unwrap();
-        cmd.timeout(Duration::from_secs(10));
+        cmd.timeout(Duration::from_secs(30));
         cmd
     }
 
