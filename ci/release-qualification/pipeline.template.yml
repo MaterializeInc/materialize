@@ -191,7 +191,7 @@ steps:
     key: mysql-versions
     steps:
       - id: mysql-cdc-5_7_44
-        label: "MySQL CDC tests w/ 5.7.44"
+        label: "MySQL CDC w/ 5.7.44"
         depends_on: build-x86_64
         timeout_in_minutes: 30
         agents:
@@ -202,7 +202,7 @@ steps:
               composition: mysql-cdc
               args: [ "--mysql-version=5.7.44" ]
       - id: mysql-cdc-8_0_36
-        label: "MySQL CDC tests w/ 8.0.36"
+        label: "MySQL CDC w/ 8.0.36"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
@@ -216,7 +216,7 @@ steps:
     key: postgres-versions
     steps:
       - id: pg-cdc-15_6
-        label: "Postgres CDC tests w/ 15.6"
+        label: "Postgres CDC w/ 15.6"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
@@ -227,7 +227,7 @@ steps:
         agents:
           queue: linux-aarch64-small
       - id: pg-cdc-14_11
-        label: "Postgres CDC tests w/ 14.11"
+        label: "Postgres CDC w/ 14.11"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
@@ -238,7 +238,7 @@ steps:
         agents:
           queue: linux-aarch64-small
       - id: pg-cdc-13_14
-        label: "Postgres CDC tests w/ 13.14"
+        label: "Postgres CDC w/ 13.14"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
@@ -249,7 +249,7 @@ steps:
         agents:
           queue: linux-aarch64-small
       - id: pg-cdc-12_18
-        label: "Postgres CDC tests w/ 12.18"
+        label: "Postgres CDC w/ 12.18"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
@@ -260,7 +260,7 @@ steps:
         agents:
           queue: linux-aarch64-small
       - id: pg-cdc-11_22
-        label: "Postgres CDC tests w/ 11.22"
+        label: "Postgres CDC w/ 11.22"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
