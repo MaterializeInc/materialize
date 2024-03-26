@@ -211,3 +211,62 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
               args: [ "--mysql-version=8.0.36" ]
+
+  - group: "Postgres: other versions"
+    key: postgres-versions
+    steps:
+      - id: pg-cdc-15_6
+        label: "Postgres CDC tests w/ 15.6"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc
+              args: [ "--pg-version=15.6" ]
+        agents:
+          queue: linux-aarch64-small
+      - id: pg-cdc-14_11
+        label: "Postgres CDC tests w/ 14.11"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc
+              args: [ "--pg-version=14.11" ]
+        agents:
+          queue: linux-aarch64-small
+      - id: pg-cdc-13_14
+        label: "Postgres CDC tests w/ 13.14"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc
+              args: [ "--pg-version=13.14" ]
+        agents:
+          queue: linux-aarch64-small
+      - id: pg-cdc-12_18
+        label: "Postgres CDC tests w/ 12.18"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc
+              args: [ "--pg-version=12.18" ]
+        agents:
+          queue: linux-aarch64-small
+      - id: pg-cdc-11_22
+        label: "Postgres CDC tests w/ 11.22"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc
+              args: [ "--pg-version=11.22" ]
+        agents:
+          queue: linux-aarch64-small
