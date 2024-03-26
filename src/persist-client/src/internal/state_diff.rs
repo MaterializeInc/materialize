@@ -10,6 +10,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
 use differential_dataflow::lattice::Lattice;
@@ -29,7 +30,7 @@ use crate::internal::state::{
     ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State, StateCollections,
     WriterState,
 };
-use crate::internal::trace::{FueledMergeRes, Trace};
+use crate::internal::trace::{FueledMergeRes, FuelingMerge, SpineId, ThinSpineBatch, Trace};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig, ShardId};
@@ -77,7 +78,10 @@ pub struct StateDiff<T> {
     pub(crate) critical_readers: Vec<StateFieldDiff<CriticalReaderId, CriticalReaderState<T>>>,
     pub(crate) writers: Vec<StateFieldDiff<WriterId, WriterState<T>>>,
     pub(crate) since: Vec<StateFieldDiff<(), Antichain<T>>>,
-    pub(crate) spine: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
+    pub(crate) legacy_batches: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
+    pub(crate) hollow_batches: Vec<StateFieldDiff<SpineId, Arc<HollowBatch<T>>>>,
+    pub(crate) spine_batches: Vec<StateFieldDiff<SpineId, ThinSpineBatch<T>>>,
+    pub(crate) fueling_merges: Vec<StateFieldDiff<SpineId, FuelingMerge<T>>>,
 }
 
 impl<T: Timestamp + Codec64> StateDiff<T> {
@@ -101,7 +105,10 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             critical_readers: Vec::default(),
             writers: Vec::default(),
             since: Vec::default(),
-            spine: Vec::default(),
+            legacy_batches: Vec::default(),
+            hollow_batches: Vec::default(),
+            spine_batches: Vec::default(),
+            fueling_merges: Vec::default(),
         }
     }
 }
@@ -167,12 +174,12 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         );
         diff_field_sorted_iter(from_writers.iter(), to_writers, &mut diffs.writers);
         diff_field_single(from_trace.since(), to_trace.since(), &mut diffs.since);
-        diff_field_spine(from_trace, to_trace, &mut diffs.spine);
+        diff_field_spine(from_trace, to_trace, &mut diffs.legacy_batches);
         diffs
     }
 
     pub(crate) fn map_blob_inserts<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
-        for spine_diff in self.spine.iter() {
+        for spine_diff in self.legacy_batches.iter() {
             match &spine_diff.val {
                 StateFieldValDiff::Insert(()) => {
                     f(HollowBlobRef::Batch(&spine_diff.key));
@@ -196,7 +203,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     }
 
     pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
-        for spine_diff in self.spine.iter() {
+        for spine_diff in self.legacy_batches.iter() {
             match &spine_diff.val {
                 StateFieldValDiff::Insert(()) => {} // No-op
                 StateFieldValDiff::Update((), ()) => {
@@ -340,7 +347,10 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             critical_readers: diff_critical_readers,
             writers: diff_writers,
             since: diff_since,
-            spine: diff_spine,
+            legacy_batches: diff_legacy_batches,
+            hollow_batches,
+            spine_batches,
+            fueling_merges: spine_merges,
         } = diff;
         if self.seqno == diff_seqno_to {
             return Ok(());
@@ -396,8 +406,8 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                 Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
-        if !diff_spine.is_empty() {
-            apply_diffs_spine(metrics, diff_spine, trace)?;
+        if !diff_legacy_batches.is_empty() {
+            apply_diffs_spine(metrics, diff_legacy_batches, trace)?;
             debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
         }
 

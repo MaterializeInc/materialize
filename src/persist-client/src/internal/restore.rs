@@ -91,7 +91,7 @@ pub(crate) async fn restore_blob(
                 }
             }
         }
-        for batch in diff.spine {
+        for batch in diff.legacy_batches {
             if let Some(_) = after(batch.val) {
                 for part in batch.key.parts {
                     let key = part.key.complete(&shard_id);

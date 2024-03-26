@@ -107,6 +107,13 @@ impl<T: Timestamp + Lattice> Default for Trace<T> {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThinSpineBatch<T> {
+    pub(crate) level: usize,
+    pub(crate) desc: Description<T>,
+    pub(crate) parts: Vec<SpineId>,
+}
+
 impl<T> Trace<T> {
     pub fn since(&self) -> &Antichain<T> {
         &self.spine.since
@@ -560,10 +567,10 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FuelingMerge<T> {
-    since: Antichain<T>,
-    remaining_work: usize,
+    pub(crate) since: Antichain<T>,
+    pub(crate) remaining_work: usize,
 }
 
 impl<T: Timestamp + Lattice> FuelingMerge<T> {
