@@ -29,9 +29,11 @@ use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
 use mz_sql::session::vars::OwnedVarInput;
+use mz_sql_parser::ast::ClusterScheduleOptionValue;
 use mz_storage_types::instances::StorageInstanceId;
 use std::time::Duration;
 
+use crate::durable::objects::serialization::proto::{cluster_schedule_option_value, Empty};
 use crate::durable::objects::state_update::StateUpdateKindRaw;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
@@ -77,6 +79,31 @@ impl ProtoMapEntry<String, String> for proto::OptimizerFeatureOverride {
     }
 }
 
+impl RustType<proto::ClusterScheduleOptionValue> for ClusterScheduleOptionValue {
+    fn into_proto(&self) -> proto::ClusterScheduleOptionValue {
+        match self {
+            ClusterScheduleOptionValue::Manual => proto::ClusterScheduleOptionValue {
+                value: Some(cluster_schedule_option_value::Value::Manual(Empty {})),
+            },
+            ClusterScheduleOptionValue::Refresh => proto::ClusterScheduleOptionValue {
+                value: Some(cluster_schedule_option_value::Value::Refresh(Empty {})),
+            },
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterScheduleOptionValue) -> Result<Self, TryFromProtoError> {
+        match proto.value {
+            None => Ok(Default::default()),
+            Some(cluster_schedule_option_value::Value::Manual(Empty {})) => {
+                Ok(ClusterScheduleOptionValue::Manual)
+            }
+            Some(cluster_schedule_option_value::Value::Refresh(Empty {})) => {
+                Ok(ClusterScheduleOptionValue::Refresh)
+            }
+        }
+    }
+}
+
 impl RustType<proto::ClusterConfig> for ClusterConfig {
     fn into_proto(&self) -> proto::ClusterConfig {
         proto::ClusterConfig {
@@ -102,6 +129,7 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 replication_factor,
                 disk,
                 optimizer_feature_overrides,
+                schedule,
             }) => proto::cluster_config::Variant::Managed(proto::cluster_config::ManagedCluster {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
@@ -111,6 +139,7 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 replication_factor: *replication_factor,
                 disk: *disk,
                 optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
+                schedule: Some(schedule.into_proto()),
             }),
             ClusterVariant::Unmanaged => proto::cluster_config::Variant::Unmanaged(proto::Empty {}),
         }
@@ -132,6 +161,7 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                     replication_factor: managed.replication_factor,
                     disk: managed.disk,
                     optimizer_feature_overrides: managed.optimizer_feature_overrides.into_rust()?,
+                    schedule: managed.schedule.unwrap_or_default().into_rust()?,
                 }))
             }
         }

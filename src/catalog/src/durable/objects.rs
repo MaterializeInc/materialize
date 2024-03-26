@@ -23,6 +23,7 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
+use mz_sql_parser::ast::ClusterScheduleOptionValue;
 use proptest_derive::Arbitrary;
 
 use crate::durable::objects::serialization::proto;
@@ -208,6 +209,7 @@ pub struct ClusterVariantManaged {
     pub replication_factor: u32,
     pub disk: bool,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
+    pub schedule: ClusterScheduleOptionValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
