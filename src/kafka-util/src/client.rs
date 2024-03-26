@@ -23,7 +23,7 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
-use mz_ore::netio::resolve_external_address;
+use mz_ore::netio::resolve_address;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
@@ -298,7 +298,7 @@ enum BrokerRewriteHandle {
     FailedDefaultSshTunnel(String),
     /// We store an error if DNS resolution fails when resolving
     /// a new broker host.
-    FailedDNSResolution(String),
+    FailedDnsResolution(String),
 }
 
 /// Tunneling clients
@@ -430,7 +430,7 @@ impl<C> TunnelingClientContext<C> {
                 BrokerRewriteHandle::FailedDefaultSshTunnel(e) => {
                     SshTunnelStatus::Errored(e.clone())
                 }
-                BrokerRewriteHandle::Simple(_) | BrokerRewriteHandle::FailedDNSResolution(_) => {
+                BrokerRewriteHandle::Simple(_) | BrokerRewriteHandle::FailedDnsResolution(_) => {
                     SshTunnelStatus::Running
                 }
             })
@@ -452,7 +452,7 @@ impl<C> TunnelingClientContext<C> {
         let broker_status = rewrites
             .values()
             .map(|handle| match handle {
-                BrokerRewriteHandle::FailedDNSResolution(e) => BrokerStatus::Failed(e.clone()),
+                BrokerRewriteHandle::FailedDnsResolution(e) => BrokerStatus::Failed(e.clone()),
                 _ => BrokerStatus::Nominal,
             })
             .fold(BrokerStatus::Nominal, |acc, status| match (acc, status) {
@@ -491,7 +491,7 @@ where
                     }
                 }
                 BrokerRewriteHandle::FailedDefaultSshTunnel(_)
-                | BrokerRewriteHandle::FailedDNSResolution(_) => {
+                | BrokerRewriteHandle::FailedDnsResolution(_) => {
                     unreachable!()
                 }
             };
@@ -515,28 +515,18 @@ where
         match rewrite {
             None
             | Some(BrokerRewriteHandle::FailedDefaultSshTunnel(_))
-            | Some(BrokerRewriteHandle::FailedDNSResolution(_)) => {
+            | Some(BrokerRewriteHandle::FailedDnsResolution(_)) => {
                 match &self.default_tunnel {
                     TunnelConfig::Ssh(default_tunnel) => {
                         // Multiple users could all run `connect` at the same time; only one ssh
                         // tunnel will ever be connected, and only one will be inserted into the
                         // map.
                         let ssh_tunnel = self.runtime.block_on(async {
-                            // Ensure the default tunnel host is resolved to an external address.
-                            let resolved_tunnel_addr = resolve_external_address(
-                                &default_tunnel.host,
-                                self.enforce_external_addresses,
-                            )
-                            .await?;
-                            let tunnel_config = SshTunnelConfig {
-                                host: resolved_tunnel_addr.to_string(),
-                                port: default_tunnel.port,
-                                user: default_tunnel.user.clone(),
-                                key_pair: default_tunnel.key_pair.clone(),
-                            };
                             self.ssh_tunnel_manager
                                 .connect(
-                                    tunnel_config,
+                                    // We know the default_tunnel has already been validated by the `resolve_address`
+                                    // method when it was provided to the client, so we don't need to check it again.
+                                    default_tunnel.clone(),
                                     &addr.host,
                                     addr.port.parse().unwrap(),
                                     self.ssh_timeout_config,
@@ -552,7 +542,7 @@ where
                                         if matches!(
                                             o.get(),
                                             BrokerRewriteHandle::FailedDefaultSshTunnel(_)
-                                                | BrokerRewriteHandle::FailedDNSResolution(_)
+                                                | BrokerRewriteHandle::FailedDnsResolution(_)
                                         ) =>
                                     {
                                         o.insert(BrokerRewriteHandle::SshTunnel(
@@ -600,15 +590,14 @@ where
                         // If no rewrite is specified, we still should check that this potentially
                         // new broker address is a global address.
                         self.runtime.block_on(async {
-                            match resolve_external_address(
-                                &addr.host,
-                                self.enforce_external_addresses,
-                            )
-                            .await
+                            match resolve_address(&addr.host, self.enforce_external_addresses).await
                             {
                                 Ok(resolved) => {
                                     let rewrite = BrokerRewriteHandle::Simple(BrokerRewrite {
-                                        host: resolved.to_string(),
+                                        // `resolve_address` will always return at least one address.
+                                        // TODO: Once we have a way to provide multiple hosts to rdkafka, we should
+                                        // return all resolved addresses here.
+                                        host: resolved.first().unwrap().to_string(),
                                         port: addr.port.parse().ok(),
                                     });
                                     return_rewrite(&rewrite)
@@ -622,7 +611,7 @@ where
                                     // Write an error if no one else has already written one.
                                     let mut rewrites = self.rewrites.lock().expect("poisoned");
                                     rewrites.entry(addr.clone()).or_insert_with(|| {
-                                        BrokerRewriteHandle::FailedDNSResolution(
+                                        BrokerRewriteHandle::FailedDnsResolution(
                                             e.to_string_with_causes(),
                                         )
                                     });

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::net::IpAddr;
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
@@ -27,7 +28,7 @@ use crate::MySqlError;
 #[derive(Debug, PartialEq, Clone)]
 pub enum TunnelConfig {
     /// Establish a direct TCP connection to the database host.
-    Direct { tcp_host_override: Option<String> },
+    Direct { resolved_ips: Option<Vec<IpAddr>> },
     /// Establish a TCP connection to the database via an SSH tunnel.
     /// This means first establishing an SSH connection to a bastion host,
     /// and then opening a separate connection from that host to the database.
@@ -237,27 +238,9 @@ impl Config {
         ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<MySqlConn, MySqlError> {
         match &self.tunnel {
-            TunnelConfig::Direct { tcp_host_override } => {
-                // Override the connection host for the actual TCP connection to point to
-                // the privatelink hostname instead.
-                let mut opts_builder = OptsBuilder::from_opts(self.inner.clone());
-
-                if let Some(tcp_override) = tcp_host_override {
-                    opts_builder = opts_builder.ip_or_hostname(tcp_override);
-
-                    if let Some(ssl_opts) = self.inner.ssl_opts() {
-                        if !ssl_opts.skip_domain_validation() {
-                            // If the TLS configuration will validate the hostname, we need to set
-                            // the TLS hostname back to the actual upstream host and not the
-                            // TCP hostname.
-                            opts_builder = opts_builder.ssl_opts(Some(
-                                ssl_opts.clone().with_danger_tls_hostname_override(Some(
-                                    self.inner.ip_or_hostname().to_string(),
-                                )),
-                            ));
-                        }
-                    }
-                };
+            TunnelConfig::Direct { resolved_ips } => {
+                let opts_builder =
+                    OptsBuilder::from_opts(self.inner.clone()).resolved_ips(resolved_ips.clone());
 
                 Ok(MySqlConn {
                     conn: Conn::new(opts_builder).await.map_err(MySqlError::from)?,

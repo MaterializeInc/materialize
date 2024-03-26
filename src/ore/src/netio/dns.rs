@@ -22,10 +22,10 @@ const DUMMY_PORT: u16 = 11111;
 
 /// Resolves a host address and ensures it is a global address when `enforce_global` is set.
 /// This parameter is useful when connecting to user-defined unverified addresses.
-pub async fn resolve_external_address(
+pub async fn resolve_address(
     mut host: &str,
     enforce_global: bool,
-) -> Result<IpAddr, io::Error> {
+) -> Result<Vec<IpAddr>, io::Error> {
     // `net::lookup_host` requires a port to be specified, but we don't care about the port.
     let mut port = DUMMY_PORT;
     // If a port is already specified, use it and remove it from the host.
@@ -37,23 +37,26 @@ pub async fn resolve_external_address(
     }
 
     let mut addrs = lookup_host((host, port)).await?;
-
-    if let Some(addr) = addrs.next() {
+    let mut ips = Vec::new();
+    while let Some(addr) = addrs.next() {
         let ip = addr.ip();
         if enforce_global && !is_global(ip) {
             Err(io::Error::new(
                 io::ErrorKind::AddrNotAvailable,
                 "address is not global",
-            ))
+            ))?
         } else {
-            Ok(ip)
+            ips.push(ip);
         }
-    } else {
+    }
+
+    if ips.len() == 0 {
         Err(io::Error::new(
             io::ErrorKind::AddrNotAvailable,
             "no addresses found",
-        ))
+        ))?
     }
+    Ok(ips)
 }
 
 fn is_global(addr: IpAddr) -> bool {

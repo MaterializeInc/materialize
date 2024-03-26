@@ -110,7 +110,11 @@ impl SshTunnelManager {
                         error!(
                             "not using existing ssh tunnel \
                             ({}:{} via {}@{}:{}) because it's broken: {e}",
-                            remote_host, remote_port, config.user, config.host, config.port,
+                            remote_host,
+                            remote_port,
+                            config.user,
+                            config.host.join(","),
+                            config.port,
                         );
 
                         // This is bit unfortunate, as this method returns an
@@ -124,7 +128,11 @@ impl SshTunnelManager {
 
                     info!(
                         "reusing existing ssh tunnel ({}:{} via {}@{}:{})",
-                        remote_host, remote_port, config.user, config.host, config.port,
+                        remote_host,
+                        remote_port,
+                        config.user,
+                        config.host.join(","),
+                        config.port,
                     );
                     return Ok(handle);
                 }
@@ -147,7 +155,11 @@ impl SshTunnelManager {
                     // Try to connect.
                     info!(
                         "initiating new ssh tunnel ({}:{} via {}@{}:{})",
-                        remote_host, remote_port, config.user, config.host, config.port,
+                        remote_host,
+                        remote_port,
+                        config.user,
+                        config.host.join(","),
+                        config.port,
                     );
 
                     let config = config.clone();
