@@ -220,8 +220,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 subsource_resume_uppers
                     .values()
                     .flat_map(|f| f.elements())
-                    // Advance any upper as far as the slot_lsn.
-                    .map(|t| std::cmp::max(*t, slot_lsn)),
+                    .cloned()
             );
 
             let Some(resume_lsn) = resume_upper.into_option() else {
@@ -347,6 +346,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             // this transaction and therefore be able to pass the data of the
                             // transaction through as we stream it.
                             upper_cap_set.downgrade([&new_upper]);
+                            // println!("\n\nKILL ME NOW\n\n");
+                            // tokio::time::sleep(Duration::from_secs(30)).await;
                             while let Some((oid, event, diff)) = tx.try_next().await? {
                                 if !table_info.contains_key(&oid) {
                                     continue;
