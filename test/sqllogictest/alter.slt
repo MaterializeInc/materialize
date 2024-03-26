@@ -136,17 +136,25 @@ SELECT create_sql FROM (SHOW CREATE TABLE t)
 ----
 CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4")
 
-# TODO: Allow ALTER on load generators for retain history.
-statement error db error: ERROR: s is a load\-generator source, which does not support ALTER SOURCE\.
+statement ok
 ALTER SOURCE s SET (RETAIN HISTORY FOR '1m')
 
-statement error db error: ERROR: s is a load\-generator source, which does not support ALTER SOURCE\.
+query T
+SELECT create_sql FROM (SHOW CREATE SOURCE s)
+----
+CREATE SOURCE "materialize"."public"."s" IN CLUSTER "quickstart" FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS "materialize"."public"."s_progress" WITH (RETAIN HISTORY = FOR '1m')
+
+statement ok
 ALTER SOURCE s RESET (RETAIN HISTORY)
+
+query T
+SELECT create_sql FROM (SHOW CREATE SOURCE s)
+----
+CREATE SOURCE "materialize"."public"."s" IN CLUSTER "quickstart" FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS "materialize"."public"."s_progress"
 
 statement ok
 ALTER INDEX i SET (RETAIN HISTORY FOR '1m')
 
-# TODO: Fix this: RETAIN HISTORY not here.
 query T
 SELECT create_sql FROM (SHOW CREATE INDEX i)
 ----

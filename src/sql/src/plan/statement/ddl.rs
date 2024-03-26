@@ -5691,14 +5691,40 @@ pub fn plan_alter_source(
 
     let action = match action {
         AlterSourceAction::SetOptions(options) => {
-            let option = options.into_iter().next().unwrap();
+            let mut options = options.into_iter();
+            let option = options.next().unwrap();
+            if option.name == CreateSourceOptionName::RetainHistory {
+                if options.next().is_some() {
+                    sql_bail!("RETAIN HISTORY must be only option");
+                }
+                return alter_retain_history(
+                    scx,
+                    object_type,
+                    if_exists,
+                    UnresolvedObjectName::Item(source_name),
+                    option.value,
+                );
+            }
             sql_bail!(
                 "Cannot modify the {} of a SOURCE.",
                 option.name.to_ast_string()
             );
         }
         AlterSourceAction::ResetOptions(reset) => {
-            let option = reset.into_iter().next().unwrap();
+            let mut options = reset.into_iter();
+            let option = options.next().unwrap();
+            if option == CreateSourceOptionName::RetainHistory {
+                if options.next().is_some() {
+                    sql_bail!("RETAIN HISTORY must be only option");
+                }
+                return alter_retain_history(
+                    scx,
+                    object_type,
+                    if_exists,
+                    UnresolvedObjectName::Item(source_name),
+                    None,
+                );
+            }
             sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
         }
         AlterSourceAction::DropSubsources {

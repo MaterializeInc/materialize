@@ -218,7 +218,11 @@ impl Plan {
             StatementKind::AlterSetCluster => &[PlanKind::AlterNoop, PlanKind::AlterSetCluster],
             // TODO: If we ever support ALTER SINK again, this will need to be changed
             StatementKind::AlterSink => &[PlanKind::AlterNoop],
-            StatementKind::AlterSource => &[PlanKind::AlterNoop, PlanKind::AlterSource],
+            StatementKind::AlterSource => &[
+                PlanKind::AlterNoop,
+                PlanKind::AlterSource,
+                PlanKind::AlterRetainHistory,
+            ],
             StatementKind::AlterSystemReset => &[PlanKind::AlterNoop, PlanKind::AlterSystemReset],
             StatementKind::AlterSystemResetAll => {
                 &[PlanKind::AlterNoop, PlanKind::AlterSystemResetAll]
