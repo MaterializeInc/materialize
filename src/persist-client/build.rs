@@ -51,6 +51,14 @@ fn main() {
             ".mz_persist_client.internal.service.ProtoPushDiff",
         ]);
 
+    // Setting `emit_rerun_if_changed(false)` below causes tonic to entirely
+    // skip emitting a "rerun-if-changed", which results in us getting the
+    // default behavior for a build script: to invalidate when any file in the
+    // crate changes. This breaks the fast iteration cycle of datadriven tests
+    // (i.e. touching a tests/ file results in an unnecessary recompile). Fix by
+    // only rerunning this build script if something changes in src/ because all
+    // mz_persist_client protos are in there.
+    println!("cargo:rerun-if-changed=src/");
     tonic_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when
         // anything in the include directory (..) changes. This causes quite a

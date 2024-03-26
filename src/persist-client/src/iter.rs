@@ -33,7 +33,7 @@ use tracing::{debug_span, Instrument};
 
 use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter, LeasedBatchPart};
 use crate::internal::metrics::{BatchPartReadMetrics, ReadMetrics, ShardMetrics};
-use crate::internal::paths::{PartialBatchKey, WriterKey};
+use crate::internal::paths::WriterKey;
 use crate::internal::state::HollowBatchPart;
 use crate::metrics::Metrics;
 use crate::read::SubscriptionLeaseReturner;
@@ -65,9 +65,8 @@ pub(crate) enum FetchData<T> {
         metrics: Arc<Metrics>,
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: Arc<ShardMetrics>,
-        part_key: PartialBatchKey,
         part_desc: Description<T>,
-        key_lower: Vec<u8>,
+        part: HollowBatchPart<T>,
     },
     Leased {
         blob: Arc<dyn Blob + Send + Sync>,
@@ -82,8 +81,8 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     fn maybe_unconsolidated(&self) -> bool {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
         match self {
-            FetchData::Unleased { part_key, .. } => part_key.split().0 >= min_version,
-            FetchData::Leased { part, .. } => part.key.split().0 >= min_version,
+            FetchData::Unleased { part, .. } => part.key.split().0 >= min_version,
+            FetchData::Leased { part, .. } => part.part.key.split().0 >= min_version,
             FetchData::AlreadyFetched => false,
         }
     }
@@ -94,8 +93,8 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
 
     fn key_lower(&self) -> &[u8] {
         match self {
-            FetchData::Unleased { key_lower, .. } => key_lower.as_slice(),
-            FetchData::Leased { part, .. } => part.key_lower.as_slice(),
+            FetchData::Unleased { part, .. } => part.key_lower.as_slice(),
+            FetchData::Leased { part, .. } => part.part.key_lower.as_slice(),
             FetchData::AlreadyFetched => &[],
         }
     }
@@ -108,8 +107,8 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 metrics,
                 read_metrics,
                 shard_metrics,
-                part_key,
                 part_desc,
+                part,
                 ..
             } => fetch_batch_part(
                 &shard_id,
@@ -117,8 +116,8 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 &metrics,
                 &shard_metrics,
                 read_metrics(&metrics.read),
-                &part_key,
                 &part_desc,
+                &part,
             )
             .await
             .map_err(|blob_key| anyhow!("missing unleased key {blob_key}")),
@@ -137,8 +136,8 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                     &part.metrics,
                     &*shard_metrics,
                     read_metrics(&part.metrics.read),
-                    &part.key,
                     &part.desc,
+                    &part.part,
                 )
                 .await
                 .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"));
@@ -287,11 +286,11 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: &Arc<ShardMetrics>,
         desc: &Description<T>,
-        parts: impl IntoIterator<Item = &'a HollowBatchPart>,
+        parts: impl IntoIterator<Item = &'a HollowBatchPart<T>>,
     ) {
         let run = parts
             .into_iter()
-            .map(|part: &HollowBatchPart| {
+            .map(|part: &HollowBatchPart<T>| {
                 let c_part = ConsolidationPart::Queued {
                     data: FetchData::Unleased {
                         shard_id,
@@ -299,9 +298,8 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         metrics: Arc::clone(metrics),
                         read_metrics,
                         shard_metrics: Arc::clone(shard_metrics),
-                        part_key: part.key.clone(),
                         part_desc: desc.clone(),
-                        key_lower: part.key_lower.clone(),
+                        part: part.clone(),
                     },
                 };
                 (c_part, part.encoded_size_bytes)
@@ -322,7 +320,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         let run = parts
             .into_iter()
             .map(|part: LeasedBatchPart<T>| {
-                let size = part.encoded_size_bytes;
+                let size = part.part.encoded_size_bytes;
                 let queued = ConsolidationPart::Queued {
                     data: FetchData::Leased {
                         blob: Arc::clone(blob),
@@ -973,6 +971,7 @@ mod tests {
                         encoded_size_bytes,
                         key_lower: vec![],
                         stats: None,
+                        ts_rewrite: None,
                     })
                     .collect();
                 consolidator.enqueue_run(

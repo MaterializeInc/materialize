@@ -753,7 +753,7 @@ where
     fn lease_batch_part(
         &mut self,
         desc: Description<T>,
-        part: HollowBatchPart,
+        part: HollowBatchPart<T>,
         metadata: SerdeLeasedBatchPartMetadata,
     ) -> LeasedBatchPart<T> {
         LeasedBatchPart {
@@ -762,12 +762,9 @@ where
             reader_id: self.reader_id.clone(),
             metadata,
             desc,
-            key: part.key,
-            stats: part.stats,
-            encoded_size_bytes: part.encoded_size_bytes,
+            part,
             leased_seqno: Some(self.lease_seqno()),
             filter_pushdown_audit: false,
-            key_lower: part.key_lower,
         }
     }
 
@@ -1062,7 +1059,7 @@ where
                     .map(|part| {
                         self.lease_batch_part(batch.desc.clone(), part.clone(), metadata.clone())
                     })
-                    .filter(|p| should_fetch_part(&p.stats))
+                    .filter(|p| should_fetch_part(&p.part.stats))
                     .collect();
                 consolidator.enqueue_leased_run(
                     &self.blob,

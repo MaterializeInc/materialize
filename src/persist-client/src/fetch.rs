@@ -22,6 +22,7 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
@@ -34,8 +35,8 @@ use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::{BlobKey, PartialBatchKey};
+use crate::internal::state::HollowBatchPart;
 use crate::read::LeasedReaderId;
-use crate::stats::PartStats;
 use crate::ShardId;
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
@@ -87,13 +88,13 @@ where
             });
         }
 
-        let value = fetch_batch_part_blob(
+        let buf = fetch_batch_part_blob(
             &part.shard_id,
             self.blob.as_ref(),
             &self.metrics,
             &self.shard_metrics,
             &self.metrics.read.batch_fetcher,
-            &part.key,
+            &part.part,
         )
         .await
         .unwrap_or_else(|blob_key| {
@@ -108,15 +109,14 @@ where
             panic!("batch fetcher could not fetch batch part: {}", blob_key)
         });
         let fetched_blob = FetchedBlob {
-            key: part.key.0.clone(),
             metrics: Arc::clone(&self.metrics),
             read_metrics: self.metrics.read.batch_fetcher.clone(),
+            buf,
             registered_desc: part.desc.clone(),
-            part: value,
+            part: part.part.clone(),
             schemas: self.schemas.clone(),
             metadata: part.metadata.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
-            stats: part.stats.clone(),
             _phantom: PhantomData,
         };
         Ok(fetched_blob)
@@ -215,8 +215,8 @@ where
         &metrics,
         shard_metrics,
         read_metrics,
-        &part.key,
         &part.desc,
+        &part.part,
     )
     .await
     .unwrap_or_else(|blob_key| {
@@ -236,21 +236,21 @@ where
         schemas,
         &part.metadata,
         part.filter_pushdown_audit,
-        part.stats.as_ref(),
+        part.part.stats.as_ref(),
     )
 }
 
-pub(crate) async fn fetch_batch_part_blob(
+pub(crate) async fn fetch_batch_part_blob<T>(
     shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
-    key: &PartialBatchKey,
+    part: &HollowBatchPart<T>,
 ) -> Result<SegmentedBytes, BlobKey> {
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
-    let blob_key = key.complete(shard_id);
+    let blob_key = part.key.complete(shard_id);
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
         shard_metrics.blob_gets.inc();
         blob.get(&blob_key).await
@@ -271,28 +271,28 @@ pub(crate) async fn fetch_batch_part_blob(
 pub(crate) fn decode_batch_part_blob<T>(
     metrics: &Metrics,
     read_metrics: &ReadMetrics,
-    key: &str,
     registered_desc: Description<T>,
-    value: &SegmentedBytes,
+    part: &HollowBatchPart<T>,
+    buf: &SegmentedBytes,
 ) -> EncodedPart<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
     trace_span!("fetch_batch::decode").in_scope(|| {
-        let part = metrics
+        let parsed = metrics
             .codecs
             .batch
-            .decode(|| BlobTraceBatchPart::decode(value, &metrics.columnar))
-            .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
+            .decode(|| BlobTraceBatchPart::decode(buf, &metrics.columnar))
+            .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", part.key, err))
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable
             // data was corrupted, or if operations messes up deployment. In any
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
         read_metrics.part_goodbytes.inc_by(u64::cast_from(
-            part.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
+            parsed.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
         ));
-        EncodedPart::new(key, registered_desc, part)
+        EncodedPart::new(read_metrics.clone(), registered_desc, part, parsed)
     })
 }
 
@@ -302,15 +302,15 @@ pub(crate) async fn fetch_batch_part<T>(
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
-    key: &PartialBatchKey,
     registered_desc: &Description<T>,
+    part: &HollowBatchPart<T>,
 ) -> Result<EncodedPart<T>, BlobKey>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    let value =
-        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, key).await?;
-    let part = decode_batch_part_blob(metrics, read_metrics, key, registered_desc.clone(), &value);
+    let buf =
+        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
+    let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
     Ok(part)
 }
 
@@ -364,17 +364,12 @@ pub struct LeasedBatchPart<T> {
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) metadata: SerdeLeasedBatchPartMetadata,
     pub(crate) desc: Description<T>,
-    pub(crate) key: PartialBatchKey,
-    pub(crate) encoded_size_bytes: usize,
+    pub(crate) part: HollowBatchPart<T>,
     /// The `SeqNo` from which this part originated; we track this value as
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
     pub(crate) leased_seqno: Option<SeqNo>,
-    pub(crate) stats: Option<LazyPartStats>,
     pub(crate) filter_pushdown_audit: bool,
-    /// A lower bound on the key. If a tight lower bound is not available, the
-    /// empty vec (as the minimum vec) is a conservative choice.
-    pub(crate) key_lower: Vec<u8>,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -397,13 +392,18 @@ where
             lower: self.desc.lower().iter().map(T::encode).collect(),
             upper: self.desc.upper().iter().map(T::encode).collect(),
             since: self.desc.since().iter().map(T::encode).collect(),
-            key: self.key.clone(),
-            encoded_size_bytes: self.encoded_size_bytes,
+            key: self.part.key.clone(),
+            encoded_size_bytes: self.part.encoded_size_bytes,
             leased_seqno: self.leased_seqno,
             reader_id: self.reader_id.clone(),
-            stats: self.stats.clone(),
+            stats: self.part.stats.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit,
-            key_lower: std::mem::take(&mut self.key_lower),
+            key_lower: std::mem::take(&mut self.part.key_lower),
+            ts_rewrite: self
+                .part
+                .ts_rewrite
+                .as_ref()
+                .map(|x| x.iter().map(T::encode).collect()),
         };
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = self.leased_seqno.take();
@@ -430,7 +430,7 @@ where
 
     /// The encoded size of this part in bytes
     pub fn encoded_size_bytes(&self) -> usize {
-        self.encoded_size_bytes
+        self.part.encoded_size_bytes
     }
 
     /// The filter has indicated we don't need this part, we can verify the
@@ -443,7 +443,7 @@ where
 
     /// Returns the pushdown stats for this part.
     pub fn stats(&self) -> Option<PartStats> {
-        self.stats.as_ref().map(|x| x.decode())
+        self.part.stats.as_ref().map(|x| x.decode())
     }
 }
 
@@ -460,30 +460,28 @@ impl<T> Drop for LeasedBatchPart<T> {
 /// decoding.
 #[derive(Debug)]
 pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
-    key: String,
     metrics: Arc<Metrics>,
     read_metrics: ReadMetrics,
+    buf: SegmentedBytes,
     registered_desc: Description<T>,
-    part: SegmentedBytes,
+    part: HollowBatchPart<T>,
     schemas: Schemas<K, V>,
     metadata: SerdeLeasedBatchPartMetadata,
     filter_pushdown_audit: bool,
-    stats: Option<LazyPartStats>,
     _phantom: PhantomData<fn() -> D>,
 }
 
 impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
-            key: self.key.clone(),
             metrics: Arc::clone(&self.metrics),
             read_metrics: self.read_metrics.clone(),
+            buf: self.buf.clone(),
             registered_desc: self.registered_desc.clone(),
             part: self.part.clone(),
             schemas: self.schemas.clone(),
             metadata: self.metadata.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
-            stats: self.stats.clone(),
             _phantom: self._phantom.clone(),
         }
     }
@@ -495,9 +493,9 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
         let part = decode_batch_part_blob(
             &self.metrics,
             &self.read_metrics,
-            &self.key,
             self.registered_desc.clone(),
             &self.part,
+            &self.buf,
         );
         FetchedPart::new(
             Arc::clone(&self.metrics),
@@ -505,7 +503,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
             self.schemas.clone(),
             &self.metadata,
             self.filter_pushdown_audit,
-            self.stats.as_ref(),
+            self.part.stats.as_ref(),
         )
     }
 }
@@ -586,9 +584,11 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
 /// logic.
 #[derive(Debug, Clone)]
 pub(crate) struct EncodedPart<T> {
+    metrics: ReadMetrics,
     registered_desc: Description<T>,
     part: Arc<BlobTraceBatchPart<T>>,
     needs_truncation: bool,
+    ts_rewrite: Option<Antichain<T>>,
 }
 
 impl<K, V, T, D> FetchedPart<K, V, T, D>
@@ -681,9 +681,10 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     pub(crate) fn new(
-        key: &str,
+        metrics: ReadMetrics,
         registered_desc: Description<T>,
-        part: BlobTraceBatchPart<T>,
+        part: &HollowBatchPart<T>,
+        parsed: BlobTraceBatchPart<T>,
     ) -> Self {
         // There are two types of batches in persist:
         // - Batches written by a persist user (either directly or indirectly
@@ -696,24 +697,30 @@ where
         // - Batches written by compaction. These always have an inline desc
         //   that exactly matches the one they are registered with. The since
         //   can be anything.
-        let inline_desc = &part.desc;
+        let inline_desc = &parsed.desc;
         let needs_truncation = inline_desc.lower() != registered_desc.lower()
             || inline_desc.upper() != registered_desc.upper();
         if needs_truncation {
             assert!(
                 PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
                 "key={} inline={:?} registered={:?}",
-                key,
+                part.key,
                 inline_desc,
                 registered_desc
             );
-            assert!(
-                PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
-                "key={} inline={:?} registered={:?}",
-                key,
-                inline_desc,
-                registered_desc
-            );
+            if part.ts_rewrite.is_none() {
+                // The ts rewrite feature allows us to advance the registered
+                // upper of a batch that's already been staged (the inline
+                // upper), so if it's been used, then there's no useful
+                // invariant that we can assert here.
+                assert!(
+                    PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
+                    "key={} inline={:?} registered={:?}",
+                    part.key,
+                    inline_desc,
+                    registered_desc
+                );
+            }
             // As mentioned above, batches that needs truncation will always have a
             // since of the minimum timestamp. Technically we could truncate any
             // batch where the since is less_than the output_desc's lower, but we're
@@ -722,7 +729,7 @@ where
                 inline_desc.since(),
                 &Antichain::from_elem(T::minimum()),
                 "key={} inline={:?} registered={:?}",
-                key,
+                part.key,
                 inline_desc,
                 registered_desc
             );
@@ -730,14 +737,16 @@ where
             assert_eq!(
                 inline_desc, &registered_desc,
                 "key={} inline={:?} registered={:?}",
-                key, inline_desc, registered_desc
+                part.key, inline_desc, registered_desc
             );
         }
 
         EncodedPart {
+            metrics,
             registered_desc,
-            part: Arc::new(part),
+            part: Arc::new(parsed),
             needs_truncation,
+            ts_rewrite: part.ts_rewrite.clone(),
         }
     }
 
@@ -764,7 +773,7 @@ impl Cursor {
     /// A cursor points to a particular update in the backing part data.
     /// If the update it points to is not valid, advance it to the next valid update
     /// if there is one, and return the pointed-to data.
-    pub fn peek<'a, T: Timestamp + Codec64>(
+    pub fn peek<'a, T: Timestamp + Lattice + Codec64>(
         &mut self,
         encoded: &'a EncodedPart<T>,
     ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
@@ -778,7 +787,16 @@ impl Cursor {
                 }
             };
 
-            let t = T::decode(t);
+            let mut t = T::decode(t);
+            // We assert on the write side that at most one of rewrite or
+            // truncation is used, so it shouldn't matter which is run first.
+            //
+            // That said, my (Dan's) intuition here is that rewrite goes first,
+            // though I don't particularly have a justification for it.
+            if let Some(ts_rewrite) = encoded.ts_rewrite.as_ref() {
+                t.advance_by(ts_rewrite.borrow());
+                encoded.metrics.ts_rewrite.inc();
+            }
 
             // This filtering is really subtle, see the comment above for
             // what's going on here.
@@ -796,7 +814,7 @@ impl Cursor {
     }
 
     /// Similar to peek, but advance the cursor just past the end of the most recent update.
-    pub fn pop<'a, T: Timestamp + Codec64>(
+    pub fn pop<'a, T: Timestamp + Lattice + Codec64>(
         &mut self,
         part: &'a EncodedPart<T>,
     ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
@@ -837,6 +855,7 @@ pub struct SerdeLeasedBatchPart {
     stats: Option<LazyPartStats>,
     filter_pushdown_audit: bool,
     key_lower: Vec<u8>,
+    ts_rewrite: Option<Vec<[u8; 8]>>,
 }
 
 impl SerdeLeasedBatchPart {
@@ -866,13 +885,18 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
                 Antichain::from_iter(x.upper.into_iter().map(T::decode)),
                 Antichain::from_iter(x.since.into_iter().map(T::decode)),
             ),
-            key: x.key,
-            encoded_size_bytes: x.encoded_size_bytes,
+            part: HollowBatchPart {
+                key: x.key,
+                encoded_size_bytes: x.encoded_size_bytes,
+                stats: x.stats,
+                key_lower: x.key_lower,
+                ts_rewrite: x
+                    .ts_rewrite
+                    .map(|x| Antichain::from_iter(x.into_iter().map(T::decode))),
+            },
             leased_seqno: x.leased_seqno,
             reader_id: x.reader_id,
-            stats: x.stats,
             filter_pushdown_audit: x.filter_pushdown_audit,
-            key_lower: x.key_lower,
         }
     }
 }

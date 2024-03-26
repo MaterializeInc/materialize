@@ -1,0 +1,73 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+write-batch output=b0 lower=0 upper=1
+k0 0 1
+----
+parts=1 len=1
+
+# Oops we had a txn conflict, rewrite our batch and write out a new one with
+# some adjustments.
+compare-and-append-batches expected_upper=0 new_upper=1 batches=()
+----
+ok
+
+compare-and-append-batches expected_upper=0 new_upper=1 batches=(b0)
+----
+error: upper mismatch: UpperMismatch { expected: Antichain { elements: [0] }, current: Antichain { elements: [1] } }
+
+rewrite-ts input=b0 frontier=1 upper=2
+----
+ok
+
+write-batch output=b1 lower=1 upper=2
+k1 1 1
+----
+parts=1 len=1
+
+# Oops we had a txn conflict again, same deal one more time.
+compare-and-append-batches expected_upper=1 new_upper=2 batches=()
+----
+ok
+
+compare-and-append-batches expected_upper=1 new_upper=2 batches=(b0,b1)
+----
+error: upper mismatch: UpperMismatch { expected: Antichain { elements: [1] }, current: Antichain { elements: [2] } }
+
+rewrite-ts input=b0 frontier=2 upper=3
+----
+ok
+
+rewrite-ts input=b1 frontier=2 upper=3
+----
+ok
+
+write-batch output=b2 lower=2 upper=3
+k2 2 1
+----
+parts=1 len=1
+
+# Goes through this time!
+compare-and-append-batches expected_upper=2 new_upper=3 batches=(b0,b1,b2)
+----
+ok
+
+snapshot as_of=2
+----
+<batch [0]-[2]>
+<batch [2]-[3]>
+<run 0>
+<part 0>
+k0 2 1
+<run 1>
+<part 0>
+k1 2 1
+<run 2>
+<part 0>
+k2 2 1

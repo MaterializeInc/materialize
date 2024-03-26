@@ -25,6 +25,7 @@ use differential_dataflow::Hashable;
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -43,7 +44,7 @@ use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::RetryParameters;
 use crate::fetch::{FetchedBlob, SerdeLeasedBatchPart};
 use crate::read::SubscriptionLeaseReturner;
-use crate::stats::{PartStats, STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
+use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
@@ -377,13 +378,13 @@ where
             for mut part_desc in parts {
                 // TODO: Push the filter down into the Subscribe?
                 if STATS_FILTER_ENABLED.get(&cfg) {
-                    let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
+                    let should_fetch = part_desc.part.stats.as_ref().map_or(true, |stats| {
                         should_fetch_part(&stats.decode(), current_frontier.borrow())
                     });
-                    let bytes = u64::cast_from(part_desc.encoded_size_bytes);
+                    let bytes = u64::cast_from(part_desc.part.encoded_size_bytes);
                     if should_fetch {
                         audit_budget_bytes =
-                            audit_budget_bytes.saturating_add(part_desc.encoded_size_bytes);
+                            audit_budget_bytes.saturating_add(part_desc.part.encoded_size_bytes);
                         metrics.pushdown.parts_fetched_count.inc();
                         metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
                     } else {
@@ -391,18 +392,18 @@ where
                         metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
                         let should_audit = {
                             let mut h = DefaultHasher::new();
-                            part_desc.key.hash(&mut h);
+                            part_desc.part.key.hash(&mut h);
                             usize::cast_from(h.finish()) % 100 < STATS_AUDIT_PERCENT.get(&cfg)
                         };
-                        if should_audit && part_desc.encoded_size_bytes < audit_budget_bytes {
-                            audit_budget_bytes -= part_desc.encoded_size_bytes;
+                        if should_audit && part_desc.part.encoded_size_bytes < audit_budget_bytes {
+                            audit_budget_bytes -= part_desc.part.encoded_size_bytes;
                             metrics.pushdown.parts_audited_count.inc();
                             metrics.pushdown.parts_audited_bytes.inc_by(bytes);
                             part_desc.request_filter_pushdown_audit();
                         } else {
                             debug!(
                                 "skipping part because of stats filter {:?}",
-                                part_desc.stats
+                                part_desc.part.stats
                             );
                             lease_returner.return_leased_part(part_desc);
                             continue;

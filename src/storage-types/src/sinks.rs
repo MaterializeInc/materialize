@@ -12,7 +12,7 @@
 use std::borrow::Cow;
 use std::fmt::Debug;
 
-use mz_persist_client::ShardId;
+use mz_persist_types::ShardId;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};

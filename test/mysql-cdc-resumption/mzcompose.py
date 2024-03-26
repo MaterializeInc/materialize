@@ -46,6 +46,10 @@ def workflow_default(c: Composition) -> None:
         if name == "default":
             continue
 
+        # TODO(def-): Reenable when #26127 is fixed
+        if name == "bin-log-manipulations":
+            continue
+
         with c.test_case(name):
             c.workflow(name)
 

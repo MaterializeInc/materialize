@@ -10,6 +10,7 @@
 //! Prometheus monitoring metrics.
 
 use async_stream::stream;
+use mz_persist_types::stats::PartStatsMetrics;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -209,6 +210,7 @@ struct MetricsVecs {
     read_part_goodbytes: IntCounterVec,
     read_part_count: IntCounterVec,
     read_part_seconds: CounterVec,
+    read_ts_rewrite: IntCounterVec,
 
     lock_acquire_count: IntCounterVec,
     lock_blocking_acquire_count: IntCounterVec,
@@ -359,6 +361,11 @@ impl MetricsVecs {
             read_part_seconds: registry.register(metric!(
                 name: "mz_persist_read_batch_part_seconds",
                 help: "time spent reading batch parts",
+                var_labels: ["op"],
+            )),
+            read_ts_rewrite: registry.register(metric!(
+                name: "mz_persist_read_ts_rewite",
+                help: "count of updates read with rewritten ts",
                 var_labels: ["op"],
             )),
 
@@ -528,6 +535,7 @@ impl MetricsVecs {
             part_goodbytes: self.read_part_goodbytes.with_label_values(&[op]),
             part_count: self.read_part_count.with_label_values(&[op]),
             seconds: self.read_part_seconds.with_label_values(&[op]),
+            ts_rewrite: self.read_ts_rewrite.with_label_values(&[op]),
         }
     }
 
@@ -668,6 +676,7 @@ pub struct ReadMetrics {
     pub(crate) part_goodbytes: IntCounter,
     pub(crate) part_count: IntCounter,
     pub(crate) seconds: Counter,
+    pub(crate) ts_rewrite: IntCounter,
 }
 
 // This one is Clone in contrast to the others because it has to get moved into
@@ -1195,6 +1204,7 @@ pub struct ShardsMetrics {
     backpressure_emitted_bytes: IntCounterVec,
     backpressure_last_backpressured_bytes: UIntGaugeVec,
     backpressure_retired_bytes: IntCounterVec,
+    rewrite_part_count: mz_ore::metrics::UIntGaugeVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1379,6 +1389,11 @@ impl ShardsMetrics {
                 help:"A counter with the number of bytes retired by downstream processing.",
                 var_labels: ["shard", "name"],
             )),
+            rewrite_part_count: registry.register(metric!(
+                name: "mz_persist_shard_rewrite_part_count",
+                help: "count of batch parts with rewrites by shard",
+                var_labels: ["shard", "name"],
+            )),
             shards,
         }
     }
@@ -1456,6 +1471,7 @@ pub struct ShardMetrics {
     pub backpressure_last_backpressured_bytes:
         Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
     pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
+    pub rewrite_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1563,8 +1579,11 @@ impl ShardMetrics {
             backpressure_retired_bytes: Arc::new(
                 shards_metrics
                     .backpressure_retired_bytes
-                    .get_delete_on_drop_counter(vec![shard, name.to_string()]),
+                    .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             ),
+            rewrite_part_count: shards_metrics
+                .rewrite_part_count
+                .get_delete_on_drop_gauge(vec![shard, name.to_string()]),
         }
     }
 
@@ -2194,7 +2213,7 @@ pub struct PushdownMetrics {
     pub(crate) parts_audited_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
-    pub parts_mismatched_stats_count: IntCounter,
+    pub part_stats: PartStatsMetrics,
 }
 
 impl PushdownMetrics {
@@ -2232,10 +2251,7 @@ impl PushdownMetrics {
                 name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
                 help: "total bytes trimmed from part stats",
             )),
-            parts_mismatched_stats_count: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_mismatched_stats_count",
-                help: "number of parts read with unexpectedly the incorrect type of stats",
-            )),
+            part_stats: PartStatsMetrics::new(registry),
         }
     }
 }

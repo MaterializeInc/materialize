@@ -26,6 +26,7 @@ use mz_persist_client::metrics::encode_ts_metric;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -33,7 +34,7 @@ use tracing::debug;
 
 use crate::metrics::Metrics;
 use crate::txn_read::{DataListenNext, DataSnapshot};
-use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
+use crate::TxnsCodecDefault;
 
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.
@@ -987,8 +988,8 @@ pub(crate) enum Unapplied<'a> {
 
 #[cfg(test)]
 mod tests {
-    use mz_persist_client::{PersistClient, ShardIdSchema};
-    use mz_persist_types::codec_impls::VecU8Schema;
+    use mz_persist_client::PersistClient;
+    use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
     use DataListenNext::*;
 
     use crate::operator::DataSubscribe;

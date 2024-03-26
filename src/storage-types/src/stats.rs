@@ -9,124 +9,24 @@
 
 //! Types and traits that connect up our mz-repr types with the stats that persist maintains.
 
-use crate::controller::TxnsCodecRow;
-use crate::errors::DataflowError;
-use crate::sources::SourceData;
 use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, UnmaterializableFunc};
-use mz_persist_client::metrics::Metrics;
-use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
-use mz_persist_client::stats::PartStats;
-use mz_persist_txn::txn_cache::TxnsCache;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
-use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
+use mz_persist_types::stats::{
+    BytesStats, ColumnStats, DynStats, JsonStats, PartStats, PartStatsMetrics,
+};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{
-    ColumnType, Datum, DatumToPersist, DatumToPersistFn, Diff, RelationDesc, Row, RowArena,
-    ScalarType, Timestamp,
+    ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, RowArena, ScalarType,
 };
-use timely::progress::Antichain;
 use tracing::warn;
-
-/// This is a streaming-consolidating cursor type specialized to `RelationDesc`.
-///
-/// Internally this maintains two separate cursors: one for errors and one for data.
-/// This is necessary so that errors are presented before data, which matches our usual
-/// lookup semantics. To avoid being ludicrously inefficient, this pushes down a filter
-/// on the stats. (In particular, in the common case of no errors, we don't do any extra
-/// fetching.)
-pub struct StatsCursor {
-    errors: Cursor<SourceData, (), Timestamp, Diff>,
-    data: Cursor<SourceData, (), Timestamp, Diff>,
-}
-
-impl StatsCursor {
-    pub async fn new(
-        handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
-        // If and only if we are using persist-txn to manage this shard, then
-        // this must be Some. This is because the upper might be advanced lazily
-        // and we have to go through persist-txn for reads.
-        txns_read: Option<&mut TxnsCache<Timestamp, TxnsCodecRow>>,
-        metrics: &Metrics,
-        desc: &RelationDesc,
-        as_of: Antichain<Timestamp>,
-    ) -> Result<StatsCursor, Since<Timestamp>> {
-        let should_fetch = |name: &'static str, count: fn(&RelationPartStats) -> Option<usize>| {
-            move |stats: &Option<LazyPartStats>| {
-                let Some(stats) = stats else { return true };
-                let stats = stats.decode();
-                let relation_stats = RelationPartStats::new(name, metrics, desc, &stats);
-                count(&relation_stats).map_or(true, |n| n > 0)
-            }
-        };
-        let (errors, data) = match txns_read {
-            None => {
-                let errors = handle
-                    .snapshot_cursor(as_of.clone(), should_fetch("errors", |s| s.err_count()))
-                    .await?;
-                let data = handle
-                    .snapshot_cursor(as_of.clone(), should_fetch("data", |s| s.ok_count()))
-                    .await?;
-                (errors, data)
-            }
-            Some(txns_read) => {
-                let as_of = as_of
-                    .as_option()
-                    .expect("reads as_of empty antichain block forever")
-                    .clone();
-                txns_read.update_gt(&as_of).await;
-                let data_snapshot = txns_read.data_snapshot(handle.shard_id(), as_of);
-                let errors: Cursor<SourceData, (), Timestamp, i64> = data_snapshot
-                    .snapshot_cursor(handle, should_fetch("errors", |s| s.err_count()))
-                    .await?;
-                let data = data_snapshot
-                    .snapshot_cursor(handle, should_fetch("data", |s| s.ok_count()))
-                    .await?;
-                (errors, data)
-            }
-        };
-
-        Ok(StatsCursor { errors, data })
-    }
-
-    pub async fn next(
-        &mut self,
-    ) -> Option<impl Iterator<Item = (Result<Row, DataflowError>, Timestamp, Diff)> + '_> {
-        fn expect_decode(
-            raw: impl Iterator<
-                Item = (
-                    (Result<SourceData, String>, Result<(), String>),
-                    Timestamp,
-                    Diff,
-                ),
-            >,
-            is_err: bool,
-        ) -> impl Iterator<Item = (Result<Row, DataflowError>, Timestamp, Diff)> {
-            raw.map(|((k, v), t, d)| {
-                // NB: this matches the decode behaviour in sources
-                let SourceData(row) = k.expect("decode error");
-                let () = v.expect("decode error");
-                (row, t, d)
-            })
-            .filter(move |(r, _, _)| if is_err { r.is_err() } else { r.is_ok() })
-        }
-
-        if let Some(errors) = self.errors.next().await {
-            Some(expect_decode(errors, true))
-        } else if let Some(data) = self.data.next().await {
-            Some(expect_decode(data, false))
-        } else {
-            None
-        }
-    }
-}
 
 /// Bundles together a relation desc with the stats for a specific part, and translates between
 /// Persist's stats representation and the `ResultSpec`s that are used for eg. filter pushdown.
 #[derive(Debug)]
 pub struct RelationPartStats<'a> {
     pub(crate) name: &'a str,
-    pub(crate) metrics: &'a Metrics,
+    pub(crate) metrics: &'a PartStatsMetrics,
     pub(crate) desc: &'a RelationDesc,
     pub(crate) stats: &'a PartStats,
 }
@@ -134,7 +34,7 @@ pub struct RelationPartStats<'a> {
 impl<'a> RelationPartStats<'a> {
     pub fn new(
         name: &'a str,
-        metrics: &'a Metrics,
+        metrics: &'a PartStatsMetrics,
         desc: &'a RelationDesc,
         stats: &'a PartStats,
     ) -> Self {
@@ -148,7 +48,7 @@ impl<'a> RelationPartStats<'a> {
 }
 
 fn downcast_stats<'a, T: Data>(
-    metrics: &Metrics,
+    metrics: &PartStatsMetrics,
     name: &str,
     col_name: &str,
     stats: &'a dyn DynStats,
@@ -167,7 +67,7 @@ fn downcast_stats<'a, T: Data>(
                 std::any::type_name::<T::Stats>(),
                 stats.type_name()
             );
-            metrics.pushdown.parts_mismatched_stats_count.inc();
+            metrics.mismatched_count.inc();
             None
         }
     }
@@ -310,7 +210,7 @@ impl RelationPartStats<'_> {
 
     fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
         struct ColValues<'a>(
-            &'a Metrics,
+            &'a PartStatsMetrics,
             &'a str,
             &'a str,
             &'a dyn DynStats,
@@ -360,13 +260,11 @@ impl RelationPartStats<'_> {
 
 #[cfg(test)]
 mod tests {
-    use mz_persist_client::stats::PartStats;
+    use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{PartEncoder, Schema};
     use mz_persist_types::part::PartBuilder;
-
-    use mz_ore::metrics::MetricsRegistry;
-    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_types::stats::PartStats;
     use mz_repr::{
         is_no_stats_type, ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row,
         RowArena, ScalarType,
@@ -406,7 +304,7 @@ mod tests {
             let part = part.finish()?;
             let stats = part.key_stats()?;
 
-            let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());
+            let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
             let stats = RelationPartStats {
                 name: "test",
                 metrics: &metrics,

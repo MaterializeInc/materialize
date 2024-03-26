@@ -170,8 +170,8 @@ pub struct HandleDebugState {
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
-#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct HollowBatchPart {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HollowBatchPart<T> {
     /// Pointer usable to retrieve the updates.
     pub key: PartialBatchKey,
     /// The encoded size of this part.
@@ -182,8 +182,15 @@ pub struct HollowBatchPart {
     pub key_lower: Vec<u8>,
     /// Aggregate statistics about data contained in this part.
     #[serde(serialize_with = "serialize_part_stats")]
-    #[proptest(strategy = "super::encoding::any_some_lazy_part_stats()")]
     pub stats: Option<LazyPartStats>,
+    /// A frontier to which timestamps in this part are advanced on read, if
+    /// set.
+    ///
+    /// A value of `Some([T::minimum()])` is functionally the same as `None`,
+    /// but we maintain the distinction between the two for some internal sanity
+    /// checking of invariants as well as metrics. If this ever becomes an
+    /// issue, everything still works with this as just `Antichain<T>`.
+    pub ts_rewrite: Option<Antichain<T>>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -194,7 +201,7 @@ pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
     /// Pointers usable to retrieve the updates.
-    pub parts: Vec<HollowBatchPart>,
+    pub parts: Vec<HollowBatchPart<T>>,
     /// The number of updates in the batch.
     pub len: usize,
     /// Runs of sequential sorted batch parts, stored as indices into `parts`.
@@ -308,7 +315,7 @@ pub(crate) struct HollowBatchRunIter<'a, T> {
 }
 
 impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
-    type Item = &'a [HollowBatchPart];
+    type Item = &'a [HollowBatchPart<T>];
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.batch.parts.is_empty() {
@@ -331,6 +338,109 @@ impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
         }
 
         None
+    }
+}
+
+impl<T: Timestamp> HollowBatch<T> {
+    pub(crate) fn rewrite_ts(
+        &mut self,
+        frontier: &Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<(), String> {
+        if !PartialOrder::less_than(frontier, &new_upper) {
+            return Err(format!(
+                "rewrite frontier {:?} !< rewrite upper {:?}",
+                frontier.elements(),
+                new_upper.elements(),
+            ));
+        }
+        if PartialOrder::less_than(&new_upper, self.desc.upper()) {
+            return Err(format!(
+                "rewrite upper {:?} < batch upper {:?}",
+                new_upper.elements(),
+                self.desc.upper().elements(),
+            ));
+        }
+
+        // The following are things that it seems like we could support, but
+        // initially we don't because we don't have a use case for them.
+        if PartialOrder::less_than(frontier, self.desc.lower()) {
+            return Err(format!(
+                "rewrite frontier {:?} < batch lower {:?}",
+                frontier.elements(),
+                self.desc.lower().elements(),
+            ));
+        }
+        if self.desc.since() != &Antichain::from_elem(T::minimum()) {
+            return Err(format!(
+                "batch since {:?} != minimum antichain {:?}",
+                self.desc.since().elements(),
+                &[T::minimum()],
+            ));
+        }
+        for part in self.parts.iter() {
+            let Some(ts_rewrite) = part.ts_rewrite.as_ref() else {
+                continue;
+            };
+            if PartialOrder::less_than(frontier, ts_rewrite) {
+                return Err(format!(
+                    "rewrite frontier {:?} < batch rewrite {:?}",
+                    frontier.elements(),
+                    ts_rewrite.elements(),
+                ));
+            }
+        }
+
+        self.desc = Description::new(
+            self.desc.lower().clone(),
+            new_upper,
+            self.desc.since().clone(),
+        );
+        for part in &mut self.parts {
+            part.ts_rewrite = Some(frontier.clone());
+        }
+        Ok(())
+    }
+}
+
+impl<T: Ord> PartialOrd for HollowBatchPart<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Ord> Ord for HollowBatchPart<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Deconstruct self and other so we get a compile failure if new fields
+        // are added.
+        let HollowBatchPart {
+            key: self_key,
+            encoded_size_bytes: self_encoded_size_bytes,
+            key_lower: self_key_lower,
+            stats: self_stats,
+            ts_rewrite: self_ts_rewrite,
+        } = self;
+        let HollowBatchPart {
+            key: other_key,
+            encoded_size_bytes: other_encoded_size_bytes,
+            key_lower: other_key_lower,
+            stats: other_stats,
+            ts_rewrite: other_ts_rewrite,
+        } = other;
+        (
+            self_key,
+            self_encoded_size_bytes,
+            self_key_lower,
+            self_stats,
+            self_ts_rewrite.as_ref().map(|x| x.elements()),
+        )
+            .cmp(&(
+                other_key,
+                other_encoded_size_bytes,
+                other_key_lower,
+                other_stats,
+                other_ts_rewrite.as_ref().map(|x| x.elements()),
+            ))
     }
 }
 
@@ -1215,6 +1325,9 @@ where
                 let mut batch_size = 0;
                 for x in x.parts.iter() {
                     batch_size += x.encoded_size_bytes;
+                    if x.ts_rewrite.is_some() {
+                        ret.rewrite_part_count += 1;
+                    }
                 }
                 ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);
                 ret.state_batches_bytes += batch_size;
@@ -1473,6 +1586,7 @@ impl<T: Serialize> Serialize for State<T> {
 pub struct StateSizeMetrics {
     pub hollow_batch_count: usize,
     pub batch_part_count: usize,
+    pub rewrite_part_count: usize,
     pub num_updates: usize,
     pub largest_batch_bytes: usize,
     pub state_batches_bytes: usize,
@@ -1504,6 +1618,7 @@ pub(crate) mod tests {
     use proptest::strategy::ValueTree;
 
     use crate::cache::PersistClientCache;
+    use crate::internal::encoding::any_some_lazy_part_stats;
     use crate::internal::paths::RollupId;
     use crate::internal::trace::tests::any_trace;
     use crate::tests::new_test_client_cache;
@@ -1526,7 +1641,7 @@ pub(crate) mod tests {
                 any::<T>(),
                 any::<T>(),
                 any::<T>(),
-                proptest::collection::vec(any::<HollowBatchPart>(), 0..3),
+                proptest::collection::vec(any_hollow_batch_part::<T>(), 0..3),
                 any::<usize>(),
                 any::<bool>(),
             ),
@@ -1544,6 +1659,26 @@ pub(crate) mod tests {
                     len: len % 10,
                     runs,
                 }
+            },
+        )
+    }
+
+    pub fn any_hollow_batch_part<T: Arbitrary + Timestamp>(
+    ) -> impl Strategy<Value = HollowBatchPart<T>> {
+        Strategy::prop_map(
+            (
+                any::<PartialBatchKey>(),
+                any::<usize>(),
+                any::<Vec<u8>>(),
+                any_some_lazy_part_stats(),
+                any::<Option<T>>(),
+            ),
+            |(key, encoded_size_bytes, key_lower, stats, ts_rewrite)| HollowBatchPart {
+                key,
+                encoded_size_bytes,
+                key_lower,
+                stats,
+                ts_rewrite: ts_rewrite.map(Antichain::from_elem),
             },
         )
     }
@@ -1686,6 +1821,7 @@ pub(crate) mod tests {
                     encoded_size_bytes: 0,
                     key_lower: vec![],
                     stats: None,
+                    ts_rewrite: None,
                 })
                 .collect(),
             len,

@@ -4499,6 +4499,7 @@ name = "mz-fivetran-destination"
 version = "0.0.0"
 dependencies = [
  "async-compression",
+ "bytes",
  "clap",
  "csv-async",
  "futures",
@@ -5113,6 +5114,7 @@ dependencies = [
  "protobuf-src",
  "serde",
  "serde_json",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -6110,8 +6112,6 @@ dependencies = [
  "mz-mysql-util",
  "mz-ore",
  "mz-persist",
- "mz-persist-client",
- "mz-persist-txn",
  "mz-persist-types",
  "mz-pgcopy",
  "mz-postgres-util",
@@ -6137,7 +6137,6 @@ dependencies = [
  "protobuf-src",
  "rand",
  "rdkafka",
- "scopeguard",
  "serde",
  "serde_json",
  "thiserror",
@@ -6328,7 +6327,6 @@ dependencies = [
  "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
- "mz-persist-client",
  "mz-repr",
  "num-traits",
  "ordered-float",

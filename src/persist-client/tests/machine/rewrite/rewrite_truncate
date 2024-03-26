@@ -1,0 +1,40 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# We don't allow both ts rewrite and truncation on the same batch. Exercise the
+# various error cases.
+
+write-batch output=b0 lower=2 upper=5
+k1 2 1
+----
+parts=1 len=1
+
+rewrite-ts input=b0 frontier=3 upper=5
+----
+ok
+
+# Batch might contain truncated data (at 4).
+compare-and-append-batches expected_upper=2 new_upper=4 batches=(b0)
+----
+error: invalid rewrite: rewritten batch might have data past [4] up to [5]
+
+# Batch might contain truncated data (at 3)
+compare-and-append-batches expected_upper=4 new_upper=5 batches=(b0)
+----
+error: invalid rewrite: rewritten batch might have data below [4] at [3]
+
+# If anything contains a rewrite, we require that none of it can be truncated.
+write-batch output=b1 lower=2 upper=5
+k2 2 1
+----
+parts=1 len=1
+
+compare-and-append-batches expected_upper=3 new_upper=5 batches=(b0,b1)
+----
+error: invalid rewrite: rewritten batch might have data below [3] at [2]

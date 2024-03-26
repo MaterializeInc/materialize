@@ -4,7 +4,7 @@
     ],
     "ops": [
         {
-            "truncate": [
+            "soft_truncate_before": [
                 "test_writes"
             ]
         }

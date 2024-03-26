@@ -2710,45 +2710,56 @@ impl Coordinator {
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
     pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        // Note: We purposefully use the `Debug` formatting for the value of all fields in the
+        // returned object as a tradeoff between usability and stability. `serde_json` will fail
+        // to serialize an object if the keys aren't strings, so `Debug` formatting the values
+        // prevents a future unrelated change from silently breaking this method.
+
         let active_conns: BTreeMap<_, _> = self
             .active_conns
             .iter()
-            .map(|(id, meta)| (id.unhandled().to_string(), meta))
+            .map(|(id, meta)| (id.unhandled().to_string(), format!("{meta:?}")))
             .collect();
         let storage_read_capabilities: BTreeMap<_, _> = self
             .storage_read_capabilities
             .iter()
-            .map(|(id, capability)| (id.to_string(), capability))
+            .map(|(id, capability)| (id.to_string(), format!("{capability:?}")))
             .collect();
         let compute_read_capabilities: BTreeMap<_, _> = self
             .compute_read_capabilities
             .iter()
-            .map(|(id, capability)| (id.to_string(), capability))
+            .map(|(id, capability)| (id.to_string(), format!("{capability:?}")))
             .collect();
         let txn_read_holds: BTreeMap<_, _> = self
             .txn_read_holds
             .iter()
-            .map(|(id, capability)| (id.unhandled().to_string(), capability))
+            .map(|(id, capability)| (id.unhandled().to_string(), format!("{capability:?}")))
             .collect();
         let pending_peeks: BTreeMap<_, _> = self
             .pending_peeks
             .iter()
-            .map(|(id, peek)| (id.to_string(), format!("{peek:#?}")))
+            .map(|(id, peek)| (id.to_string(), format!("{peek:?}")))
             .collect();
         let client_pending_peeks: BTreeMap<_, _> = self
             .client_pending_peeks
             .iter()
-            .map(|(id, peek)| (id.to_string(), peek))
+            .map(|(id, peek)| {
+                let peek: BTreeMap<_, _> = peek
+                    .iter()
+                    .map(|(uuid, storage_id)| (uuid.to_string(), storage_id))
+                    .collect();
+                (id.to_string(), peek)
+            })
             .collect();
         let pending_real_time_recency_timestamp: BTreeMap<_, _> = self
             .pending_real_time_recency_timestamp
             .iter()
-            .map(|(id, timestamp)| (id.unhandled().to_string(), format!("{timestamp:#?}")))
+            .map(|(id, timestamp)| (id.unhandled().to_string(), format!("{timestamp:?}")))
             .collect();
         let pending_linearize_read_txns: BTreeMap<_, _> = self
             .pending_linearize_read_txns
             .iter()
-            .map(|(id, read_txn)| (id.unhandled().to_string(), format!("{read_txn:#?}")))
+            .map(|(id, read_txn)| (id.unhandled().to_string(), format!("{read_txn:?}")))
             .collect();
 
         let map = serde_json::Map::from_iter([

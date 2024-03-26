@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
+use bytes::Bytes;
 use futures::{SinkExt, TryStreamExt};
 use itertools::Itertools;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
@@ -22,7 +23,6 @@ use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio_postgres::types::{to_sql_checked, Format, IsNull, ToSql, Type};
-use tokio_util::io::ReaderStream;
 
 use crate::crypto::AsyncAesDecrypter;
 use crate::destination::{
@@ -31,7 +31,7 @@ use crate::destination::{
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::write_batch_request::FileParams;
 use crate::fivetran_sdk::{Compression, Encryption, Table, TruncateRequest, WriteBatchRequest};
-use crate::utils;
+use crate::utils::{self, AsyncCsvReaderTableAdapter};
 
 pub async fn handle_truncate_table(request: TruncateRequest) -> Result<(), OpError> {
     let delete_before = {
@@ -180,7 +180,6 @@ enum FileCompression {
 }
 
 type AsyncFileReader = Pin<Box<dyn AsyncRead + Send>>;
-type AsyncCsvReader = csv_async::AsyncReader<Pin<Box<dyn AsyncRead + Send>>>;
 
 async fn load_file(file_config: &FileConfig, path: &str) -> Result<AsyncFileReader, OpError> {
     let mut file = File::open(path).await?;
@@ -241,6 +240,7 @@ async fn replace_files(
         file_config,
         replace_files,
         client,
+        table,
         &qualified_temp_table_name,
     )
     .await
@@ -338,9 +338,8 @@ async fn update_files(
         let file = load_file(file_config, path)
             .await
             .with_context(|| format!("loading update file {path}"))?;
-        let reader = csv_async::AsyncReaderBuilder::new().create_reader(file);
 
-        update_file(file_config, client, &update_stmt, reader)
+        update_file(file_config, client, &update_stmt, table, file)
             .await
             .with_context(|| format!("handling update file {path}"))?;
     }
@@ -351,10 +350,16 @@ async fn update_file(
     file_config: &FileConfig,
     client: &tokio_postgres::Client,
     update_stmt: &tokio_postgres::Statement,
-    reader: AsyncCsvReader,
+    table: &Table,
+    file: AsyncFileReader,
 ) -> Result<(), OpError> {
-    let mut stream = reader.into_byte_records();
-    while let Some(record) = stream.try_next().await? {
+    // Map the column order from the CSV to the order of the table.
+    let adapted_stream = AsyncCsvReaderTableAdapter::new(file, table)
+        .await?
+        .into_stream();
+    let mut adapted_stream = std::pin::pin!(adapted_stream);
+
+    while let Some(record) = adapted_stream.try_next().await? {
         let params = record.iter().map(|value| TextFormatter {
             value,
             null_string: &file_config.null_string,
@@ -389,6 +394,7 @@ async fn delete_files(
         file_config,
         delete_files,
         client,
+        table,
         &qualified_temp_table_name,
     )
     .await?;
@@ -628,11 +634,12 @@ async fn copy_files(
     file_config: &FileConfig,
     files: &[String],
     client: &tokio_postgres::Client,
+    table: &Table,
     temporary_table: &UnresolvedItemName,
 ) -> Result<u64, OpError> {
     // Create a Sink which we can stream the CSV files into.
     let copy_in_stmt = format!(
-        "COPY {temporary_table} FROM STDIN WITH (FORMAT CSV, HEADER true, NULL {null_value})",
+        "COPY {temporary_table} FROM STDIN WITH (FORMAT CSV, HEADER false, NULL {null_value})",
         null_value = escape::escape_literal(&file_config.null_string),
     );
     let sink = client.copy_in(&copy_in_stmt).await?;
@@ -640,14 +647,33 @@ async fn copy_files(
 
     // Stream the files into the COPY FROM sink.
     for path in files {
+        // Open the CSV file, returning an AsyncReader.
         let file = load_file(file_config, path)
             .await
             .with_context(|| format!("loading delete file {path}"))?;
-        let mut file_stream = ReaderStream::new(file).map_err(OpErrorKind::from);
+        // Map the column order from the CSV to the order of the table.
+        let adapter = AsyncCsvReaderTableAdapter::new(file, table)
+            .await
+            .context("creating mapping adapter")?;
 
+        // Transform the individual records back into a CSV format.
+        let bytes_stream = adapter.into_stream().map_ok(|record| {
+            // Pre-size the buffer to fit all of the fields, each with a comma, then a newline.
+            let mut buf = Vec::with_capacity(record.as_slice().len() + record.len() + 1);
+            let slices = Itertools::intersperse(record.into_iter(), b",");
+            for slice in slices {
+                buf.extend(slice);
+            }
+            buf.extend(b"\n");
+
+            Bytes::from(buf)
+        });
+        let mut bytes_stream = std::pin::pin!(bytes_stream);
+
+        // Sink all of this into the `COPY FROM ...`.
         (&mut sink)
-            .sink_map_err(OpErrorKind::from)
-            .send_all(&mut file_stream)
+            .sink_map_err(|e| OpErrorKind::from(e).context("sink"))
+            .send_all(&mut bytes_stream)
             .await
             .context("sinking data")?;
     }

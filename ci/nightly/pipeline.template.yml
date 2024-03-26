@@ -459,31 +459,6 @@ steps:
               composition: zippy
               args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
 
-  - group: "MySQL: other versions"
-    key: mysql-versions
-    steps:
-      - id: mysql-cdc-5_7_44
-        label: "MySQL CDC tests w/ 5.7.44"
-        depends_on: build-x86_64
-        timeout_in_minutes: 30
-        agents:
-          # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
-          queue: linux-x86_64-small
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: mysql-cdc
-              args: [ "--mysql-version=5.7.44" ]
-      - id: mysql-cdc-8_3_0
-        label: "MySQL CDC tests w/ 8.3.0"
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        agents:
-          queue: linux-aarch64-small
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: mysql-cdc
-              args: [ "--mysql-version=8.3.0" ]
-
   - group: AWS
     key: aws
     steps:

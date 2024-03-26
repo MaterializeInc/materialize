@@ -22,6 +22,7 @@ use mz_ore::instrument;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -30,7 +31,7 @@ use tracing::debug;
 use crate::metrics::Metrics;
 use crate::txn_cache::{TxnsCache, Unapplied};
 use crate::txn_write::Txn;
-use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
+use crate::TxnsCodecDefault;
 
 /// An interface for atomic multi-shard writes.
 ///

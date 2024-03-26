@@ -32,7 +32,7 @@ use crate::dyn_struct::{
     ColumnsMut, ColumnsRef, DynStruct, DynStructCfg, DynStructCol, DynStructMut, DynStructRef,
 };
 use crate::stats::{BytesStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
-use crate::{Codec, Codec64, Opaque};
+use crate::{Codec, Codec64, Opaque, ShardId};
 
 /// An implementation of [Schema] for [()].
 #[derive(Debug, Default)]
@@ -249,6 +249,47 @@ impl Codec for Vec<u8> {
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
         Ok(buf.to_owned())
+    }
+}
+
+impl Codec for ShardId {
+    type Storage = ();
+    type Schema = ShardIdSchema;
+    fn codec_name() -> String {
+        "ShardId".into()
+    }
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        buf.put(self.to_string().as_bytes())
+    }
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        let shard_id = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
+        shard_id.parse()
+    }
+}
+
+/// An implementation of [Schema] for [ShardId].
+#[derive(Debug)]
+pub struct ShardIdSchema;
+
+impl Schema<ShardId> for ShardIdSchema {
+    type Encoder<'a> = SimpleEncoder<'a, ShardId, String>;
+
+    type Decoder<'a> = SimpleDecoder<'a, ShardId, String>;
+
+    fn columns(&self) -> DynStructCfg {
+        SimpleSchema::<ShardId, String>::columns(&())
+    }
+
+    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        SimpleSchema::<ShardId, String>::decoder(cols, |val, ret| {
+            *ret = val.parse().expect("should be valid ShardId")
+        })
+    }
+
+    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        SimpleSchema::<ShardId, String>::push_encoder(cols, |col, val| {
+            ColumnPush::<String>::push(col, &val.to_string())
+        })
     }
 }
 
@@ -785,5 +826,84 @@ impl<T: Debug + Send + Sync> Schema<T> for TodoSchema<T> {
 
     fn encoder<'a>(&self, _cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
         panic!("TODO")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use serde::{Deserialize, Serialize};
+    use serde_json::json;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn fmt_ids() {
+        assert_eq!(
+            format!("{}", ShardId([0u8; 16])),
+            "s00000000-0000-0000-0000-000000000000"
+        );
+        assert_eq!(
+            format!("{:?}", ShardId([0u8; 16])),
+            "ShardId(00000000-0000-0000-0000-000000000000)"
+        );
+
+        // ShardId can be parsed back from its Display/to_string format.
+        assert_eq!(
+            ShardId::from_str("s00000000-0000-0000-0000-000000000000"),
+            Ok(ShardId([0u8; 16]))
+        );
+        assert_eq!(
+            ShardId::from_str("x00000000-0000-0000-0000-000000000000"),
+            Err(
+                "invalid ShardId x00000000-0000-0000-0000-000000000000: incorrect prefix"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            ShardId::from_str("s0"),
+            Err(
+                "invalid ShardId s0: invalid length: expected length 32 for simple format, found 1"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
+            Err("invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `O` at 38".to_string())
+        );
+    }
+
+    #[mz_ore::test]
+    fn shard_id_human_readable_serde() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct ShardIdContainer {
+            shard_id: ShardId,
+        }
+
+        // roundtrip id through json
+        let id =
+            ShardId::from_str("s00000000-1234-5678-0000-000000000000").expect("valid shard id");
+        assert_eq!(
+            id,
+            serde_json::from_value(serde_json::to_value(id).expect("serializable"))
+                .expect("deserializable")
+        );
+
+        // deserialize a serialized string directly
+        assert_eq!(
+            id,
+            serde_json::from_str("\"s00000000-1234-5678-0000-000000000000\"")
+                .expect("deserializable")
+        );
+
+        // roundtrip shard id through a container type
+        let json = json!({ "shard_id": id });
+        assert_eq!(
+            "{\"shard_id\":\"s00000000-1234-5678-0000-000000000000\"}",
+            &json.to_string()
+        );
+        let container: ShardIdContainer = serde_json::from_value(json).expect("deserializable");
+        assert_eq!(container.shard_id, id);
     }
 }

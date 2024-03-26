@@ -21,6 +21,7 @@ use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_persist_client::ShardId;
+use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
@@ -29,7 +30,6 @@ use tracing::debug;
 
 use crate::proto::ProtoIdBatch;
 use crate::txns::{Tidy, TxnsHandle};
-use crate::{TxnsCodec, TxnsEntry};
 
 /// An in-progress transaction.
 #[derive(Debug)]

@@ -15,10 +15,9 @@ use std::sync::Arc;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist_types::columnar::{PartEncoder, Schema};
-use mz_persist_types::part::{Part, PartBuilder};
-use mz_persist_types::stats::StructStats;
+use mz_persist_types::part::PartBuilder;
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec;
-use proptest_derive::Arbitrary;
 
 use crate::batch::UntrimmableColumns;
 use crate::internal::encoding::Schemas;
@@ -120,52 +119,31 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
     }
 }
 
-/// Aggregate statistics about data contained in a [Part].
-#[derive(Arbitrary, Debug)]
-pub struct PartStats {
-    /// Aggregate statistics about key data contained in a [Part].
-    pub key: StructStats,
-}
-
-impl serde::Serialize for PartStats {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let PartStats { key } = self;
-        key.serialize(s)
-    }
-}
-
-impl PartStats {
-    pub(crate) fn new(part: &Part) -> Result<Self, String> {
-        let key = part.key_stats()?;
-        Ok(PartStats { key })
-    }
-
-    pub(crate) fn legacy_part_format<K: Codec, V: Codec>(
-        schemas: &Schemas<K, V>,
-        part: &[ColumnarRecords],
-    ) -> Result<Self, String> {
-        // This is a laughably inefficient placeholder implementation of stats
-        // on the old part format. We don't intend to make this fast, rather we
-        // intend to compute stats on the new part format.
-        let mut new_format = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref());
-        let mut builder = new_format.get_mut();
-        let mut key = schemas.key.encoder(builder.key)?;
-        let mut val = schemas.val.encoder(builder.val)?;
-        for x in part {
-            for ((k, v), t, d) in x.iter() {
-                let k = K::decode(k)?;
-                let v = V::decode(v)?;
-                key.encode(&k);
-                val.encode(&v);
-                builder.ts.push(i64::from_le_bytes(t));
-                builder.diff.push(i64::from_le_bytes(d));
-            }
+pub(crate) fn part_stats_for_legacy_part<K: Codec, V: Codec>(
+    schemas: &Schemas<K, V>,
+    part: &[ColumnarRecords],
+) -> Result<PartStats, String> {
+    // This is a laughably inefficient placeholder implementation of stats
+    // on the old part format. We don't intend to make this fast, rather we
+    // intend to compute stats on the new part format.
+    let mut new_format = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref());
+    let mut builder = new_format.get_mut();
+    let mut key = schemas.key.encoder(builder.key)?;
+    let mut val = schemas.val.encoder(builder.val)?;
+    for x in part {
+        for ((k, v), t, d) in x.iter() {
+            let k = K::decode(k)?;
+            let v = V::decode(v)?;
+            key.encode(&k);
+            val.encode(&v);
+            builder.ts.push(i64::from_le_bytes(t));
+            builder.diff.push(i64::from_le_bytes(d));
         }
-        drop(key);
-        drop(val);
-        let new_format = new_format.finish()?;
-        Self::new(&new_format)
     }
+    drop(key);
+    drop(val);
+    let new_format = new_format.finish()?;
+    PartStats::new(&new_format)
 }
 
 /// Statistics about the contents of a shard as_of some time.

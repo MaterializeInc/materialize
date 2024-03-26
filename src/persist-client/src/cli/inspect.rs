@@ -39,7 +39,7 @@ use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
-use crate::internal::state::{ProtoRollup, ProtoStateDiff, State};
+use crate::internal::state::{HollowBatchPart, ProtoRollup, ProtoStateDiff, State};
 use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId};
@@ -338,16 +338,28 @@ pub async fn blob_batch_part(
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
 
-    let key = PartialBatchKey(partial_key).complete(&shard_id);
-    let part = blob
-        .get(&*key)
+    let key = PartialBatchKey(partial_key);
+    let buf = blob
+        .get(&*key.complete(&shard_id))
         .await
         .expect("blob exists")
         .expect("part exists");
-    let part = BlobTraceBatchPart::<u64>::decode(&part, &metrics.columnar).expect("decodable");
-    let desc = part.desc.clone();
+    let parsed = BlobTraceBatchPart::<u64>::decode(&buf, &metrics.columnar).expect("decodable");
+    let desc = parsed.desc.clone();
 
-    let encoded_part = EncodedPart::new(&*key, part.desc.clone(), part);
+    let part = HollowBatchPart {
+        key,
+        encoded_size_bytes: 0,
+        key_lower: vec![],
+        stats: None,
+        ts_rewrite: None,
+    };
+    let encoded_part = EncodedPart::new(
+        metrics.read.snapshot.clone(),
+        parsed.desc.clone(),
+        &part,
+        parsed,
+    );
     let mut out = BatchPartOutput {
         desc,
         updates: Vec::new(),
@@ -382,29 +394,30 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
     let as_of = state.upper().borrow();
 
     let mut updates = Vec::new();
-    for part in state
-        .collections
-        .trace
-        .batches()
-        .into_iter()
-        .flat_map(|x| x.parts.iter())
-    {
-        let key = part.key.complete(&shard_id);
-        tracing::info!("fetching {}", key);
-        let part = state_versions
-            .blob
-            .get(&*key)
-            .await
-            .expect("blob exists")
-            .expect("part exists");
-        let part = BlobTraceBatchPart::<u64>::decode(&part, &state_versions.metrics.columnar)
-            .expect("decodable");
-        let encoded_part = EncodedPart::new(&*key, part.desc.clone(), part);
-        let mut cursor = Cursor::default();
-        while let Some((k, v, mut t, d)) = cursor.pop(&encoded_part) {
-            t.advance_by(as_of);
-            let d = <i64 as Codec64>::decode(d);
-            updates.push(((k.to_owned(), v.to_owned()), t, d));
+    for batch in state.collections.trace.batches() {
+        for part in batch.parts.iter() {
+            let key = part.key.complete(&shard_id);
+            tracing::info!("fetching {}", key);
+            let buf = state_versions
+                .blob
+                .get(&*key)
+                .await
+                .expect("blob exists")
+                .expect("part exists");
+            let parsed = BlobTraceBatchPart::<u64>::decode(&buf, &state_versions.metrics.columnar)
+                .expect("decodable");
+            let encoded_part = EncodedPart::new(
+                state_versions.metrics.read.snapshot.clone(),
+                batch.desc.clone(),
+                part,
+                parsed,
+            );
+            let mut cursor = Cursor::default();
+            while let Some((k, v, mut t, d)) = cursor.pop(&encoded_part) {
+                t.advance_by(as_of);
+                let d = <i64 as Codec64>::decode(d);
+                updates.push(((k.to_owned(), v.to_owned()), t, d));
+            }
         }
     }
 

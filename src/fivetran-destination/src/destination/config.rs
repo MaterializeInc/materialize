@@ -18,9 +18,12 @@ use crate::fivetran_sdk::form_field::Type;
 use crate::fivetran_sdk::{
     ConfigurationFormResponse, ConfigurationTest, FormField, TestRequest, TextField,
 };
+use crate::utils;
 
 pub const FIVETRAN_DESTINATION_APPLICATION_NAME: &str = "materialize_fivetran_destination";
 
+/// Returns a [`ConfigurationFormResponse`] which defines what configuration fields are available
+/// for users of the destination to specify.
 pub fn handle_configuration_form_request() -> ConfigurationFormResponse {
     ConfigurationFormResponse {
         schema_selection_supported: true,
@@ -52,6 +55,13 @@ pub fn handle_configuration_form_request() -> ConfigurationFormResponse {
                 label: "Database".into(),
                 description: Some("The name of the database to connect to".into()),
                 required: true,
+                r#type: Some(Type::TextField(TextField::PlainText.into())),
+            },
+            FormField {
+                name: "cluster".into(),
+                label: "Cluster".into(),
+                description: Some("The cluster to run operations on".into()),
+                required: false,
                 r#type: Some(Type::TextField(TextField::PlainText.into())),
             },
         ],
@@ -126,6 +136,7 @@ pub async fn connect(
     let dbname = config
         .remove("dbname")
         .ok_or(OpErrorKind::FieldMissing("dbname"))?;
+    let cluster = config.remove("cluster");
 
     // Compile in the CA certificate bundle downloaded by the build script, and
     // configure the TLS connector to reference that compiled-in CA bundle,
@@ -146,6 +157,12 @@ pub async fn connect(
     let mut builder = SslConnector::builder(SslMethod::tls_client())?;
     builder.set_verify_cert_store(cert_store.build())?;
 
+    let options = if let Some(cluster) = cluster.as_ref() {
+        format!("--cluster={}", utils::escape_options(cluster))
+    } else {
+        String::new()
+    };
+
     let tls_connector = MakeTlsConnector::new(builder.build());
     let (client, conn) = tokio_postgres::Config::new()
         .host(&host)
@@ -154,6 +171,7 @@ pub async fn connect(
         .password(app_password)
         .dbname(&dbname)
         .application_name(FIVETRAN_DESTINATION_APPLICATION_NAME)
+        .options(&options)
         .connect(tls_connector)
         .await?;
 
