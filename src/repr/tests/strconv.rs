@@ -282,11 +282,7 @@ fn test_parse_timestamptz() {
             .unwrap();
         let offset = FixedOffset::east_opt(test.8).unwrap();
         let dt_fixed_offset = offset.from_local_datetime(&expected).earliest().unwrap();
-        let expected = CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
-            dt_fixed_offset.naive_utc(),
-            Utc,
-        ))
-        .unwrap();
+        let expected = CheckedTimestamp::from_timestamplike(dt_fixed_offset.to_utc()).unwrap();
 
         assert_eq!(actual, expected);
     }

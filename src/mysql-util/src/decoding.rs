@@ -220,8 +220,9 @@ fn val_to_datum<'a>(
                 let chrono_timestamp = match value {
                     Value::Date(..) => from_value_opt::<chrono::NaiveDateTime>(value)?,
                     // old temporal format from before MySQL 5.6; didn't support fractional seconds
-                    Value::Int(val) => chrono::NaiveDateTime::from_timestamp_opt(val, 0)
-                        .ok_or(anyhow::anyhow!("received invalid timestamp value: {}", val))?,
+                    Value::Int(val) => chrono::DateTime::from_timestamp(val, 0)
+                        .ok_or(anyhow::anyhow!("received invalid timestamp value: {}", val))?
+                        .naive_utc(),
                     Value::Bytes(data) => {
                         let data = std::str::from_utf8(&data)?;
                         if data.contains('.') {

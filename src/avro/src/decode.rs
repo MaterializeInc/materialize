@@ -26,7 +26,7 @@ use std::fmt::{self, Display};
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate};
 use flate2::read::MultiGzDecoder;
 
 use crate::error::{DecodeError, Error as AvroError};
@@ -110,7 +110,7 @@ impl Display for TsUnit {
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDateTime;
+    use chrono::DateTime;
 
     use crate::types::Value;
     use crate::util::TsUnit;
@@ -121,24 +121,38 @@ mod tests {
     fn test_negative_timestamps() {
         assert_eq!(
             build_ts_value(-1, TsUnit::Millis).unwrap(),
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(-1, 999_000_000).unwrap())
+            Value::Timestamp(
+                DateTime::from_timestamp(-1, 999_000_000)
+                    .unwrap()
+                    .naive_utc()
+            )
         );
         assert_eq!(
             build_ts_value(-1000, TsUnit::Millis).unwrap(),
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(-1, 0).unwrap())
+            Value::Timestamp(DateTime::from_timestamp(-1, 0).unwrap().naive_utc())
         );
         assert_eq!(
             build_ts_value(-1000, TsUnit::Micros).unwrap(),
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(-1, 999_000_000).unwrap())
+            Value::Timestamp(
+                DateTime::from_timestamp(-1, 999_000_000)
+                    .unwrap()
+                    .naive_utc()
+            )
         );
         assert_eq!(
             build_ts_value(-1, TsUnit::Micros).unwrap(),
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(-1, 999_999_000).unwrap())
+            Value::Timestamp(
+                DateTime::from_timestamp(-1, 999_999_000)
+                    .unwrap()
+                    .naive_utc()
+            )
         );
         assert_eq!(
             build_ts_value(-123_456_789_123, TsUnit::Micros).unwrap(),
             Value::Timestamp(
-                NaiveDateTime::from_timestamp_opt(-123_457, (1_000_000 - 789_123) * 1_000).unwrap()
+                DateTime::from_timestamp(-123_457, (1_000_000 - 789_123) * 1_000)
+                    .unwrap()
+                    .naive_utc()
             )
         );
     }
@@ -147,11 +161,11 @@ mod tests {
 /// A convenience function to build timestamp values from underlying longs.
 pub fn build_ts_value(value: i64, unit: TsUnit) -> Result<Value, AvroError> {
     let result = match unit {
-        TsUnit::Millis => NaiveDateTime::from_timestamp_millis(value),
-        TsUnit::Micros => NaiveDateTime::from_timestamp_micros(value),
+        TsUnit::Millis => DateTime::from_timestamp_millis(value),
+        TsUnit::Micros => DateTime::from_timestamp_micros(value),
     };
     let ndt = result.ok_or(AvroError::Decode(DecodeError::BadTimestamp { unit, value }))?;
-    Ok(Value::Timestamp(ndt))
+    Ok(Value::Timestamp(ndt.naive_utc()))
 }
 
 /// A convenience trait for types that are both readable and skippable.
@@ -176,6 +190,10 @@ pub trait Skip: Read {
     /// # Errors
     ///
     /// Can return an error in all the same cases that [`Read::read`] can.
+    ///
+    /// TODO: Remove this clippy suppression when the issue is fixed.
+    /// See <https://github.com/rust-lang/rust-clippy/issues/12519>
+    #[allow(clippy::unused_io_amount)]
     fn skip(&mut self, mut len: usize) -> Result<(), io::Error> {
         const BUF_SIZE: usize = 512;
         let mut buf = [0; BUF_SIZE];
@@ -1545,7 +1563,10 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
 
                 let date = NaiveDate::from_ymd_opt(1970, 1, 1)
                     .expect("naive date known valid")
-                    .checked_add_signed(chrono::Duration::days(days.into()))
+                    .checked_add_signed(
+                        chrono::Duration::try_days(days.into())
+                            .ok_or(AvroError::Decode(DecodeError::BadDate(days)))?,
+                    )
                     .ok_or(AvroError::Decode(DecodeError::BadDate(days)))?;
                 let dt = date.and_hms_opt(0, 0, 0).expect("HMS known valid");
                 d.scalar(Scalar::Timestamp(dt))

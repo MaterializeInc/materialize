@@ -194,4 +194,4 @@ true
 true
 
 query error timestamp out of range
-select timezone('1 day'::interval, '1-12-31'::timestamptz+'262142 years'::interval)
+select timezone('1 day'::interval, '1-12-31'::timestamptz+'262141 years'::interval)

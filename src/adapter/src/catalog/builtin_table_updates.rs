@@ -12,7 +12,6 @@ mod notice;
 use std::net::Ipv4Addr;
 
 use bytesize::ByteSize;
-use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
@@ -1324,7 +1323,7 @@ impl CatalogState {
             .iter()
             .next()
             .expect("details created above with a single jsonb column");
-        let dt = mz_ore::now::to_datetime(occurred_at).naive_utc();
+        let dt = mz_ore::now::to_datetime(occurred_at);
         let id = event.sortable_id();
         Ok(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_AUDIT_EVENTS),
@@ -1337,7 +1336,7 @@ impl CatalogState {
                     Some(user) => Datum::String(user),
                     None => Datum::Null,
                 },
-                Datum::TimestampTz(DateTime::from_utc(dt, Utc).try_into().expect("must fit")),
+                Datum::TimestampTz(dt.try_into().expect("must fit")),
             ]),
             diff: 1,
         })

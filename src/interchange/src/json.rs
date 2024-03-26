@@ -160,17 +160,17 @@ impl ToJson for TypedDatum<'_> {
             ScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
             ScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
             ScalarType::Timestamp { .. } => {
-                let naive = datum.unwrap_timestamp().to_naive();
-                let millis = naive.timestamp_millis();
-                let micros = naive.timestamp_subsec_micros()
-                    - (naive.timestamp_subsec_millis() * MICROS_PER_MILLIS);
+                let dt = datum.unwrap_timestamp().to_naive().and_utc();
+                let millis = dt.timestamp_millis();
+                let micros = dt.timestamp_subsec_micros()
+                    - (dt.timestamp_subsec_millis() * MICROS_PER_MILLIS);
                 serde_json::Value::String(format!("{millis}.{micros:0>3}"))
             }
             ScalarType::TimestampTz { .. } => {
-                let naive = datum.unwrap_timestamptz().to_naive();
-                let millis = naive.timestamp_millis();
-                let micros = naive.timestamp_subsec_micros()
-                    - (naive.timestamp_subsec_millis() * MICROS_PER_MILLIS);
+                let dt = datum.unwrap_timestamptz().to_utc();
+                let millis = dt.timestamp_millis();
+                let micros = dt.timestamp_subsec_micros()
+                    - (dt.timestamp_subsec_millis() * MICROS_PER_MILLIS);
                 serde_json::Value::String(format!("{millis}.{micros:0>3}"))
             }
             ScalarType::Interval => {

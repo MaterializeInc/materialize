@@ -1930,7 +1930,7 @@ fn timezone_interval_timestamp(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'stat
             .unwrap_timestamp()
             .checked_sub_signed(interval.duration_as_chrono())
         {
-            Some(sub) => Ok(DateTime::from_utc(sub, Utc).try_into()?),
+            Some(sub) => Ok(DateTime::from_naive_utc_and_offset(sub, Utc).try_into()?),
             None => Err(EvalError::TimestampOutOfRange),
         }
     }
@@ -2484,18 +2484,15 @@ impl BinaryFunc {
                 a.unwrap_interval(),
                 b.unwrap_timestamp(),
                 CheckedTimestamp::from_timestamplike(
-                    NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
+                    DateTime::from_timestamp(0, 0).unwrap().naive_utc(),
                 )
                 .expect("must fit"),
             ),
             BinaryFunc::DateBinTimestampTz => date_bin(
                 a.unwrap_interval(),
                 b.unwrap_timestamptz(),
-                CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
-                    NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
-                    Utc,
-                ))
-                .expect("must fit"),
+                CheckedTimestamp::from_timestamplike(DateTime::from_timestamp(0, 0).unwrap())
+                    .expect("must fit"),
             ),
             BinaryFunc::ExtractInterval => date_part_interval::<Numeric>(a, b),
             BinaryFunc::ExtractTime => date_part_time::<Numeric>(a, b),

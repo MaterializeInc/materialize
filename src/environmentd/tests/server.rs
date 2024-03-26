@@ -297,7 +297,7 @@ ORDER BY mseh.began_at;",
         // both the start and end time, but the `NowFn` mechanism doesn't
         // appear to give us any way to do that. Instead, let's just check
         // that none of these statements took longer than 5s wall-clock time.
-        assert!(r.finished_at - r.began_at <= chrono::Duration::seconds(5));
+        assert!(r.finished_at - r.began_at <= chrono::Duration::try_seconds(5).unwrap());
         if !r.sql.is_empty() {
             let expected_redacted = mz_sql::parse::parse(&r.sql)
                 .unwrap()
@@ -433,7 +433,7 @@ ORDER BY mseh.began_at",
         if let Some(ts) = r.execution_timestamp {
             if ts != u64::MAX {
                 let ts = to_datetime(ts);
-                assert!((ts - r.prepared_at).abs() < chrono::Duration::seconds(5))
+                assert!((ts - r.prepared_at).abs() < chrono::Duration::try_seconds(5).unwrap())
             }
         }
     }

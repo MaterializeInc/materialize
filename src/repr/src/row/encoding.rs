@@ -1103,7 +1103,7 @@ mod tests {
                 .unwrap(),
             ),
             Datum::TimestampTz(
-                CheckedTimestamp::from_timestamplike(DateTime::from_utc(
+                CheckedTimestamp::from_timestamplike(DateTime::from_naive_utc_and_offset(
                     NaiveDate::from_ymd_opt(18, 19 % 12, 20)
                         .unwrap()
                         .and_time(NaiveTime::from_hms_opt(21, 22, 23).unwrap()),

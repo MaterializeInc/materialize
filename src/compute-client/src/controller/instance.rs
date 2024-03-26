@@ -752,7 +752,7 @@ where
             .expect("replica must exist");
 
         let now = Utc::now()
-            .duration_trunc(Duration::seconds(60))
+            .duration_trunc(Duration::try_seconds(60).unwrap())
             .expect("cannot fail");
 
         let mut updates = Vec::new();

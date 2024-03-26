@@ -391,7 +391,7 @@ impl Interval {
     /// Converts this `Interval`'s duration into `chrono::Duration`.
     pub fn duration_as_chrono(&self) -> chrono::Duration {
         use chrono::Duration;
-        Duration::days(self.days.into()) + Duration::microseconds(self.micros)
+        Duration::try_days(self.days.into()).unwrap() + Duration::microseconds(self.micros)
     }
 
     pub fn duration(&self) -> Result<Duration, anyhow::Error> {

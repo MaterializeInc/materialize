@@ -222,7 +222,7 @@ impl AvroDecode for RowDecoder {
 
 // Get around orphan rule
 #[derive(Debug)]
-pub(super) struct RowWrapper(pub Row);
+pub(super) struct RowWrapper(#[allow(dead_code)] pub Row);
 
 impl StatefulAvroDecodable for RowWrapper {
     type Decoder = RowDecoder;

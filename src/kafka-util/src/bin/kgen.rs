@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::bail;
-use chrono::NaiveDateTime;
+use chrono::DateTime;
 use crossbeam::thread;
 use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_avro::types::{DecimalValue, Value};
@@ -114,8 +114,8 @@ impl<'a> RandomAvroGenerator<'a> {
                 // TODO(benesch): rewrite to avoid `as`.
                 #[allow(clippy::as_conversions)]
                 let fraction = (millis % 1000) as u32;
-                let val = NaiveDateTime::from_timestamp_opt(seconds, fraction * 1_000_000).unwrap();
-                Value::Timestamp(val)
+                let val = DateTime::from_timestamp(seconds, fraction * 1_000_000).unwrap();
+                Value::Timestamp(val.naive_utc())
             }
             SchemaPiece::TimestampMicro => {
                 let micros = self.longs.get_mut(&p).unwrap()(rng);
@@ -124,8 +124,8 @@ impl<'a> RandomAvroGenerator<'a> {
                 // TODO(benesch): rewrite to avoid `as`.
                 #[allow(clippy::as_conversions)]
                 let fraction = (micros % 1_000_000) as u32;
-                let val = NaiveDateTime::from_timestamp_opt(seconds, fraction * 1_000).unwrap();
-                Value::Timestamp(val)
+                let val = DateTime::from_timestamp(seconds, fraction * 1_000).unwrap();
+                Value::Timestamp(val.naive_utc())
             }
             SchemaPiece::Decimal {
                 precision,
