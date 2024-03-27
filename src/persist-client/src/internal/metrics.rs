@@ -1072,6 +1072,7 @@ pub struct StateMetrics {
     pub(crate) apply_spine_slow_path_lenient: IntCounter,
     pub(crate) apply_spine_slow_path_lenient_adjustment: IntCounter,
     pub(crate) apply_spine_slow_path_with_reconstruction: IntCounter,
+    pub(crate) apply_spine_flattened: IntCounter,
     pub(crate) update_state_noop_path: IntCounter,
     pub(crate) update_state_empty_path: IntCounter,
     pub(crate) update_state_fast_path: IntCounter,
@@ -1115,6 +1116,10 @@ impl StateMetrics {
             apply_spine_slow_path_with_reconstruction: registry.register(metric!(
                 name: "mz_persist_state_apply_spine_slow_path_with_reconstruction",
                 help: "count of spine diff applications that hit the slow path with extra spine reconstruction step",
+            )),
+            apply_spine_flattened: registry.register(metric!(
+                name: "mz_persist_state_apply_spine_flattened",
+                help: "count of spine diff applications that flatten the trace",
             )),
             update_state_noop_path: registry.register(metric!(
                 name: "mz_persist_state_update_state_noop_path",
