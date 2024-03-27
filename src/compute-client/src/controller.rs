@@ -548,13 +548,12 @@ where
             None => (false, Duration::from_secs(1)),
         };
 
-        let idle_arrangement_merge_effort = config
-            .arrangement_merge_effort
-            .unwrap_or(self.compute.default_idle_arrangement_merge_effort);
+        // TODO(teskje): remove this deprecated option
+        let idle_arrangement_merge_effort = self.compute.default_idle_arrangement_merge_effort;
 
-        // TODO(teskje): make configurable via replica option
-        let arrangement_exert_proportionality =
-            self.compute.default_arrangement_exert_proportionality;
+        let arrangement_exert_proportionality = config
+            .arrangement_merge_effort
+            .unwrap_or(self.compute.default_arrangement_exert_proportionality);
 
         let replica_config = ReplicaConfig {
             location,
