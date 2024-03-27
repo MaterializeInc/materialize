@@ -145,7 +145,8 @@ struct PendingCompactionCommand<T> {
 }
 
 /// A storage controller for a storage instance.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
 {
     /// The build information for this process.
@@ -182,6 +183,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
     pending_compaction_commands: Vec<PendingCompactionCommand<T>>,
+    /// Futures for table handle drops to await while processing compaction commands.
+    #[derivative(Debug = "ignore")]
+    pending_table_handle_drops: BTreeMap<GlobalId, BoxFuture<'static, ()>>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -1182,16 +1186,18 @@ where
         let drop_notif = self
             .persist_table_worker
             .drop_handles(identifiers.clone(), ts);
-        let internal_response_sender = self.internal_response_sender.clone();
-        let dropped_ids = identifiers.clone().into_iter().collect();
+        let (tx, _) = tokio::sync::broadcast::channel(1);
+        for id in &identifiers {
+            let mut rx = tx.subscribe();
+            let drop_notif = async move {
+                let _ = rx.recv().await;
+            }
+            .boxed();
+            self.pending_table_handle_drops.insert(*id, drop_notif);
+        }
         mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
-            // Await the drop before triggering finalization. Persist may attempt to write directly
-            // to the shard as part of dropping it, which would fail if the shard is finalized.
             drop_notif.await;
-            // Notify that this ID has been dropped, which will start finalization of
-            // the shard. We don't need to wait for the shard to be downgraded because shard
-            // finalization is designed to queue shards that aren't downgraded for later.
-            let _ = internal_response_sender.send(StorageResponse::DroppedIds(dropped_ids));
+            let _ = tx.send(());
         });
         self.drop_sources(identifiers)
     }
@@ -1812,7 +1818,7 @@ where
                 let drop_notif = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) if read_frontier.is_empty() => {
                         pending_collection_drops.push(id);
-                        None
+                        self.pending_table_handle_drops.remove(&id)
                     }
                     DataSource::Webhook | DataSource::Introspection(_)
                         if read_frontier.is_empty() =>
@@ -2404,6 +2410,7 @@ where
             txns_metrics,
             stashed_response: None,
             pending_compaction_commands: vec![],
+            pending_table_handle_drops: BTreeMap::new(),
             collection_manager,
             collection_status_manager,
             introspection_ids,
