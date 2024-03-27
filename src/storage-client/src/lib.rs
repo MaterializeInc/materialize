@@ -15,4 +15,5 @@ pub mod healthcheck;
 pub mod metrics;
 pub mod sink;
 pub mod statistics;
+pub mod storage_collections;
 pub mod util;

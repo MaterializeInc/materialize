@@ -99,6 +99,7 @@ use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
+use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -127,6 +128,7 @@ use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConn
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -149,6 +151,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
+use crate::coord::read_policy::ReadHoldsGuard;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
@@ -188,7 +191,7 @@ mod indexes;
 mod introspection;
 mod message_handler;
 mod privatelink_status;
-mod read_policy;
+pub mod read_policy;
 mod sequencer;
 mod sql;
 
@@ -1270,15 +1273,13 @@ pub struct Coordinator {
     /// active connections.
     active_conns: BTreeMap<ConnectionId, ConnMeta>,
 
-    /// For each identifier in STORAGE, its read policy and any read holds on time.
+    /// For each identifier in STORAGE, its read policy.
     ///
-    /// Transactions should introduce and remove constraints through the methods
-    /// `acquire_read_holds` and `release_read_holds`, respectively. The base
-    /// policy can also be updated, though one should be sure to communicate this
-    /// to the controller for it to have an effect.
+    /// Transactions should acquire and release reads holds through the methods
+    /// `acquire_read_holds` and `release_read_holds`, respectively.
     ///
     /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    storage_read_capabilities: BTreeMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    storage_read_policies: BTreeMap<GlobalId, ReadPolicy<mz_repr::Timestamp>>,
     /// For each identifier in COMPUTE, its read policy and any read holds on time.
     ///
     /// Transactions should introduce and remove constraints through the methods
@@ -1404,6 +1405,9 @@ impl Coordinator {
         let merge_effort = system_config.default_idle_arrangement_merge_effort();
         let exert_prop = system_config.default_arrangement_exert_proportionality();
         self.controller.compute.update_configuration(compute_config);
+        self.controller
+            .collections
+            .update_parameters(storage_config.clone());
         self.controller.storage.update_parameters(storage_config);
         self.controller
             .update_orchestrator_scheduling_config(scheduling_config);
@@ -1443,11 +1447,9 @@ impl Coordinator {
         debug!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
         self.controller
-            .storage
             .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids);
 
         self.controller
-            .storage
             .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids);
         self.controller
             .storage
@@ -1644,7 +1646,7 @@ impl Coordinator {
                             idx.custom_logical_compaction_window.unwrap_or_default()
                         };
 
-                        let as_of = self.bootstrap_index_as_of(
+                        let (as_of, read_holds_guard) = self.bootstrap_index_as_of(
                             &df_desc,
                             idx.cluster_id,
                             dependent_matviews,
@@ -1652,18 +1654,29 @@ impl Coordinator {
                         );
                         df_desc.set_as_of(as_of);
 
-                        let df_meta = self
+                        let df_meta = read_holds_guard
+                            .coordinator
                             .catalog()
                             .try_get_dataflow_metainfo(&entry.id())
                             .expect("added in `bootstrap_dataflow_plans`");
 
-                        if self.catalog().state().system_config().enable_mz_notices() {
+                        if read_holds_guard
+                            .coordinator
+                            .catalog()
+                            .state()
+                            .system_config()
+                            .enable_mz_notices()
+                        {
                             // Collect optimization hint updates.
-                            self.catalog().state().pack_optimizer_notices(
-                                &mut builtin_table_updates,
-                                df_meta.optimizer_notices.iter(),
-                                1,
-                            );
+                            read_holds_guard
+                                .coordinator
+                                .catalog()
+                                .state()
+                                .pack_optimizer_notices(
+                                    &mut builtin_table_updates,
+                                    df_meta.optimizer_notices.iter(),
+                                    1,
+                                );
                         }
 
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
@@ -1674,10 +1687,16 @@ impl Coordinator {
                             .or_insert_with(Default::default)
                             .extend(df_desc.export_ids());
 
-                        self.controller
+                        read_holds_guard
+                            .coordinator
+                            .controller
                             .active_compute()
                             .create_dataflow(idx.cluster_id, df_desc)
                             .unwrap_or_terminate("cannot fail to create dataflows");
+
+                        // Drop read holds after the dataflow has been shipped, at which
+                        // point compute will have put in its own read holds.
+                        drop(read_holds_guard);
                     }
                 }
                 CatalogItem::View(_) => (),
@@ -1695,7 +1714,8 @@ impl Coordinator {
                         .clone();
 
                     // Timestamp selection
-                    let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
+                    let (as_of, read_holds_guard) =
+                        self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
                     df_desc.set_as_of(as_of);
 
                     // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
@@ -1708,21 +1728,39 @@ impl Coordinator {
                         df_desc.until.meet_assign(&Antichain::from_elem(until));
                     }
 
-                    let df_meta = self
+                    let df_meta = read_holds_guard
+                        .coordinator
                         .catalog()
                         .try_get_dataflow_metainfo(&entry.id())
                         .expect("added in `bootstrap_dataflow_plans`");
 
-                    if self.catalog().state().system_config().enable_mz_notices() {
+                    if read_holds_guard
+                        .coordinator
+                        .catalog()
+                        .state()
+                        .system_config()
+                        .enable_mz_notices()
+                    {
                         // Collect optimization hint updates.
-                        self.catalog().state().pack_optimizer_notices(
-                            &mut builtin_table_updates,
-                            df_meta.optimizer_notices.iter(),
-                            1,
-                        );
+                        read_holds_guard
+                            .coordinator
+                            .catalog()
+                            .state()
+                            .pack_optimizer_notices(
+                                &mut builtin_table_updates,
+                                df_meta.optimizer_notices.iter(),
+                                1,
+                            );
                     }
 
-                    self.ship_dataflow(df_desc, mview.cluster_id).await;
+                    read_holds_guard
+                        .coordinator
+                        .ship_dataflow(df_desc, mview.cluster_id)
+                        .await;
+
+                    // Drop read holds after the dataflow has been shipped, at which
+                    // point compute will have put in its own read holds.
+                    drop(read_holds_guard);
                 }
                 CatalogItem::Sink(sink) => {
                     let id = entry.id();
@@ -1916,6 +1954,13 @@ impl Coordinator {
             .init_txns(init_ts)
             .await
             .unwrap_or_terminate("init_txns");
+        // Also let `StorageCollections` know that the txns system has in fact
+        // been initialized.
+        self.controller
+            .collections
+            .init_txns(init_ts)
+            .await
+            .unwrap_or_terminate("init_txns");
         self.apply_local_write(init_ts).await;
 
         let catalog = self.catalog();
@@ -1982,7 +2027,6 @@ impl Coordinator {
             .collect();
 
         self.controller
-            .storage
             .migrate_collections(collections.clone())
             .await
             .unwrap_or_terminate("cannot fail to migrate collections");
@@ -1990,7 +2034,6 @@ impl Coordinator {
         let register_ts = self.get_local_write_ts().await.timestamp;
 
         self.controller
-            .storage
             .create_collections(Some(register_ts), collections)
             .await
             .unwrap_or_terminate("cannot fail to create collections");
@@ -2212,16 +2255,23 @@ impl Coordinator {
 
     /// Returns an `as_of` suitable for bootstrapping the given index dataflow.
     fn bootstrap_index_as_of(
-        &self,
+        &mut self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
         dependent_matviews: BTreeSet<GlobalId>,
         compaction_window: CompactionWindow,
-    ) -> Antichain<Timestamp> {
+    ) -> (Antichain<Timestamp>, ReadHoldsGuard) {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
-        let min_as_of = self.least_valid_read(&id_bundle);
+
+        // We're putting in place a read holds, to prevent the since of
+        // dependencies moving along concurrently, pulling the rug from under
+        // us!
+        let read_holds_guard = self
+            .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
+            .expect("can acquire read holds");
+        let min_as_of = read_holds_guard.coordinator.least_valid_read(&id_bundle);
 
         // For compute reconciliation to recognize that an existing dataflow can be reused, we want
         // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
@@ -2232,9 +2282,11 @@ impl Coordinator {
         // produced output at `least_valid_write`, so their write frontiers can't be later. Also,
         // subtracting 1 is still ok, because we can assume that the compaction window is at least
         // 1.
-        let warmup_frontier = self.greatest_available_read(&id_bundle);
+        let warmup_frontier = read_holds_guard
+            .coordinator
+            .greatest_available_read(&id_bundle);
 
-        let write_frontier = self.least_valid_write(&id_bundle);
+        let write_frontier = read_holds_guard.coordinator.least_valid_write(&id_bundle);
 
         // We wouldn't be able to calculate a `max_compaction_frontier` if `write_frontier` is
         // empty. (This can happen for constant collections, and for an index on a REFRESH MV that
@@ -2249,7 +2301,7 @@ impl Coordinator {
                 min_as_of.elements(),
             );
 
-            return min_as_of;
+            return (min_as_of, read_holds_guard);
         }
 
         // The compaction frontier might be earlier than the warmup frontier.
@@ -2271,10 +2323,13 @@ impl Coordinator {
         // need to provide output starting from their `since`s, so these serve as upper bounds for
         // our `as_of`.
         let mut max_as_of = Antichain::new();
-        for mv_id in &dependent_matviews {
-            let since = self.storage_implied_capability(*mv_id);
-            let upper = self.storage_write_frontier(*mv_id);
-            max_as_of.meet_assign(&since.join(upper));
+        // TODO: Figure out if we're still correct here, because the upper can
+        // now concurrently change. At least in the future.
+        for (_mv_id, since, upper) in read_holds_guard
+            .coordinator
+            .storage_frontiers(dependent_matviews.iter().cloned().collect_vec())
+        {
+            max_as_of.meet_assign(&since.join(&upper));
         }
 
         let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
@@ -2319,19 +2374,26 @@ impl Coordinator {
             "bootstrapping index `as_of`",
         );
 
-        as_of
+        (as_of, read_holds_guard)
     }
 
     /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
     fn bootstrap_materialized_view_as_of(
-        &self,
+        &mut self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
-    ) -> Antichain<Timestamp> {
+    ) -> (Antichain<Timestamp>, ReadHoldsGuard) {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
-        let min_as_of = self.least_valid_read(&id_bundle);
+
+        // We're putting in place a read holds, to prevent the since of
+        // dependencies moving along concurrently, pulling the rug from under
+        // us!
+        let read_holds_guard = self
+            .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
+            .expect("can acquire read holds");
+        let min_as_of = read_holds_guard.coordinator.least_valid_read(&id_bundle);
 
         let sink_id = dataflow
             .sink_exports
@@ -2346,13 +2408,23 @@ impl Coordinator {
         // `greatest_available_read`, but for MVs there is an additional constraint: we should
         // also make sure that we don't advance the `as_of` past the MV's storage collection's
         // `upper`, because then we'd skip times in the MV output.
-        let warmup_frontier = self.greatest_available_read(&id_bundle);
-        let max_as_of = self.storage_write_frontier(*sink_id);
+        let warmup_frontier = read_holds_guard
+            .coordinator
+            .greatest_available_read(&id_bundle);
+
+        let (_id, _since, upper) = read_holds_guard
+            .coordinator
+            .storage_frontiers(vec![*sink_id])
+            .into_iter()
+            .expect_element(|| "must return exactly one");
+
+        let max_as_of = upper;
+
         let candidate_as_of = if max_as_of.is_empty() {
             // If the storage collection is already sealed, there is no need for warmup.
             max_as_of.clone()
         } else {
-            warmup_frontier.meet(max_as_of)
+            warmup_frontier.meet(&max_as_of)
         };
 
         let as_of = min_as_of.join(&candidate_as_of);
@@ -2368,7 +2440,7 @@ impl Coordinator {
             "bootstrapping materialized view `as_of`",
         );
 
-        as_of
+        (as_of, read_holds_guard)
     }
 
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
@@ -2721,7 +2793,7 @@ impl Coordinator {
             .map(|(id, meta)| (id.unhandled().to_string(), format!("{meta:?}")))
             .collect();
         let storage_read_capabilities: BTreeMap<_, _> = self
-            .storage_read_capabilities
+            .storage_read_policies
             .iter()
             .map(|(id, capability)| (id.to_string(), format!("{capability:?}")))
             .collect();
@@ -3071,7 +3143,7 @@ pub fn serve(
                     global_timelines: timestamp_oracles,
                     transient_id_counter: 1,
                     active_conns: BTreeMap::new(),
-                    storage_read_capabilities: Default::default(),
+                    storage_read_policies: Default::default(),
                     compute_read_capabilities: Default::default(),
                     txn_read_holds: Default::default(),
                     pending_peeks: BTreeMap::new(),

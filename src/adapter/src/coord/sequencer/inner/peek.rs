@@ -771,7 +771,10 @@ impl Coordinator {
 
         if let Some(transient_index_id) = match &planned_peek.plan {
             peek::PeekPlan::FastPath(_) => None,
-            peek::PeekPlan::SlowPath(PeekDataflowPlan { id, .. }) => Some(id),
+            peek::PeekPlan::SlowPath(PeekDataflowPlan { id, desc, .. }) => {
+                tracing::info!(as_of = ?desc.as_of, "in peek_stage_finish");
+                Some(id)
+            }
         } {
             if let Some(statement_logging_id) = ctx.extra.contents() {
                 self.set_transient_index_id(statement_logging_id, *transient_index_id);
@@ -796,16 +799,16 @@ impl Coordinator {
                     _ => {}
                 }
             }
-            self.controller.install_watch_set(
+            self.controller.install_storage_watch_set(
                 transitive_storage_deps,
                 ts,
                 Box::new((uuid, StatementLifecycleEvent::StorageDependenciesFinished)),
             );
-            self.controller.install_watch_set(
+            self.controller.install_compute_watch_set(
                 transitive_compute_deps,
                 ts,
                 Box::new((uuid, StatementLifecycleEvent::ComputeDependenciesFinished)),
-            );
+            )
         }
         let max_query_result_size = std::cmp::min(
             ctx.session().vars().max_query_result_size(),
@@ -973,7 +976,7 @@ impl Coordinator {
                         .expect("source should have a proper desc");
                     let snapshot_stats: SnapshotPartsStats = this
                         .controller
-                        .storage
+                        .collections
                         .snapshot_parts_stats(gid, as_of.clone())
                         .await?;
 
@@ -1044,52 +1047,60 @@ impl Coordinator {
 
         // Fetch or generate a timestamp for this query and what the read holds would be if we need to set
         // them.
-        let (determination, potential_read_holds) =
-            match session.get_transaction_timestamp_determination() {
-                // Use the transaction's timestamp if it exists and this isn't an AS OF query.
-                Some(
-                    determination @ TimestampDetermination {
-                        timestamp_context: TimestampContext::TimelineTimestamp { .. },
-                        ..
-                    },
-                ) if in_immediate_multi_stmt_txn => (determination, None),
-                _ => {
-                    let determine_bundle = if in_immediate_multi_stmt_txn {
-                        // In a transaction, determine a timestamp that will be valid for anything in
-                        // any schema referenced by the first query.
-                        timedomain_bundle = self.timedomain_for(
-                            source_ids,
-                            &timeline_context,
-                            session.conn_id(),
-                            cluster_id,
-                        )?;
-                        &timedomain_bundle
-                    } else {
-                        // If not in a transaction, use the source.
-                        source_bundle
-                    };
-                    let determination = self
-                        .determine_timestamp(
-                            session,
-                            determine_bundle,
-                            when,
-                            cluster_id,
-                            &timeline_context,
-                            oracle_read_ts,
-                            real_time_recency_ts,
-                        )
-                        .await?;
-                    // We only need read holds if the read depends on a timestamp. We don't set the
-                    // read holds here because it makes the code a bit more clear to handle the two
-                    // cases for "is this the first statement in a transaction?" in an if/else block
-                    // below.
-                    let read_holds = determination
-                        .timestamp_context
-                        .timestamp()
-                        .map(|timestamp| (timestamp.clone(), determine_bundle));
-                    (determination, read_holds)
-                }
-            };
+        let (determination, read_holds) = match session.get_transaction_timestamp_determination() {
+            // Use the transaction's timestamp if it exists and this isn't an AS OF query.
+            Some(
+                determination @ TimestampDetermination {
+                    timestamp_context: TimestampContext::TimelineTimestamp { .. },
+                    ..
+                },
+            ) if in_immediate_multi_stmt_txn => (determination, None),
+            _ => {
+                let determine_bundle = if in_immediate_multi_stmt_txn {
+                    // In a transaction, determine a timestamp that will be valid for anything in
+                    // any schema referenced by the first query.
+                    timedomain_bundle = self.timedomain_for(
+                        source_ids,
+                        &timeline_context,
+                        session.conn_id(),
+                        cluster_id,
+                    )?;
+
+                    tracing::debug!(session = %session.conn_id(), ?source_ids, ?timeline_context, ?timedomain_bundle, "in multi txn");
+
+                    &timedomain_bundle
+                } else {
+                    tracing::debug!(session = %session.conn_id(), ?timeline_context, ?source_ids, "NOT in multi txn");
+                    // If not in a transaction, use the source.
+                    source_bundle
+                };
+                let (determination, read_holds) = self
+                    .determine_timestamp(
+                        session,
+                        determine_bundle,
+                        when,
+                        cluster_id,
+                        &timeline_context,
+                        oracle_read_ts,
+                        real_time_recency_ts,
+                    )
+                    .await?;
+                // We only need read holds if the read depends on a timestamp.
+                let read_holds = match determination.timestamp_context.timestamp() {
+                    Some(_ts) => Some(read_holds),
+                    None => {
+                        // We don't need the read holds and shouldn't add them
+                        // to the txn.
+                        //
+                        // TODO: Handle this within determine_timestamp.
+                        self.release_read_holds(vec![read_holds]);
+                        None
+                    }
+                };
+                tracing::debug!(session = %session.conn_id(), ?read_holds, "read holds");
+                (determination, read_holds)
+            }
+        };
 
         // Always either verify the current statement ids are within the existing
         // transaction's read hold set (timedomain), or create the read holds if this is the
@@ -1099,13 +1110,23 @@ impl Coordinator {
         // we must acquire read holds here so they are held until the off-thread work
         // returns to the coordinator.
         if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
+            tracing::debug!(session = %session.conn_id(), ?read_holds, ?txn_reads, "using txn read holds");
+
             // Transactions involving peeks will acquire read holds at most once.
             assert_eq!(txn_reads.len(), 1);
             let txn_reads = &txn_reads[0];
+
             // Find referenced ids not in the read hold. A reference could be caused by a
             // user specifying an object in a different schema than the first query. An
             // index could be caused by a CREATE INDEX after the transaction started.
             let allowed_id_bundle = txn_reads.id_bundle();
+
+            // We don't need the read holds that determine_timestamp acquired
+            // for us.
+            if let Some(read_holds) = read_holds {
+                self.release_read_holds(vec![read_holds]);
+            }
+
             let outside = source_bundle.difference(&allowed_id_bundle);
             // Queries without a timestamp and timeline can belong to any existing timedomain.
             if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
@@ -1117,9 +1138,12 @@ impl Coordinator {
                     names: valid_names,
                 });
             }
-        } else if let Some((timestamp, bundle)) = potential_read_holds {
-            self.acquire_read_holds_auto_cleanup(session, timestamp, bundle, true)
-                .expect("able to acquire read holds at the time that we just got from `determine_timestamp`");
+        } else if let Some(read_holds) = read_holds {
+            tracing::debug!(session = %session.conn_id(), ?read_holds,  "storing txn read holds");
+            self.txn_read_holds
+                .entry(session.conn_id().clone())
+                .or_insert_with(Vec::new)
+                .push(read_holds);
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems

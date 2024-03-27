@@ -44,6 +44,8 @@ use mz_sql::names::{
     ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
+use mz_storage_client::storage_collections::StorageCollections;
+use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::{
@@ -319,7 +321,6 @@ impl Coordinator {
 
                     coord
                         .controller
-                        .storage
                         .create_collections(
                             None,
                             vec![(
@@ -634,7 +635,6 @@ impl Coordinator {
                 );
                 coord
                     .controller
-                    .storage
                     .create_collections(Some(register_ts), vec![(table_id, collection_desc)])
                     .await
                     .unwrap_or_terminate("cannot fail to create collections");
@@ -766,8 +766,8 @@ impl Coordinator {
         let from = self.catalog().get_entry(&catalog_sink.from);
         if let Err(e) = self
             .controller
-            .storage
-            .collection(sink.from)
+            .collections
+            .check_exists(sink.from)
             .map_err(|e| match e {
                 StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
                     "{} is a {}, which cannot be exported as a sink",
@@ -2034,15 +2034,17 @@ impl Coordinator {
     ) -> TimestampExplanation<mz_repr::Timestamp> {
         let mut sources = Vec::new();
         {
-            for id in id_bundle.storage_ids.iter() {
-                let state = self
-                    .controller
-                    .storage
-                    .collection(*id)
-                    .expect("id does not exist");
+            let storage_ids = id_bundle.storage_ids.iter().cloned().collect_vec();
+            let frontiers = self
+                .controller
+                .collections
+                .collection_frontiers(storage_ids)
+                .expect("missing collection");
+
+            for (id, since, upper) in frontiers {
                 let name = self
                     .catalog()
-                    .try_get_entry(id)
+                    .try_get_entry(&id)
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog()
@@ -2052,8 +2054,8 @@ impl Coordinator {
                     .unwrap_or_else(|| id.to_string());
                 sources.push(TimestampSource {
                     name: format!("{name} ({id}, storage)"),
-                    read_frontier: state.implied_capability.elements().to_vec(),
-                    write_frontier: state.write_frontier.elements().to_vec(),
+                    read_frontier: since.elements().to_vec(),
+                    write_frontier: upper.elements().to_vec(),
                 });
             }
         }
@@ -3330,7 +3332,7 @@ impl Coordinator {
                 let collection = btreemap! {id => ingestion};
 
                 self.controller
-                    .storage
+                    .collections
                     .check_alter_collection(&collection)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
@@ -3370,6 +3372,35 @@ impl Coordinator {
                     to_item: CatalogItem::Source(source),
                 });
 
+                // The catalog_transact call below will issue
+                // drop_collections to the StorageController and
+                // StorageCollections, which would normally drop those
+                // collections. However, the alter_collection call below still
+                // needs access to those to verify that the ALTER is correct.
+                //
+                // NOTE: This works on current main because we never clean out
+                // collection state for subsources. The new StorageCollections
+                // does not have that bug, though, so we need to be careful not
+                // to let it drop collection state to early.
+                let mut temporary_desired_read_holds = Vec::new();
+                for op in ops.iter() {
+                    match op {
+                        catalog::Op::DropObject(ObjectId::Item(id)) => {
+                            if self.controller.collections.check_exists(*id).is_ok() {
+                                temporary_desired_read_holds.push((
+                                    *id,
+                                    Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                                ));
+                            }
+                        }
+                        _ => (),
+                    }
+                }
+                let temporary_read_holds = self
+                    .controller
+                    .collections
+                    .acquire_read_holds(temporary_desired_read_holds);
+
                 self.catalog_transact(Some(session), ops).await?;
 
                 // Commit the new ingestion to storage.
@@ -3378,6 +3409,8 @@ impl Coordinator {
                     .alter_collection(collection)
                     .await
                     .expect("altering collection after txn must succeed");
+
+                drop(temporary_read_holds);
             }
             plan::AlterSourceAction::AddSubsourceExports {
                 subsources,
@@ -3543,7 +3576,7 @@ impl Coordinator {
                 let collection = btreemap! {id => ingestion};
 
                 self.controller
-                    .storage
+                    .collections
                     .check_alter_collection(&collection)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
@@ -3593,7 +3626,6 @@ impl Coordinator {
                     };
 
                     self.controller
-                        .storage
                         .create_collections(
                             None,
                             vec![(
@@ -4180,15 +4212,15 @@ struct CachedStatisticsOracle {
 }
 
 impl CachedStatisticsOracle {
-    pub async fn new<T: Clone + std::fmt::Debug + timely::PartialOrder + Send + Sync>(
+    pub async fn new<T: TimelyTimestamp>(
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<T>,
-        storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
+        storage_collections: &dyn StorageCollections<Timestamp = T>,
     ) -> Result<Self, StorageError> {
         let mut cache = BTreeMap::new();
 
         for id in ids {
-            let stats = storage.snapshot_stats(*id, as_of.clone()).await;
+            let stats = storage_collections.snapshot_stats(*id, as_of.clone()).await;
 
             match stats {
                 Ok(stats) => {
@@ -4234,7 +4266,11 @@ impl Coordinator {
 
         let cached_stats = mz_ore::future::timeout(
             timeout,
-            CachedStatisticsOracle::new(source_ids, query_as_of, self.controller.storage.as_ref()),
+            CachedStatisticsOracle::new(
+                source_ids,
+                query_as_of,
+                self.controller.collections.as_ref(),
+            ),
         )
         .await;
 
