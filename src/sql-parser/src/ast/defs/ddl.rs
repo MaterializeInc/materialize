@@ -1188,7 +1188,14 @@ impl WithOptionName for LoadGeneratorOptionName {
         match self {
             LoadGeneratorOptionName::ScaleFactor
             | LoadGeneratorOptionName::TickInterval
-            | LoadGeneratorOptionName::MaxCardinality => false,
+            | LoadGeneratorOptionName::MaxCardinality
+            | LoadGeneratorOptionName::Keys
+            | LoadGeneratorOptionName::SnapshotRounds
+            | LoadGeneratorOptionName::TransactionalSnapshot
+            | LoadGeneratorOptionName::ValueSize
+            | LoadGeneratorOptionName::Partitions
+            | LoadGeneratorOptionName::BatchSize
+            | LoadGeneratorOptionName::Seed => false,
         }
     }
 }
