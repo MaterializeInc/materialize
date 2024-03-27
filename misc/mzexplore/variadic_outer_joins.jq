@@ -107,6 +107,6 @@ def compute_predicate_info:
        then .complex_eq += 1
        else .
        end)
-;  
+;
 
 maximal_stacks | values | { "file": input_filename, "size": . | stack_info, "predicates": . | compute_predicate_info }
