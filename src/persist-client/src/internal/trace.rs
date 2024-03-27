@@ -291,13 +291,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
             merging[level] = state;
         }
-        let spine = Spine {
-            effort: 1,
-            next_id,
-            since,
-            upper,
-            merging,
-        };
 
         fn check_empty(name: &str, len: usize) -> Result<(), String> {
             if len != 0 {
@@ -307,15 +300,30 @@ impl<T: Timestamp + Lattice> Trace<T> {
             }
         }
 
-        check_empty("legacy batches", legacy_batches.len())?;
         check_empty("hollow batches", hollow_batches.len())?;
         check_empty("merges", fueling_merges.len())?;
-        debug_assert_eq!(spine.validate(), Ok(()), "{:?}", spine);
 
-        Ok(Trace {
-            spine,
+        let mut trace = Trace {
+            spine: Spine {
+                effort: 1,
+                next_id,
+                since,
+                upper,
+                merging,
+            },
             roundtrip_structure: true,
-        })
+        };
+
+        // If the structure wasn't actually serialized, we may have legacy batches left over.
+        // Apply them, but record that isn't a structured batch.
+        for batch in legacy_batches {
+            trace.push_batch_no_merge_reqs(Arc::unwrap_or_clone(batch));
+            trace.roundtrip_structure = false;
+        }
+
+        debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
+
+        Ok(trace)
     }
 }
 

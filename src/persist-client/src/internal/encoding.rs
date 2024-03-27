@@ -27,8 +27,6 @@ use prost::Message;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tracing::debug;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -1075,62 +1073,11 @@ impl<T: Timestamp + Codec64> RustType<ProtoTrace> for FlatTrace<T> {
 
 impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
     fn into_proto(&self) -> ProtoTrace {
-        if self.roundtrip_structure {
-            return self.flatten().into_proto();
-        }
-        let mut legacy_batches = Vec::new();
-        self.map_batches(|b| {
-            legacy_batches.push(b.into_proto());
-        });
-        ProtoTrace {
-            since: Some(self.since().into_proto()),
-            legacy_batches,
-            hollow_batches: vec![],
-            spine_batches: vec![],
-            merges: vec![],
-        }
+        self.flatten().into_proto()
     }
 
     fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
-        let roundtrip_structure = !proto.hollow_batches.is_empty()
-            || !proto.spine_batches.is_empty()
-            || !proto.merges.is_empty();
-        if roundtrip_structure {
-            return Trace::unflatten(proto.into_rust()?)
-                .map_err(TryFromProtoError::InvalidPersistState);
-        }
-
-        let mut ret = Trace::default();
-        ret.downgrade_since(&proto.since.into_rust_if_some("since")?);
-        let mut batches_pushed = 0;
-        for batch in proto.legacy_batches.into_iter() {
-            let batch: HollowBatch<T> = batch.into_rust()?;
-            if PartialOrder::less_than(ret.since(), batch.desc.since()) {
-                return Err(TryFromProtoError::InvalidPersistState(format!(
-                    "invalid ProtoTrace: the spine's since {:?} was less than a batch's since {:?}",
-                    ret.since(),
-                    batch.desc.since()
-                )));
-            }
-            // We could perhaps more directly serialize and rehydrate the
-            // internals of the Spine, but this is nice because it insulates
-            // us against changes in the Spine logic. The current logic has
-            // turned out to be relatively expensive in practice, but as we
-            // tune things (especially when we add inc state) the rate of
-            // this deserialization should go down. Revisit as necessary.
-            //
-            // Ignore merge_reqs because whichever process generated this diff is
-            // assigned the work.
-            let () = ret.push_batch_no_merge_reqs(batch);
-
-            batches_pushed += 1;
-            if batches_pushed % 1000 == 0 {
-                let mut batch_count = 0;
-                ret.map_batches(|_| batch_count += 1);
-                debug!("Decoded and pushed {batches_pushed} batches; trace size {batch_count}");
-            }
-        }
-        Ok(ret)
+        Trace::unflatten(proto.into_rust()?).map_err(TryFromProtoError::InvalidPersistState)
     }
 }
 
