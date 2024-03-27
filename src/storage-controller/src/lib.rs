@@ -22,7 +22,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::FutureExt;
 use itertools::Itertools;
@@ -47,7 +46,7 @@ use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_txn::INIT_FORGET_ALL;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::RustType;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, TypedCollection};
@@ -80,7 +79,6 @@ use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::oneshot;
 use tokio::sync::watch::{channel, Sender};
 use tokio_stream::StreamMap;
 use tracing::{debug, info, warn};
@@ -142,9 +140,6 @@ struct PendingCompactionCommand<T> {
     read_frontier: Antichain<T>,
     /// Cluster associated with this collection, if any.
     cluster_id: Option<StorageInstanceId>,
-    /// Future that returns if since of the collection has been downgraded.
-    #[derivative(Debug = "ignore")]
-    downgrade_notif: BoxFuture<'static, Result<(), ()>>,
 }
 
 /// A storage controller for a storage instance.
@@ -158,6 +153,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
 
+    pub(crate) collections: BTreeMap<GlobalId, CollectionState>,
     pub(crate) ingestions: BTreeMap<GlobalId, IngestionState<T>>,
     pub(crate) exports: BTreeMap<GlobalId, ExportState<T>>,
     pub(crate) stash: Arc<tokio::sync::Mutex<mz_stash::Stash>>,
@@ -378,17 +374,17 @@ where
             ))
         }
 
-        // Acquire read holds at the CollectionsController to ensure that these
-        // collections are not dropped while we're still working with them. We
-        // will release these holds only when a collection is dropped.
+        // Acquire read holds at StorageCollections to ensure that that state
+        // for these ingestions is not dropped while we're still working with
+        // them. We will release these holds only when an ingestsion is dropped.
         //
         // TODO: We should also acquire read holds for sub-source and store them
         // in our state. We're not doing that right now because we don't get
         // `DroppedIds` messages for them, so we wouldn't know when to clean up
         // read holds. Plus, the dependencies go from main source to sub source,
-        // and the CollectionsController will maintain holds from the main
-        // source on the sub-source, meaning we transitively have a hold on them
-        // from these holds here.
+        // and StorageCollections will maintain holds from the main source on
+        // the sub-source, meaning we transitively have a hold on them from
+        // these holds here.
         let desired_ingestion_read_holds = collections
             .iter()
             .filter(|(_id, desc)| desc.cluster_id().is_some())
@@ -410,6 +406,7 @@ where
                 .find(|(c_id, _description)| read_hold.id() == c_id)
                 .map(|(_id, desc)| desc.cluster_id())
                 .expect("missing description");
+
             if let Some(instance_id) = instance_id {
                 let id = read_hold.id().clone();
                 let state = IngestionState {
@@ -425,51 +422,20 @@ where
             }
         }
 
-        // Also acquire read holds for webhooks, and store them in ingestion
-        // state.
-        let desired_ingestion_read_holds = collections
-            .iter()
-            .filter(|(_id, desc)| matches!(desc.data_source, DataSource::Webhook))
-            .map(|(id, _)| {
-                // Just ask for the minimum. When acquiring, these will be
-                // advanced to the since.
-                let since = Antichain::from_elem(Self::Timestamp::minimum());
-                (*id, since)
-            })
-            .collect_vec();
-        let webhook_read_holds = self
-            .storage_collections
-            .acquire_read_holds(desired_ingestion_read_holds);
-        for read_hold in webhook_read_holds {
-            let mut read_capabilities = MutableAntichain::new();
-            read_capabilities.update_iter(read_hold.since().iter().map(|time| (time.clone(), 1)));
-            let id = read_hold.id().clone();
-            let state = IngestionState {
-                read_capabilities,
-                read_hold,
-                write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
-                hold_policy: ReadPolicy::step_back(),
-                instance_id: None,
-            };
-
-            let prev = self.ingestions.insert(id, state);
-            assert!(prev.is_none());
-        }
-
+        // Perform all stash writes in a single transaction, to minimize transaction overhead and
+        // the time spent waiting for stash.
         let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
-            .iter(&mut *self.stash.lock().await)
+            .insert_without_overwrite(
+                &mut *self.stash.lock().await,
+                entries
+                    .into_iter()
+                    .map(|(key, val)| (key.into_proto(), val.into_proto())),
+            )
             .await?
             .into_iter()
-            .map(|((key, value), _ts, diff)| {
-                assert_eq!(diff, 1);
-
-                let key = RustType::from_proto(key)?;
-                let value = RustType::from_proto(value)?;
-
-                Ok((key, value))
-            })
+            .map(RustType::from_proto)
             .collect::<Result<_, _>>()
-            .map_err(|e: TryFromProtoError| StorageError::IOError(e.into()))?;
+            .map_err(|e| StorageError::IOError(e.into()))?;
 
         // We first enrich each collection description with some additional metadata...
         let enriched_with_metadata = collections
@@ -627,6 +593,13 @@ where
                         source_statistics.source_statistics.insert(id, None);
                     }
                 }
+
+                let state = CollectionState {
+                    data_source: description.data_source.clone(),
+                    collection_metadata: metadata.clone(),
+                };
+
+                self.collections.insert(id, state);
 
                 to_create.push((id, description));
             }
@@ -1087,15 +1060,44 @@ where
     }
 
     fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
+        for id in identifiers.iter() {
+            let collection_state = self.collections.get(id);
+            if let Some(collection_state) = collection_state {
+                match collection_state.data_source {
+                    // Webhooks and tables are dropped differently from
+                    // ingestions and other collections.
+                    DataSource::Webhook | DataSource::Other(DataSourceOther::TableWrites) => {
+                        let pending_compaction_command = PendingCompactionCommand {
+                            id: *id,
+                            read_frontier: Antichain::new(),
+                            cluster_id: None,
+                        };
+
+                        tracing::info!(?pending_compaction_command, "pushing pending compaction");
+
+                        self.pending_compaction_commands
+                            .push(pending_compaction_command);
+                    }
+                    DataSource::Other(_)
+                    | DataSource::Ingestion(_)
+                    | DataSource::Introspection(_)
+                    | DataSource::Progress => (),
+                }
+            }
+        }
+
+        // For ingestions, we fabricate a new hold that will propagate through
+        // the cluster and then back to us.
+
         // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
-        let policies = identifiers
+        let ingestion_policies = identifiers
             .into_iter()
             .filter(|id| self.ingestions.contains_key(id))
             .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
             .collect();
-        self.set_hold_policies(policies);
+        self.set_hold_policies(ingestion_policies);
     }
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
@@ -1434,9 +1436,7 @@ where
                         .expect("we only advance the frontier");
                 }
 
-                // TODO: ???
-                let (_tx, rx) = oneshot::channel();
-                worker_compaction_commands.insert(key, (frontier.clone(), cluster_id, rx));
+                worker_compaction_commands.insert(key, (frontier.clone(), cluster_id));
             }
         }
         for (key, (mut changes, frontier, cluster_id)) in exports_net {
@@ -1448,26 +1448,18 @@ where
                     .try_downgrade(frontier.clone())
                     .expect("we only advance the frontier");
 
-                let (_tx, rx) = oneshot::channel();
-                worker_compaction_commands.insert(key, (frontier, cluster_id, rx));
+                worker_compaction_commands.insert(key, (frontier, cluster_id));
             }
         }
 
-        for (id, (read_frontier, cluster_id, rx)) in worker_compaction_commands {
+        for (id, (read_frontier, cluster_id)) in worker_compaction_commands {
             // Acquiring a client for a storage instance requires await, so we
             // instead stash these for later and process when we can.
-            let downgrade_notif = rx
-                .map(|res| match res {
-                    Ok(res) => res,
-                    Err(_) => Err(()),
-                })
-                .boxed();
             self.pending_compaction_commands
                 .push(PendingCompactionCommand {
                     id,
                     read_frontier,
                     cluster_id,
-                    downgrade_notif,
                 });
         }
     }
@@ -1508,10 +1500,26 @@ where
                 updated_frontiers = Some(Response::FrontierUpdates(updates));
             }
             Some(StorageResponse::DroppedIds(ids)) => {
-                for id in ids {
+                let mut shards_to_finalize = Vec::new();
+
+                for id in ids.iter() {
                     if let Some(ingestion) = self.ingestions.remove(&id) {
+                        // Make sure to remove collection state of the "main"
+                        // export of the ingestion, and finalize its shard.
+                        let collection = self
+                            .collections
+                            .remove(&id)
+                            .expect("missing collection state");
+
                         tracing::info!("enqueueing read hold of ingestion {id} for release!");
                         dropped_read_holds.push(ingestion.read_hold);
+
+                        shards_to_finalize.push(collection.collection_metadata.data_shard);
+                    } else if let Some(collection) = self.collections.remove(&id) {
+                        // No read holds for other types of collections!
+                        tracing::info!("DroppedIds for collection {id}");
+
+                        shards_to_finalize.push(collection.collection_metadata.data_shard);
                     } else if let Some(export) = self.exports.get_mut(&id) {
                         // TODO: Current main never drops export state, so we
                         // also don't do that, because it would be yet more
@@ -1524,49 +1532,26 @@ where
                             .try_downgrade(Antichain::new())
                             .expect("must be possible");
                     } else {
-                        tracing::warn!("DroppedIds for ID {id} but we have neither ingestion nor export under that ID");
+                        panic!("DroppedIds for ID {id} but we have neither ingestion nor export under that ID");
                     }
                 }
 
-                // let shards_to_finalize: Vec<_> = ids
-                //     .iter()
-                //     .filter_map(|id| {
-                //         // Note: All handles to the id should be dropped by now and the since of
-                //         // the collection should be downgraded to the empty antichain. If handles
-                //         // to the shard still exist, then we will incorrectly report the shard as
-                //         // alive, and if the since of the shard has not been downgraded, then we
-                //         // will continuously fail to finalize it.
-                //         //
-                //         // TODO(parkmycar): Should we be asserting that .remove(...) is some? In
-                //         // other words that we know about the collection we're receiving an event
-                //         // for.
-                //         self.collections
-                //             .remove(id)
-                //             .map(|state| state.collection_metadata.data_shard)
-                //     })
-                //     .collect();
-                //
-                // // Ensure we don't leak any shards by tracking all of them we intend to
-                // // finalize.
-                // self.register_shards_for_finalization(shards_to_finalize)
-                //     .await;
-                //
-                // METADATA_COLLECTION
-                //     .delete_keys(
-                //         &mut self.stash,
-                //         ids.into_iter()
-                //             .map(|id| RustType::into_proto(&id))
-                //             .collect(),
-                //     )
-                //     .await
-                //     .expect("stash operation must succeed");
-                //
-                // if self.config.parameters.finalize_shards {
-                //     info!("triggering shard finalization due to dropped storage object");
-                //     self.finalize_shards().await;
-                // } else {
-                //     info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false")
-                // }
+                // Ensure we don't leak any shards by tracking all of them we intend to
+                // finalize.
+                self.register_shards_for_finalization(shards_to_finalize)
+                    .await;
+
+                METADATA_COLLECTION
+                    .delete_keys(
+                        &mut *self.stash.lock().await,
+                        ids.into_iter()
+                            .map(|id| RustType::into_proto(&id))
+                            .collect(),
+                    )
+                    .await
+                    .expect("stash operation must succeed");
+
+                self.finalize_shards().await;
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -1628,7 +1613,6 @@ where
                 id,
                 read_frontier,
                 cluster_id,
-                downgrade_notif,
             } = compaction_command;
 
             // TODO(petrosagg): make this a strict check
@@ -1637,74 +1621,58 @@ where
             // be cleared out, before we do this post-processing!
             let client = cluster_id.and_then(|cluster_id| self.clients.get_mut(&cluster_id));
 
-            if cluster_id.is_some() && read_frontier.is_empty() {
-                if self.ingestions.get(&id).is_some() {
+            let internal_response_sender = self.internal_response_sender.clone();
+            let spawn_cleanup_task = |drop_fut| {
+                mz_ore::task::spawn(|| format!("storage-table-cleanup-{id}"), async move {
+                    // Wait for the relevant component to drop its resources and handles, this
+                    // guarantees we won't see any more writes.
+                    drop_fut.await;
+
+                    // Notify that this ID has been dropped, which will start finalization of
+                    // the shard.
+                    let _ = internal_response_sender.send(StorageResponse::DroppedIds([id].into()));
+                });
+            };
+
+            if read_frontier.is_empty() {
+                if self.ingestions.get(&id).is_some() && client.is_some() {
                     pending_source_drops.push(id);
-                } else if self.exports.get(&id).is_some() {
+                } else if let Some(collection) = self.collections.get(&id) {
+                    match collection.data_source {
+                        DataSource::Other(DataSourceOther::TableWrites) => {
+                            pending_collection_drops.push(id);
+
+                            let drop_fut = self.persist_table_worker.drop_handles(vec![id]);
+                            spawn_cleanup_task(drop_fut);
+                        }
+                        DataSource::Webhook => {
+                            pending_collection_drops.push(id);
+
+                            // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
+                            // could probably use some love and maybe get merged together?
+                            let unregister_notif =
+                                self.collection_manager.unregister_collection(id);
+                            let monotonic_worker = self.persist_monotonic_worker.clone();
+                            let drop_fut = async move {
+                                // Wait for the collection manager to stop writing.
+                                unregister_notif.await;
+                                // Wait for the montonic worker to drop the handle.
+                                monotonic_worker.drop_handle(id).await;
+                            };
+                            let drop_fut = drop_fut.boxed();
+
+                            spawn_cleanup_task(drop_fut);
+                        }
+                        DataSource::Ingestion(_) => (),
+                        DataSource::Introspection(_) => (),
+                        DataSource::Progress => (),
+                        DataSource::Other(_) => (),
+                    }
+                } else if self.exports.get(&id).is_some() && client.is_some() {
                     pending_sink_drops.push(id);
                 } else {
                     panic!("Reference to absent collection {id}");
-                }
-            }
-
-            // Check if a collection is managed by the storage-controller itself.
-            let collection = self.storage_collections.collection_description(id);
-            if let Ok(description) = collection {
-                // Normally `clusterd` will emit this StorageResponse when it knows we can drop an
-                // ID, but some collections are managed by the storage controller itself, so we
-                // must emit this event here.
-                let drop_notif = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) if read_frontier.is_empty() => {
-                        pending_collection_drops.push(id);
-                        // TODO(jkosh44) Batch all table drops into single call to `drop_handles`.
-                        Some(self.persist_table_worker.drop_handles(vec![id]))
-                    }
-                    DataSource::Webhook | DataSource::Introspection(_)
-                        if read_frontier.is_empty() =>
-                    {
-                        pending_collection_drops.push(id);
-                        // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
-                        // could probably use some love and maybe get merged together?
-                        let unregister_notif = self.collection_manager.unregister_collection(id);
-                        let monotonic_worker = self.persist_monotonic_worker.clone();
-                        let drop_fut = async move {
-                            // Wait for the collection manager to stop writing.
-                            unregister_notif.await;
-                            // Wait for the montonic worker to drop the handle.
-                            monotonic_worker.drop_handle(id).await;
-                        };
-                        Some(drop_fut.boxed())
-                    }
-                    // These sources are manged by `clusterd`.
-                    DataSource::Webhook
-                    | DataSource::Introspection(_)
-                    | DataSource::Other(_)
-                    | DataSource::Progress
-                    | DataSource::Ingestion(_) => None,
                 };
-
-                // Wait for all of the resources to get cleaned up, but emitting our event.
-                if let Some(drop_notif) = drop_notif {
-                    let internal_response_sender = self.internal_response_sender.clone();
-                    mz_ore::task::spawn(|| format!("storage-cleanup-{id}"), async move {
-                        // Wait for the relevant component to drop its resources and handles, this
-                        // guarantees we won't see any more writes.
-                        drop_notif.await;
-                        // Wait to make sure the since of our collection has been downgraded, this
-                        // guarantees we won't have any more readers.
-                        //
-                        // If we fail to downgrade the since the process will halt, but as a back
-                        // stop we only notify the storage-controller if it succeeds.
-                        let _downgrade_res = downgrade_notif.await;
-
-                        // WIP: Fix downgrade_notif shenanigans.
-
-                        // Notify that this ID has been dropped, which will start finalization of
-                        // the shard.
-                        let _ =
-                            internal_response_sender.send(StorageResponse::DroppedIds([id].into()));
-                    });
-                }
             }
 
             // Sources can have subsources, which don't have associated clusters, which
@@ -2203,6 +2171,7 @@ where
 
         Self {
             build_info,
+            collections: BTreeMap::default(),
             ingestions: BTreeMap::default(),
             exports: BTreeMap::default(),
             stash,
@@ -2266,7 +2235,7 @@ where
 
                 ingestion.hold_policy = policy;
             } else if let Some(_export) = self.exports.get_mut(&id) {
-                unreachable!("set_hold_policies is not called for exports");
+                unreachable!("set_hold_policies is only called for ingestions");
             }
         }
 
@@ -2671,11 +2640,11 @@ where
         let mut row_buf = Row::default();
 
         for global_id in global_ids {
-            let shard_id = self
-                .storage_collections
-                .collection_metadata(global_id)
-                .expect("must exist")
-                .data_shard;
+            let shard_id = if let Some(collection) = self.collections.get(&global_id) {
+                collection.collection_metadata.data_shard.clone()
+            } else {
+                panic!("unknown global id: {}", global_id);
+            };
 
             let mut packer = row_buf.packer();
             packer.push(Datum::from(global_id.to_string().as_str()));
@@ -2730,8 +2699,10 @@ where
                     .expect("invalid persist usage");
 
                 if is_finalized {
+                    tracing::info!("learned that shard {shard_id} is finalized!");
                     Some(shard_id)
                 } else {
+                    tracing::info!("attempting to finalize shard {shard_id}");
                     // Finalizing a shard can take a long time cleaning up existing data.
                     // Spawning a task means that we can't proactively remove this shard
                     // from the finalization register, unfortunately... but a future run
@@ -2778,9 +2749,11 @@ where
                         match finalize().await {
                             Err(e) => {
                                 // Rather than error, just leave this shard as one to finalize later.
-                                warn!("error during background finalization: {e:?}");
+                                warn!("error during background finalization of shard {shard_id}: {e:?}");
                             }
-                            Ok(()) => {}
+                            Ok(()) => {
+                                info!("succesfully finalized shard {shard_id}");
+                            }
                         }
                     });
                     None
@@ -2797,6 +2770,7 @@ where
             .collect();
 
         if !finalized_shards.is_empty() {
+            tracing::info!(?finalized_shards, "clearing out finalized shards");
             self.clear_from_shard_finalization_register(finalized_shards)
                 .await;
         }
@@ -2943,6 +2917,15 @@ where
             .append_updates(sink_status_updates, IntrospectionType::SinkStatusHistory)
             .await;
     }
+}
+
+/// State maintained about individual collections.
+#[derive(Debug)]
+struct CollectionState {
+    /// The source of this collection's data.
+    pub data_source: DataSource,
+
+    pub collection_metadata: CollectionMetadata,
 }
 
 /// State maintained about ingestions
