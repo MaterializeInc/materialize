@@ -18,7 +18,7 @@ proc-macro2 = "1.0.60"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
-datadriven = "0.6.0"
+datadriven = "0.8.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
