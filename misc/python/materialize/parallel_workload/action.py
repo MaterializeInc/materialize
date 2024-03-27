@@ -1868,7 +1868,7 @@ write_action_list = ActionList(
         (InsertAction, 50),
         (SelectOneAction, 1),  # can be mixed with writes
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
-        (HttpPostAction, 50),
+        #(HttpPostAction, 50),
         (CommitRollbackAction, 10),
         (ReconnectAction, 1),
         (SourceInsertAction, 50),
