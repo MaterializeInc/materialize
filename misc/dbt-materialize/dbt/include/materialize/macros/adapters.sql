@@ -86,6 +86,40 @@
     {{ sql }}
 {%- endmacro %}
 
+{% macro materialize__create_source(relation, sql) -%}
+  {% set contract_config = config.get('contract') %}
+  {% if contract_config.enforced %}
+    {{exceptions.warn("Model contracts cannot be enforced for custom materializations (see dbt-core #7213)")}}
+  {%- endif %}
+
+  {%- set cluster = generate_cluster_name(config.get('cluster', target.cluster)) -%}
+
+  create source {{ relation }}
+  {% if cluster %}
+    in cluster {{ cluster }}
+  {% endif %}
+
+  {{ sql }}
+  ;
+  {%- endmacro %}
+
+{% macro materialize__create_sink(relation, sql) -%}
+  {% set contract_config = config.get('contract') %}
+  {% if contract_config.enforced %}
+    {{exceptions.warn("Model contracts cannot be enforced for custom materializations (see dbt-core #7213)")}}
+  {%- endif %}
+
+  {%- set cluster = generate_cluster_name(config.get('cluster', target.cluster)) -%}
+
+  create sink {{ relation }}
+  {% if cluster %}
+    in cluster {{ cluster }}
+  {% endif %}
+
+  {{ sql }}
+  ;
+  {%- endmacro %}
+
 {% macro materialize__rename_relation(from_relation, to_relation) -%}
   {% set target_name = adapter.quote_as_configured(to_relation.identifier, 'identifier') %}
   {% call statement('rename_relation') -%}

@@ -8,9 +8,8 @@
 # by the Apache License, Version 2.0.
 
 import contextlib
-import os
 import sys
-import tempfile
+from io import StringIO
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -1633,12 +1632,12 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
         for scenario in scenarios:
-            with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
-                print(f"write testdrive to {c.path}")
-                with contextlib.redirect_stdout(tmp):
-                    scenario.generate()
-                    sys.stdout.flush()
-                    c.exec("testdrive", os.path.basename(tmp.name))
+            print(f"--- Running scenario {scenario.__name__}")
+            f = StringIO()
+            with contextlib.redirect_stdout(f):
+                scenario.generate()
+                sys.stdout.flush()
+            c.testdrive(f.getvalue())
 
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1693,8 +1692,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
     with c.override(*cluster_replicas):
         with c.override(Testdrive(seed=1, no_reset=True)):
-            for n in cluster_replicas:
-                c.up(n.name)
+            c.up(*[n.name for n in cluster_replicas])
 
             # Increase resource limits
             c.testdrive(

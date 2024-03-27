@@ -787,7 +787,7 @@ steps:
 
       - id: checks-migrate-x86-64-aarch64
         label: "Checks migrate from x86-64 to aarch64"
-        depends_on: build-x86_64
+        depends_on: [build-x86_64, build-aarch64]
         timeout_in_minutes: 180
         agents:
           queue: builder-linux-x86_64
@@ -799,7 +799,7 @@ steps:
 
       - id: checks-migrate-aarch64-x86-64
         label: "Checks migrate from aarch64 to x86-64"
-        depends_on: build-x86_64
+        depends_on: [build-x86_64, build-aarch64]
         timeout_in_minutes: 120
         agents:
           # On x86-64 because of 24794

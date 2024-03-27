@@ -47,7 +47,7 @@ def workflow_default(c: Composition) -> None:
             continue
 
         # TODO(def-): Reenable when #26127 is fixed
-        if name == "bin-log-manipulations":
+        if name in ("bin-log-manipulations", "short-bin-log-retention"):
             continue
 
         with c.test_case(name):

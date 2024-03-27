@@ -3365,7 +3365,7 @@ generate_extracted_config!(
     (
         Schedule,
         ClusterScheduleOptionValue,
-        Default(ClusterScheduleOptionValue::Manual)
+        Default(Default::default())
     )
 );
 
@@ -3415,9 +3415,6 @@ pub fn plan_create_cluster(
         let Some(size) = size else {
             sql_bail!("SIZE must be specified for managed clusters");
         };
-        if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
-            bail_unsupported!("cluster schedules other than MANUAL");
-        }
         if disk_in.is_some() {
             scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
         }
@@ -3478,6 +3475,7 @@ pub fn plan_create_cluster(
                 compute,
                 disk,
                 optimizer_feature_overrides,
+                schedule,
             }),
         }))
     } else {
@@ -4587,9 +4585,6 @@ pub fn plan_alter_cluster(
                     if replica_defs.is_some() {
                         sql_bail!("REPLICAS not supported for managed clusters");
                     }
-                    if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
-                        bail_unsupported!("cluster schedules other than MANUAL");
-                    }
 
                     if let Some(replication_factor) = replication_factor {
                         let internal_replica_count =
@@ -4706,6 +4701,7 @@ pub fn plan_alter_cluster(
             if !replicas.is_empty() {
                 options.replicas = AlterOptionParameter::Set(replicas);
             }
+            options.schedule = AlterOptionParameter::Set(schedule);
         }
         AlterClusterAction::ResetOptions(reset_options) => {
             use AlterOptionParameter::Reset;

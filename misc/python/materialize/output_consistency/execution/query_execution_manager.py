@@ -236,6 +236,8 @@ class QueryExecutionManager:
             original_query_template.storage_layout,
             original_query_template.contains_aggregations,
             original_query_template.row_selection,
+            original_query_template.offset,
+            original_query_template.limit,
         )
         new_query_template2 = QueryTemplate(
             False,
@@ -244,6 +246,8 @@ class QueryExecutionManager:
             original_query_template.storage_layout,
             original_query_template.contains_aggregations,
             original_query_template.row_selection,
+            original_query_template.offset,
+            original_query_template.limit,
         )
         query_id_prefix = f"{query_id}."
 

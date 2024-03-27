@@ -674,7 +674,6 @@ fn extract_transaction<'a>(
                             ssh_tunnel_manager,
                             connection_config,
                             publication,
-                            Some(rel_id),
                         )
                         .await?;
                         let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
@@ -684,6 +683,17 @@ fn extract_transaction<'a>(
                         {
                             errored_tables.insert(rel_id);
                             yield (rel_id, Err(err), 1);
+                        }
+
+                        // Error any dropped tables.
+                        for oid in table_info.keys() {
+                            if !upstream_info.contains_key(oid) {
+                                if errored_tables.insert(*oid) {
+                                    // Minimize the number of excessive errors
+                                    // this will generate.
+                                    yield (*oid, Err(DefiniteError::TableDropped), 1);
+                                }
+                            }
                         }
                     }
                 }

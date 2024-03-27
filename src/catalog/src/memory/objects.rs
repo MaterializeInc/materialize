@@ -51,6 +51,7 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
+use mz_sql_parser::ast::ClusterScheduleOptionValue;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
@@ -1766,6 +1767,7 @@ pub struct ClusterVariantManaged {
     pub replication_factor: u32,
     pub disk: bool,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
+    pub schedule: ClusterScheduleOptionValue,
 }
 
 impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
@@ -1778,6 +1780,7 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             replication_factor: managed.replication_factor,
             disk: managed.disk,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
+            schedule: managed.schedule,
         }
     }
 }
@@ -1792,6 +1795,7 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             replication_factor: managed.replication_factor,
             disk: managed.disk,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
+            schedule: managed.schedule,
         }
     }
 }

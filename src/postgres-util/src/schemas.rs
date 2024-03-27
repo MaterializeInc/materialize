@@ -34,12 +34,9 @@ pub async fn get_schemas(
         .collect::<Vec<_>>())
 }
 
-/// Fetches table schema information from an upstream Postgres source for
-/// tables that are part of a publication, given a connection string and the
+/// Fetches table schema information from an upstream Postgres source for tables
+/// that are part of a publication, given a connection string and the
 /// publication name.
-///
-/// If `oid_filter` is `None`, returns all tables, otherwise returns only the
-/// details for the identified oid.
 ///
 /// # Errors
 ///
@@ -49,7 +46,6 @@ pub async fn publication_info(
     ssh_tunnel_manager: &SshTunnelManager,
     config: &Config,
     publication: &str,
-    oid_filter: Option<u32>,
 ) -> Result<Vec<PostgresTableDesc>, PostgresError> {
     let client = config
         .connect("postgres_publication_info", ssh_tunnel_manager)
@@ -75,9 +71,8 @@ pub async fn publication_info(
                 JOIN pg_publication_tables AS p ON
                         c.relname = p.tablename AND n.nspname = p.schemaname
             WHERE
-                p.pubname = $1
-                AND ($2::oid IS NULL OR c.oid = $2::oid)",
-            &[&publication, &oid_filter],
+                p.pubname = $1",
+            &[&publication],
         )
         .await
         .map_err(PostgresError::from)?;

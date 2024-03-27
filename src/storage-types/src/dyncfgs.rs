@@ -22,7 +22,19 @@ pub const DELAY_SOURCES_PAST_REHYDRATION: Config<bool> = Config::new(
         (namely, upsert) till after rehydration is finished",
 );
 
+/// When enabled, force-downgrade the controller's since handle on the shard
+/// during shard finalization.
+pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::new(
+    "storage_downgrade_since_during_finalization",
+    // This was original `false`, but it is not enabled everywhere.
+    true,
+    "When enabled, force-downgrade the controller's since handle on the shard\
+    during shard finalization",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
-    configs.add(&DELAY_SOURCES_PAST_REHYDRATION)
+    configs
+        .add(&DELAY_SOURCES_PAST_REHYDRATION)
+        .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
 }
