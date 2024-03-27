@@ -203,6 +203,13 @@ where
     let (decoded_stream, decode_health) = match encoding {
         None => (
             ok_source.map(|r| DecodeResult {
+                // This is safe because the current set of sources produce
+                // either:
+                // 1. Non-nullable keys
+                // 2. No keys at all.
+                //
+                // Please see the comment on `key_envelope_no_encoding` in
+                // `mz_sql::plan::statement::ddl` for more details.
                 key: Some(Ok(r.key)),
                 value: Some(Ok(r.value)),
                 metadata: r.metadata,

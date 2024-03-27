@@ -1240,9 +1240,15 @@ pub fn plan_create_source(
     // KEY VALUE load generators are the only UPSERT source that
     // has no encoding but defaults to `INCLUDE KEY`.
     //
-    // TODO(guswynn|petrosagg): when this is refactored, remove this special-case
-    // and move the `bail_unsupported` call below to a check specific to planning
-    // the decode stage.
+    // As discussed
+    // <https://github.com/MaterializeInc/materialize/pull/26246#issuecomment-2023558097>,
+    // removing this special case amounts to deciding how to handle null keys
+    // from sources, in a holistic way. We aren't yet prepared to do this, so we leave
+    // this special case in.
+    //
+    // Note that this is safe because this generator is
+    // 1. The only source with no encoding that can have its key included.
+    // 2. Never produces null keys (or values, for that matter).
     let key_envelope_no_encoding = matches!(
         external_connection,
         GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
