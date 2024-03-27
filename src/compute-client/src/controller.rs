@@ -106,10 +106,8 @@ pub enum ComputeControllerResponse<T> {
 pub struct ComputeReplicaConfig {
     /// TODO(#25239): Add documentation.
     pub logging: ComputeReplicaLogging,
-    /// The amount of effort to be spent on arrangement compaction during idle times.
-    ///
-    /// See [`differential_dataflow::Config::idle_merge_effort`].
-    pub idle_arrangement_merge_effort: Option<u32>,
+    /// The amount of effort to be spent on continual arrangement compaction.
+    pub arrangement_merge_effort: Option<u32>,
 }
 
 /// Logging configuration of a replica.
@@ -551,7 +549,7 @@ where
         };
 
         let idle_arrangement_merge_effort = config
-            .idle_arrangement_merge_effort
+            .arrangement_merge_effort
             .unwrap_or(self.compute.default_idle_arrangement_merge_effort);
 
         // TODO(teskje): make configurable via replica option

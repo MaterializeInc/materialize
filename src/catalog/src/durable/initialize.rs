@@ -630,7 +630,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> ClusterConfig {
                 log_logging: false,
                 interval: Some(Duration::from_secs(1)),
             },
-            idle_arrangement_merge_effort: None,
+            arrangement_merge_effort: None,
             disk: false,
             optimizer_feature_overrides: Default::default(),
             schedule: Default::default(),
@@ -652,6 +652,6 @@ fn default_replica_config(args: &BootstrapArgs) -> ReplicaConfig {
             log_logging: false,
             interval: Some(Duration::from_secs(1)),
         },
-        idle_arrangement_merge_effort: None,
+        arrangement_merge_effort: None,
     }
 }

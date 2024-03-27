@@ -36,7 +36,7 @@ statement ok
 ALTER CLUSTER foo RESET (INTROSPECTION INTERVAL)
 
 statement ok
-ALTER CLUSTER foo RESET (IDLE ARRANGEMENT MERGE EFFORT)
+ALTER CLUSTER foo RESET (ARRANGEMENT MERGE EFFORT)
 
 statement ok
 DROP CLUSTER foo
@@ -97,8 +97,8 @@ ALTER CLUSTER baz RESET (INTROSPECTION DEBUGGING)
 statement error db error: ERROR: Cannot change INTROSPECTION INTERVAL of unmanaged clusters
 ALTER CLUSTER baz RESET (INTROSPECTION INTERVAL)
 
-statement error db error: ERROR: Cannot change IDLE ARRANGEMENT MERGE EFFORT of unmanaged clusters
-ALTER CLUSTER baz RESET (IDLE ARRANGEMENT MERGE EFFORT)
+statement error db error: ERROR: Cannot change ARRANGEMENT MERGE EFFORT of unmanaged clusters
+ALTER CLUSTER baz RESET (ARRANGEMENT MERGE EFFORT)
 
 statement error db error: ERROR: Missing SIZE for empty cluster
 ALTER CLUSTER baz SET (MANAGED)

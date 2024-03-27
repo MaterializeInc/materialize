@@ -514,7 +514,7 @@ Trace {
                                                     ),
                                                 },
                                             ),
-                                            idle_arrangement_merge_effort: None,
+                                            arrangement_merge_effort: None,
                                             disk: false,
                                             optimizer_feature_overrides: [],
                                             schedule: Some(
@@ -580,7 +580,7 @@ Trace {
                                         ),
                                     },
                                 ),
-                                idle_arrangement_merge_effort: None,
+                                arrangement_merge_effort: None,
                                 location: Some(
                                     Managed(
                                         ManagedLocation {

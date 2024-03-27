@@ -308,10 +308,6 @@ message ReplicaLogging {
   Duration interval = 2;
 }
 
-message ReplicaMergeEffort {
-  uint32 effort = 1;
-}
-
 message OptimizerFeatureOverride {
   string name = 1;
   string value = 2;
@@ -330,7 +326,7 @@ message ClusterConfig {
     uint32 replication_factor = 2;
     repeated string availability_zones = 3;
     ReplicaLogging logging = 4;
-    ReplicaMergeEffort idle_arrangement_merge_effort = 5;
+    optional uint32 arrangement_merge_effort = 5;
     bool disk = 6;
     repeated OptimizerFeatureOverride optimizer_feature_overrides = 7;
     ClusterScheduleOptionValue schedule = 8;
@@ -364,7 +360,7 @@ message ReplicaConfig {
     ManagedLocation managed = 2;
   }
   ReplicaLogging logging = 3;
-  ReplicaMergeEffort idle_arrangement_merge_effort = 4;
+  optional uint32 arrangement_merge_effort = 4;
 }
 
 message RoleId {
