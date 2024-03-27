@@ -706,6 +706,8 @@ impl Catalog {
                 &mut builtin_migration_metadata,
             )?;
 
+            state.update_storage_metadata(&txn);
+
             txn.commit().await?;
             Ok((
                 state,

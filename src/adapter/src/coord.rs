@@ -1458,7 +1458,7 @@ impl Coordinator {
             .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
         debug!("coordinator init: initializing storage collections");
-        self.bootstrap_storage_collections().await?;
+        self.bootstrap_storage_collections().await;
 
         // Load catalog entries based on topological dependency sorting. We do
         // this to reinforce that `GlobalId`'s `Ord` implementation does not
@@ -1908,17 +1908,7 @@ impl Coordinator {
     /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
     /// storage collections, without needing to worry about dependency order.
     #[instrument]
-    async fn bootstrap_storage_collections(&mut self) -> Result<(), AdapterError> {
-        // We re-implement `catalog_mut` here so that we don't take a mutable
-        // reference over `self` for the lifetime of the return result because
-        // we also need to take a mutable reference to the storage controller.
-        {
-            let catalog = Arc::make_mut(&mut self.catalog);
-            catalog
-                .initialize_storage_controller_state(&mut *self.controller.storage)
-                .await?;
-        }
-
+    async fn bootstrap_storage_collections(&mut self) {
         // Reset the txns and table shards to a known set of invariants.
         //
         // TODO: This can be removed once we've flipped to the new txns system
@@ -2006,8 +1996,6 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to create collections");
 
         self.apply_local_write(register_ts).await;
-
-        Ok(())
     }
 
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
@@ -2970,7 +2958,7 @@ pub fn serve(
         let boot_ts = epoch_millis_oracle.write_ts().await.timestamp;
 
         info!("coordinator init: opening catalog");
-        let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
+        let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
             Catalog::open(
                 mz_catalog::config::Config {
                     storage,
@@ -3035,16 +3023,18 @@ pub fn serve(
             .name("coordinator".to_string())
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
-                let catalog = Arc::new(catalog);
 
-                let controller = handle.block_on(
-                    mz_controller::Controller::new(
-                        controller_config,
-                        controller_envd_epoch,
-                        controller_persist_txn_tables,
-                    )
-                    .boxed(),
-                );
+                let controller = handle
+                    .block_on({
+                        catalog.initialize_controller(
+                            controller_config,
+                            controller_envd_epoch,
+                            controller_persist_txn_tables,
+                        )
+                    })
+                    .expect("failed to initialize storage_controller");
+
+                let catalog = Arc::new(catalog);
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let mut coord = Coordinator {

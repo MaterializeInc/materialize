@@ -226,7 +226,7 @@ impl StorageMetadata {
 /// Data written to the implementor of this trait should make a consistent view
 /// of the data available through [`StorageMetadata`].
 #[async_trait(?Send)]
-pub trait StorageTxn<T: Timestamp> {
+pub trait StorageTxn<T> {
     /// Retrieve all of the visible storage metadata.
     ///
     /// The value of this map should be treated as opaque.
