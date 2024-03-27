@@ -427,6 +427,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
 
         if trace.roundtrip_structure || !structure_unchanged {
             if !spine_unchanged {
+                metrics.state.apply_spine_flattened.inc();
                 let mut flat = trace.flatten();
                 apply_diffs_single("since", diff_since, &mut flat.since)?;
                 apply_diffs_map(
