@@ -37,7 +37,6 @@ use uuid::Uuid;
 use crate::cfg::RetryParameters;
 use crate::fetch::{
     fetch_leased_part, FetchBatchFilter, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
-    SerdeLeasedBatchPartMetadata,
 };
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
@@ -370,11 +369,11 @@ where
         // `maybe_downgrade_since` call. Otherwise, we might give up our
         // capability on the batch's SeqNo before we lease it, which could lead
         // to blobs that it references being GC'd.
-        let metadata = SerdeLeasedBatchPartMetadata::Listen {
-            as_of: self.as_of.iter().map(T::encode).collect(),
-            lower: self.frontier.iter().map(T::encode).collect(),
+        let filter = FetchBatchFilter::Listen {
+            as_of: self.as_of.clone(),
+            lower: self.frontier.clone(),
         };
-        let parts = self.handle.lease_batch_parts(batch, metadata).collect();
+        let parts = self.handle.lease_batch_parts(batch, filter).collect();
 
         self.handle.maybe_downgrade_since(&self.since).await;
 
@@ -484,7 +483,7 @@ impl SubscriptionLeaseReturner {
         &self,
         x: SerdeLeasedBatchPart,
     ) -> LeasedBatchPart<T> {
-        LeasedBatchPart::from(x, Arc::clone(&self.metrics))
+        x.decode(Arc::clone(&self.metrics))
     }
 
     pub(crate) fn return_leased_part<T: Timestamp + Codec64>(
@@ -721,16 +720,14 @@ where
     ) -> Result<Vec<LeasedBatchPart<T>>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
-        let metadata = SerdeLeasedBatchPartMetadata::Snapshot {
-            as_of: as_of.iter().map(T::encode).collect(),
-        };
+        let filter = FetchBatchFilter::Snapshot { as_of };
         let mut leased_parts = Vec::new();
         for batch in batches {
             // Flatten the HollowBatch into one LeasedBatchPart per key. Each key
             // corresponds to a "part" or s3 object. This allows persist_source
             // to distribute work by parts (smallish, more even size) instead of
             // batches (arbitrarily large).
-            leased_parts.extend(self.lease_batch_parts(batch, metadata.clone()));
+            leased_parts.extend(self.lease_batch_parts(batch, filter.clone()));
         }
         Ok(leased_parts)
     }
@@ -754,13 +751,13 @@ where
         &mut self,
         desc: Description<T>,
         part: HollowBatchPart<T>,
-        metadata: SerdeLeasedBatchPartMetadata,
+        filter: FetchBatchFilter<T>,
     ) -> LeasedBatchPart<T> {
         LeasedBatchPart {
             metrics: Arc::clone(&self.metrics),
             shard_id: self.machine.shard_id(),
             reader_id: self.reader_id.clone(),
-            metadata,
+            filter,
             desc,
             part,
             leased_seqno: Some(self.lease_seqno()),
@@ -771,12 +768,12 @@ where
     fn lease_batch_parts(
         &mut self,
         batch: HollowBatch<T>,
-        metadata: SerdeLeasedBatchPartMetadata,
+        filter: FetchBatchFilter<T>,
     ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
         batch
             .parts
             .into_iter()
-            .map(move |part| self.lease_batch_part(batch.desc.clone(), part, metadata.clone()))
+            .map(move |part| self.lease_batch_part(batch.desc.clone(), part, filter.clone()))
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
@@ -1048,16 +1045,13 @@ where
             self.cfg.dynamic.compaction_memory_bound_bytes(),
         );
 
-        let metadata = SerdeLeasedBatchPartMetadata::Snapshot {
-            as_of: as_of.iter().map(T::encode).collect(),
-        };
-
+        let filter = FetchBatchFilter::Snapshot { as_of };
         for batch in batches {
             for run in batch.runs() {
                 let leased_parts: Vec<_> = run
                     .into_iter()
                     .map(|part| {
-                        self.lease_batch_part(batch.desc.clone(), part.clone(), metadata.clone())
+                        self.lease_batch_part(batch.desc.clone(), part.clone(), filter.clone())
                     })
                     .filter(|p| should_fetch_part(&p.part.stats))
                     .collect();

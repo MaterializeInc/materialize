@@ -39,7 +39,7 @@
   {{ run_hooks(pre_hooks, inside_transaction=True) }}
 
   {% call statement('main') -%}
-    {{ materialize__create_arbitrary_object(sql) }}
+    {{ materialize__create_sink(target_relation, sql) }}
   {%- endcall %}
 
   {% do persist_docs(target_relation, model) %}

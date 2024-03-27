@@ -991,6 +991,15 @@ Snapshot {
                                 idle_arrangement_merge_effort: None,
                                 disk: false,
                                 optimizer_feature_overrides: [],
+                                schedule: Some(
+                                    ClusterScheduleOptionValue {
+                                        value: Some(
+                                            Manual(
+                                                Empty,
+                                            ),
+                                        ),
+                                    },
+                                ),
                             },
                         ),
                     ),

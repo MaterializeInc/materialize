@@ -29,7 +29,9 @@ fi
 date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
+sudo systemctl restart docker
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
+killall -9 clusterd || true # There might be remaining processes from a previous cargo-test run
 
 ci_collapsed_heading "kind: Increase system limits..."
 sudo sysctl fs.inotify.max_user_watches=524288

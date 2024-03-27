@@ -176,6 +176,8 @@ class QueryGenerator:
                 storage_layout,
                 contains_aggregations,
                 row_selection,
+                offset=self._generate_offset(storage_layout, contains_aggregations),
+                limit=self._generate_limit(storage_layout, contains_aggregations),
             )
 
             queries.append(query)
@@ -203,14 +205,18 @@ class QueryGenerator:
                 self._log_skipped_expression(logger, expression, ignore_verdict.reason)
                 continue
 
+            contains_aggregation = expression.is_aggregate
+
             queries.append(
                 QueryTemplate(
                     expression.is_expect_error,
                     [expression],
                     None,
                     storage_layout,
-                    expression.is_aggregate,
+                    contains_aggregation,
                     row_selection,
+                    offset=self._generate_offset(storage_layout, contains_aggregation),
+                    limit=self._generate_limit(storage_layout, contains_aggregation),
                 )
             )
 
@@ -262,6 +268,43 @@ class QueryGenerator:
             del expressions[index_to_remove]
 
         return expressions
+
+    def _generate_offset(
+        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+    ) -> int | None:
+        return self._generate_offset_or_limit(storage_layout, contains_aggregations)
+
+    def _generate_limit(
+        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+    ) -> int | None:
+        return self._generate_offset_or_limit(storage_layout, contains_aggregations)
+
+    def _generate_offset_or_limit(
+        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+    ) -> int | None:
+        if storage_layout != ValueStorageLayout.VERTICAL:
+            return None
+
+        likelihood_of_offset_or_limit = 0.025 if contains_aggregations else 0.25
+
+        if not self.randomized_picker.random_boolean(likelihood_of_offset_or_limit):
+            # do not apply it
+            return None
+
+        max_value = self.vertical_storage_row_count + 1
+
+        if self.randomized_picker.random_boolean(0.7):
+            # prefer lower numbers since queries may already contain where conditions or apply aggregations
+            # (or contain offsets when generating a limit)
+            max_value = int(max_value / 3)
+
+        value = self.randomized_picker.random_number(0, max_value)
+
+        if value == 0 and self.randomized_picker.random_boolean(0.95):
+            # drop most 0 values for readability (but keep a few)
+            value = None
+
+        return value
 
     def _log_skipped_expression(
         self,

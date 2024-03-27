@@ -1117,7 +1117,7 @@ CREATE CLUSTER c_schedule_1 (SIZE = '1', SCHEDULE = MANUAL);
 statement ok
 CREATE CLUSTER c_schedule_2 (SIZE = '1', SCHEDULE MANUAL);
 
-statement error cluster schedules other than MANUAL not yet supported
+statement error db error: ERROR: cluster schedules other than MANUAL are not supported
 CREATE CLUSTER c_schedule_3 (SIZE = '1', SCHEDULE = ON REFRESH);
 
 statement ok
@@ -1126,7 +1126,7 @@ ALTER cluster c_schedule_1 RESET (SCHEDULE);
 statement ok
 ALTER cluster c_schedule_1 SET (SCHEDULE = MANUAL);
 
-statement error cluster schedules other than MANUAL not yet supported
+statement error db error: ERROR: cluster schedules other than MANUAL are not supported
 ALTER cluster c_schedule_1 SET (SCHEDULE = ON REFRESH);
 
 statement ok

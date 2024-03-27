@@ -7,9 +7,5 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT k1, k2, v1, v2, _fivetran_deleted FROM test.tester.test_writes
-k1  k2  v1     v2               _fivetran_deleted
--------------------------------------------------
-1   a   12.78  "{\"x\":\"y\"}"  true
-1   b   91.28  {}               <null>
-2   a   34.21  "{\"x\":\"z\"}"  false
+> SELECT COUNT(*) FROM test.tester.test_writes
+0

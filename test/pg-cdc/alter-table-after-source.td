@@ -401,10 +401,18 @@ TRUNCATE truncate_table;
 > SELECT * from drop_table;
 1 1
 
+# Drop a table and then trigger a `Relation` message
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE drop_table;
+ALTER TABLE add_columns ADD COLUMN f3 int;
+INSERT INTO add_columns VALUES (3, 'cd', 1);
 
-# This should error but we don't have a mechanism that does that yet.
-# #18519
-> SELECT * FROM drop_table;
-1 1
+# Ensure we've seen the relation message.
+> SELECT * from add_columns;
+1
+2
+3
+
+# Table is dropped
+! SELECT * FROM drop_table;
+contains:table was dropped

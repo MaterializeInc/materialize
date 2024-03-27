@@ -3586,10 +3586,16 @@ impl<T: AstInfo> AstDisplay for RefreshOptionValue<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
 pub enum ClusterScheduleOptionValue {
     Manual,
     Refresh,
+}
+
+impl Default for ClusterScheduleOptionValue {
+    fn default() -> Self {
+        ClusterScheduleOptionValue::Manual
+    }
 }
 
 impl AstDisplay for ClusterScheduleOptionValue {

@@ -27,7 +27,7 @@ class RandomizedPicker:
         self.config = config
         random.seed(self.config.random_seed)
 
-    def random_boolean(self, probability_for_true: float) -> bool:
+    def random_boolean(self, probability_for_true: float = 0.5) -> bool:
         assert (
             0 <= probability_for_true <= 1
         ), f"Invalid probability: {probability_for_true}"

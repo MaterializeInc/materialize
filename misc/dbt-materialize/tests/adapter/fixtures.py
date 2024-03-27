@@ -68,8 +68,6 @@ test_source = """
     pre_hook="CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}', SECURITY PROTOCOL PLAINTEXT)"
     )
 }}
-
-CREATE SOURCE {{ this }}
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
 FORMAT BYTES
 """
@@ -79,8 +77,15 @@ test_source_index = """
     materialized='source',
     indexes=[{'columns': ['data']}]
 ) }}
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
+FORMAT BYTES
+"""
 
-CREATE SOURCE {{ this }}
+test_source_cluster = """
+{{ config(
+    materialized='source',
+    cluster='quickstart'
+) }}
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
 FORMAT BYTES
 """
@@ -91,8 +96,6 @@ test_subsources = """
     database='materialize'
     )
 }}
-
-CREATE SOURCE {{ this }}
 FROM LOAD GENERATOR AUCTION
 FOR ALL TABLES;
 """
@@ -102,7 +105,18 @@ test_sink = """
     materialized='sink'
     )
 }}
- CREATE SINK {{ this }}
+ FROM {{ ref('test_materialized_view') }}
+ INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink')
+ FORMAT JSON
+ ENVELOPE DEBEZIUM
+"""
+
+test_sink_cluster = """
+{{ config(
+    materialized='sink',
+    cluster='quickstart'
+    )
+}}
  FROM {{ ref('test_materialized_view') }}
  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink')
  FORMAT JSON

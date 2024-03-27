@@ -24,17 +24,22 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, trace_span, Instrument};
 
+use crate::batch::{
+    proto_fetch_batch_filter, ProtoFetchBatchFilter, ProtoFetchBatchFilterListen, ProtoLease,
+    ProtoLeasedBatchPart,
+};
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{LazyPartStats, Schemas};
+use crate::internal::encoding::{LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
-use crate::internal::paths::{BlobKey, PartialBatchKey};
+use crate::internal::paths::BlobKey;
 use crate::internal::state::HollowBatchPart;
 use crate::read::LeasedReaderId;
 use crate::ShardId;
@@ -69,7 +74,7 @@ where
 {
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
-        LeasedBatchPart::from(x, Arc::clone(&self.metrics))
+        x.decode(Arc::clone(&self.metrics))
     }
 
     /// Trade in an exchange-able [LeasedBatchPart] for the data it represents.
@@ -115,7 +120,7 @@ where
             registered_desc: part.desc.clone(),
             part: part.part.clone(),
             schemas: self.schemas.clone(),
-            metadata: part.metadata.clone(),
+            filter: part.filter.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
             _phantom: PhantomData,
         };
@@ -138,22 +143,6 @@ pub(crate) enum FetchBatchFilter<T> {
 }
 
 impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
-    pub(crate) fn new(meta: &SerdeLeasedBatchPartMetadata) -> Self
-    where
-        T: Codec64,
-    {
-        match &meta {
-            SerdeLeasedBatchPartMetadata::Snapshot { as_of } => {
-                let as_of = Antichain::from_iter(as_of.iter().map(|x| T::decode(*x)));
-                FetchBatchFilter::Snapshot { as_of }
-            }
-            SerdeLeasedBatchPartMetadata::Listen { as_of, lower } => {
-                let as_of = Antichain::from_iter(as_of.iter().map(|x| T::decode(*x)));
-                let lower = Antichain::from_iter(lower.iter().map(|x| T::decode(*x)));
-                FetchBatchFilter::Listen { as_of, lower }
-            }
-        }
-    }
     pub(crate) fn filter_ts(&self, t: &mut T) -> bool {
         match self {
             FetchBatchFilter::Snapshot { as_of } => {
@@ -186,6 +175,42 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
                 t.advance_by(since.borrow());
                 true
             }
+        }
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoFetchBatchFilter> for FetchBatchFilter<T> {
+    fn into_proto(&self) -> ProtoFetchBatchFilter {
+        let kind = match self {
+            FetchBatchFilter::Snapshot { as_of } => {
+                proto_fetch_batch_filter::Kind::Snapshot(as_of.into_proto())
+            }
+            FetchBatchFilter::Listen { as_of, lower } => {
+                proto_fetch_batch_filter::Kind::Listen(ProtoFetchBatchFilterListen {
+                    as_of: Some(as_of.into_proto()),
+                    lower: Some(lower.into_proto()),
+                })
+            }
+            FetchBatchFilter::Compaction { .. } => unreachable!("not serialized"),
+        };
+        ProtoFetchBatchFilter { kind: Some(kind) }
+    }
+
+    fn from_proto(proto: ProtoFetchBatchFilter) -> Result<Self, TryFromProtoError> {
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoFetchBatchFilter::kind"))?;
+        match kind {
+            proto_fetch_batch_filter::Kind::Snapshot(as_of) => Ok(FetchBatchFilter::Snapshot {
+                as_of: as_of.into_rust()?,
+            }),
+            proto_fetch_batch_filter::Kind::Listen(ProtoFetchBatchFilterListen {
+                as_of,
+                lower,
+            }) => Ok(FetchBatchFilter::Listen {
+                as_of: as_of.into_rust_if_some("ProtoFetchBatchFilterListen::as_of")?,
+                lower: lower.into_rust_if_some("ProtoFetchBatchFilterListen::lower")?,
+            }),
         }
     }
 }
@@ -234,7 +259,7 @@ where
         metrics,
         encoded_part,
         schemas,
-        &part.metadata,
+        part.filter.clone(),
         part.filter_pushdown_audit,
         part.part.stats.as_ref(),
     )
@@ -314,24 +339,6 @@ where
     Ok(part)
 }
 
-/// Propagates metadata from readers alongside a `HollowBatch` to apply the
-/// desired semantics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) enum SerdeLeasedBatchPartMetadata {
-    /// Apply snapshot-style semantics to the fetched batch part.
-    Snapshot {
-        /// Return all values with time leq `as_of`.
-        as_of: Vec<[u8; 8]>,
-    },
-    /// Apply listen-style semantics to the fetched batch part.
-    Listen {
-        /// Return all values with time in advance of `as_of`.
-        as_of: Vec<[u8; 8]>,
-        /// Return all values with `lower` leq time.
-        lower: Vec<[u8; 8]>,
-    },
-}
-
 /// A token representing one fetch-able batch part.
 ///
 /// It is tradeable via `crate::fetch::fetch_batch` for the resulting data
@@ -362,7 +369,7 @@ pub struct LeasedBatchPart<T> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
     pub(crate) reader_id: LeasedReaderId,
-    pub(crate) metadata: SerdeLeasedBatchPartMetadata,
+    pub(crate) filter: FetchBatchFilter<T>,
     pub(crate) desc: Description<T>,
     pub(crate) part: HollowBatchPart<T>,
     /// The `SeqNo` from which this part originated; we track this value as
@@ -386,28 +393,13 @@ where
     /// the returned `SerdeLeasedBatchPart` back into a `LeasedBatchPart` will
     /// leak `SeqNo`s and prevent persist GC.
     pub fn into_exchangeable_part(mut self) -> SerdeLeasedBatchPart {
-        let r = SerdeLeasedBatchPart {
-            shard_id: self.shard_id,
-            metadata: self.metadata.clone(),
-            lower: self.desc.lower().iter().map(T::encode).collect(),
-            upper: self.desc.upper().iter().map(T::encode).collect(),
-            since: self.desc.since().iter().map(T::encode).collect(),
-            key: self.part.key.clone(),
-            encoded_size_bytes: self.part.encoded_size_bytes,
-            leased_seqno: self.leased_seqno,
-            reader_id: self.reader_id.clone(),
-            stats: self.part.stats.clone(),
-            filter_pushdown_audit: self.filter_pushdown_audit,
-            key_lower: std::mem::take(&mut self.part.key_lower),
-            ts_rewrite: self
-                .part
-                .ts_rewrite
-                .as_ref()
-                .map(|x| x.iter().map(T::encode).collect()),
-        };
+        let (proto, _metrics) = self.into_proto();
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = self.leased_seqno.take();
-        r
+        SerdeLeasedBatchPart {
+            encoded_size_bytes: self.part.encoded_size_bytes,
+            proto: LazyProto::from(&proto),
+        }
     }
 
     /// Because sources get dropped without notice, we need to permit another
@@ -466,7 +458,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     registered_desc: Description<T>,
     part: HollowBatchPart<T>,
     schemas: Schemas<K, V>,
-    metadata: SerdeLeasedBatchPartMetadata,
+    filter: FetchBatchFilter<T>,
     filter_pushdown_audit: bool,
     _phantom: PhantomData<fn() -> D>,
 }
@@ -480,7 +472,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             registered_desc: self.registered_desc.clone(),
             part: self.part.clone(),
             schemas: self.schemas.clone(),
-            metadata: self.metadata.clone(),
+            filter: self.filter.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             _phantom: self._phantom.clone(),
         }
@@ -501,7 +493,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
             Arc::clone(&self.metrics),
             part,
             self.schemas.clone(),
-            &self.metadata,
+            self.filter.clone(),
             self.filter_pushdown_audit,
             self.part.stats.as_ref(),
         )
@@ -547,11 +539,10 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         metrics: Arc<Metrics>,
         part: EncodedPart<T>,
         schemas: Schemas<K, V>,
-        metadata: &SerdeLeasedBatchPartMetadata,
+        ts_filter: FetchBatchFilter<T>,
         filter_pushdown_audit: bool,
         stats: Option<&LazyPartStats>,
     ) -> Self {
-        let ts_filter = FetchBatchFilter::new(metadata);
         let filter_pushdown_audit = if filter_pushdown_audit {
             stats.cloned()
         } else {
@@ -843,19 +834,11 @@ impl Cursor {
 /// - `From<SerdeLeasedBatchPart>` for `LeasedBatchPart<T>`
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SerdeLeasedBatchPart {
-    shard_id: ShardId,
-    metadata: SerdeLeasedBatchPartMetadata,
-    lower: Vec<[u8; 8]>,
-    upper: Vec<[u8; 8]>,
-    since: Vec<[u8; 8]>,
-    key: PartialBatchKey,
+    // Duplicated with the one serialized in the proto for use in backpressure.
     encoded_size_bytes: usize,
-    leased_seqno: Option<SeqNo>,
-    reader_id: LeasedReaderId,
-    stats: Option<LazyPartStats>,
-    filter_pushdown_audit: bool,
-    key_lower: Vec<u8>,
-    ts_rewrite: Option<Vec<[u8; 8]>>,
+    // We wrap this in a LazyProto because it guarantees that we use the proto
+    // encoding for the serde impls.
+    proto: LazyProto<ProtoLeasedBatchPart>,
 }
 
 impl SerdeLeasedBatchPart {
@@ -863,41 +846,54 @@ impl SerdeLeasedBatchPart {
     pub fn encoded_size_bytes(&self) -> usize {
         self.encoded_size_bytes
     }
+
+    pub(crate) fn decode<T: Timestamp + Codec64>(
+        &self,
+        metrics: Arc<Metrics>,
+    ) -> LeasedBatchPart<T> {
+        let proto = self.proto.decode().expect("valid leased batch part");
+        (proto, metrics)
+            .into_rust()
+            .expect("valid leased batch part")
+    }
 }
 
-impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
-    /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
-    ///
-    /// Note that this process in non-commutative with
-    /// [LeasedBatchPart::into_exchangeable_part]. The `LeasedBatchPart` that
-    /// this function generates is never droppable. However, the value generated
-    /// by `LeasedBatchPart::into_exchangeable_part` inherits the
-    /// `LeasedBatchPart`'s droppability.
-    ///
-    /// For more details, see [`LeasedBatchPart`]'s documentation.
-    pub(crate) fn from(x: SerdeLeasedBatchPart, metrics: Arc<Metrics>) -> Self {
-        LeasedBatchPart {
+// TODO: The way we're smuggling the metrics through here is a bit odd. Perhaps
+// we could refactor `LeasedBatchPart` into some proto-able struct plus the
+// metrics for the Drop bit?
+impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for LeasedBatchPart<T> {
+    fn into_proto(&self) -> (ProtoLeasedBatchPart, Arc<Metrics>) {
+        let proto = ProtoLeasedBatchPart {
+            shard_id: self.shard_id.into_proto(),
+            filter: Some(self.filter.into_proto()),
+            desc: Some(self.desc.into_proto()),
+            part: Some(self.part.into_proto()),
+            lease: Some(ProtoLease {
+                reader_id: self.reader_id.into_proto(),
+                seqno: self.leased_seqno.map(|x| x.into_proto()),
+            }),
+            filter_pushdown_audit: self.filter_pushdown_audit,
+        };
+        (proto, Arc::clone(&self.metrics))
+    }
+
+    fn from_proto(proto: (ProtoLeasedBatchPart, Arc<Metrics>)) -> Result<Self, TryFromProtoError> {
+        let (proto, metrics) = proto;
+        let lease = proto
+            .lease
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoLeasedBatchPart::lease"))?;
+        Ok(LeasedBatchPart {
             metrics,
-            shard_id: x.shard_id,
-            metadata: x.metadata,
-            desc: Description::new(
-                Antichain::from_iter(x.lower.into_iter().map(T::decode)),
-                Antichain::from_iter(x.upper.into_iter().map(T::decode)),
-                Antichain::from_iter(x.since.into_iter().map(T::decode)),
-            ),
-            part: HollowBatchPart {
-                key: x.key,
-                encoded_size_bytes: x.encoded_size_bytes,
-                stats: x.stats,
-                key_lower: x.key_lower,
-                ts_rewrite: x
-                    .ts_rewrite
-                    .map(|x| Antichain::from_iter(x.into_iter().map(T::decode))),
-            },
-            leased_seqno: x.leased_seqno,
-            reader_id: x.reader_id,
-            filter_pushdown_audit: x.filter_pushdown_audit,
-        }
+            shard_id: proto.shard_id.into_rust()?,
+            filter: proto
+                .filter
+                .into_rust_if_some("ProtoLeasedBatchPart::filter")?,
+            desc: proto.desc.into_rust_if_some("ProtoLeasedBatchPart::desc")?,
+            part: proto.part.into_rust_if_some("ProtoLeasedBatchPart::part")?,
+            reader_id: lease.reader_id.into_rust()?,
+            leased_seqno: lease.seqno.map(|x| x.into_rust()).transpose()?,
+            filter_pushdown_audit: proto.filter_pushdown_audit,
+        })
     }
 }
 

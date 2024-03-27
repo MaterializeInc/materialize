@@ -1,5 +1,35 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* **Breaking change.** The `source` and `sink` materialization types no longer
+    accept arbitrary SQL statements, and now accept the `cluster` configuration
+    option. The new syntax omits the `CREATE { SOURCE | SINK }` clause, and
+    requires migrating existing `source` and `sink` models to use that syntax
+    before upgrading.
+
+    **New**
+
+    ```sql
+    {{ config(
+         materialized='source',
+         cluster='quickstart'
+       ) }}
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-topic')
+    FORMAT BYTES
+    ```
+
+    **Deprecated**
+
+    ```sql
+    {{ config(
+         materialized='source'
+       ) }}
+    CREATE SOURCE {{ this }} IN CLUSTER 'quickstart'
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-topic')
+    FORMAT BYTES
+    ```
+
 ## 1.7.5 - 2024-03-15
 
 * `deploy_init(ignore_existing_objects)` now automatically copies the default

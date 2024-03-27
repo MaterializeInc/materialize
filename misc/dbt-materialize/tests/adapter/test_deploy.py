@@ -270,6 +270,7 @@ class TestRunWithDeploy:
     @pytest.fixture(scope="class")
     def models(self):
         return {
+            "test_source.sql": test_source,
             "test_materialized_view_index.sql": test_materialized_view_index,
             "test_view_index.sql": test_view_index,
         }
@@ -286,6 +287,18 @@ class TestRunWithDeploy:
 
         run_dbt(["run-operation", "deploy_init"])
         run_dbt(["run", "--vars", "deploy: True"])
+
+        sources = project.run_sql(
+            """
+            SELECT count(*)
+            FROM mz_sources
+            JOIN mz_clusters ON mz_sources.cluster_id = mz_clusters.id
+            WHERE mz_clusters.name = 'quickstart_dbt_deploy'
+               AND mz_sources.id LIKE 'u%'""",
+            fetch="one",
+        )
+
+        assert int(sources[0]) == 1
 
         mat_views = project.run_sql(
             """
@@ -311,34 +324,6 @@ class TestRunWithDeploy:
 
         assert int(indexes[0]) == 2
 
-        run_dbt(["run-operation", "deploy_cleanup"])
-
-
-class TestSourceFail:
-    @pytest.fixture(scope="class")
-    def project_config_update(self):
-        return {
-            "vars": {
-                "deployment": {
-                    "default": {"clusters": ["quickstart"], "schemas": ["public"]}
-                }
-            }
-        }
-
-    @pytest.fixture(scope="class")
-    def models(self):
-        return {
-            "test_source.sql": test_source,
-        }
-
-    @pytest.fixture(autouse=True)
-    def cleanup(self, project):
-        project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
-
-    def test_source_fails(self, project):
-        run_dbt(["run-operation", "deploy_init"])
-        run_dbt(["run", "--vars", "deploy: True"], expect_pass=False)
         run_dbt(["run-operation", "deploy_cleanup"])
 
 
