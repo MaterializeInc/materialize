@@ -68,6 +68,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{
     CollectionMetadata, DurableCollectionMetadata, PersistTxnTablesImpl, StorageError, TxnsCodecRow,
 };
+use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -1685,12 +1686,7 @@ where
                     .await
                     .expect("stash operation must succeed");
 
-                if self.config.parameters.finalize_shards {
-                    info!("triggering shard finalization due to dropped storage object");
-                    self.finalize_shards().await;
-                } else {
-                    info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false")
-                }
+                self.finalize_shards().await;
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -3031,6 +3027,12 @@ where
     #[allow(dead_code)]
     #[instrument(level = "debug")]
     async fn finalize_shards(&mut self) {
+        if !self.config.parameters.finalize_shards {
+            info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
+            return;
+        }
+        info!("triggering shard finalization due to dropped storage object");
+
         let shards = self
             .stash
             .with_transaction(move |tx| {
@@ -3057,11 +3059,17 @@ where
         let persist_client = &persist_client;
         let diagnostics = &Diagnostics::from_purpose("finalizing shards");
 
+        let force_downgrade_since =
+            STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION.get(self.config.config_set());
+
+        let epoch = &PersistEpoch::from(self.envd_epoch);
+
         use futures::stream::StreamExt;
         let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(shards)
             .map(|shard_id| async move {
                 let persist_client = persist_client.clone();
                 let diagnostics = diagnostics.clone();
+                let epoch = epoch.clone();
 
                 let is_finalized = persist_client
                     .is_finalized::<SourceData, (), T, Diff>(shard_id, diagnostics)
@@ -3105,6 +3113,34 @@ where
                                 }
                             }
                             write_handle.expire().await;
+
+                            if force_downgrade_since {
+                                let mut since_handle: SinceHandle<
+                                    SourceData,
+                                    (),
+                                    T,
+                                    Diff,
+                                    PersistEpoch,
+                                > = persist_client
+                                    .open_critical_since(
+                                        shard_id,
+                                        PersistClient::CONTROLLER_CRITICAL_SINCE,
+                                        Diagnostics::from_purpose("finalizing shards"),
+                                    )
+                                    .await
+                                    .expect("invalid persist usage");
+                                let epoch = epoch.clone();
+                                let new_since = Antichain::new();
+                                let downgrade = since_handle
+                                    .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+                                    .await;
+                                if let Err(e) = downgrade {
+                                    warn!(
+                                        "tried to finalize a shard with an advancing epoch: {e:?}"
+                                    );
+                                    return Ok(());
+                                }
+                            }
 
                             persist_client
                                 .finalize_shard::<SourceData, (), T, Diff>(
