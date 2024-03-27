@@ -1635,7 +1635,7 @@ where
             };
 
             if read_frontier.is_empty() {
-                if self.ingestions.get(&id).is_some() && client.is_some() {
+                if client.is_some() && self.ingestions.get(&id).is_some() {
                     pending_source_drops.push(id);
                 } else if let Some(collection) = self.collections.get(&id) {
                     match collection.data_source {
@@ -1668,8 +1668,10 @@ where
                         DataSource::Progress => (),
                         DataSource::Other(_) => (),
                     }
-                } else if self.exports.get(&id).is_some() && client.is_some() {
+                } else if client.is_some() && self.exports.get(&id).is_some() {
                     pending_sink_drops.push(id);
+                } else if client.is_none() {
+                    tracing::info!("Compaction command for id {id}, but we don't have a client.");
                 } else {
                     panic!("Reference to absent collection {id}");
                 };
