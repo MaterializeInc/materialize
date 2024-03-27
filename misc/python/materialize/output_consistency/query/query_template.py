@@ -37,6 +37,8 @@ class QueryTemplate:
         storage_layout: ValueStorageLayout,
         contains_aggregations: bool,
         row_selection: DataRowSelection,
+        offset: int | None,
+        limit: int | None,
     ) -> None:
         assert storage_layout != ValueStorageLayout.ANY
         self.expect_error = expect_error
@@ -45,6 +47,8 @@ class QueryTemplate:
         self.storage_layout = storage_layout
         self.contains_aggregations = contains_aggregations
         self.row_selection = row_selection
+        self.offset = offset
+        self.limit = limit
         self.disable_error_message_validation = not self.__can_compare_error_messages()
 
     def add_select_expression(self, expression: Expression) -> None:
@@ -70,12 +74,17 @@ class QueryTemplate:
         )
         where_clause = self._create_where_clause(strategy.sql_adjuster)
         order_by_clause = self._create_order_by_clause()
+        limit_clause = self._create_limit_clause()
+        offset_clause = self._create_offset_clause()
 
         sql = f"""
 SELECT{space_separator}{column_sql}
 FROM{space_separator}{db_object_name}
 {where_clause}
-{order_by_clause};""".strip()
+{order_by_clause}
+{limit_clause}
+{offset_clause};
+""".strip()
 
         return self._post_format_sql(sql, output_format)
 
@@ -137,8 +146,21 @@ FROM{space_separator}{db_object_name}
 
         return ""
 
+    def _create_offset_clause(self) -> str:
+        if self.offset is not None:
+            return f"OFFSET {self.offset}"
+
+        return ""
+
+    def _create_limit_clause(self) -> str:
+        if self.limit is not None:
+            return f"LIMIT {self.limit}"
+
+        return ""
+
     def _post_format_sql(self, sql: str, output_format: QueryOutputFormat) -> str:
-        sql = sql.replace("\n\n", "\n")
+        # apply this replacement twice
+        sql = sql.replace("\n\n", "\n").replace("\n\n", "\n")
         sql = sql.replace("\n;", ";")
 
         if output_format == QueryOutputFormat.SINGLE_LINE:
