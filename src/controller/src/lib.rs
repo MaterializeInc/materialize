@@ -58,6 +58,7 @@ use mz_storage_client::controller::StorageController;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
+use serde::Serialize;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -121,7 +122,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
 
 /// Whether one of the underlying controllers is ready for their `process`
 /// method to be called.
-#[derive(Default)]
+#[derive(Debug, Default)]
 enum Readiness<T> {
     /// No underlying controllers are ready.
     #[default]
@@ -215,6 +216,63 @@ impl<T: Timestamp> Controller<T> {
     /// This is purely a helper, and can be obtained from `self.storage`.
     pub fn storage_configuration(&self) -> &StorageConfiguration {
         self.storage.config()
+    }
+
+    /// Returns the state of the [`Controller`] formatted as JSON.
+    ///
+    /// The returned value is not guaranteed to be stable and may change at any point in time.
+    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        // Note: We purposefully use the `Debug` formatting for the value of all fields in the
+        // returned object as a tradeoff between usability and stability. `serde_json` will fail
+        // to serialize an object if the keys aren't strings, so `Debug` formatting the values
+        // prevents a future unrelated change from silently breaking this method.
+
+        // Destructure `self` here so we don't forget to consider dumping newly added fields.
+        let Self {
+            storage: _,
+            compute,
+            clusterd_image: _,
+            init_container_image: _,
+            orchestrator: _,
+            readiness,
+            metrics_tasks: _,
+            metrics_tx: _,
+            metrics_rx: _,
+            frontiers_ticker: _,
+            persist_pubsub_url: _,
+            persist_txn_tables: _,
+            secrets_args: _,
+            objects_to_unfulfilled_watch_sets,
+            immediate_watch_sets,
+        } = self;
+
+        let objects_to_unfulfilled_watch_sets: BTreeMap<_, _> = objects_to_unfulfilled_watch_sets
+            .iter()
+            .map(|(id, watches)| (id.to_string(), format!("{watches:?}")))
+            .collect();
+        let immediate_watch_sets: Vec<_> = immediate_watch_sets
+            .iter()
+            .map(|watch| format!("{watch:?}"))
+            .collect();
+
+        fn field(
+            key: &str,
+            value: impl Serialize,
+        ) -> Result<(String, serde_json::Value), anyhow::Error> {
+            let value = serde_json::to_value(value)?;
+            Ok((key.to_string(), value))
+        }
+
+        let map = serde_json::Map::from_iter([
+            field("compute", compute.dump()?)?,
+            field("readiness", format!("{readiness:?}"))?,
+            field(
+                "objects_to_unfulfilled_watch_sets",
+                objects_to_unfulfilled_watch_sets,
+            )?,
+            field("immediate_watch_sets", immediate_watch_sets)?,
+        ]);
+        Ok(serde_json::Value::Object(map))
     }
 }
 
