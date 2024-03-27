@@ -28,6 +28,7 @@ use mz_repr::user::ExternalUserMetadata;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::metrics::Metrics;
@@ -539,6 +540,10 @@ impl AuthenticatorInner {
         if let Some(expected_email) = expected_email {
             validate_email(&msg.claims.email, expected_email)?;
         }
+        info!(
+            "LOOK HERE, admin_role: {:?}, claim roles: {:?}",
+            self.admin_role, msg.claims.roles
+        );
         Ok(ValidatedClaims {
             exp: msg.claims.exp,
             email: msg.claims.email,
