@@ -27,8 +27,6 @@ use prost::Message;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tracing::debug;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -48,7 +46,7 @@ use crate::internal::state::{
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
-use crate::internal::trace::{FuelingMerge, SpineId, ThinSpineBatch, Trace};
+use crate::internal::trace::{FlatTrace, FuelingMerge, SpineId, ThinSpineBatch, Trace};
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::{cfg, PersistConfig, ShardId, WriterId};
 
@@ -1033,53 +1031,53 @@ impl<T: Timestamp + Codec64> ProtoMapEntry<SpineId, FuelingMerge<T>> for ProtoId
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
+impl<T: Timestamp + Codec64> RustType<ProtoTrace> for FlatTrace<T> {
     fn into_proto(&self) -> ProtoTrace {
-        let mut legacy_batches = Vec::new();
-        self.map_batches(|b| {
-            legacy_batches.push(b.into_proto());
-        });
+        let since = self.since.into_proto();
+        let legacy_batches = self
+            .legacy_batches
+            .iter()
+            .map(|(b, _)| b.into_proto())
+            .collect();
+        let hollow_batches = self.hollow_batches.into_proto();
+        let spine_batches = self.spine_batches.into_proto();
+        let merges = self.fueling_merges.into_proto();
         ProtoTrace {
-            since: Some(self.since().into_proto()),
+            since: Some(since),
             legacy_batches,
-            hollow_batches: vec![],
-            spine_batches: vec![],
-            merges: vec![],
+            hollow_batches,
+            spine_batches,
+            merges,
         }
     }
 
     fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
-        let mut ret = Trace::default();
-        ret.downgrade_since(&proto.since.into_rust_if_some("since")?);
-        let mut batches_pushed = 0;
-        for batch in proto.legacy_batches.into_iter() {
-            let batch: HollowBatch<T> = batch.into_rust()?;
-            if PartialOrder::less_than(ret.since(), batch.desc.since()) {
-                return Err(TryFromProtoError::InvalidPersistState(format!(
-                    "invalid ProtoTrace: the spine's since {:?} was less than a batch's since {:?}",
-                    ret.since(),
-                    batch.desc.since()
-                )));
-            }
-            // We could perhaps more directly serialize and rehydrate the
-            // internals of the Spine, but this is nice because it insulates
-            // us against changes in the Spine logic. The current logic has
-            // turned out to be relatively expensive in practice, but as we
-            // tune things (especially when we add inc state) the rate of
-            // this deserialization should go down. Revisit as necessary.
-            //
-            // Ignore merge_reqs because whichever process generated this diff is
-            // assigned the work.
-            let () = ret.push_batch_no_merge_reqs(batch);
+        let since = proto.since.into_rust_if_some("ProtoTrace::since")?;
+        let legacy_batches = proto
+            .legacy_batches
+            .into_iter()
+            .map(|b| b.into_rust().map(|b| (b, ())))
+            .collect::<Result<_, _>>()?;
+        let hollow_batches = proto.hollow_batches.into_rust()?;
+        let spine_batches = proto.spine_batches.into_rust()?;
+        let merges = proto.merges.into_rust()?;
+        Ok(FlatTrace {
+            since,
+            legacy_batches,
+            hollow_batches,
+            spine_batches,
+            fueling_merges: merges,
+        })
+    }
+}
 
-            batches_pushed += 1;
-            if batches_pushed % 1000 == 0 {
-                let mut batch_count = 0;
-                ret.map_batches(|_| batch_count += 1);
-                debug!("Decoded and pushed {batches_pushed} batches; trace size {batch_count}");
-            }
-        }
-        Ok(ret)
+impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
+    fn into_proto(&self) -> ProtoTrace {
+        self.flatten().into_proto()
+    }
+
+    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
+        Trace::unflatten(proto.into_rust()?).map_err(TryFromProtoError::InvalidPersistState)
     }
 }
 
