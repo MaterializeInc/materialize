@@ -121,7 +121,7 @@ running
 # ALTER CONNECTION for Kafka + SSH
 
 ! ALTER CONNECTION testdrive_no_reset_connections.public.ssh SET (HOST = 'abcd') WITH (VALIDATE = true);
-contains:Could not resolve hostname abcd
+contains:failed to lookup address information: Name or service not known
 
 ! ALTER CONNECTION testdrive_no_reset_connections.public.ssh RESET (HOST);
 contains:HOST option is required

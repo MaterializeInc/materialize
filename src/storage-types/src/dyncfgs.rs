@@ -22,7 +22,18 @@ pub const DELAY_SOURCES_PAST_REHYDRATION: Config<bool> = Config::new(
         (namely, upsert) till after rehydration is finished",
 );
 
-/// Adds the full set of all compute `Config`s.
+/// Whether or not to enforce that external connection addresses are global
+/// (not private or local) when resolving them.
+pub const ENFORCE_EXTERNAL_ADDRESSES: Config<bool> = Config::new(
+    "storage_enforce_external_addresses",
+    false,
+    "Whether or not to enforce that external connection addresses are global \
+          (not private or local) when resolving them",
+);
+
+/// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
-    configs.add(&DELAY_SOURCES_PAST_REHYDRATION)
+    configs
+        .add(&DELAY_SOURCES_PAST_REHYDRATION)
+        .add(&ENFORCE_EXTERNAL_ADDRESSES)
 }

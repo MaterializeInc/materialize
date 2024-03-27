@@ -185,12 +185,15 @@ differential-dataflow = { git = "https://github.com/MaterializeInc/differential-
 dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "91522e47643ebb6d6a5e392957b2319e5bb522ad" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "91522e47643ebb6d6a5e392957b2319e5bb522ad" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "91522e47643ebb6d6a5e392957b2319e5bb522ad" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "91522e47643ebb6d6a5e392957b2319e5bb522ad" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "91522e47643ebb6d6a5e392957b2319e5bb522ad" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
+
+# Waiting on https://github.com/blackbeam/mysql_async/pull/300
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", rev = "6afd2136181f2ec93b7ca7de524f6d02b6f10c1d" }
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }

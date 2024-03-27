@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::net::IpAddr;
 use std::time::Duration;
 
 use mz_ore::option::OptionExt;
@@ -37,7 +38,7 @@ macro_rules! bail_generic {
 #[derive(Debug, PartialEq, Clone)]
 pub enum TunnelConfig {
     /// Establish a direct TCP connection to the database host.
-    Direct,
+    Direct { resolved_ips: Option<Vec<IpAddr>> },
     /// Establish a TCP connection to the database via an SSH tunnel.
     /// This means first establishing an SSH connection to a bastion host,
     /// and then opening a separate connection from that host to the database.
@@ -222,7 +223,24 @@ impl Config {
         })?;
 
         match &self.tunnel {
-            TunnelConfig::Direct => {
+            TunnelConfig::Direct { resolved_ips } => {
+                if let Some(ips) = resolved_ips {
+                    let host = match postgres_config.get_hosts() {
+                        [Host::Tcp(host)] => host,
+                        _ => bail_generic!(
+                            "only TCP connections to a single PostgreSQL server are supported"
+                        ),
+                    }
+                    .to_owned();
+                    // The number of 'host' and 'hostaddr' values must be the same.
+                    for (idx, ip) in ips.iter().enumerate() {
+                        if idx != 0 {
+                            postgres_config.host(&host);
+                        }
+                        postgres_config.hostaddr(ip.clone());
+                    }
+                };
+
                 let (client, connection) = postgres_config.connect(tls).await?;
                 task::spawn(|| task_name, connection);
                 Ok(client)
@@ -262,16 +280,24 @@ impl Config {
                 // `tokio_postgres::Config` to do this is somewhat confusing, and requires we edit
                 // the singular host in place.
 
-                let (host, _) = self.address()?;
-                postgres_config.tls_verify_host(host);
-
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
+                let privatelink_addrs = tokio::net::lookup_host(privatelink_host).await?;
 
-                match postgres_config.get_hosts_mut() {
-                    [Host::Tcp(host)] => *host = privatelink_host,
+                // Override the actual IPs to connect to for the TCP connection, leaving the original host in-place
+                // for TLS verification
+                let host = match postgres_config.get_hosts() {
+                    [Host::Tcp(host)] => host,
                     _ => bail_generic!(
                         "only TCP connections to a single PostgreSQL server are supported"
                     ),
+                }
+                .to_owned();
+                // The number of 'host' and 'hostaddr' values must be the same.
+                for (idx, addr) in privatelink_addrs.enumerate() {
+                    if idx != 0 {
+                        postgres_config.host(&host);
+                    }
+                    postgres_config.hostaddr(addr.ip());
                 }
 
                 let (client, connection) = postgres_config.connect(tls).await?;
