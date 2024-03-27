@@ -48,7 +48,7 @@ use crate::internal::state::{
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
-use crate::internal::trace::{FuelingMerge, SpineId, ThinSpineBatch, Trace};
+use crate::internal::trace::{FlatTrace, FuelingMerge, SpineId, ThinSpineBatch, Trace};
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::{cfg, PersistConfig, ShardId, WriterId};
 
@@ -1033,8 +1033,51 @@ impl<T: Timestamp + Codec64> ProtoMapEntry<usize, FuelingMerge<T>> for ProtoLeve
     }
 }
 
+impl<T: Timestamp + Codec64> RustType<ProtoTrace> for FlatTrace<T> {
+    fn into_proto(&self) -> ProtoTrace {
+        let since = self.since.into_proto();
+        let legacy_batches = self
+            .legacy_batches
+            .iter()
+            .map(|(b, _)| b.into_proto())
+            .collect();
+        let hollow_batches = self.hollow_batches.into_proto();
+        let spine_batches = self.spine_batches.into_proto();
+        let merges = self.fueling_merges.into_proto();
+        ProtoTrace {
+            since: Some(since),
+            legacy_batches,
+            hollow_batches,
+            spine_batches,
+            merges,
+        }
+    }
+
+    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
+        let since = proto.since.into_rust_if_some("since")?;
+        let legacy_batches = proto
+            .legacy_batches
+            .into_iter()
+            .map(|b| b.into_rust().map(|b| (b, ())))
+            .collect::<Result<_, _>>()?;
+        let hollow_batches = proto.hollow_batches.into_rust()?;
+        let spine_batches = proto.spine_batches.into_rust()?;
+        let spine_merges = proto.merges.into_rust()?;
+        Ok(FlatTrace {
+            since,
+            legacy_batches,
+            hollow_batches,
+            spine_batches,
+            fueling_merges: spine_merges,
+        })
+    }
+}
+
 impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
     fn into_proto(&self) -> ProtoTrace {
+        if self.roundtrip_structure {
+            return self.flatten().into_proto();
+        }
         let mut legacy_batches = Vec::new();
         self.map_batches(|b| {
             legacy_batches.push(b.into_proto());
@@ -1049,6 +1092,14 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
     }
 
     fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
+        let roundtrip_structure = !proto.hollow_batches.is_empty()
+            || !proto.spine_batches.is_empty()
+            || !proto.merges.is_empty();
+        if roundtrip_structure {
+            return Trace::unflatten(proto.into_rust()?)
+                .map_err(TryFromProtoError::InvalidPersistState);
+        }
+
         let mut ret = Trace::default();
         ret.downgrade_since(&proto.since.into_rust_if_some("since")?);
         let mut batches_pushed = 0;

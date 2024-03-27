@@ -191,7 +191,29 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         );
         diff_field_sorted_iter(from_writers.iter(), to_writers, &mut diffs.writers);
         diff_field_single(from_trace.since(), to_trace.since(), &mut diffs.since);
-        diff_field_spine(from_trace, to_trace, &mut diffs.legacy_batches);
+
+        let from_flat = from_trace.flatten();
+        let to_flat = to_trace.flatten();
+        diff_field_sorted_iter(
+            from_flat.legacy_batches.iter().map(|(k, v)| (&**k, v)),
+            to_flat.legacy_batches.iter().map(|(k, v)| (&**k, v)),
+            &mut diffs.legacy_batches,
+        );
+        diff_field_sorted_iter(
+            from_flat.hollow_batches.iter(),
+            to_flat.hollow_batches.iter(),
+            &mut diffs.hollow_batches,
+        );
+        diff_field_sorted_iter(
+            from_flat.spine_batches.iter(),
+            to_flat.spine_batches.iter(),
+            &mut diffs.spine_batches,
+        );
+        diff_field_sorted_iter(
+            from_flat.fueling_merges.iter(),
+            to_flat.fueling_merges.iter(),
+            &mut diffs.fueling_merges,
+        );
         diffs
     }
 
@@ -355,9 +377,9 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             writers: diff_writers,
             since: diff_since,
             legacy_batches: diff_legacy_batches,
-            hollow_batches,
-            spine_batches,
-            fueling_merges: spine_merges,
+            hollow_batches: diff_hollow_batches,
+            spine_batches: diff_spine_batches,
+            fueling_merges: diff_fueling_merges,
         } = diff;
         if self.seqno == diff_seqno_to {
             return Ok(());
@@ -397,25 +419,56 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         apply_diffs_map("critical_readers", diff_critical_readers, critical_readers)?;
         apply_diffs_map("writers", diff_writers, writers)?;
 
-        for x in diff_since {
-            match x.val {
-                Update(from, to) => {
-                    if trace.since() != &from {
-                        return Err(format!(
-                            "since update didn't match: {:?} vs {:?}",
-                            self.collections.trace.since(),
-                            &from
-                        ));
-                    }
-                    trace.downgrade_since(&to);
-                }
-                Insert(_) => return Err("cannot insert since field".to_string()),
-                Delete(_) => return Err("cannot delete since field".to_string()),
+        let structure_unchanged = diff_hollow_batches.is_empty()
+            && diff_spine_batches.is_empty()
+            && diff_fueling_merges.is_empty();
+        let spine_unchanged =
+            diff_since.is_empty() && diff_legacy_batches.is_empty() && structure_unchanged;
+
+        if trace.roundtrip_structure || !structure_unchanged {
+            if !spine_unchanged {
+                let mut flat = trace.flatten();
+                apply_diffs_single("since", diff_since, &mut flat.since)?;
+                apply_diffs_map(
+                    "legacy_batches",
+                    diff_legacy_batches
+                        .into_iter()
+                        .map(|StateFieldDiff { key, val }| StateFieldDiff {
+                            key: Arc::new(key),
+                            val,
+                        }),
+                    &mut flat.legacy_batches,
+                )?;
+                apply_diffs_map(
+                    "hollow_batches",
+                    diff_hollow_batches,
+                    &mut flat.hollow_batches,
+                )?;
+                apply_diffs_map("spine_batches", diff_spine_batches, &mut flat.spine_batches)?;
+                apply_diffs_map("merges", diff_fueling_merges, &mut flat.fueling_merges)?;
+                *trace = Trace::unflatten(flat)?;
             }
-        }
-        if !diff_legacy_batches.is_empty() {
-            apply_diffs_spine(metrics, diff_legacy_batches, trace)?;
-            debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
+        } else {
+            for x in diff_since {
+                match x.val {
+                    Update(from, to) => {
+                        if trace.since() != &from {
+                            return Err(format!(
+                                "since update didn't match: {:?} vs {:?}",
+                                self.collections.trace.since(),
+                                &from
+                            ));
+                        }
+                        trace.downgrade_since(&to);
+                    }
+                    Insert(_) => return Err("cannot insert since field".to_string()),
+                    Delete(_) => return Err("cannot delete since field".to_string()),
+                }
+            }
+            if !diff_legacy_batches.is_empty() {
+                apply_diffs_spine(metrics, diff_legacy_batches, trace)?;
+                debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
+            }
         }
 
         // There's various sanity checks that this method could run (e.g. since,
@@ -591,7 +644,7 @@ where
 
 fn apply_diffs_map<K: Ord, V: PartialEq + Debug>(
     name: &str,
-    diffs: Vec<StateFieldDiff<K, V>>,
+    diffs: impl IntoIterator<Item = StateFieldDiff<K, V>>,
     map: &mut BTreeMap<K, V>,
 ) -> Result<(), String> {
     for diff in diffs {
@@ -639,16 +692,6 @@ fn apply_diff_map<K: Ord, V: PartialEq + Debug>(
         }
     };
     Ok(())
-}
-
-fn diff_field_spine<T: Timestamp + Lattice>(
-    from: &Trace<T>,
-    to: &Trace<T>,
-    diffs: &mut Vec<StateFieldDiff<HollowBatch<T>, ()>>,
-) {
-    let from_batches = from.batches().into_iter().map(|b| (b, &()));
-    let to_batches = to.batches().into_iter().map(|b| (b, &()));
-    diff_field_sorted_iter(from_batches, to_batches, diffs);
 }
 
 // This might leave state in an invalid (umm) state when returning an error. The
