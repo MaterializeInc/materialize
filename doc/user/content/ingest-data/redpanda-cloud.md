@@ -15,38 +15,44 @@ with the Postgres ones."
 
 This guide goes through the required steps to connect Materialize to a Redpanda
 Cloud cluster. If you already have a Redpanda Cloud cluster up and running,
-skip straight to [Step 4. Download Redpanda Broker CA certificate](#step-4-download-the-broker-ca-certificate).
+skip straight to [Step 2](#step-2-create-a-user).
 
 ## Step 1. Create a Redpanda Cloud cluster
 
 {{< note >}}
-Once created, provisioning a Redpanda Cloud cluster can take up to 15 minutes.
+Once created, provisioning a Dedicated Redpanda Cloud cluster can take up to 40 minutes.
+
+Serverless clusters are provisioned in a few minutes.
 {{</ note >}}
 
-1. Sign in to the [Redpanda Cloud console](https://vectorized.cloud/).
+1. Sign in to the [Redpanda Cloud console](https://cloud.redpanda.com/).
 
-1. Choose **Add cluster**.
+1. Create a new namespace or select an existing one where you want to create the cluster.
+
+1. Choose the type of cluster you want to create.
 
 1. Enter a cluster name, and specify the rest of the settings based on your
 needs.
 
-1. Choose **Create cluster**.
+1. Click **Next** and select the network settings for your cluster.
 
-## Step 2. Create a service account
+1. Next, click **Create** to create the cluster.
 
-1. Navigate to the [Redpanda Cloud console](https://vectorized.cloud/).
+## Step 2. Create a user
+
+1. Navigate to the [Redpanda Cloud console](https://cloud.redpanda.com/).
 
 1. Choose the Redpanda cluster you created in **Step 1**.
 
 1. Click on the **Security** tab.
 
-1. In the **Security** section, choose **Add service account**.
+1. In the **Security** section, choose **Create User**.
 
-1. Specify a name for the service account and click **Create**.
+1. Specify a name and a password along with the SASL Mechanism
+for the user and click **Create**.
 
-Take note of the name of the service account you just created, as well as
-the service account secret key; you'll need them later on. Keep in mind
-that the service account secret key contains sensitive information, and you
+Take note of the user you just created, as well as the password and the SASL Mechanism you chose;
+you'll need them later on. Keep in mind that the password contains sensitive information, and you
 should store it somewhere safe!
 
 ## Step 3. Create an Access Control List
@@ -55,7 +61,7 @@ should store it somewhere safe!
 
 1. Click **Add ACL**,
 
-1. Choose the **Service Account** you just created.
+1. Choose the **User** you just created.
 
 1. Choose the **Read** and **Write** permissions for the **Topics** section.
 
@@ -63,24 +69,6 @@ should store it somewhere safe!
 access to all topics by adding a `*` in the **Topics ID** input field.
 
 1. Click **Create**.
-
-## Step 4. Download the broker CA certificate
-
-1. Go to the [Redpanda Cloud console](https://vectorized.cloud/).
-
-1. Click on the **Overview** tab.
-
-1. Click on the **Download** button next to the **Kafka API TLS**.
-
-1. You'll need to `base64`-encode the certificate. One way to do this is to open
-up a terminal and run the following command:
-
-    ```bash
-    cat <redpanda-broker-ca>.crt | base64
-    ```
-
-    Store the encoded certificate somewhere safe; you'll need it to securely
-    connect to Materialize.
 
 ## Step 5. Create a topic
 
@@ -101,7 +89,7 @@ start by selecting the relevant option.
 {{< tabs >}}
 {{< tab "Public cluster">}}
 
-1. Open the [Redpanda Cloud console](https://vectorized.cloud/) and select your cluster.
+1. Open the [Redpanda Cloud console](https://cloud.redpanda.com/) and select your cluster.
 
 1. Click on **Overview**
 
@@ -114,18 +102,15 @@ access and authentication details using the [`CREATE CONNECTION`](/sql/create-co
 command:
 
     ```sql
-      -- The credentials of your service account.
+      -- The credentials of your Redpanda Cloud user.
       CREATE SECRET redpanda_username AS '<your-username>';
       CREATE SECRET redpanda_password AS '<your-password>';
-      -- The base64 encoded certificate from Step 4.
-      CREATE SECRET redpanda_ca_cert AS  decode('<redpanda-broker-ca-cert>', 'base64');
 
       CREATE CONNECTION rp_connection TO KAFKA (
           BROKER '<redpanda-broker-url>',
-          SASL MECHANISMS = 'SCRAM-SHA-256',
+          SASL MECHANISMS = 'SCRAM-SHA-256', -- The SASL mechanism you chose in Step 2.
           SASL USERNAME = SECRET redpanda_username,
-          SASL PASSWORD = SECRET redpanda_password,
-          SSL CERTIFICATE AUTHORITY = SECRET redpanda_ca_cert
+          SASL PASSWORD = SECRET redpanda_password
       );
     ```
 
@@ -301,18 +286,15 @@ principal:
 Privatelink connection you created earlier:
 
     ```sql
-    -- The credentials of your service account.
+    -- The credentials of your Redpanda Cloud user.
     CREATE SECRET redpanda_username AS '<your-username>';
     CREATE SECRET redpanda_password AS '<your-password>';
-    -- The base64 encoded certificate from Step 4.
-    CREATE SECRET redpanda_ca_cert AS  decode('<redpanda-broker-ca-cert>', 'base64');
 
     CREATE CONNECTION rp_connection TO KAFKA (
         AWS PRIVATELINK rp_privatelink (PORT 30292)
-        SASL MECHANISMS = 'SCRAM-SHA-256',
+        SASL MECHANISMS = 'SCRAM-SHA-256', -- The SASL mechanism you chose in Step 2.
         SASL USERNAME = SECRET redpanda_username,
-        SASL PASSWORD = SECRET redpanda_password,
-        SSL CERTIFICATE AUTHORITY = SECRET redpanda_ca_cert
+        SASL PASSWORD = SECRET redpanda_password
     );
 
     CREATE SOURCE rp_source
