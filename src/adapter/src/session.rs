@@ -787,6 +787,7 @@ impl<T: TimestampManipulation> Session<T> {
         // Update our metadata! Note the short critical section (just a clone) to avoid blocking
         // the sending side of this watch channel.
         let metadata = rx.borrow_and_update().clone();
+        tracing::info!(?metadata, "updating external user metadata");
         self.vars.set_external_user_metadata(metadata);
     }
 

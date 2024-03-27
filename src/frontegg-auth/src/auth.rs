@@ -210,9 +210,13 @@ impl Authenticator {
                         .inc();
 
                     // Return a handle to the existing session.
+                    let external_metadata_rx = external_metadata_tx.subscribe();
+                    // Mark the value as modified so the new subscriber sees it.
+                    external_metadata_tx.send_modify(|_| ());
+
                     return Ok(AuthSessionHandle {
                         ident: Arc::clone(ident),
-                        external_metadata_rx: external_metadata_tx.subscribe(),
+                        external_metadata_rx,
                         authenticator: Arc::clone(&self.inner),
                         app_password: password,
                     });
