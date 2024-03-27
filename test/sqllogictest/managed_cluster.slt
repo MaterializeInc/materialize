@@ -53,8 +53,8 @@ ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters
 ----
-s1  mz_system  false  NULL  NULL
-s2  mz_introspection  false  NULL  NULL
+s1  mz_system  true  1  2
+s2  mz_introspection  true  1  2
 u1  quickstart  true  1  2
 
 
