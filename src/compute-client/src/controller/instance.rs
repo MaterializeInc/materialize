@@ -1218,20 +1218,29 @@ where
             return;
         }
 
-        // Check dependency frontiers to determine if all inputs are available.
-        // An input is available when its frontier is greater than the `as_of`, i.e., all input
-        // data up to and including the `as_of` has been sealed.
-        let compute_frontiers = collection.compute_dependencies.iter().map(|id| {
-            let dep = &self.compute.expect_collection(*id);
-            &dep.write_frontier
-        });
-        let storage_frontiers = collection.storage_dependencies.iter().map(|id| {
-            let dep = &self.storage_controller.collection(*id).expect("must exist");
-            &dep.write_frontier
-        });
-        let ready = compute_frontiers
-            .chain(storage_frontiers)
-            .all(|frontier| PartialOrder::less_than(&as_of, &frontier.borrow()));
+        let ready = if id.is_transient() {
+            // Always schedule transient collections immediately. The assumption is that those are
+            // created by interactive user commands and we want to schedule them as quickly as
+            // possible. Inputs might not yet be available, but when they become available, we
+            // don't need to wait for the controller to become aware and for the scheduling check
+            // to run again.
+            true
+        } else {
+            // Check dependency frontiers to determine if all inputs are available.
+            // An input is available when its frontier is greater than the `as_of`, i.e., all input
+            // data up to and including the `as_of` has been sealed.
+            let compute_frontiers = collection.compute_dependencies.iter().map(|id| {
+                let dep = &self.compute.expect_collection(*id);
+                &dep.write_frontier
+            });
+            let storage_frontiers = collection.storage_dependencies.iter().map(|id| {
+                let dep = &self.storage_controller.collection(*id).expect("must exist");
+                &dep.write_frontier
+            });
+            compute_frontiers
+                .chain(storage_frontiers)
+                .all(|frontier| PartialOrder::less_than(&as_of, &frontier.borrow()))
+        };
 
         if ready {
             self.compute.send(ComputeCommand::Schedule(id));
