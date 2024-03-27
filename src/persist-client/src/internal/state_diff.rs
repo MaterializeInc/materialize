@@ -111,6 +111,23 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             fueling_merges: Vec::default(),
         }
     }
+
+    pub fn referenced_batches(&self) -> impl Iterator<Item = StateFieldValDiff<&HollowBatch<T>>> {
+        let legacy_batches = self
+            .legacy_batches
+            .iter()
+            .filter_map(|diff| match diff.val {
+                Insert(()) => Some(Insert(&diff.key)),
+                Update((), ()) => None, // Ignoring a noop diff.
+                Delete(()) => Some(Delete(&diff.key)),
+            });
+        let hollow_batches = self.hollow_batches.iter().map(|diff| match &diff.val {
+            Insert(batch) => Insert(&**batch),
+            Update(before, after) => Update(&**before, &**after),
+            Delete(batch) => Delete(&**batch),
+        });
+        legacy_batches.chain(hollow_batches)
+    }
 }
 
 impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
@@ -179,17 +196,12 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     }
 
     pub(crate) fn map_blob_inserts<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
-        for spine_diff in self.legacy_batches.iter() {
-            match &spine_diff.val {
-                StateFieldValDiff::Insert(()) => {
-                    f(HollowBlobRef::Batch(&spine_diff.key));
+        for spine_diff in self.referenced_batches() {
+            match spine_diff {
+                Insert(b) | Update(_, b) => {
+                    f(HollowBlobRef::Batch(b));
                 }
-                StateFieldValDiff::Update((), ()) => {
-                    // spine fields are always inserted/deleted, this
-                    // would mean we encountered a malformed diff.
-                    panic!("cannot update spine field")
-                }
-                StateFieldValDiff::Delete(()) => {} // No-op
+                Delete(_) => {} // No-op
             }
         }
         for rollups_diff in self.rollups.iter() {
@@ -203,16 +215,11 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     }
 
     pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
-        for spine_diff in self.legacy_batches.iter() {
-            match &spine_diff.val {
-                StateFieldValDiff::Insert(()) => {} // No-op
-                StateFieldValDiff::Update((), ()) => {
-                    // spine fields are always inserted/deleted, this
-                    // would mean we encountered a malformed diff.
-                    panic!("cannot update spine field")
-                }
-                StateFieldValDiff::Delete(()) => {
-                    f(HollowBlobRef::Batch(&spine_diff.key));
+        for spine_diff in self.referenced_batches() {
+            match spine_diff {
+                Insert(_) => {} // No-op
+                Update(b, _) | Delete(b) => {
+                    f(HollowBlobRef::Batch(b));
                 }
             }
         }
