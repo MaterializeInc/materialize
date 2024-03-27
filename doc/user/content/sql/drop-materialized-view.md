@@ -25,7 +25,7 @@ _view&lowbar;name_ | The materialized view you want to drop. For available mater
 
 ### Dropping a materialized view with no dependencies
 
-```sql
+```mzsql
 DROP MATERIALIZED VIEW winning_bids;
 ```
 ```nofmt
@@ -34,7 +34,7 @@ DROP MATERIALIZED VIEW
 
 ### Dropping a materialized view with dependencies
 
-```sql
+```mzsql
 DROP MATERIALIZED VIEW winning_bids;
 ```
 

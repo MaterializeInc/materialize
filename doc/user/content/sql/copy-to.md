@@ -28,13 +28,13 @@ Name | Value type | Default value | Description
 
 ### Copying a view
 
-```sql
+```mzsql
 COPY (SELECT * FROM some_view) TO STDOUT;
 ```
 
 ### Subscribing to a view with binary output
 
-```sql
+```mzsql
 COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 ```
 

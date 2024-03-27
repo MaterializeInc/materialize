@@ -113,7 +113,7 @@ preferred SQL client, create a connection with your Redpanda Cloud cluster
 access and authentication details using the [`CREATE CONNECTION`](/sql/create-connection/)
 command:
 
-    ```sql
+    ```mzsql
       -- The credentials of your service account.
       CREATE SECRET redpanda_username AS '<your-username>';
       CREATE SECRET redpanda_password AS '<your-password>';
@@ -134,7 +134,7 @@ command:
    By default, the source will be created in the active cluster; to use a
    different cluster, use the `IN CLUSTER` clause.
 
-    ```sql
+    ```mzsql
     CREATE SOURCE rp_source
       -- The topic you want to read from.
       FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
@@ -220,7 +220,7 @@ preferred SQL client, create a [PrivateLink connection](/ingest-data/network-sec
 using the service name from the previous step. Be sure to specify **all
 availability zones** of your Redpanda Cloud cluster.
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION rp_privatelink TO AWS PRIVATELINK (
       SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-abcdefghijk',
       AVAILABILITY ZONES ('use1-az4','use1-az1','use1-az2')
@@ -230,7 +230,7 @@ availability zones** of your Redpanda Cloud cluster.
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just
 created:
 
-    ```sql
+    ```mzsql
     SELECT principal
     FROM mz_aws_privatelink_connections plc
     JOIN mz_connections c ON plc.id = c.id
@@ -286,7 +286,7 @@ principal:
 1. In Materialize, validate the AWS PrivateLink connection you created using the
 [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
-    ```sql
+    ```mzsql
     VALIDATE CONNECTION rp_privatelink;
     ```
 
@@ -300,7 +300,7 @@ principal:
 1. Finally, create a connection to your Redpanda Cloud cluster using the AWS
 Privatelink connection you created earlier:
 
-    ```sql
+    ```mzsql
     -- The credentials of your service account.
     CREATE SECRET redpanda_username AS '<your-username>';
     CREATE SECRET redpanda_password AS '<your-password>';

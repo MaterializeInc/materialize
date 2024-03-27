@@ -70,7 +70,7 @@ The following characteristics apply to the `mz_system` cluster:
 
 ## Examples
 
-```sql
+```mzsql
 SET CLUSTER = mz_introspection;
 
 SHOW CLUSTERS;
@@ -85,7 +85,7 @@ SHOW CLUSTERS;
  mz_system            |  r1 (2xsmall)
 ```
 
-```sql
+```mzsql
 SHOW CLUSTERS LIKE 'auction_%';
 ```
 

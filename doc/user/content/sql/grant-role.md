@@ -20,11 +20,11 @@ _member_name_ | The role name to add to _role_name_ as a member.
 
 ## Examples
 
-```sql
+```mzsql
 GRANT data_scientist TO joe;
 ```
 
-```sql
+```mzsql
 GRANT data_scientist TO joe, mike;
 ```
 

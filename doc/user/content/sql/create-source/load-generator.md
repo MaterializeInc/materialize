@@ -183,7 +183,7 @@ Field          | Type                                     | Meaning
 
 And can be queried using:
 
-```sql
+```mzsql
 SELECT "offset"
 FROM <src_name>_progress;
 ```
@@ -199,7 +199,7 @@ issues, see [Troubleshooting](/ops/troubleshooting/).
 To create a load generator source that emits the next number in the sequence every
 500 milliseconds:
 
-```sql
+```mzsql
 CREATE SOURCE counter
   FROM LOAD GENERATOR COUNTER
   (TICK INTERVAL '500ms');
@@ -207,7 +207,7 @@ CREATE SOURCE counter
 
 To examine the counter:
 
-```sql
+```mzsql
 SELECT * FROM counter;
 ```
 ```nofmt
@@ -222,7 +222,7 @@ SELECT * FROM counter;
 
 To create a load generator source that simulates an auction house and emits new data every second:
 
-```sql
+```mzsql
 CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '1s')
@@ -231,7 +231,7 @@ CREATE SOURCE auction_house
 
 To display the created subsources:
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
@@ -248,7 +248,7 @@ SHOW SOURCES;
 
 To examine the simulated bids:
 
-```sql
+```mzsql
 SELECT * from bids;
 ```
 ```nofmt
@@ -263,7 +263,7 @@ SELECT * from bids;
 
 To create a load generator source that simulates an online marketing campaign:
 
-```sql
+```mzsql
 CREATE SOURCE marketing
   FROM LOAD GENERATOR MARKETING
   FOR ALL TABLES;
@@ -271,7 +271,7 @@ CREATE SOURCE marketing
 
 To display the created subsources:
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 
@@ -290,7 +290,7 @@ SHOW SOURCES;
 
 To find all impressions and clicks associated with a campaign over the last 30 days:
 
-```sql
+```mzsql
 WITH
     click_rollup AS
     (
@@ -339,7 +339,7 @@ GROUP BY campaign_id;
 
 To create the load generator source and its associated subsources:
 
-```sql
+```mzsql
 CREATE SOURCE tpch
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
   FOR ALL TABLES;
@@ -347,7 +347,7 @@ CREATE SOURCE tpch
 
 To display the created subsources:
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
@@ -368,7 +368,7 @@ SHOW SOURCES;
 To run the Pricing Summary Report Query (Q1), which reports the amount of
 billed, shipped, and returned items:
 
-```sql
+```mzsql
 SELECT
     l_returnflag,
     l_linestatus,

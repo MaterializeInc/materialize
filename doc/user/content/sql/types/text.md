@@ -29,7 +29,7 @@ Detail | Info
 To escape a single quote character (`'`) in a standard string literal, write two
 adjacent single quotes:
 
-```sql
+```mzsql
 SELECT 'single''quote' AS output
 ```
 ```nofmt
@@ -82,7 +82,7 @@ You can [cast](../../functions/cast) [all types](../) to `text`. All casts are b
 
 ## Examples
 
-```sql
+```mzsql
 SELECT 'hello' AS text_val;
 ```
 ```nofmt
@@ -93,7 +93,7 @@ SELECT 'hello' AS text_val;
 
 <hr>
 
-```sql
+```mzsql
 SELECT E'behold\nescape strings\U0001F632' AS escape_val;
 ```
 ```nofmt

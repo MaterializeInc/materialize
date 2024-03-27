@@ -27,19 +27,19 @@ Prepared statements only last for the duration of the current database session. 
 
 ### Create a prepared statement
 
-```sql
+```mzsql
 PREPARE a AS SELECT 1 + $1;
 ```
 
 ### Execute a prepared statement
 
-```sql
+```mzsql
 EXECUTE a ('a', 'b', 1 + 2)
 ```
 
 ### Deallocate a prepared statement
 
-```sql
+```mzsql
 DEALLOCATE a;
 ```
 

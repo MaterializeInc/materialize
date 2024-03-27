@@ -29,7 +29,7 @@ Alternatively, you can get this information from the system catalog by querying
 the [`mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses)
 table:
 
-```sql
+```mzsql
 SELECT * FROM mz_internal.mz_source_statuses
 WHERE name = <SOURCE_NAME>;
 ```
@@ -60,7 +60,7 @@ To determine whether your source has completed ingesting the initial snapshot,
 you can query the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
 system catalog table:
 
-```sql
+```mzsql
 SELECT snapshot_committed
 FROM mz_internal.mz_source_statistics
 WHERE id = <SOURCE_ID>;
@@ -80,7 +80,7 @@ Repeatedly query the
 [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
 table and look for ingestion statistics that advance over time:
 
-```sql
+```mzsql
 SELECT
     bytes_received,
     messages_received,

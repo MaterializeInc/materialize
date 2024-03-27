@@ -40,14 +40,14 @@ Instead, we recommend that you materialize all components required for the
 `list_agg` function call and create a non-materialized view using `list_agg`
 on top of that. That pattern is illustrated in the following statements:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
 CREATE VIEW bar AS SELECT list_agg(foo_view.bar) FROM foo_view;
 ```
 
 ## Examples
 
-```sql
+```mzsql
 SELECT
     title,
     LIST_AGG (

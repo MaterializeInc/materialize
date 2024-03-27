@@ -61,10 +61,10 @@ Like PostgreSQL, altering the variable for a role only affects **new sessions**.
 
 #### Altering the attributes of a role
 
-```sql
+```mzsql
 ALTER ROLE rj INHERIT;
 ```
-```sql
+```mzsql
 SELECT name, inherit FROM mz_roles WHERE name = 'rj';
 ```
 ```nofmt
@@ -73,7 +73,7 @@ rj  true
 
 #### Setting session variable defaults for a role
 
-```sql
+```mzsql
 SHOW cluster;
 quickstart
 
@@ -93,7 +93,7 @@ quickstart
 ```
 
 ##### Non-inheritance
-```sql
+```mzsql
 CREATE ROLE team;
 CREATE ROLE member;
 

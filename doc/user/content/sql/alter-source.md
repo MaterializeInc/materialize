@@ -69,13 +69,13 @@ You cannot drop the "progress subsource".
 
 ### Adding subsources
 
-```sql
+```mzsql
 ALTER SOURCE pg_src ADD SUBSOURCE tbl_a, tbl_b AS b WITH (TEXT COLUMNS [tbl_a.col]);
 ```
 
 ### Dropping subsources
 
-```sql
+```mzsql
 ALTER SOURCE pg_src DROP SUBSOURCE tbl_a, b CASCADE;
 ```
 

@@ -20,7 +20,7 @@ databases, you might use window functions. In Materialize, we recommend using a
 [`LATERAL` subquery](/transform-data/join/#lateral-subqueries). The general form of the
 query looks like this:
 
-```sql
+```mzsql
 SELECT * FROM
     (SELECT DISTINCT key_col FROM tbl) grp,
     LATERAL (
@@ -33,7 +33,7 @@ SELECT * FROM
 For example, suppose you have a relation containing the population of various
 U.S. cities.
 
-```sql
+```mzsql
 CREATE TABLE cities (
     name text NOT NULL,
     state text NOT NULL,
@@ -56,7 +56,7 @@ INSERT INTO cities VALUES
 
 To fetch the three most populous cities in each state:
 
-```sql
+```mzsql
 SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (
@@ -80,7 +80,7 @@ TX  Dallas
 Despite the verbosity of the above query, Materialize produces a straightforward
 plan:
 
-```sql
+```mzsql
 EXPLAIN SELECT state, name FROM ...
 ```
 ```nofmt
@@ -94,7 +94,7 @@ Explained Query:
 
 If _K_ = 1, i.e., you would like to see only the most populous city in each state, another approach is to use `DISTINCT ON`:
 
-```sql
+```mzsql
 SELECT DISTINCT ON(state) state, name
 FROM cities
 ORDER BY state, pop DESC;
@@ -106,7 +106,7 @@ Note that the `ORDER BY` clause should start with the expressions that are in th
 When using either the above `LATERAL` subquery pattern or `DISTINCT ON`, we recommend
 specifying [query hints](/sql/select/#query-hints) to improve memory usage. For example:
 
-```sql
+```mzsql
 SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (
@@ -119,7 +119,7 @@ SELECT state, name FROM
 
 or
 
-```sql
+```mzsql
 SELECT DISTINCT ON(state) state, name
 FROM cities
 OPTIONS (DISTINCT ON INPUT GROUP SIZE = 1000)

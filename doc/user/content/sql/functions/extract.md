@@ -48,7 +48,7 @@ decade  |  `DEC`, `DECS`, `DECADE`, `DECADES`
 
 ### Extract second from timestamptz
 
-```sql
+```mzsql
 SELECT EXTRACT(S FROM TIMESTAMP '2006-01-02 15:04:05.06');
 ```
 ```nofmt
@@ -59,7 +59,7 @@ SELECT EXTRACT(S FROM TIMESTAMP '2006-01-02 15:04:05.06');
 
 ### Extract century from date
 
-```sql
+```mzsql
 SELECT EXTRACT(CENTURIES FROM DATE '2006-01-02');
 ```
 ```nofmt

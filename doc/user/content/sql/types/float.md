@@ -57,7 +57,7 @@ Value       | Aliases                    | Represents
 To input these special values, write them as a string and cast that string to
 the desired floating-point type. For example:
 
-```sql
+```mzsql
 SELECT 'NaN'::real AS nan
 ```
 ```nofmt
@@ -91,7 +91,7 @@ You can [cast](../../functions/cast) to `real` or `double precision` from the fo
 
 ## Examples
 
-```sql
+```mzsql
 SELECT 1.23::real AS real_v;
 ```
 ```nofmt

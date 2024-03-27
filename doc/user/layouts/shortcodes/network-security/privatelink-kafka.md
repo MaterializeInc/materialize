@@ -52,7 +52,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 1. #### Create an AWS PrivateLink connection
      In Materialize, create an [AWS PrivateLink connection](/sql/create-connection/#aws-privatelink) that references the endpoint service that you created in the previous step.
 
-     ```sql
+     ```mzsql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
         SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
         AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
@@ -65,7 +65,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just created:
 
-    ```sql
+    ```mzsql
     SELECT principal
     FROM mz_aws_privatelink_connections plc
     JOIN mz_connections c ON plc.id = c.id
@@ -90,7 +90,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
 Validate the AWS PrivateLink connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
-```sql
+```mzsql
 VALIDATE CONNECTION privatelink_svc;
 ```
 
@@ -100,7 +100,7 @@ If no validation error is returned, move to the next step.
 
 In Materialize, create a source connection that uses the AWS PrivateLink connection you just configured:
 
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKERS (
         'b-1.hostname-1:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9001, AVAILABILITY ZONE 'use1-az2'),

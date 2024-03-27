@@ -45,7 +45,7 @@ commas. Each individual `map` must be correctly contained by a set of curly
 braces (`{}`).
 
 You can construct maps from strings using the following syntax:
-```sql
+```mzsql
 SELECT '{a=>123.4, b=>111.1}'::map[text=>double] as m;
 ```
 ```nofmt
@@ -55,7 +55,7 @@ SELECT '{a=>123.4, b=>111.1}'::map[text=>double] as m;
 ```
 
 You can create nested maps the same way:
-```sql
+```mzsql
 SELECT '{a=>{b=>{c=>d}}}'::map[text=>map[text=>map[text=>text]]] as nested_map;
 ```
 ```nofmt
@@ -113,7 +113,7 @@ You can [cast](../../functions/cast) `map` to and from the following types:
 
 Retrieves and returns the target value or `NULL`.
 
-```sql
+```mzsql
 SELECT '{a=>1, b=>2}'::map[text=>int] -> 'a' as field_map;
 ```
 ```nofmt
@@ -122,7 +122,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] -> 'a' as field_map;
  1
 ```
 
-```sql
+```mzsql
 SELECT '{a=>1, b=>2}'::map[text=>int] -> 'c' as field_map;
 ```
 ```nofmt
@@ -133,7 +133,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] -> 'c' as field_map;
 
 Field accessors can also be chained together.
 
-```sql
+```mzsql
 SELECT '{a=>{b=>1}}, {c=>{d=>2}}'::map[text=>map[text=>int]] -> 'a' -> 'b' as field_map;
 ```
 ```nofmt
@@ -148,7 +148,7 @@ Note that all returned values are of the map's value type.
 
 #### LHS contains RHS (`@>`)
 
-```sql
+```mzsql
 SELECT '{a=>1, b=>2}'::map[text=>int] @>
        '{a=>1}'::map[text=>int] AS lhs_contains_rhs;
 ```
@@ -162,7 +162,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] @>
 
 #### RHS contains LHS (`<@`)
 
-```sql
+```mzsql
 SELECT '{a=>1, b=>2}'::map[text=>int] <@
        '{a=>1}'::map[text=>int] as rhs_contains_lhs;
 ```
@@ -176,7 +176,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] <@
 
 #### Search top-level keys (`?`)
 
-```sql
+```mzsql
 SELECT '{a=>1.9, b=>2.0}'::map[text=>double] ? 'a' AS search_for_key;
 ```
 ```nofmt
@@ -185,7 +185,7 @@ SELECT '{a=>1.9, b=>2.0}'::map[text=>double] ? 'a' AS search_for_key;
  t
 ```
 
-```sql
+```mzsql
 SELECT '{a=>{aa=>1.9}}, {b=>{bb=>2.0}}'::map[text=>map[text=>double]]
         ? 'aa' AS search_for_key;
 ```
@@ -200,7 +200,7 @@ SELECT '{a=>{aa=>1.9}}, {b=>{bb=>2.0}}'::map[text=>map[text=>double]]
 Returns `true` if all keys provided on the RHS are present in the top-level of
 the map, `false` otherwise.
 
-```sql
+```mzsql
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['b', 'a'] as search_for_all_keys;
 ```
 ```nofmt
@@ -209,7 +209,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['b', 'a'] as search_for_all_keys;
  t
 ```
 
-```sql
+```mzsql
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['c', 'b'] as search_for_all_keys;
 ```
 ```nofmt
@@ -223,7 +223,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['c', 'b'] as search_for_all_keys;
 Returns `true` if any keys provided on the RHS are present in the top-level of
 the map, `false` otherwise.
 
-```sql
+```mzsql
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'b'] as search_for_any_keys;
 ```
 ```nofmt
@@ -232,7 +232,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'b'] as search_for_any_keys;
  t
 ```
 
-```sql
+```mzsql
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'd', '1'] as search_for_any_keys;
 ```
 ```nofmt
@@ -245,7 +245,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'd', '1'] as search_for_any_
 
 Returns the number of entries in the map.
 
-```sql
+```mzsql
 SELECT map_length('{a=>1, b=>2}'::map[text=>int]) as count;
 ```
 ```nofmt

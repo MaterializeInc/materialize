@@ -39,7 +39,7 @@ whenever possible.
 
 You can construct arrays using the special `ARRAY` expression:
 
-```sql
+```mzsql
 SELECT ARRAY[1, 2, 3]
 ```
 ```nofmt
@@ -50,7 +50,7 @@ SELECT ARRAY[1, 2, 3]
 
 You can nest `ARRAY` constructors to create multidimensional arrays:
 
-```sql
+```mzsql
 SELECT ARRAY[ARRAY['a', 'b'], ARRAY['c', 'd']]
 ```
 ```nofmt
@@ -62,7 +62,7 @@ SELECT ARRAY[ARRAY['a', 'b'], ARRAY['c', 'd']]
 Alternatively, you can construct an array from the results subquery.  These subqueries must return a single column. Note
 that, in this form of the `ARRAY` expression, parentheses are used rather than square brackets.
 
-```sql
+```mzsql
 SELECT ARRAY(SELECT x FROM test0 WHERE x > 0 ORDER BY x DESC LIMIT 3);
 ```
 ```nofmt
@@ -75,7 +75,7 @@ Arrays cannot be "ragged." The length of each array expression must equal the
 length of all other array constructors in the same dimension. For example, the
 following ragged array is rejected:
 
-```sql
+```mzsql
 SELECT ARRAY[ARRAY[1, 2], ARRAY[3]]
 ```
 ```nofmt
@@ -102,7 +102,7 @@ quotes, backslashes and double quotes are backslash-escaped.
 The following example demonstrates the output format and includes many of the
 aforementioned special cases.
 
-```sql
+```mzsql
 SELECT ARRAY[ARRAY['a', 'white space'], ARRAY[NULL, ''], ARRAY['escape"m\e', 'nUlL']]
 ```
 ```nofmt
@@ -152,7 +152,7 @@ You can cast any type of array to a list of the same element type, as long as
 the array has only 0 or 1 dimensions, i.e. you can cast `integer[]` to `integer
 list`, as long as the array is empty or does not contain any arrays itself.
 
-```sql
+```mzsql
 SELECT pg_typeof('{1,2,3}`::integer[]::integer list);
 ```
 ```
@@ -161,7 +161,7 @@ integer list
 
 ## Examples
 
-```sql
+```mzsql
 SELECT '{1,2,3}'::int[]
 ```
 ```nofmt
@@ -170,7 +170,7 @@ SELECT '{1,2,3}'::int[]
  {1,2,3}
 ```
 
-```sql
+```mzsql
 SELECT ARRAY[ARRAY[1, 2], ARRAY[NULL, 4]]::text
 ```
 ```nofmt

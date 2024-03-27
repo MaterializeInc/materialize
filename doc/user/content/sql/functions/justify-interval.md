@@ -26,7 +26,7 @@ _interval_ | [`interval`](../../types/interval) | The interval value to justify.
 
 ## Example
 
-```sql
+```mzsql
 SELECT justify_interval(interval '1 mon -1 hour');
 ```
 ```nofmt

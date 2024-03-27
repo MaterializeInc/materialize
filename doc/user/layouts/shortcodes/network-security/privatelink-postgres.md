@@ -39,7 +39,7 @@
 1. #### Create an AWS PrivateLink Connection
      In Materialize, create an [AWS PrivateLink connection](/sql/create-connection/#aws-privatelink) that references the endpoint service that you created in the previous step.
 
-     ```sql
+     ```mzsql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
         SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
         AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
@@ -52,7 +52,7 @@
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just created:
 
-    ```sql
+    ```mzsql
     SELECT principal
     FROM mz_aws_privatelink_connections plc
     JOIN mz_connections c ON plc.id = c.id
@@ -77,7 +77,7 @@
 
 Validate the AWS PrivateLink connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
-```sql
+```mzsql
 VALIDATE CONNECTION privatelink_svc;
 ```
 
@@ -87,7 +87,7 @@ If no validation error is returned, move to the next step.
 
 In Materialize, create a source connection that uses the AWS PrivateLink connection you just configured:
 
-```sql
+```mzsql
 CREATE CONNECTION pg_connection TO POSTGRES (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     PORT 5432,
@@ -100,7 +100,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 
 This PostgreSQL connection can then be reused across multiple [CREATE SOURCE](https://materialize.com/docs/sql/create-source/postgres/) statements:
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR ALL TABLES;

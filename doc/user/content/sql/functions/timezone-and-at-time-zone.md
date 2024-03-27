@@ -33,7 +33,7 @@ _timestamptz_ | [`timestamptz`](../../types/timestamp/#timestamp-with-time-zone-
 
 ### Convert timestamp to another time zone, returned as UTC with offset
 
-```sql
+```mzsql
 SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'America/New_York'::text;
 ```
 ```
@@ -43,7 +43,7 @@ SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'America/New_York'::text;
 (1 row)
 ```
 
-```sql
+```mzsql
 SELECT TIMEZONE('America/New_York'::text,'2020-12-21 18:53:49');
 ```
 ```
@@ -55,7 +55,7 @@ SELECT TIMEZONE('America/New_York'::text,'2020-12-21 18:53:49');
 
 ### Convert timestamp to another time zone, returned as specified local time
 
-```sql
+```mzsql
 SELECT TIMESTAMPTZ '2020-12-21 18:53:49+08' AT TIME ZONE 'America/New_York'::text;
 ```
 ```
@@ -65,7 +65,7 @@ SELECT TIMESTAMPTZ '2020-12-21 18:53:49+08' AT TIME ZONE 'America/New_York'::tex
 (1 row)
 ```
 
-```sql
+```mzsql
 SELECT TIMEZONE ('America/New_York'::text,'2020-12-21 18:53:49+08');
 ```
 ```

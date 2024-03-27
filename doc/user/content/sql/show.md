@@ -31,7 +31,7 @@ _variable&lowbar;name_ | The name of the session or system variable to display.
 
 ### Show active cluster
 
-```sql
+```mzsql
 SHOW cluster;
 ```
 ```
@@ -42,7 +42,7 @@ SHOW cluster;
 
 ### Show transaction isolation level
 
-```sql
+```mzsql
 SHOW transaction_isolation;
 ```
 ```

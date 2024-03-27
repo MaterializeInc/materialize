@@ -26,7 +26,7 @@ alone.
 
 Using a `VALUES` expression as a standalone statement:
 
-```sql
+```mzsql
 VALUES (1, 2, 3), (4, 5, 6);
 ```
 ```nofmt
@@ -38,7 +38,7 @@ VALUES (1, 2, 3), (4, 5, 6);
 
 Using a `VALUES` expression in place of a `SELECT` expression:
 
-```sql
+```mzsql
 VALUES (1), (2), (3) ORDER BY column1 DESC LIMIT 2;
 ```
 ```nofmt
@@ -50,7 +50,7 @@ VALUES (1), (2), (3) ORDER BY column1 DESC LIMIT 2;
 
 Using a `VALUES` expression in an [`INSERT`] statement:
 
-```sql
+```mzsql
 INSERT INTO t VALUES (1, 2), (3, 4);
 ```
 

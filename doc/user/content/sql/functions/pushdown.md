@@ -45,7 +45,7 @@ optimization for your query.
 
 ## Examples
 
-```sql
+```mzsql
 SELECT try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123Z') AS ts;
 ```
 ```nofmt
@@ -56,7 +56,7 @@ SELECT try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123Z') AS ts;
 
  <hr/>
 
-```sql
+```mzsql
 SELECT try_parse_monotonic_iso8601_timestamp('nope') AS ts;
 ```
 ```nofmt

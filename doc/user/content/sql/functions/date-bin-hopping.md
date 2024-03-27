@@ -39,7 +39,7 @@ _origin_ | Must be the same as _source_ | Align bins to this value. If not provi
 
 ## Examples
 
-```sql
+```mzsql
 SELECT * FROM date_bin_hopping('45s', '1m', TIMESTAMP '2001-01-01 00:01:20');
 ```
 ```nofmt
@@ -49,7 +49,7 @@ SELECT * FROM date_bin_hopping('45s', '1m', TIMESTAMP '2001-01-01 00:01:20');
  2001-01-01 00:01:15
 ```
 
-```sql
+```mzsql
 SELECT date_bin_hopping AS timeframe_start, sum(v)
   FROM ( VALUES
     (TIMESTAMP '2021-01-01 01:05', 41),
