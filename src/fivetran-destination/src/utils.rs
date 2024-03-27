@@ -8,12 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use crate::error::{OpError, OpErrorKind};
 use crate::fivetran_sdk::{DataType, DecimalParams, Table};
 
 use csv_async::ByteRecord;
-use futures::{Stream, StreamExt};
+use futures::{ready, Sink, Stream, StreamExt};
 use mz_pgrepr::Type;
 use tokio::io::AsyncRead;
 
@@ -236,6 +238,64 @@ where
 
             Ok::<ByteRecord, OpError>(mapped_record)
         })
+    }
+}
+
+/// An adapter that implements [`tokio::io::AsyncWrite`] for a [`tokio_postgres::CopyInSink`].
+///
+/// Note: [`tokio_util`] has a similar adapter which we largely derive this implementation from
+/// [1]. The reason we don't use it is because of a higher ranked lifetime error which this adapter
+/// works around lifetime issues by using an owned [`bytes::Bytes`] instead of a `&[u8]`.
+///
+/// [1]: <https://github.com/tokio-rs/tokio/blob/59c93646898176961ee914c60932b09ce7f5eb4f/tokio-util/src/io/sink_writer.rs#L92>
+pub struct CopyIntoAsyncWrite<'a> {
+    inner: Pin<&'a mut tokio_postgres::CopyInSink<bytes::Bytes>>,
+}
+
+impl<'a> CopyIntoAsyncWrite<'a> {
+    pub fn new(inner: Pin<&'a mut tokio_postgres::CopyInSink<bytes::Bytes>>) -> Self {
+        CopyIntoAsyncWrite { inner }
+    }
+}
+
+impl<'a> tokio::io::AsyncWrite for CopyIntoAsyncWrite<'a> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        ready!(self
+            .inner
+            .as_mut()
+            .poll_ready(cx)
+            .map_err(|e| std::io::Error::other(e)))?;
+
+        let len = buf.len();
+        let buf = bytes::Bytes::from(buf.to_vec());
+        match self.inner.as_mut().start_send(buf) {
+            Ok(_) => Poll::Ready(Ok(len)),
+            Err(e) => Poll::Ready(Err(std::io::Error::other(e))),
+        }
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        self.inner
+            .as_mut()
+            .poll_flush(cx)
+            .map_err(|e| std::io::Error::other(e))
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        self.inner
+            .as_mut()
+            .poll_close(cx)
+            .map_err(|e| std::io::Error::other(e))
     }
 }
 
