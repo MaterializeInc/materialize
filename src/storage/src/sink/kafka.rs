@@ -230,7 +230,7 @@ impl TransactionalProducer {
         sink_id: GlobalId,
         connection: &KafkaSinkConnection,
         storage_configuration: &StorageConfiguration,
-        metrics: KafkaSinkMetrics,
+        metrics: Arc<KafkaSinkMetrics>,
         statistics: SinkStatistics,
     ) -> Result<Self, ContextCreationError> {
         let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
@@ -447,7 +447,10 @@ impl TransactionalProducer {
 }
 
 /// Listens for statistics updates from librdkafka and updates our Prometheus metrics.
-async fn collect_statistics(mut receiver: watch::Receiver<Statistics>, metrics: KafkaSinkMetrics) {
+async fn collect_statistics(
+    mut receiver: watch::Receiver<Statistics>,
+    metrics: Arc<KafkaSinkMetrics>,
+) {
     let mut outbuf_cnt: i64 = 0;
     let mut outbuf_msg_cnt: i64 = 0;
     let mut waitresp_cnt: i64 = 0;
@@ -524,18 +527,21 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                 ContextCreationError::Other(anyhow::anyhow!("synthetic error"))
             ));
 
+            let metrics = Arc::new(metrics);
+
             let mut producer = TransactionalProducer::new(
                 sink_id,
                 &connection,
                 &storage_configuration,
-                metrics,
+                Arc::clone(&metrics),
                 statistics,
             )
             .await?;
             // Instantiating the transactional producer fences out all previous ones, making it
             // safe to determine the resume upper.
             let resume_upper =
-                determine_sink_resume_upper(sink_id, &connection, &storage_configuration).await?;
+                determine_sink_resume_upper(sink_id, &connection, &storage_configuration, metrics)
+                    .await?;
 
             let resume_upper = match resume_upper {
                 Some(upper) => {
@@ -732,6 +738,7 @@ async fn determine_sink_resume_upper(
     sink_id: GlobalId,
     connection: &KafkaSinkConnection,
     storage_configuration: &StorageConfiguration,
+    metrics: Arc<KafkaSinkMetrics>,
 ) -> Result<Option<Antichain<Timestamp>>, ContextCreationError> {
     // ****************************** WARNING ******************************
     // Be VERY careful when editing the code in this function. It is very easy
@@ -915,18 +922,22 @@ async fn determine_sink_resume_upper(
                     )
                 })?
                 .offset();
-            match position {
-                Offset::Offset(position) => Ok(position),
+            let position = match position {
+                Offset::Offset(position) => position,
                 // An invalid offset indicates the consumer has not yet read a
                 // message. Since we assigned the consumer to the beginning of
                 // the topic, it's safe to return 0 here, which indicates the
                 // position before the first possible message.
-                Offset::Invalid => Ok(0),
+                Offset::Invalid => 0,
                 _ => bail!(
                     "Consumer::position returned offset of wrong type: {:?}",
                     position
                 ),
-            }
+            };
+            // Record the outstanding number of progress records that remain to be processed
+            let outstanding = u64::try_from(std::cmp::max(0, hi - position)).unwrap();
+            metrics.outstanding_progress_records.set(outstanding);
+            Ok(position)
         };
 
         info!("fetching latest progress record for {progress_key}, lo/hi: {lo}/{hi}");
