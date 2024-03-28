@@ -1723,7 +1723,6 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Create multiple clusters with multiple nodes and replicas each"""
-    c.up("zookeeper", "kafka", "schema-registry")
 
     parser.add_argument(
         "--workers",
@@ -1757,7 +1756,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     args = parser.parse_args()
 
     c.up("testdrive", persistent=True)
-    c.up("materialized")
+    c.up("zookeeper", "kafka", "schema-registry", "materialized", "balancerd")
 
     # Construct the requied Clusterd instances and peer them into clusters
     cluster_replicas = []
@@ -1772,7 +1771,14 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 cluster_replicas.append(Clusterd(name=nodes[node_id]))
 
     with c.override(*cluster_replicas):
-        with c.override(Testdrive(seed=1, no_reset=True)):
+        with c.override(
+            Testdrive(
+                seed=1,
+                materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
+                materialize_use_https=True,
+                no_reset=True,
+            )
+        ):
             c.up(*[n.name for n in cluster_replicas])
 
             # Increase resource limits
