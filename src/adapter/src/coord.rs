@@ -194,7 +194,7 @@ mod sql;
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
-    Command(OpenTelemetryContext, Command),
+    Command(Span, Command),
     ControllerReady,
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
@@ -2383,7 +2383,7 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
-        mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
+        mut cmd_rx: mpsc::UnboundedReceiver<(Span, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
         async move {
@@ -2506,8 +2506,8 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                     m = cmd_rx.recv() => match m {
                         None => break,
-                        Some((otel_ctx, m)) => {
-                            Message::Command(otel_ctx, m)
+                        Some((span, m)) => {
+                            Message::Command(span, m)
 
                         }
                     },

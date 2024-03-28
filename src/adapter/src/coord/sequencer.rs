@@ -17,7 +17,6 @@ use futures::FutureExt;
 use inner::return_if_err;
 use mz_controller_types::ClusterId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogError;
@@ -510,7 +509,7 @@ impl Coordinator {
                             let (tx, _, session, extra) = ctx.into_parts();
                             self.internal_cmd_tx
                                 .send(Message::Command(
-                                    OpenTelemetryContext::obtain(),
+                                    Span::current(),
                                     Command::Execute {
                                         portal_name,
                                         session,
@@ -634,7 +633,7 @@ impl Coordinator {
                 otel_ctx.attach_as_parent();
                 let (sub_tx, sub_rx) = oneshot::channel();
                 let _ = internal_cmd_tx.send(Message::Command(
-                    otel_ctx,
+                    Span::current(),
                     Command::Commit {
                         action: EndTransactionAction::Commit,
                         session,

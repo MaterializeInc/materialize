@@ -29,6 +29,7 @@ use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
+use tracing::Span;
 
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, Response};
@@ -96,7 +97,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
         {
             self.internal_cmd_tx
                 .send(Message::Command(
-                    OpenTelemetryContext::obtain(),
+                    Span::current(),
                     Command::Terminate {
                         conn_id: res.session.conn_id().clone(),
                         tx: None,
