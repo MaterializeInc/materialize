@@ -186,7 +186,6 @@ Hours
 Humanized
 Id
 Identifiers
-Idle
 Ids
 If
 Ignore

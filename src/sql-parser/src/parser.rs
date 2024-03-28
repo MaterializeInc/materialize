@@ -3721,9 +3721,9 @@ impl<'a> Parser<'a> {
 
     fn parse_cluster_option_name(&mut self) -> Result<ClusterOptionName, ParserError> {
         let option = self.expect_one_of_keywords(&[
+            ARRANGEMENT,
             AVAILABILITY,
             DISK,
-            IDLE,
             INTROSPECTION,
             MANAGED,
             REPLICAS,
@@ -3732,15 +3732,15 @@ impl<'a> Parser<'a> {
             SCHEDULE,
         ])?;
         let name = match option {
+            ARRANGEMENT => {
+                self.expect_keywords(&[MERGE, EFFORT])?;
+                ClusterOptionName::ArrangementMergeEffort
+            }
             AVAILABILITY => {
                 self.expect_keyword(ZONES)?;
                 ClusterOptionName::AvailabilityZones
             }
             DISK => ClusterOptionName::Disk,
-            IDLE => {
-                self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
-                ClusterOptionName::IdleArrangementMergeEffort
-            }
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ClusterOptionName::IntrospectionDebugging,
                 INTERVAL => ClusterOptionName::IntrospectionInterval,
@@ -3813,12 +3813,12 @@ impl<'a> Parser<'a> {
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
+            ARRANGEMENT,
             AVAILABILITY,
             BILLED,
             COMPUTE,
             COMPUTECTL,
             DISK,
-            IDLE,
             INTERNAL,
             INTROSPECTION,
             SIZE,
@@ -3826,6 +3826,10 @@ impl<'a> Parser<'a> {
             STORAGECTL,
             WORKERS,
         ])? {
+            ARRANGEMENT => {
+                self.expect_keywords(&[MERGE, EFFORT])?;
+                ReplicaOptionName::ArrangementMergeEffort
+            }
             AVAILABILITY => {
                 self.expect_keyword(ZONE)?;
                 ReplicaOptionName::AvailabilityZone
@@ -3843,10 +3847,6 @@ impl<'a> Parser<'a> {
                 ReplicaOptionName::ComputectlAddresses
             }
             DISK => ReplicaOptionName::Disk,
-            IDLE => {
-                self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
-                ReplicaOptionName::IdleArrangementMergeEffort
-            }
             INTERNAL => ReplicaOptionName::Internal,
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ReplicaOptionName::IntrospectionDebugging,
