@@ -1129,6 +1129,7 @@ pub enum LoadGenerator {
     Auction,
     Datums,
     Tpch,
+    KeyValue,
 }
 
 impl AstDisplay for LoadGenerator {
@@ -1139,6 +1140,7 @@ impl AstDisplay for LoadGenerator {
             Self::Auction => f.write_str("AUCTION"),
             Self::Datums => f.write_str("DATUMS"),
             Self::Tpch => f.write_str("TPCH"),
+            Self::KeyValue => f.write_str("KEY VALUE"),
         }
     }
 }
@@ -1149,6 +1151,13 @@ pub enum LoadGeneratorOptionName {
     ScaleFactor,
     TickInterval,
     MaxCardinality,
+    Keys,
+    SnapshotRounds,
+    TransactionalSnapshot,
+    ValueSize,
+    Seed,
+    Partitions,
+    BatchSize,
 }
 
 impl AstDisplay for LoadGeneratorOptionName {
@@ -1157,6 +1166,13 @@ impl AstDisplay for LoadGeneratorOptionName {
             LoadGeneratorOptionName::ScaleFactor => "SCALE FACTOR",
             LoadGeneratorOptionName::TickInterval => "TICK INTERVAL",
             LoadGeneratorOptionName::MaxCardinality => "MAX CARDINALITY",
+            LoadGeneratorOptionName::Keys => "KEYS",
+            LoadGeneratorOptionName::SnapshotRounds => "SNAPSHOT ROUNDS",
+            LoadGeneratorOptionName::TransactionalSnapshot => "TRANSACTIONAL SNAPSHOT",
+            LoadGeneratorOptionName::ValueSize => "VALUE SIZE",
+            LoadGeneratorOptionName::Seed => "SEED",
+            LoadGeneratorOptionName::Partitions => "PARTITIONS",
+            LoadGeneratorOptionName::BatchSize => "BATCH SIZE",
         })
     }
 }
@@ -1172,7 +1188,14 @@ impl WithOptionName for LoadGeneratorOptionName {
         match self {
             LoadGeneratorOptionName::ScaleFactor
             | LoadGeneratorOptionName::TickInterval
-            | LoadGeneratorOptionName::MaxCardinality => false,
+            | LoadGeneratorOptionName::MaxCardinality
+            | LoadGeneratorOptionName::Keys
+            | LoadGeneratorOptionName::SnapshotRounds
+            | LoadGeneratorOptionName::TransactionalSnapshot
+            | LoadGeneratorOptionName::ValueSize
+            | LoadGeneratorOptionName::Partitions
+            | LoadGeneratorOptionName::BatchSize
+            | LoadGeneratorOptionName::Seed => false,
         }
     }
 }

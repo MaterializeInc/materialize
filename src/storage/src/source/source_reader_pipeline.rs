@@ -368,19 +368,16 @@ where
 
 struct RemapClock {
     now: NowFn,
-    update_interval_ms: u64,
+    tick_interval_ms: u64,
     upper: Antichain<mz_repr::Timestamp>,
     sleep: Pin<Box<tokio::time::Sleep>>,
 }
 
 impl RemapClock {
-    fn new(now: NowFn, update_interval: Duration) -> Self {
+    fn new(now: NowFn, tick_interval: Duration) -> Self {
         Self {
             now,
-            update_interval_ms: update_interval
-                .as_millis()
-                .try_into()
-                .expect("huge duration"),
+            tick_interval_ms: tick_interval.as_millis().try_into().expect("huge duration"),
             upper: Antichain::from_elem(Timestamp::minimum()),
             sleep: Box::pin(tokio::time::sleep_until(tokio::time::Instant::now())),
         }
@@ -394,9 +391,9 @@ impl futures::Stream for RemapClock {
         loop {
             futures::ready!(self.sleep.as_mut().poll(cx));
             let now = (self.now)();
-            let mut new_ts = now - now % self.update_interval_ms;
-            if (now % self.update_interval_ms) != 0 {
-                new_ts += self.update_interval_ms;
+            let mut new_ts = now - now % self.tick_interval_ms;
+            if (now % self.tick_interval_ms) != 0 {
+                new_ts += self.tick_interval_ms;
             }
             let new_ts: mz_repr::Timestamp = new_ts.try_into().expect("must fit");
 

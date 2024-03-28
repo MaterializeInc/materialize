@@ -270,7 +270,7 @@ class Composition:
         capture_and_print: bool = False,
         stdin: str | None = None,
         check: bool = True,
-        max_tries: int = 1,
+        max_pull_tries: int = 1,
         silent: bool = False,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
@@ -284,7 +284,8 @@ class Composition:
             capture_and_print: Print during execution and capture the stdout and
                 stderr of the `docker compose` invocation.
             input: A string to provide as stdin for the command.
-            max_tries: How many times to try, if the command failed.
+            max_pull_tries: How many times to try, if the command failed with a
+                problem in `docker pull`.
         """
 
         if not self.silent and not silent:
@@ -324,7 +325,7 @@ class Composition:
             *args,
         ]
 
-        for retry in range(1, max_tries + 1):
+        for retry in range(1, max_pull_tries + 1):
             stdout_result = ""
             stderr_result = ""
             file.seek(0)
@@ -392,7 +393,10 @@ class Composition:
                 if e.stderr and not capture_and_print:
                     print(e.stderr, file=sys.stderr)
 
-                if retry < max_tries:
+                if (
+                    "unexpected HTTP status" in str(e.stdout) + str(e.stderr)
+                    or "net/http" in str(e.stdout) + str(e.stderr)
+                ) and retry < max_pull_tries:
                     print("Retrying ...")
                     time.sleep(3)
                     continue
@@ -787,7 +791,7 @@ class Composition:
             check=check,
         )
 
-    def pull_if_variable(self, services: list[str], max_tries: int = 5) -> None:
+    def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
         """Pull fresh service images in case the tag indicates the underlying image may change over time.
 
         Args:
@@ -804,7 +808,7 @@ class Composition:
     def pull_single_image_by_service_name(
         self, service_name: str, max_tries: int
     ) -> None:
-        self.invoke("pull", service_name, max_tries=max_tries)
+        self.invoke("pull", service_name, max_pull_tries=max_tries)
 
     def try_pull_service_image(self, service: Service, max_tries: int = 2) -> bool:
         """Tries to pull the specified image and returns if this was successful."""
@@ -837,7 +841,7 @@ class Composition:
             persistent: Replace the container's entrypoint and command with
                 `sleep infinity` so that additional commands can be scheduled
                 on the container with `Composition.exec`.
-            max_pull_tries: Number of tries on failure for `docker pull`.
+            max_pull_tries: Number of tries on failure for pulls.
         """
         if persistent:
             old_compose = copy.deepcopy(self.compose)
@@ -846,21 +850,12 @@ class Composition:
                 service["command"] = []
             self.files = {}
 
-        pull_services = []
-        services_iter = iter(services)
-        for service in services_iter:
-            if service == "--scale":
-                next(services_iter)
-                continue
-            pull_services.append(service)
-        self.invoke("pull", *pull_services, max_tries=max_pull_tries)
-
         self.invoke(
             "up",
             *(["--detach"] if detach else []),
             *(["--wait"] if wait else []),
             *services,
-            max_tries=1,  # since we pulled the image before, there should be no dockerhub flakiness
+            max_pull_tries=max_pull_tries,
         )
 
         if persistent:

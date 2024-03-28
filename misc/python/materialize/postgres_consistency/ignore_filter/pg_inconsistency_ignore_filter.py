@@ -45,6 +45,9 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
     TAG_JSONB_TO_TEXT,
 )
+from materialize.output_consistency.input_data.operations.text_operations_provider import (
+    TAG_REGEX,
+)
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
@@ -210,7 +213,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#24578: different representation")
 
-        if db_operation.pattern in {"$ ~ $", "$ ~* $", "$ !~ $", "$ !~* $"}:
+        if db_operation.is_tagged(TAG_REGEX):
             return YesIgnore(
                 "Materialize regular expressions are similar to, but not identical to, PostgreSQL regular expressions."
             )
@@ -533,6 +536,19 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("Caused by a different precision")
 
         return super()._shall_ignore_row_count_mismatch(
+            error, query_template, contains_aggregation
+        )
+
+    def _shall_ignore_content_type_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        if error.value1 == int and error.value2 == float:
+            return YesIgnore("#26306: float instead of int returned")
+
+        return self._shall_ignore_content_mismatch(
             error, query_template, contains_aggregation
         )
 

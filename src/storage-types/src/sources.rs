@@ -699,22 +699,23 @@ impl<C: ConnectionAccess> SourceDesc<C> {
                 connection: GenericSourceConnection::MySql(_),
                 ..
             } => false,
+            // Upsert and CdcV2 may produce retractions.
+            SourceDesc {
+                envelope: SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
+                connection:
+                    GenericSourceConnection::Kafka(_) | GenericSourceConnection::LoadGenerator(_),
+                ..
+            } => false,
             // Loadgen can produce retractions (deletes)
             SourceDesc {
                 connection: GenericSourceConnection::LoadGenerator(g),
                 ..
             } => g.load_generator.is_monotonic(),
-            // Other sources the `None` envelope are append-only.
+            // Other sources with the `None` envelope are append-only.
             SourceDesc {
                 envelope: SourceEnvelope::None(_),
                 ..
             } => true,
-            // Other combinations may produce retractions.
-            SourceDesc {
-                envelope: SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
-                connection: GenericSourceConnection::Kafka(_),
-                ..
-            } => false,
         }
     }
 
