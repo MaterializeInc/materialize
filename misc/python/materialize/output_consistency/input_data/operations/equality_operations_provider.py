@@ -21,10 +21,60 @@ from materialize.output_consistency.operation.operation import (
 
 EQUALITY_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
+TAG_EQUALITY = "equality"
+TAG_EQUALITY_ORDERING = "equality-order"
+
 EQUALITY_OPERATION_TYPES.append(
     DbOperation(
         "$ = $",
         [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
         BooleanReturnTypeSpec(),
+        tags={TAG_EQUALITY},
+    )
+)
+
+# This is assumed to be the same as "$ != $".
+EQUALITY_OPERATION_TYPES.append(
+    DbOperation(
+        "$ <> $",
+        [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
+        BooleanReturnTypeSpec(),
+        tags={TAG_EQUALITY},
+    )
+)
+
+EQUALITY_OPERATION_TYPES.append(
+    DbOperation(
+        "$ < $",
+        [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
+        BooleanReturnTypeSpec(),
+        tags={TAG_EQUALITY, TAG_EQUALITY_ORDERING},
+    )
+)
+
+EQUALITY_OPERATION_TYPES.append(
+    DbOperation(
+        "$ <= $",
+        [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
+        BooleanReturnTypeSpec(),
+        tags={TAG_EQUALITY, TAG_EQUALITY_ORDERING},
+    )
+)
+
+EQUALITY_OPERATION_TYPES.append(
+    DbOperation(
+        "$ > $",
+        [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
+        BooleanReturnTypeSpec(),
+        tags={TAG_EQUALITY, TAG_EQUALITY_ORDERING},
+    )
+)
+
+EQUALITY_OPERATION_TYPES.append(
+    DbOperation(
+        "$ >= $",
+        [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
+        BooleanReturnTypeSpec(),
+        tags={TAG_EQUALITY, TAG_EQUALITY_ORDERING},
     )
 )
