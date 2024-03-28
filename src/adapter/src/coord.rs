@@ -2799,6 +2799,7 @@ impl Coordinator {
                 "pending_linearize_read_txns".to_string(),
                 serde_json::to_value(pending_linearize_read_txns)?,
             ),
+            ("controller".to_string(), self.controller.dump()?),
         ]);
         Ok(serde_json::Value::Object(map))
     }

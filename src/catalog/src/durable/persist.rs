@@ -53,6 +53,7 @@ use crate::durable::metrics::Metrics;
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::state_update::{
     IntoStateUpdateKindRaw, StateUpdate, StateUpdateKind, StateUpdateKindRaw,
+    TryIntoStateUpdateKind,
 };
 use crate::durable::objects::{AuditLogKey, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
@@ -123,7 +124,7 @@ pub(crate) enum Mode {
 
 /// Enum representing a potentially fenced epoch.
 #[derive(Debug)]
-enum FenceableEpoch {
+pub enum FenceableEpoch {
     /// The current epoch, if one exists, has not been fenced.
     Unfenced(Option<Epoch>),
     /// The current epoch has been fenced.
@@ -157,17 +158,48 @@ impl FenceableEpoch {
             } => Some(current_epoch.clone()),
         }
     }
+
+    /// Returns `Err` if `epoch` fences out `self`, `Ok` otherwise.
+    fn maybe_fence(&mut self, epoch: Epoch) -> Result<(), DurableCatalogError> {
+        match self {
+            FenceableEpoch::Unfenced(Some(current_epoch)) => {
+                if epoch > *current_epoch {
+                    *self = FenceableEpoch::Fenced {
+                        current_epoch: *current_epoch,
+                        fence_epoch: epoch,
+                    };
+                    self.validate()?;
+                } else if epoch < *current_epoch {
+                    panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
+                }
+            }
+            FenceableEpoch::Unfenced(None) => {
+                *self = FenceableEpoch::Unfenced(Some(epoch));
+            }
+            FenceableEpoch::Fenced { .. } => {
+                self.validate()?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
-/// A Handle to an unopened catalog stored in persist. The unopened catalog can serve `Config` data
-/// or the current epoch. All other catalog data may be un-migrated and should not be read until the
-/// catalog has been opened. The [`UnopenedPersistCatalogState`] is responsible for opening the
-/// catalog, see [`OpenableDurableCatalogState::open`] for more details.
-///
-/// Production users should call [`Self::expire`] before dropping a [`UnopenedPersistCatalogState`]
-/// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
+pub trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
+    /// Process and apply `update`.
+    ///
+    /// Returns `Some` if `update` should be cached in memory and `None` otherwise.
+    fn apply_update(
+        &mut self,
+        update: StateUpdate<T>,
+        current_epoch: &mut FenceableEpoch,
+        metrics: &Arc<Metrics>,
+    ) -> Result<Option<StateUpdate<T>>, DurableCatalogError>;
+}
+
+/// A handle for interacting with the persist catalog shard.
 #[derive(Debug)]
-pub struct UnopenedPersistCatalogState {
+pub struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
@@ -179,687 +211,20 @@ pub struct UnopenedPersistCatalogState {
     /// Catalog shard ID.
     shard_id: ShardId,
     /// Cache of the most recent catalog snapshot.
-    pub(crate) snapshot: Vec<StateUpdate<StateUpdateKindRaw>>,
-    /// The current upper of the persist shard.
-    pub(crate) upper: Timestamp,
-    /// The epoch of the catalog, if one exists. This information is also included in `snapshot`,
-    /// but it's useful to have quick access to this field without parsing through all updates.
-    epoch: FenceableEpoch,
-    /// The config collection of the catalog. This information is also included in `snapshot`,
-    /// but it's useful to have quick access to these fields without parsing through all updates.
-    configs: BTreeMap<String, u64>,
-    /// The organization ID of the environment.
-    organization_id: Uuid,
-    /// Metrics for the persist catalog.
-    metrics: Arc<Metrics>,
-}
-
-impl UnopenedPersistCatalogState {
-    /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with
-    /// `organization_id`.
-    ///
-    /// All usages of the persist catalog must go through this function. That includes the
-    /// catalog-debug tool, the adapter's catalog, etc.
-    #[mz_ore::instrument]
-    pub(crate) async fn new(
-        persist_client: PersistClient,
-        organization_id: Uuid,
-        version: semver::Version,
-        metrics: Arc<Metrics>,
-    ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
-        let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
-        let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
-        debug!(
-            ?catalog_shard_id,
-            ?upgrade_shard_id,
-            "new persist backed catalog state"
-        );
-
-        // Check the catalog upgrade shard to see ensure that we don't fence anyone out of persist.
-        let upgrade_version =
-            Self::fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await;
-        // If this is `None`, no version was found in the upgrade shard. Either this is a brand new
-        // environment and we don't need to worry about fencing existing users or we're upgrading
-        // from a version that doesn't contain the catalog upgrade shard and we need to proceed
-        // with caution for that one week until the catalog upgrade shard exists in all
-        // environments.
-        if let Some(upgrade_version) = upgrade_version {
-            if mz_persist_client::cfg::check_data_version(&upgrade_version, &version).is_err() {
-                return Err(DurableCatalogError::IncompatiblePersistVersion {
-                    found_version: upgrade_version,
-                    catalog_version: version,
-                });
-            }
-        }
-
-        let since_handle = persist_client
-            .open_critical_since(
-                catalog_shard_id,
-                // TODO: We may need to use a different critical reader
-                // id for this if we want to be able to introspect it via SQL.
-                PersistClient::CONTROLLER_CRITICAL_SINCE,
-                Diagnostics {
-                    shard_name: CATALOG_SHARD_NAME.to_string(),
-                    handle_purpose: "durable catalog state critical since".to_string(),
-                },
-            )
-            .await
-            .expect("invalid usage");
-        let (mut write_handle, mut read_handle) = persist_client
-            .open(
-                catalog_shard_id,
-                Arc::new(PersistCatalogState::desc()),
-                Arc::new(UnitSchema::default()),
-                Diagnostics {
-                    shard_name: CATALOG_SHARD_NAME.to_string(),
-                    handle_purpose: "durable catalog state handles".to_string(),
-                },
-            )
-            .await
-            .expect("invalid usage");
-
-        // Commit an empty write at the minimum timestamp so the catalog is always readable.
-        const EMPTY_UPDATES: &[((SourceData, ()), Timestamp, Diff)] = &[];
-        let _ = write_handle
-            .compare_and_append(
-                EMPTY_UPDATES,
-                Antichain::from_elem(Timestamp::minimum()),
-                Antichain::from_elem(Timestamp::minimum().step_forward()),
-            )
-            .await
-            .expect("invalid usage");
-
-        let upper = current_upper(&mut write_handle).await;
-        let as_of = as_of(&mut read_handle, upper);
-        let snapshot: Vec<_> = snapshot_binary(&mut read_handle, as_of, &metrics)
-            .await
-            .collect();
-        let listen = read_handle
-            .listen(Antichain::from_elem(as_of))
-            .await
-            .expect("invalid usage");
-        let mut epoch = FenceableEpoch::Unfenced(None);
-        let mut configs = BTreeMap::new();
-        for StateUpdate { kind, ts: _, diff } in &snapshot {
-            soft_assert_eq_or_log!(*diff, 1, "snapshot should be consolidated");
-            if let Ok(kind) = kind.clone().try_into() {
-                match kind {
-                    StateUpdateKind::Epoch(current_epoch) => {
-                        epoch = FenceableEpoch::Unfenced(Some(current_epoch));
-                    }
-                    StateUpdateKind::Config(key, value) => {
-                        configs.insert(key.key, value.value);
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        Ok(UnopenedPersistCatalogState {
-            since_handle,
-            write_handle,
-            listen,
-            persist_client,
-            shard_id: catalog_shard_id,
-            snapshot,
-            upper,
-            epoch,
-            configs,
-            organization_id,
-            metrics,
-        })
-    }
-
-    /// Fetch the persist version of the catalog upgrade shard, if one exists. A version will not
-    /// exist if the catalog upgrade shard itself doesn't exist which could happen in the following
-    /// scenarios:
-    ///
-    ///   - We are creating a brand new environment.
-    ///   - We are upgrading from a version of the code where the catalog upgrade shard didn't
-    ///   exist.
-    async fn fetch_catalog_upgrade_shard_version(
-        persist_client: &PersistClient,
-        upgrade_shard_id: ShardId,
-    ) -> Option<semver::Version> {
-        let shard_state = persist_client
-            .inspect_shard::<Timestamp>(&upgrade_shard_id)
-            .await
-            .ok()?;
-        let json_state = serde_json::to_value(shard_state).expect("state serialization error");
-        let upgrade_version = json_state
-            .get("applier_version")
-            .cloned()
-            .expect("missing applier_version");
-        let upgrade_version =
-            serde_json::from_value(upgrade_version).expect("version deserialization error");
-        Some(upgrade_version)
-    }
-
-    #[mz_ore::instrument]
-    async fn open_inner(
-        mut self,
-        mode: Mode,
-        initial_ts: EpochMillis,
-        bootstrap_args: &BootstrapArgs,
-        deploy_generation: Option<u64>,
-        epoch_lower_bound: Option<Epoch>,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        let read_only = matches!(mode, Mode::Readonly);
-
-        self.sync_to_current_upper().await?;
-        let prev_epoch = self.epoch.validate()?;
-        // Fence out previous catalogs.
-        let mut fence_updates = Vec::with_capacity(2);
-        if let Some(prev_epoch) = prev_epoch {
-            fence_updates.push((StateUpdateKind::Epoch(prev_epoch), -1));
-        }
-        let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
-        // Only writable catalogs attempt to increment the epoch.
-        if matches!(mode, Mode::Writable) {
-            if let Some(epoch_lower_bound) = &epoch_lower_bound {
-                info!(?epoch_lower_bound);
-            }
-
-            current_epoch = max(
-                current_epoch + 1,
-                epoch_lower_bound.unwrap_or(Epoch::MIN).get(),
-            );
-        }
-        let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
-        fence_updates.push((StateUpdateKind::Epoch(current_epoch), 1));
-        let current_epoch = FenceableEpoch::Unfenced(Some(current_epoch));
-        debug!(
-            ?self.upper,
-            ?prev_epoch,
-            ?epoch_lower_bound,
-            ?current_epoch,
-            "fencing previous catalogs"
-        );
-        self.epoch = current_epoch;
-        if matches!(mode, Mode::Writable) {
-            self.compare_and_append(fence_updates).await?;
-        }
-
-        let is_initialized = self.is_initialized_inner();
-        if !matches!(mode, Mode::Writable) && !is_initialized {
-            return Err(CatalogError::Durable(DurableCatalogError::NotWritable(
-                format!("catalog tables do not exist; will not create in {mode:?} mode"),
-            )));
-        }
-        soft_assert_ne_or_log!(self.upper, Timestamp::minimum());
-
-        // Perform data migrations.
-        if is_initialized && !read_only {
-            upgrade(&mut self, mode.clone()).await?;
-        }
-
-        debug!(
-            ?is_initialized,
-            ?self.upper,
-            "initializing catalog state"
-        );
-        let mut catalog = PersistCatalogState {
-            mode: mode.clone(),
-            since_handle: self.since_handle,
-            write_handle: self.write_handle,
-            listen: self.listen,
-            persist_client: self.persist_client,
-            shard_id: self.shard_id,
-            upper: self.upper,
-            epoch: self.epoch,
-            // Initialize empty in-memory state.
-            snapshot: Vec::new(),
-            audit_logs: LargeCollectionStartupCache::new_open(),
-            storage_usage_events: LargeCollectionStartupCache::new_open(),
-            metrics: self.metrics,
-        };
-        catalog.metrics.collection_entries.reset();
-        let updates = self
-            .snapshot
-            .into_iter()
-            .map(|update| update.try_into().expect("kind decoding error"));
-        catalog.apply_updates(updates)?;
-
-        let txn = if is_initialized {
-            let mut txn = catalog.transaction().await?;
-            if let Some(deploy_generation) = deploy_generation {
-                txn.set_config(DEPLOY_GENERATION.into(), Some(deploy_generation))?;
-            }
-            txn
-        } else {
-            soft_assert_eq_no_log!(
-                catalog
-                    .snapshot
-                    .iter()
-                    .filter(|(kind, _, _)| !matches!(kind, StateUpdateKind::Epoch(_)))
-                    .count(),
-                0,
-                "trace should not contain any updates for an uninitialized catalog: {:?}",
-                catalog.snapshot
-            );
-            let mut txn = catalog.transaction().await?;
-            initialize::initialize(&mut txn, bootstrap_args, initial_ts, deploy_generation).await?;
-            txn
-        };
-
-        if read_only {
-            let (txn_batch, _) = txn.into_parts();
-            // The upper here doesn't matter because we are only apply the updates in memory.
-            let updates = StateUpdate::from_txn_batch(txn_batch, catalog.upper);
-            catalog.apply_updates(updates)?;
-        } else {
-            txn.commit().await?;
-        }
-
-        // Now that we've fully opened the catalog at the current version, we can increment the
-        // version in the catalog upgrade shard to signal to readers that the allowable versions
-        // have increased.
-        if matches!(mode, Mode::Writable) {
-            catalog
-                .increment_catalog_upgrade_shard_version(self.organization_id)
-                .await;
-        }
-
-        Ok(Box::new(catalog))
-    }
-
-    /// Listen and apply all updates up to `target_upper`.
-    #[mz_ore::instrument]
-    pub(crate) async fn sync(
-        &mut self,
-        target_upper: Timestamp,
-    ) -> Result<(), DurableCatalogError> {
-        self.epoch.validate()?;
-        let updates: Vec<StateUpdate<StateUpdateKindRaw>> =
-            sync(&mut self.listen, &mut self.upper, target_upper).await;
-        self.apply_updates(updates)?;
-
-        Ok(())
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) fn apply_updates(
-        &mut self,
-        updates: Vec<StateUpdate<StateUpdateKindRaw>>,
-    ) -> Result<(), DurableCatalogError> {
-        for update in updates {
-            let StateUpdate { kind, ts, diff } = &update;
-            if *diff != 1 && *diff != -1 {
-                panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
-            }
-
-            if let Ok(kind) = kind.clone().try_into() {
-                match (kind, diff) {
-                    (StateUpdateKind::Epoch(epoch), 1) => match self.epoch {
-                        FenceableEpoch::Unfenced(Some(current_epoch)) => {
-                            if epoch > current_epoch {
-                                self.epoch = FenceableEpoch::Fenced {
-                                    current_epoch,
-                                    fence_epoch: epoch,
-                                };
-                                self.epoch.validate()?;
-                            } else if epoch < current_epoch {
-                                panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
-                            }
-                        }
-                        FenceableEpoch::Unfenced(None) => {
-                            self.epoch = FenceableEpoch::Unfenced(Some(epoch));
-                        }
-                        FenceableEpoch::Fenced { .. } => {}
-                    },
-                    (StateUpdateKind::Epoch(_), -1) => {
-                        // Nothing to do, we're about to get fenced.
-                    }
-                    (StateUpdateKind::Config(key, value), 1) => {
-                        let prev = self.configs.insert(key.key, value.value);
-                        soft_assert_eq_or_log!(
-                            prev,
-                            None,
-                            "values must be explicitly retracted before inserting a new value"
-                        );
-                    }
-                    (StateUpdateKind::Config(key, value), -1) => {
-                        let prev = self.configs.remove(&key.key);
-                        soft_assert_eq_or_log!(
-                            prev,
-                            Some(value.value),
-                            "retraction does not match existing value"
-                        );
-                    }
-                    _ => {}
-                }
-            }
-
-            self.snapshot.push(update);
-        }
-        Ok(())
-    }
-
-    /// Listen and apply all updates that are currently in persist.
-    #[mz_ore::instrument]
-    pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), DurableCatalogError> {
-        let upper = self.current_upper().await;
-        self.sync(upper).await
-    }
-
-    /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
-    /// catalog state up to, and including, `as_of`.
-    #[mz_ore::instrument]
-    async fn snapshot_unconsolidated(&mut self) -> Vec<StateUpdate<StateUpdateKind>> {
-        let current_upper = self.current_upper().await;
-
-        let mut snapshot = Vec::new();
-        let mut read_handle = self.read_handle().await;
-        let as_of = as_of(&read_handle, current_upper);
-        let mut stream = Box::pin(
-            // We use `snapshot_and_stream` because it guarantees unconsolidated output.
-            read_handle
-                .snapshot_and_stream(Antichain::from_elem(as_of))
-                .await
-                .expect("we have advanced the restart_as_of by the since"),
-        );
-        while let Some(update) = stream.next().await {
-            snapshot.push(update)
-        }
-        read_handle.expire().await;
-        snapshot
-            .into_iter()
-            .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
-            .map(|state_update| state_update.try_into().expect("kind decoding error"))
-            .collect()
-    }
-
-    #[mz_ore::instrument]
-    pub(crate) fn consolidate(&mut self) {
-        let snapshot = std::mem::take(&mut self.snapshot);
-        let ts = snapshot
-            .last()
-            .map(|update| update.ts)
-            .unwrap_or_else(Timestamp::minimum);
-        let mut updates = snapshot
-            .into_iter()
-            .map(|update| (update.kind, update.diff))
-            .collect();
-        differential_dataflow::consolidation::consolidate(&mut updates);
-        self.snapshot = updates
-            .into_iter()
-            .map(|(kind, diff)| StateUpdate { kind, ts, diff })
-            .collect();
-    }
-
-    /// Open a read handle to the catalog.
-    async fn read_handle(&mut self) -> ReadHandle<SourceData, (), Timestamp, Diff> {
-        self.persist_client
-            .open_leased_reader(
-                self.shard_id,
-                Arc::new(PersistCatalogState::desc()),
-                Arc::new(UnitSchema::default()),
-                Diagnostics {
-                    shard_name: CATALOG_SHARD_NAME.to_string(),
-                    handle_purpose: "openable durable catalog state temporary reader".to_string(),
-                },
-            )
-            .await
-            .expect("invalid usage")
-    }
-
-    /// Reports if the catalog state has been initialized.
-    ///
-    /// NOTE: This is the answer as of the last call to [`Self::sync`] or [`Self::sync_to_current_upper`],
-    /// not necessarily what is currently in persist.
-    #[mz_ore::instrument]
-    fn is_initialized_inner(&self) -> bool {
-        !self.configs.is_empty()
-    }
-
-    #[mz_ore::instrument]
-    async fn current_upper(&mut self) -> Timestamp {
-        current_upper(&mut self.write_handle).await
-    }
-
-    /// Get the current value of config `key`.
-    ///
-    /// Some configs need to be read before the catalog is opened for bootstrapping.
-    #[mz_ore::instrument]
-    async fn get_current_config(&mut self, key: &str) -> Result<Option<u64>, CatalogError> {
-        self.sync_to_current_upper().await?;
-        Ok(self.configs.get(key).cloned())
-    }
-
-    /// Get the user version of this instance.
-    ///
-    /// The user version is used to determine if a migration is needed.
-    #[mz_ore::instrument]
-    pub(crate) async fn get_user_version(&mut self) -> Result<Option<u64>, CatalogError> {
-        self.get_current_config(USER_VERSION_KEY).await
-    }
-
-    /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
-    /// iff the current global upper of the catalog is `current_upper`.
-    #[mz_ore::instrument]
-    pub(crate) async fn compare_and_append<T: IntoStateUpdateKindRaw>(
-        &mut self,
-        updates: Vec<(T, Diff)>,
-    ) -> Result<(), CatalogError> {
-        let updates = updates
-            .into_iter()
-            .map(|(kind, diff)| StateUpdate {
-                kind,
-                ts: self.upper,
-                diff,
-            })
-            .collect();
-        let next_upper = self.upper.step_forward();
-        compare_and_append(
-            &mut self.since_handle,
-            &mut self.write_handle,
-            updates,
-            self.upper,
-            next_upper,
-        )
-        .await?;
-        self.sync(next_upper).await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
-    #[mz_ore::instrument]
-    async fn open_savepoint(
-        mut self: Box<Self>,
-        initial_ts: EpochMillis,
-        bootstrap_args: &BootstrapArgs,
-        deploy_generation: Option<u64>,
-        epoch_lower_bound: Option<Epoch>,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(
-            Mode::Savepoint,
-            initial_ts,
-            bootstrap_args,
-            deploy_generation,
-            epoch_lower_bound,
-        )
-        .boxed()
-        .await
-    }
-
-    #[mz_ore::instrument]
-    async fn open_read_only(
-        mut self: Box<Self>,
-        bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, EpochMillis::MIN, bootstrap_args, None, None)
-            .boxed()
-            .await
-    }
-
-    #[mz_ore::instrument]
-    async fn open(
-        mut self: Box<Self>,
-        initial_ts: EpochMillis,
-        bootstrap_args: &BootstrapArgs,
-        deploy_generation: Option<u64>,
-        epoch_lower_bound: Option<Epoch>,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(
-            Mode::Writable,
-            initial_ts,
-            bootstrap_args,
-            deploy_generation,
-            epoch_lower_bound,
-        )
-        .boxed()
-        .await
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
-        Ok(DebugCatalogState(*self))
-    }
-
-    #[mz_ore::instrument]
-    async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
-        self.sync_to_current_upper().await?;
-        Ok(!self.configs.is_empty())
-    }
-
-    #[mz_ore::instrument]
-    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
-        self.sync_to_current_upper().await?;
-        self.epoch
-            .validate()?
-            .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
-    }
-
-    #[mz_ore::instrument]
-    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
-        self.get_current_config(DEPLOY_GENERATION).await
-    }
-
-    #[mz_ore::instrument]
-    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
-        self.get_current_config(SYSTEM_CONFIG_SYNCED_KEY)
-            .await
-            .map(|value| value.map(|value| value > 0).unwrap_or(false))
-    }
-
-    #[mz_ore::instrument]
-    async fn trace_unconsolidated(&mut self) -> Result<Trace, CatalogError> {
-        self.sync_to_current_upper().await?;
-        if self.is_initialized_inner() {
-            let snapshot = self.snapshot_unconsolidated().await;
-            Ok(Trace::from_snapshot(snapshot))
-        } else {
-            Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
-        }
-    }
-
-    #[mz_ore::instrument]
-    async fn trace_consolidated(&mut self) -> Result<Trace, CatalogError> {
-        self.sync_to_current_upper().await?;
-        if self.is_initialized_inner() {
-            let snapshot = self.current_snapshot().await?;
-            Ok(Trace::from_snapshot(snapshot))
-        } else {
-            Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
-        }
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn expire(self: Box<Self>) {
-        self.listen.expire().await;
-        self.write_handle.expire().await;
-    }
-}
-
-/// Certain large collections are only needed during startup. This struct helps us cache these
-/// values during startup and ignore them at all other times.
-#[derive(Debug)]
-enum LargeCollectionStartupCache<T> {
-    /// Actively caching any new value that is seen.
-    Open(Vec<(T, Diff)>),
-    /// Ignoring any new value that is seen.
-    Closed,
-}
-
-impl<T> LargeCollectionStartupCache<T> {
-    /// Create a new opened [`LargeCollectionStartupCache`].
-    fn new_open() -> LargeCollectionStartupCache<T> {
-        LargeCollectionStartupCache::Open(Vec::new())
-    }
-
-    /// Add value to cache if open, otherwise ignore.
-    fn push(&mut self, value: (T, Diff)) {
-        match self {
-            LargeCollectionStartupCache::Open(cache) => {
-                cache.push(value);
-            }
-            LargeCollectionStartupCache::Closed => {
-                // Cache is closed, ignore value.
-            }
-        }
-    }
-}
-
-impl<T: Ord> LargeCollectionStartupCache<T> {
-    /// If the cache is open, then return all the cached values and close the cache, otherwise
-    /// return `None`.
-    fn take(&mut self) -> Option<Vec<T>> {
-        if let Self::Open(mut cache) = std::mem::replace(self, Self::Closed) {
-            differential_dataflow::consolidation::consolidate(&mut cache);
-            let cache = cache
-                .into_iter()
-                .map(|(v, diff)| {
-                    assert_eq!(1, diff, "consolidated cache should have no retraction");
-                    v
-                })
-                .collect();
-            Some(cache)
-        } else {
-            None
-        }
-    }
-}
-
-/// A durable store of the catalog state using Persist as an implementation.
-#[derive(Debug)]
-pub struct PersistCatalogState {
-    /// The [`Mode`] that this catalog was opened in.
-    mode: Mode,
-    /// Since handle to control compaction.
-    since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
-    /// Write handle to persist.
-    write_handle: WriteHandle<SourceData, (), Timestamp, Diff>,
-    /// Listener to catalog changes.
-    listen: Listen<SourceData, (), Timestamp, Diff>,
-    /// Handle for connecting to persist.
-    persist_client: PersistClient,
-    /// Catalog shard ID.
-    shard_id: ShardId,
-    /// The current upper of the persist shard.
-    upper: Timestamp,
-    /// The epoch of this catalog.
-    epoch: FenceableEpoch,
-    /// A cache of the entire catalog state.
     ///
     /// We use a tuple instead of [`StateUpdate`] to make consolidation easier.
-    snapshot: Vec<(StateUpdateKind, Timestamp, Diff)>,
-    /// A cache of audit logs that is only populated during startup.
-    audit_logs: LargeCollectionStartupCache<proto::AuditLogKey>,
-    /// A cache of storage usage events that is only populated during startup.
-    storage_usage_events: LargeCollectionStartupCache<proto::StorageUsageKey>,
+    pub(crate) snapshot: Vec<(T, Timestamp, Diff)>,
+    /// Applies custom processing, filtering, and fencing for each individual update.
+    update_applier: U,
+    /// The current upper of the persist shard.
+    pub(crate) upper: Timestamp,
+    /// The epoch of the catalog, if one exists.
+    epoch: FenceableEpoch,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
 
-impl PersistCatalogState {
-    // Returns the schema of the `Row`s/`SourceData`s stored in the persist
-    // shard backing the catalog.
-    pub fn desc() -> RelationDesc {
-        RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
-    }
-
+impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Increment the version in the catalog upgrade shard to the code's current version.
     async fn increment_catalog_upgrade_shard_version(&mut self, organization_id: Uuid) {
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
@@ -896,58 +261,106 @@ impl PersistCatalogState {
         }
     }
 
-    /// Fetch the current upper of the catalog state.
+    #[mz_ore::instrument]
     async fn current_upper(&mut self) -> Timestamp {
         current_upper(&mut self.write_handle).await
     }
 
     /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
     /// iff the current global upper of the catalog is `current_upper`.
-    async fn compare_and_append(
+    #[mz_ore::instrument]
+    pub(crate) async fn compare_and_append<S: IntoStateUpdateKindRaw>(
         &mut self,
-        updates: Vec<StateUpdate>,
-        current_upper: Timestamp,
-        next_upper: Timestamp,
+        updates: Vec<(S, Diff)>,
     ) -> Result<(), CatalogError> {
-        compare_and_append(
-            &mut self.since_handle,
-            &mut self.write_handle,
-            updates,
-            current_upper,
-            next_upper,
-        )
-        .await
-    }
+        let updates = updates.into_iter().map(|(kind, diff)| {
+            let kind: StateUpdateKindRaw = kind.into();
+            ((Into::<SourceData>::into(kind), ()), self.upper, diff)
+        });
+        let next_upper = self.upper.step_forward();
+        self.write_handle
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(self.upper),
+                Antichain::from_elem(next_upper),
+            )
+            .await
+            .expect("invalid usage")
+            .map_err(|upper_mismatch| {
+                DurableCatalogError::Fence(format!(
+                    "current catalog upper {:?} fenced by new catalog upper {:?}",
+                    upper_mismatch.expected, upper_mismatch.current
+                ))
+            })?;
 
-    /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
-    /// state.
-    ///
-    /// The output is consolidated and sorted by timestamp in ascending order.
-    #[mz_ore::instrument(level = "debug")]
-    async fn persist_snapshot(
-        &mut self,
-    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        let mut read_handle = self.read_handle().await;
-        let as_of = as_of(&read_handle, self.upper);
-        let snapshot = snapshot(&mut read_handle, as_of, &self.metrics).await;
-        read_handle.expire().await;
-        snapshot
-    }
+        // Lag the shard's upper by 1 to keep it readable.
+        let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
 
-    /// Listen and apply all updates currently in the catalog.
-    ///
-    /// Returns an error if this instance has been fenced out.
-    #[mz_ore::instrument(level = "debug")]
-    async fn sync_to_current_upper(&mut self) -> Result<(), CatalogError> {
-        let upper = self.current_upper().await;
-        self.sync(upper).await?;
-        self.epoch.validate()?;
+        // The since handle gives us the ability to fence out other writes using an opaque token.
+        // (See the method documentation for details.)
+        // That's not needed here, so we use a constant opaque token to avoid any comparison failures.
+        let opaque = i64::initial();
+        let downgrade = self
+            .since_handle
+            .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
+            .await;
+
+        match downgrade {
+            None => {}
+            Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
+            Some(Ok(updated)) => soft_assert_or_log!(
+                updated == downgrade_to,
+                "updated bound should match expected"
+            ),
+        }
+        self.sync(next_upper).await?;
         Ok(())
     }
 
+    /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
+    /// catalog state up to, and including, `as_of`.
+    #[mz_ore::instrument]
+    async fn snapshot_unconsolidated(&mut self) -> Vec<StateUpdate<StateUpdateKind>> {
+        let current_upper = self.current_upper().await;
+
+        let mut snapshot = Vec::new();
+        let mut read_handle = self.read_handle().await;
+        let as_of = as_of(&read_handle, current_upper);
+        let mut stream = Box::pin(
+            // We use `snapshot_and_stream` because it guarantees unconsolidated output.
+            read_handle
+                .snapshot_and_stream(Antichain::from_elem(as_of))
+                .await
+                .expect("we have advanced the restart_as_of by the since"),
+        );
+        while let Some(update) = stream.next().await {
+            snapshot.push(update)
+        }
+        read_handle.expire().await;
+        snapshot
+            .into_iter()
+            .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
+            .map(|state_update| state_update.try_into().expect("kind decoding error"))
+            .collect()
+    }
+
+    /// Listen and apply all updates that are currently in persist.
+    ///
+    /// Returns an error if this instance has been fenced out.
+    #[mz_ore::instrument]
+    pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), DurableCatalogError> {
+        let upper = self.current_upper().await;
+        self.sync(upper).await
+    }
+
     /// Listen and apply all updates up to `target_upper`.
+    ///
+    /// Returns an error if this instance has been fenced out.
     #[mz_ore::instrument(level = "debug")]
-    async fn sync(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
+    pub(crate) async fn sync(
+        &mut self,
+        target_upper: Timestamp,
+    ) -> Result<(), DurableCatalogError> {
         self.metrics.syncs.inc();
         let counter = self.metrics.sync_latency_seconds.clone();
         self.sync_inner(target_upper)
@@ -957,70 +370,82 @@ impl PersistCatalogState {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
-        let updates = sync(&mut self.listen, &mut self.upper, target_upper).await;
+    async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), DurableCatalogError> {
+        self.epoch.validate()?;
+        let mut updates = Vec::new();
+
+        while self.upper < target_upper {
+            let listen_events = self.listen.fetch_next().await;
+            for listen_event in listen_events {
+                match listen_event {
+                    ListenEvent::Progress(upper) => {
+                        debug!("synced up to {upper:?}");
+                        self.upper = upper
+                            .as_option()
+                            .cloned()
+                            .expect("we use a totally ordered time and never finalize the shard");
+                    }
+                    ListenEvent::Updates(batch_updates) => {
+                        debug!("syncing updates {batch_updates:?}");
+                        let batch_updates = batch_updates
+                            .into_iter()
+                            .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
+                            .map(|update| {
+                                let kind = T::try_from(update.kind).expect("kind decoding error");
+                                (kind, update.ts, update.diff)
+                            });
+                        updates.extend(batch_updates);
+                    }
+                }
+            }
+        }
+        let updates = updates
+            .into_iter()
+            .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
         self.apply_updates(updates)?;
         Ok(())
     }
 
-    /// Applies [`StateUpdate`]s to the in memory catalog cache.
     #[mz_ore::instrument(level = "debug")]
-    fn apply_updates(
+    pub(crate) fn apply_updates(
         &mut self,
-        updates: impl IntoIterator<Item = StateUpdate>,
+        updates: impl IntoIterator<Item = StateUpdate<T>>,
     ) -> Result<(), DurableCatalogError> {
-        let mut updates: Vec<_> = updates.into_iter().collect();
+        let mut updates: Vec<_> = updates
+            .into_iter()
+            .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
+            .collect();
+
+        // This helps guarantee that for a single key, there is at most a single retraction and a
+        // single insertion per timestamp. Otherwise, we would need to match the retractions and
+        // insertions up by value and manually figure out what the end value should be.
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
         // Updates must be applied in timestamp order. Within a timestamp retractions must be
         // applied before insertions, or we might end up retracting the wrong value.
-        updates.sort_by(|a, b| a.ts.cmp(&b.ts).then(a.diff.cmp(&b.diff)));
+        updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
 
-        for StateUpdate { kind, ts, diff } in updates {
+        for (kind, ts, diff) in updates {
             if diff != 1 && diff != -1 {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
 
-            if let Some(collection_type) = kind.collection_type() {
-                self.metrics
-                    .collection_entries
-                    .with_label_values(&[&collection_type.to_string()])
-                    .add(diff);
-            }
-
-            debug!("applying catalog update: ({kind:?}, {ts:?}, {diff:?})");
-            match kind {
-                StateUpdateKind::AuditLog(key, ()) => {
-                    self.audit_logs.push((key, diff));
-                }
-                StateUpdateKind::Epoch(epoch) => match self.epoch {
-                    FenceableEpoch::Unfenced(Some(current_epoch)) => {
-                        if epoch > current_epoch {
-                            soft_assert_eq_or_log!(diff, 1);
-                            self.epoch = FenceableEpoch::Fenced {
-                                current_epoch,
-                                fence_epoch: epoch,
-                            };
-                            self.epoch.validate()?;
-                        } else if epoch < current_epoch {
-                            panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
-                        }
-                    }
-                    FenceableEpoch::Unfenced(None) => {
-                        self.epoch = FenceableEpoch::Unfenced(Some(epoch));
-                    }
-                    FenceableEpoch::Fenced { .. } => {}
-                },
-                StateUpdateKind::StorageUsage(key, ()) => {
-                    self.storage_usage_events.push((key, diff));
-                }
-                _ => self.snapshot.push((kind, ts, diff)),
+            if let Some(StateUpdate { kind, ts, diff }) = self.update_applier.apply_update(
+                StateUpdate { kind, ts, diff },
+                &mut self.epoch,
+                &self.metrics,
+            )? {
+                self.snapshot.push((kind, ts, diff));
             }
         }
+
         self.consolidate();
+
         Ok(())
     }
 
-    fn consolidate(&mut self) {
+    #[mz_ore::instrument]
+    pub(crate) fn consolidate(&mut self) {
         soft_assert_no_log!(
             self.snapshot
                 .windows(2)
@@ -1043,14 +468,38 @@ impl PersistCatalogState {
     /// Execute and return the results of `f` on the current catalog trace.
     ///
     /// Will return an error if the catalog has been fenced out.
-    async fn with_trace<T>(
+    async fn with_trace<R>(
         &mut self,
-        f: impl FnOnce(&Vec<(StateUpdateKind, Timestamp, Diff)>) -> Result<T, CatalogError>,
-    ) -> Result<T, CatalogError> {
+        f: impl FnOnce(&Vec<(T, Timestamp, Diff)>) -> Result<R, CatalogError>,
+    ) -> Result<R, CatalogError> {
         self.sync_to_current_upper().await?;
         f(&self.snapshot)
     }
 
+    /// Open a read handle to the catalog.
+    async fn read_handle(&mut self) -> ReadHandle<SourceData, (), Timestamp, Diff> {
+        self.persist_client
+            .open_leased_reader(
+                self.shard_id,
+                Arc::new(desc()),
+                Arc::new(UnitSchema::default()),
+                Diagnostics {
+                    shard_name: CATALOG_SHARD_NAME.to_string(),
+                    handle_purpose: "openable durable catalog state temporary reader".to_string(),
+                },
+            )
+            .await
+            .expect("invalid usage")
+    }
+
+    /// Politely releases all external resources that can only be released in an async context.
+    async fn expire(self: Box<Self>) {
+        self.write_handle.expire().await;
+        self.listen.expire().await;
+    }
+}
+
+impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
     /// Execute and return the results of `f` on the current catalog snapshot.
     ///
     /// Will return an error if the catalog has been fenced out.
@@ -1058,11 +507,13 @@ impl PersistCatalogState {
         &mut self,
         f: impl FnOnce(Snapshot) -> Result<T, CatalogError>,
     ) -> Result<T, CatalogError> {
-        fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: V, diff: Diff)
+        fn apply<K, V>(map: &mut BTreeMap<K, V>, key: &K, value: &V, diff: Diff)
         where
-            K: Ord,
-            V: Ord + Debug,
+            K: Ord + Clone,
+            V: Ord + Clone + Debug,
         {
+            let key = key.clone();
+            let value = value.clone();
             if diff == 1 {
                 let prev = map.insert(key, value);
                 soft_assert_eq_or_log!(
@@ -1082,7 +533,8 @@ impl PersistCatalogState {
 
         self.with_trace(|trace| {
             let mut snapshot = Snapshot::empty();
-            for (kind, ts, diff) in trace.clone() {
+            for (kind, ts, diff) in trace {
+                let diff = *diff;
                 if diff != 1 && diff != -1 {
                     panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
                 }
@@ -1149,22 +601,581 @@ impl PersistCatalogState {
         .await
     }
 
-    /// Open a read handle to the catalog.
-    async fn read_handle(&mut self) -> ReadHandle<SourceData, (), Timestamp, Diff> {
-        self.persist_client
-            .open_leased_reader(
-                self.shard_id,
-                Arc::new(PersistCatalogState::desc()),
-                Arc::new(UnitSchema::default()),
+    /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
+    /// state.
+    ///
+    /// The output is fetched directly from persist instead of the in-memory cache.
+    ///
+    /// The output is consolidated and sorted by timestamp in ascending order.
+    #[mz_ore::instrument(level = "debug")]
+    async fn persist_snapshot(
+        &mut self,
+    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
+        let mut read_handle = self.read_handle().await;
+        let as_of = as_of(&read_handle, self.upper);
+        let snapshot = snapshot_binary(&mut read_handle, as_of, &self.metrics)
+            .await
+            .map(|update| update.try_into().expect("kind decoding error"));
+        read_handle.expire().await;
+        snapshot
+    }
+}
+
+#[derive(Debug)]
+pub struct UnopenedCatalogStateInner {
+    /// The organization ID of the environment.
+    organization_id: Uuid,
+    /// A cache of the config collection of the catalog.
+    configs: BTreeMap<String, u64>,
+}
+
+impl UnopenedCatalogStateInner {
+    fn new(organization_id: Uuid) -> UnopenedCatalogStateInner {
+        UnopenedCatalogStateInner {
+            organization_id,
+            configs: BTreeMap::new(),
+        }
+    }
+}
+
+impl ApplyUpdate<StateUpdateKindRaw> for UnopenedCatalogStateInner {
+    fn apply_update(
+        &mut self,
+        update: StateUpdate<StateUpdateKindRaw>,
+        current_epoch: &mut FenceableEpoch,
+        _metrics: &Arc<Metrics>,
+    ) -> Result<Option<StateUpdate<StateUpdateKindRaw>>, DurableCatalogError> {
+        if let Ok(kind) =
+            <StateUpdateKindRaw as TryIntoStateUpdateKind>::try_into(update.kind.clone())
+        {
+            match (kind, update.diff) {
+                (StateUpdateKind::Config(key, value), 1) => {
+                    let prev = self.configs.insert(key.key, value.value);
+                    soft_assert_eq_or_log!(
+                        prev,
+                        None,
+                        "values must be explicitly retracted before inserting a new value"
+                    );
+                }
+                (StateUpdateKind::Config(key, value), -1) => {
+                    let prev = self.configs.remove(&key.key);
+                    soft_assert_eq_or_log!(
+                        prev,
+                        Some(value.value),
+                        "retraction does not match existing value"
+                    );
+                }
+                (StateUpdateKind::Epoch(epoch), 1) => {
+                    current_epoch.maybe_fence(epoch)?;
+                    return Ok(Some(update));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(Some(update))
+    }
+}
+
+/// A Handle to an unopened catalog stored in persist. The unopened catalog can serve `Config` data
+/// or the current epoch. All other catalog data may be un-migrated and should not be read until the
+/// catalog has been opened. The [`UnopenedPersistCatalogState`] is responsible for opening the
+/// catalog, see [`OpenableDurableCatalogState::open`] for more details.
+///
+/// Production users should call [`Self::expire`] before dropping a [`UnopenedPersistCatalogState`]
+/// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
+pub type UnopenedPersistCatalogState = PersistHandle<StateUpdateKindRaw, UnopenedCatalogStateInner>;
+
+impl UnopenedPersistCatalogState {
+    /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with
+    /// `organization_id`.
+    ///
+    /// All usages of the persist catalog must go through this function. That includes the
+    /// catalog-debug tool, the adapter's catalog, etc.
+    #[mz_ore::instrument]
+    pub(crate) async fn new(
+        persist_client: PersistClient,
+        organization_id: Uuid,
+        version: semver::Version,
+        metrics: Arc<Metrics>,
+    ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
+        let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
+        let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
+        debug!(
+            ?catalog_shard_id,
+            ?upgrade_shard_id,
+            "new persist backed catalog state"
+        );
+
+        // Check the catalog upgrade shard to see ensure that we don't fence anyone out of persist.
+        let upgrade_version =
+            fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await;
+        // If this is `None`, no version was found in the upgrade shard. Either this is a brand new
+        // environment and we don't need to worry about fencing existing users or we're upgrading
+        // from a version that doesn't contain the catalog upgrade shard and we need to proceed
+        // with caution for that one week until the catalog upgrade shard exists in all
+        // environments.
+        if let Some(upgrade_version) = upgrade_version {
+            if mz_persist_client::cfg::check_data_version(&upgrade_version, &version).is_err() {
+                return Err(DurableCatalogError::IncompatiblePersistVersion {
+                    found_version: upgrade_version,
+                    catalog_version: version,
+                });
+            }
+        }
+
+        let since_handle = persist_client
+            .open_critical_since(
+                catalog_shard_id,
+                // TODO: We may need to use a different critical reader
+                // id for this if we want to be able to introspect it via SQL.
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
-                    handle_purpose: "durable catalog state temporary reader".to_string(),
+                    handle_purpose: "durable catalog state critical since".to_string(),
                 },
             )
             .await
-            .expect("invalid usage")
+            .expect("invalid usage");
+        let (mut write_handle, mut read_handle) = persist_client
+            .open(
+                catalog_shard_id,
+                Arc::new(desc()),
+                Arc::new(UnitSchema::default()),
+                Diagnostics {
+                    shard_name: CATALOG_SHARD_NAME.to_string(),
+                    handle_purpose: "durable catalog state handles".to_string(),
+                },
+            )
+            .await
+            .expect("invalid usage");
+
+        // Commit an empty write at the minimum timestamp so the catalog is always readable.
+        const EMPTY_UPDATES: &[((SourceData, ()), Timestamp, Diff)] = &[];
+        let _ = write_handle
+            .compare_and_append(
+                EMPTY_UPDATES,
+                Antichain::from_elem(Timestamp::minimum()),
+                Antichain::from_elem(Timestamp::minimum().step_forward()),
+            )
+            .await
+            .expect("invalid usage");
+
+        let upper = current_upper(&mut write_handle).await;
+        let as_of = as_of(&mut read_handle, upper);
+        let snapshot: Vec<_> = snapshot_binary(&mut read_handle, as_of, &metrics)
+            .await
+            .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
+            .collect();
+        let listen = read_handle
+            .listen(Antichain::from_elem(as_of))
+            .await
+            .expect("invalid usage");
+        // Sniff out most recent epoch.
+        let epoch = snapshot
+            .iter()
+            .rev()
+            .filter(|(_, _, diff)| *diff == 1)
+            .filter_map(|(kind, _, _)| {
+                <StateUpdateKindRaw as TryIntoStateUpdateKind>::try_into(kind.clone()).ok()
+            })
+            .filter_map(|kind| match kind {
+                StateUpdateKind::Epoch(epoch) => Some(epoch),
+                _ => None,
+            })
+            .next();
+        let epoch = FenceableEpoch::Unfenced(epoch);
+
+        let mut handle = UnopenedPersistCatalogState {
+            since_handle,
+            write_handle,
+            listen,
+            persist_client,
+            shard_id: catalog_shard_id,
+            // Initialize empty in-memory state.
+            snapshot: Vec::new(),
+            update_applier: UnopenedCatalogStateInner::new(organization_id),
+            upper,
+            epoch,
+            metrics,
+        };
+        let updates = snapshot
+            .into_iter()
+            .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
+        handle.apply_updates(updates)?;
+
+        Ok(handle)
+    }
+
+    #[mz_ore::instrument]
+    async fn open_inner(
+        mut self,
+        mode: Mode,
+        initial_ts: EpochMillis,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        let read_only = matches!(mode, Mode::Readonly);
+
+        self.sync_to_current_upper().await?;
+        let prev_epoch = self.epoch.validate()?;
+        // Fence out previous catalogs.
+        let mut fence_updates = Vec::with_capacity(2);
+        if let Some(prev_epoch) = prev_epoch {
+            fence_updates.push((StateUpdateKind::Epoch(prev_epoch), -1));
+        }
+        let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
+        // Only writable catalogs attempt to increment the epoch.
+        if matches!(mode, Mode::Writable) {
+            if let Some(epoch_lower_bound) = &epoch_lower_bound {
+                info!(?epoch_lower_bound);
+            }
+
+            current_epoch = max(
+                current_epoch + 1,
+                epoch_lower_bound.unwrap_or(Epoch::MIN).get(),
+            );
+        }
+        let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
+        fence_updates.push((StateUpdateKind::Epoch(current_epoch), 1));
+        let current_epoch = FenceableEpoch::Unfenced(Some(current_epoch));
+        debug!(
+            ?self.upper,
+            ?prev_epoch,
+            ?epoch_lower_bound,
+            ?current_epoch,
+            "fencing previous catalogs"
+        );
+        self.epoch = current_epoch;
+        if matches!(mode, Mode::Writable) {
+            self.compare_and_append(fence_updates).await?;
+        }
+
+        let is_initialized = self.is_initialized_inner();
+        if !matches!(mode, Mode::Writable) && !is_initialized {
+            return Err(CatalogError::Durable(DurableCatalogError::NotWritable(
+                format!("catalog tables do not exist; will not create in {mode:?} mode"),
+            )));
+        }
+        soft_assert_ne_or_log!(self.upper, Timestamp::minimum());
+
+        // Perform data migrations.
+        if is_initialized && !read_only {
+            upgrade(&mut self, mode.clone()).await?;
+        }
+
+        debug!(
+            ?is_initialized,
+            ?self.upper,
+            "initializing catalog state"
+        );
+        let mut catalog = PersistCatalogState {
+            since_handle: self.since_handle,
+            write_handle: self.write_handle,
+            listen: self.listen,
+            persist_client: self.persist_client,
+            shard_id: self.shard_id,
+            upper: self.upper,
+            epoch: self.epoch,
+            // Initialize empty in-memory state.
+            snapshot: Vec::new(),
+            update_applier: CatalogStateInner::new(mode.clone()),
+            metrics: self.metrics,
+        };
+        catalog.metrics.collection_entries.reset();
+        let updates = self.snapshot.into_iter().map(|(kind, ts, diff)| {
+            let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
+            StateUpdate { kind, ts, diff }
+        });
+        catalog.apply_updates(updates)?;
+
+        let txn = if is_initialized {
+            let mut txn = catalog.transaction().await?;
+            if let Some(deploy_generation) = deploy_generation {
+                txn.set_config(DEPLOY_GENERATION.into(), Some(deploy_generation))?;
+            }
+            txn
+        } else {
+            soft_assert_eq_no_log!(
+                catalog
+                    .snapshot
+                    .iter()
+                    .filter(|(kind, _, _)| !matches!(kind, StateUpdateKind::Epoch(_)))
+                    .count(),
+                0,
+                "trace should not contain any updates for an uninitialized catalog: {:?}",
+                catalog.snapshot
+            );
+            let mut txn = catalog.transaction().await?;
+            initialize::initialize(&mut txn, bootstrap_args, initial_ts, deploy_generation).await?;
+            txn
+        };
+
+        if read_only {
+            let (txn_batch, _) = txn.into_parts();
+            // The upper here doesn't matter because we are only applying the updates in memory.
+            let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
+            catalog.apply_updates(updates)?;
+        } else {
+            txn.commit().await?;
+        }
+
+        // Now that we've fully opened the catalog at the current version, we can increment the
+        // version in the catalog upgrade shard to signal to readers that the allowable versions
+        // have increased.
+        if matches!(mode, Mode::Writable) {
+            catalog
+                .increment_catalog_upgrade_shard_version(self.update_applier.organization_id)
+                .await;
+        }
+
+        Ok(Box::new(catalog))
+    }
+
+    /// Reports if the catalog state has been initialized.
+    ///
+    /// NOTE: This is the answer as of the last call to [`PersistHandle::sync`] or [`PersistHandle::sync_to_current_upper`],
+    /// not necessarily what is currently in persist.
+    #[mz_ore::instrument]
+    fn is_initialized_inner(&self) -> bool {
+        !self.update_applier.configs.is_empty()
+    }
+
+    /// Get the current value of config `key`.
+    ///
+    /// Some configs need to be read before the catalog is opened for bootstrapping.
+    #[mz_ore::instrument]
+    async fn get_current_config(&mut self, key: &str) -> Result<Option<u64>, CatalogError> {
+        self.sync_to_current_upper().await?;
+        Ok(self.update_applier.configs.get(key).cloned())
+    }
+
+    /// Get the user version of this instance.
+    ///
+    /// The user version is used to determine if a migration is needed.
+    #[mz_ore::instrument]
+    pub(crate) async fn get_user_version(&mut self) -> Result<Option<u64>, CatalogError> {
+        self.get_current_config(USER_VERSION_KEY).await
     }
 }
+
+#[async_trait]
+impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
+    #[mz_ore::instrument]
+    async fn open_savepoint(
+        mut self: Box<Self>,
+        initial_ts: EpochMillis,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        self.open_inner(
+            Mode::Savepoint,
+            initial_ts,
+            bootstrap_args,
+            deploy_generation,
+            epoch_lower_bound,
+        )
+        .boxed()
+        .await
+    }
+
+    #[mz_ore::instrument]
+    async fn open_read_only(
+        mut self: Box<Self>,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        self.open_inner(Mode::Readonly, EpochMillis::MIN, bootstrap_args, None, None)
+            .boxed()
+            .await
+    }
+
+    #[mz_ore::instrument]
+    async fn open(
+        mut self: Box<Self>,
+        initial_ts: EpochMillis,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        self.open_inner(
+            Mode::Writable,
+            initial_ts,
+            bootstrap_args,
+            deploy_generation,
+            epoch_lower_bound,
+        )
+        .boxed()
+        .await
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
+        Ok(DebugCatalogState(*self))
+    }
+
+    #[mz_ore::instrument]
+    async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
+        self.sync_to_current_upper().await?;
+        Ok(self.is_initialized_inner())
+    }
+
+    #[mz_ore::instrument]
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
+        self.sync_to_current_upper().await?;
+        self.epoch
+            .validate()?
+            .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
+    }
+
+    #[mz_ore::instrument]
+    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
+        self.get_current_config(DEPLOY_GENERATION).await
+    }
+
+    #[mz_ore::instrument]
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
+        self.get_current_config(SYSTEM_CONFIG_SYNCED_KEY)
+            .await
+            .map(|value| value.map(|value| value > 0).unwrap_or(false))
+    }
+
+    #[mz_ore::instrument]
+    async fn trace_unconsolidated(&mut self) -> Result<Trace, CatalogError> {
+        self.sync_to_current_upper().await?;
+        if self.is_initialized_inner() {
+            let snapshot = self.snapshot_unconsolidated().await;
+            Ok(Trace::from_snapshot(snapshot))
+        } else {
+            Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
+        }
+    }
+
+    #[mz_ore::instrument]
+    async fn trace_consolidated(&mut self) -> Result<Trace, CatalogError> {
+        self.sync_to_current_upper().await?;
+        if self.is_initialized_inner() {
+            let snapshot = self.current_snapshot().await?;
+            Ok(Trace::from_snapshot(snapshot))
+        } else {
+            Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
+        }
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn expire(self: Box<Self>) {
+        self.expire().await
+    }
+}
+
+/// Certain large collections are only needed during startup. This struct helps us cache these
+/// values during startup and ignore them at all other times.
+#[derive(Debug)]
+enum LargeCollectionStartupCache<T> {
+    /// Actively caching any new value that is seen.
+    Open(Vec<(T, Diff)>),
+    /// Ignoring any new value that is seen.
+    Closed,
+}
+
+impl<T> LargeCollectionStartupCache<T> {
+    /// Create a new opened [`LargeCollectionStartupCache`].
+    fn new_open() -> LargeCollectionStartupCache<T> {
+        LargeCollectionStartupCache::Open(Vec::new())
+    }
+
+    /// Add value to cache if open, otherwise ignore.
+    fn push(&mut self, value: (T, Diff)) {
+        match self {
+            LargeCollectionStartupCache::Open(cache) => {
+                cache.push(value);
+            }
+            LargeCollectionStartupCache::Closed => {
+                // Cache is closed, ignore value.
+            }
+        }
+    }
+}
+
+impl<T: Ord> LargeCollectionStartupCache<T> {
+    /// If the cache is open, then return all the cached values and close the cache, otherwise
+    /// return `None`.
+    fn take(&mut self) -> Option<Vec<T>> {
+        if let Self::Open(mut cache) = std::mem::replace(self, Self::Closed) {
+            differential_dataflow::consolidation::consolidate(&mut cache);
+            let cache = cache
+                .into_iter()
+                .map(|(v, diff)| {
+                    assert_eq!(1, diff, "consolidated cache should have no retraction");
+                    v
+                })
+                .collect();
+            Some(cache)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CatalogStateInner {
+    /// The [`Mode`] that this catalog was opened in.
+    mode: Mode,
+    /// A cache of audit logs that is only populated during startup.
+    audit_logs: LargeCollectionStartupCache<proto::AuditLogKey>,
+    /// A cache of storage usage events that is only populated during startup.
+    storage_usage_events: LargeCollectionStartupCache<proto::StorageUsageKey>,
+}
+
+impl CatalogStateInner {
+    fn new(mode: Mode) -> CatalogStateInner {
+        CatalogStateInner {
+            mode,
+            audit_logs: LargeCollectionStartupCache::new_open(),
+            storage_usage_events: LargeCollectionStartupCache::new_open(),
+        }
+    }
+}
+
+impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
+    fn apply_update(
+        &mut self,
+        update: StateUpdate<StateUpdateKind>,
+        current_epoch: &mut FenceableEpoch,
+        metrics: &Arc<Metrics>,
+    ) -> Result<Option<StateUpdate<StateUpdateKind>>, DurableCatalogError> {
+        if let Some(collection_type) = update.kind.collection_type() {
+            metrics
+                .collection_entries
+                .with_label_values(&[&collection_type.to_string()])
+                .add(update.diff);
+        }
+
+        match (update.kind, update.diff) {
+            (StateUpdateKind::AuditLog(key, ()), _) => {
+                self.audit_logs.push((key, update.diff));
+                Ok(None)
+            }
+            (StateUpdateKind::StorageUsage(key, ()), _) => {
+                self.storage_usage_events.push((key, update.diff));
+                Ok(None)
+            }
+            (StateUpdateKind::Epoch(epoch), 1) => {
+                current_epoch.maybe_fence(epoch)?;
+                Ok(None)
+            }
+            (kind, diff) => Ok(Some(StateUpdate {
+                kind,
+                ts: update.ts,
+                diff,
+            })),
+        }
+    }
+}
+
+/// A durable store of the catalog state using Persist as an implementation.
+pub type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 
 #[async_trait]
 impl ReadOnlyDurableCatalogState for PersistCatalogState {
@@ -1176,14 +1187,13 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn expire(self: Box<Self>) {
-        self.write_handle.expire().await;
-        self.listen.expire().await;
+        self.expire().await
     }
 
     #[mz_ore::instrument(level = "debug")]
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         self.sync_to_current_upper().await?;
-        let audit_logs = match self.audit_logs.take() {
+        let audit_logs = match self.update_applier.audit_logs.take() {
             Some(audit_logs) => audit_logs,
             None => {
                 error!("audit logs were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
@@ -1265,7 +1275,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 #[async_trait]
 impl DurableCatalogState for PersistCatalogState {
     fn is_read_only(&self) -> bool {
-        matches!(self.mode, Mode::Readonly)
+        matches!(self.update_applier.mode, Mode::Readonly)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1293,21 +1303,17 @@ impl DurableCatalogState for PersistCatalogState {
                 .into());
             }
 
-            let current_upper = catalog.upper.clone();
-            let next_upper = current_upper.step_forward();
-
-            let updates = StateUpdate::from_txn_batch(txn_batch, current_upper);
+            let updates = StateUpdate::from_txn_batch(txn_batch).collect();
             debug!("committing updates: {updates:?}");
 
-            if matches!(catalog.mode, Mode::Writable) {
-                catalog
-                    .compare_and_append(updates, current_upper, next_upper)
-                    .await?;
-                debug!(
-                    "commit successful, upper advanced from {current_upper:?} to {next_upper:?}",
-                );
-                catalog.sync(next_upper).await?;
-            } else if matches!(catalog.mode, Mode::Savepoint) {
+            if matches!(catalog.update_applier.mode, Mode::Writable) {
+                catalog.compare_and_append(updates).await?;
+            } else if matches!(catalog.update_applier.mode, Mode::Savepoint) {
+                let ts = catalog.upper;
+                let updates =
+                    updates
+                        .into_iter()
+                        .map(|(kind, diff)| StateUpdate { kind, ts, diff });
                 catalog.apply_updates(updates)?;
             }
 
@@ -1350,7 +1356,7 @@ impl DurableCatalogState for PersistCatalogState {
             None => u128::MIN,
             Some(period) => u128::from(boot_ts).saturating_sub(period.as_millis()),
         };
-        let storage_usage = match self.storage_usage_events.take() {
+        let storage_usage = match self.update_applier.storage_usage_events.take() {
             Some(storage_usage) => storage_usage,
             None => {
                 error!("storage usage events were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
@@ -1409,6 +1415,12 @@ fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
     ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
 }
 
+/// Returns the schema of the `Row`s/`SourceData`s stored in the persist
+/// shard backing the catalog.
+fn desc() -> RelationDesc {
+    RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
+}
+
 /// Fetch the current upper of the catalog state.
 async fn current_upper(
     write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
@@ -1434,66 +1446,29 @@ fn as_of(read_handle: &ReadHandle<SourceData, (), Timestamp, Diff>, upper: Times
     as_of
 }
 
-/// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
-/// iff the current global upper of the catalog is `current_upper`.
-async fn compare_and_append<T: IntoStateUpdateKindRaw>(
-    since_handle: &mut SinceHandle<SourceData, (), Timestamp, Diff, i64>,
-    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
-    updates: Vec<StateUpdate<T>>,
-    current_upper: Timestamp,
-    next_upper: Timestamp,
-) -> Result<(), CatalogError> {
-    let updates = updates.into_iter().map(|update| {
-        let kind: StateUpdateKindRaw = update.kind.into();
-        ((Into::<SourceData>::into(kind), ()), update.ts, update.diff)
-    });
-    write_handle
-        .compare_and_append(
-            updates,
-            Antichain::from_elem(current_upper),
-            Antichain::from_elem(next_upper),
-        )
+/// Fetch the persist version of the catalog upgrade shard, if one exists. A version will not
+/// exist if the catalog upgrade shard itself doesn't exist which could happen in the following
+/// scenarios:
+///
+///   - We are creating a brand new environment.
+///   - We are upgrading from a version of the code where the catalog upgrade shard didn't
+///   exist.
+async fn fetch_catalog_upgrade_shard_version(
+    persist_client: &PersistClient,
+    upgrade_shard_id: ShardId,
+) -> Option<semver::Version> {
+    let shard_state = persist_client
+        .inspect_shard::<Timestamp>(&upgrade_shard_id)
         .await
-        .expect("invalid usage")
-        .map_err(|upper_mismatch| {
-            DurableCatalogError::Fence(format!(
-                "current catalog upper {:?} fenced by new catalog upper {:?}",
-                upper_mismatch.expected, upper_mismatch.current
-            ))
-        })?;
-
-    // Lag the shard's upper by 1 to keep it readable.
-    let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
-
-    // The since handle gives us the ability to fence out other writes using an opaque token.
-    // (See the method documentation for details.)
-    // That's not needed here, so we use a constant opaque token to avoid any comparison failures.
-    let opaque = i64::initial();
-    let downgrade = since_handle
-        .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
-        .await;
-
-    match downgrade {
-        None => {}
-        Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
-        Some(Ok(updated)) => soft_assert_or_log!(
-            updated == downgrade_to,
-            "updated bound should match expected"
-        ),
-    }
-
-    Ok(())
-}
-
-#[mz_ore::instrument(level = "debug")]
-async fn snapshot(
-    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
-    as_of: Timestamp,
-    metrics: &Arc<Metrics>,
-) -> impl Iterator<Item = StateUpdate<StateUpdateKind>> + DoubleEndedIterator {
-    snapshot_binary(read_handle, as_of, metrics)
-        .await
-        .map(|update| update.try_into().expect("kind decoding error"))
+        .ok()?;
+    let json_state = serde_json::to_value(shard_state).expect("state serialization error");
+    let upgrade_version = json_state
+        .get("applier_version")
+        .cloned()
+        .expect("missing applier_version");
+    let upgrade_version =
+        serde_json::from_value(upgrade_version).expect("version deserialization error");
+    Some(upgrade_version)
 }
 
 /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
@@ -1535,48 +1510,6 @@ async fn snapshot_binary_inner(
         .into_iter()
         .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
         .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
-}
-
-/// Listen for all updates up to `target_upper`.
-///
-/// Results are guaranteed to be consolidated and sorted by timestamp then diff.
-#[mz_ore::instrument(level = "debug")]
-async fn sync<T: IntoStateUpdateKindRaw>(
-    listen: &mut Listen<SourceData, (), Timestamp, Diff>,
-    current_upper: &mut Timestamp,
-    target_upper: Timestamp,
-) -> Vec<StateUpdate<T>> {
-    let mut updates = Vec::new();
-
-    while *current_upper < target_upper {
-        let listen_events = listen.fetch_next().await;
-        for listen_event in listen_events {
-            match listen_event {
-                ListenEvent::Progress(upper) => {
-                    debug!("synced up to {upper:?}");
-                    *current_upper = upper
-                        .as_option()
-                        .cloned()
-                        .expect("we use a totally ordered time and never finalize the shard");
-                }
-                ListenEvent::Updates(batch_updates) => {
-                    debug!("syncing updates {batch_updates:?}");
-                    let batch_updates = batch_updates
-                        .into_iter()
-                        .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
-                        .map(|update| {
-                            let kind = T::try_from(update.kind).expect("kind decoding error");
-                            (kind, update.ts, update.diff)
-                        });
-                    updates.extend(batch_updates);
-                }
-            }
-        }
-    }
-    updates
-        .into_iter()
-        .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff })
-        .collect()
 }
 
 // Debug methods.
@@ -1748,11 +1681,10 @@ impl UnopenedPersistCatalogState {
     ) -> Result<impl IntoIterator<Item = StateUpdate> + '_, CatalogError> {
         self.sync_to_current_upper().await?;
         self.consolidate();
-        Ok(self
-            .snapshot
-            .iter()
-            .cloned()
-            .map(|update| update.try_into().expect("kind decoding error")))
+        Ok(self.snapshot.iter().cloned().map(|(kind, ts, diff)| {
+            let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
+            StateUpdate { kind, ts, diff }
+        }))
     }
 
     /// Increment `self.epoch` and return the updates needed to make this change durable.

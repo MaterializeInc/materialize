@@ -284,6 +284,7 @@ class Composition:
             capture_and_print: Print during execution and capture the stdout and
                 stderr of the `docker compose` invocation.
             input: A string to provide as stdin for the command.
+            max_tries: How many times to try, if the command failed.
         """
 
         if not self.silent and not silent:
@@ -786,7 +787,7 @@ class Composition:
             check=check,
         )
 
-    def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
+    def pull_if_variable(self, services: list[str], max_tries: int = 5) -> None:
         """Pull fresh service images in case the tag indicates the underlying image may change over time.
 
         Args:
@@ -822,7 +823,7 @@ class Composition:
         detach: bool = True,
         wait: bool = True,
         persistent: bool = False,
-        max_tries: int = 5,  # increased since quay.io returns 502 sometimes
+        max_pull_tries: int = 5,  # increased since quay.io returns 502 sometimes
     ) -> None:
         """Build, (re)create, and start the named services.
 
@@ -836,7 +837,7 @@ class Composition:
             persistent: Replace the container's entrypoint and command with
                 `sleep infinity` so that additional commands can be scheduled
                 on the container with `Composition.exec`.
-            max_tries: Number of tries on failure.
+            max_pull_tries: Number of tries on failure for `docker pull`.
         """
         if persistent:
             old_compose = copy.deepcopy(self.compose)
@@ -845,12 +846,21 @@ class Composition:
                 service["command"] = []
             self.files = {}
 
+        pull_services = []
+        services_iter = iter(services)
+        for service in services_iter:
+            if service == "--scale":
+                next(services_iter)
+                continue
+            pull_services.append(service)
+        self.invoke("pull", *pull_services, max_tries=max_pull_tries)
+
         self.invoke(
             "up",
             *(["--detach"] if detach else []),
             *(["--wait"] if wait else []),
             *services,
-            max_tries=max_tries,
+            max_tries=1,  # since we pulled the image before, there should be no dockerhub flakiness
         )
 
         if persistent:

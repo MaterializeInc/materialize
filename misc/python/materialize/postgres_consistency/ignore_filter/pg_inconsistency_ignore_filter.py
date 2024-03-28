@@ -449,6 +449,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                     "ln",
                     "pow",
                     "radians",
+                    "trunc",
                 },
             )
 

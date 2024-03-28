@@ -414,8 +414,10 @@ impl LazyUnaryFunc for CastStringToList {
     }
 
     /// The output ColumnType of this function
-    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
-        self.return_ty.without_modifiers().nullable(false)
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        self.return_ty
+            .without_modifiers()
+            .nullable(input_type.nullable)
     }
 
     /// Whether this function will produce NULL on NULL input
@@ -616,8 +618,10 @@ impl LazyUnaryFunc for CastStringToRange {
     }
 
     /// The output ColumnType of this function
-    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
-        self.return_ty.without_modifiers().nullable(false)
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        self.return_ty
+            .without_modifiers()
+            .nullable(input_type.nullable)
     }
 
     /// Whether this function will produce NULL on NULL input
@@ -734,8 +738,8 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
     }
 
     /// The output ColumnType of this function
-    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
-        ScalarType::Int2Vector.nullable(false)
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Int2Vector.nullable(input_type.nullable)
     }
 
     /// Whether this function will produce NULL on NULL input

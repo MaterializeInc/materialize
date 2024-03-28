@@ -12,7 +12,7 @@
 use std::any::Any;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -66,8 +66,10 @@ use mz_storage_types::collections as proto;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{
-    CollectionMetadata, DurableCollectionMetadata, PersistTxnTablesImpl, StorageError, TxnsCodecRow,
+    AlterError, CollectionMetadata, DurableCollectionMetadata, PersistTxnTablesImpl, StorageError,
+    TxnsCodecRow,
 };
+use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -251,7 +253,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>,
+        + Into<mz_repr::Timestamp>
+        + Display,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
@@ -288,7 +291,10 @@ where
         &self.config
     }
 
-    fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError> {
+    fn collection(
+        &self,
+        id: GlobalId,
+    ) -> Result<&CollectionState<Self::Timestamp>, StorageError<Self::Timestamp>> {
         self.collections
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
@@ -297,7 +303,7 @@ where
     fn collection_mut(
         &mut self,
         id: GlobalId,
-    ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError> {
+    ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError<Self::Timestamp>> {
         self.collections
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
@@ -372,7 +378,7 @@ where
     async fn migrate_collections(
         &mut self,
         _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<Self::Timestamp>> {
         // Collection migrations look something like this:
         // let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.stash).await?;
         // do_migration(&mut durable_metadata)?;
@@ -388,7 +394,7 @@ where
         &mut self,
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<Self::Timestamp>> {
         assert!(self.txns_init_run);
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
@@ -518,7 +524,7 @@ where
         // this stream cannot all have exclusive access.
         let this = &*self;
         let to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
-            .map(|data: Result<_, StorageError>| {
+            .map(|data: Result<_, StorageError<Self::Timestamp>>| {
                 let register_ts = register_ts.clone();
                 async move {
                 let (id, description, metadata) = data?;
@@ -564,7 +570,7 @@ where
                     }
                 }
 
-                Ok::<_, StorageError>((id, description, write, since_handle, metadata))
+                Ok::<_, StorageError<T>>((id, description, write, since_handle, metadata))
             }})
             // Poll each future for each collection concurrently, maximum of 50 at a time.
             .buffer_unordered(50)
@@ -896,7 +902,7 @@ where
     fn check_alter_collection(
         &mut self,
         collections: &BTreeMap<GlobalId, IngestionDescription>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<Self::Timestamp>> {
         for (id, ingestion) in collections {
             self.check_alter_collection_inner(*id, ingestion.clone())?;
         }
@@ -906,7 +912,7 @@ where
     async fn alter_collection(
         &mut self,
         collections: BTreeMap<GlobalId, IngestionDescription>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<Self::Timestamp>> {
         self.check_alter_collection(&collections)
             .expect("error avoided by calling check_alter_collection first");
 
@@ -961,7 +967,10 @@ where
         Ok(())
     }
 
-    fn export(&self, id: GlobalId) -> Result<&ExportState<Self::Timestamp>, StorageError> {
+    fn export(
+        &self,
+        id: GlobalId,
+    ) -> Result<&ExportState<Self::Timestamp>, StorageError<Self::Timestamp>> {
         self.exports
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
@@ -970,7 +979,7 @@ where
     fn export_mut(
         &mut self,
         id: GlobalId,
-    ) -> Result<&mut ExportState<Self::Timestamp>, StorageError> {
+    ) -> Result<&mut ExportState<Self::Timestamp>, StorageError<Self::Timestamp>> {
         self.exports
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
@@ -979,7 +988,7 @@ where
     async fn create_exports(
         &mut self,
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<Self::Timestamp>> {
         // Validate first, to avoid corrupting state.
         let mut dedup = BTreeMap::new();
         for (id, desc) in exports.iter() {
@@ -1076,7 +1085,7 @@ where
     async fn update_export_connection(
         &mut self,
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<Self::Timestamp>> {
         let mut updates_by_instance =
             BTreeMap::<StorageInstanceId, Vec<(RunSinkCommand<T>, ExportState<T>)>>::new();
 
@@ -1172,7 +1181,7 @@ where
         &mut self,
         identifiers: Vec<GlobalId>,
         ts: Self::Timestamp,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<Self::Timestamp>> {
         assert!(
             identifiers
                 .iter()
@@ -1202,7 +1211,10 @@ where
         self.drop_sources(identifiers)
     }
 
-    fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+    fn drop_sources(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
         self.validate_collection_ids(identifiers.iter().cloned())?;
         self.drop_sources_unvalidated(identifiers);
         Ok(())
@@ -1221,7 +1233,10 @@ where
     }
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
-    fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+    fn drop_sinks(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
         self.validate_export_ids(identifiers.iter().cloned())?;
         self.drop_sinks_unvalidated(identifiers);
         Ok(())
@@ -1249,7 +1264,10 @@ where
         write_ts: Self::Timestamp,
         advance_to: Self::Timestamp,
         commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
+    ) -> Result<
+        tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
+        StorageError<Self::Timestamp>,
+    > {
         assert!(self.txns_init_run);
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates) in commands.iter() {
@@ -1265,12 +1283,18 @@ where
             .append(write_ts, advance_to, commands))
     }
 
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
+    fn monotonic_appender(
+        &self,
+        id: GlobalId,
+    ) -> Result<MonotonicAppender<Self::Timestamp>, StorageError<Self::Timestamp>> {
         assert!(self.txns_init_run);
         self.collection_manager.monotonic_appender(id)
     }
 
-    fn webhook_statistics(&self, id: GlobalId) -> Result<Arc<WebhookStatistics>, StorageError> {
+    fn webhook_statistics(
+        &self,
+        id: GlobalId,
+    ) -> Result<Arc<WebhookStatistics>, StorageError<Self::Timestamp>> {
         // Call to this method are usually cached so the lock is not in the critical path.
         let source_statistics = self.source_statistics.lock().expect("poisoned");
         source_statistics
@@ -1289,7 +1313,7 @@ where
         &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<Vec<(Row, Diff)>, StorageError> {
+    ) -> Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>> {
         let metadata = &self.collection(id)?.collection_metadata;
         let contents = match metadata.txns_shard.as_ref() {
             None => {
@@ -1341,7 +1365,7 @@ where
         &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
+    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
     where
         Self::Timestamp: Timestamp + Lattice + Codec64,
     {
@@ -1384,7 +1408,7 @@ where
         &self,
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats, StorageError> {
+    ) -> Result<SnapshotStats, StorageError<Self::Timestamp>> {
         let metadata = &self.collection(id)?.collection_metadata;
         // See the comments in Self::snapshot for what's going on here.
         let as_of = match metadata.txns_shard.as_ref() {
@@ -1408,7 +1432,7 @@ where
         &self,
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotPartsStats, StorageError> {
+    ) -> Result<SnapshotPartsStats, StorageError<Self::Timestamp>> {
         let metadata = &self.collection(id)?.collection_metadata;
         // See the comments in Self::snapshot for what's going on here.
         let result = match metadata.txns_shard.as_ref() {
@@ -1723,12 +1747,7 @@ where
                     .await
                     .expect("stash operation must succeed");
 
-                if self.config.parameters.finalize_shards {
-                    info!("triggering shard finalization due to dropped storage object");
-                    self.finalize_shards().await;
-                } else {
-                    info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false")
-                }
+                self.finalize_shards().await;
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -2131,7 +2150,7 @@ where
     ///
     /// H/t jkosh44 for the above notes from the discussion in which we hashed
     /// this all out.
-    async fn init_txns(&mut self, init_ts: T) -> Result<(), StorageError> {
+    async fn init_txns(&mut self, init_ts: T) -> Result<(), StorageError<Self::Timestamp>> {
         assert_eq!(self.txns_init_run, false);
         let (txns_id, txns_client) = match &self.txns {
             PersistTxns::EnabledEager {
@@ -2441,7 +2460,7 @@ where
     fn validate_collection_ids(
         &self,
         ids: impl Iterator<Item = GlobalId>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<T>> {
         for id in ids {
             self.collection(id)?;
         }
@@ -2449,7 +2468,10 @@ where
     }
 
     /// Validate that a collection exists for all identifiers, and error if any do not.
-    fn validate_export_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), StorageError> {
+    fn validate_export_ids(
+        &self,
+        ids: impl Iterator<Item = GlobalId>,
+    ) -> Result<(), StorageError<T>> {
         for id in ids {
             self.export(id)?;
         }
@@ -2480,7 +2502,7 @@ where
     fn determine_collection_since_joins(
         &self,
         collections: &[GlobalId],
-    ) -> Result<Antichain<T>, StorageError> {
+    ) -> Result<Antichain<T>, StorageError<T>> {
         let mut joined_since = Antichain::from_elem(T::minimum());
         for id in collections {
             let collection = self.collection(*id)?;
@@ -2499,7 +2521,7 @@ where
         _from_id: GlobalId,
         storage_dependencies: &[GlobalId],
         read_capability: Antichain<T>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<T>> {
         let mut changes = ChangeBatch::new();
         for time in read_capability.iter() {
             changes.update(time.clone(), 1);
@@ -3069,6 +3091,12 @@ where
     #[allow(dead_code)]
     #[instrument(level = "debug")]
     async fn finalize_shards(&mut self) {
+        if !self.config.parameters.finalize_shards {
+            info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
+            return;
+        }
+        info!("triggering shard finalization due to dropped storage object");
+
         let shards = self
             .stash
             .with_transaction(move |tx| {
@@ -3095,11 +3123,17 @@ where
         let persist_client = &persist_client;
         let diagnostics = &Diagnostics::from_purpose("finalizing shards");
 
+        let force_downgrade_since =
+            STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION.get(self.config.config_set());
+
+        let epoch = &PersistEpoch::from(self.envd_epoch);
+
         use futures::stream::StreamExt;
         let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(shards)
             .map(|shard_id| async move {
                 let persist_client = persist_client.clone();
                 let diagnostics = diagnostics.clone();
+                let epoch = epoch.clone();
 
                 let is_finalized = persist_client
                     .is_finalized::<SourceData, (), T, Diff>(shard_id, diagnostics)
@@ -3144,6 +3178,34 @@ where
                             }
                             write_handle.expire().await;
 
+                            if force_downgrade_since {
+                                let mut since_handle: SinceHandle<
+                                    SourceData,
+                                    (),
+                                    T,
+                                    Diff,
+                                    PersistEpoch,
+                                > = persist_client
+                                    .open_critical_since(
+                                        shard_id,
+                                        PersistClient::CONTROLLER_CRITICAL_SINCE,
+                                        Diagnostics::from_purpose("finalizing shards"),
+                                    )
+                                    .await
+                                    .expect("invalid persist usage");
+                                let epoch = epoch.clone();
+                                let new_since = Antichain::new();
+                                let downgrade = since_handle
+                                    .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+                                    .await;
+                                if let Err(e) = downgrade {
+                                    warn!(
+                                        "tried to finalize a shard with an advancing epoch: {e:?}"
+                                    );
+                                    return Ok(());
+                                }
+                            }
+
                             persist_client
                                 .finalize_shard::<SourceData, (), T, Diff>(
                                     shard_id,
@@ -3184,7 +3246,7 @@ where
         &self,
         id: GlobalId,
         mut ingestion: IngestionDescription,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<T>> {
         // Check that the client exists.
         self.clients
             .get(&ingestion.instance_id)
@@ -3225,7 +3287,7 @@ where
                     "{id:?} inalterable because its data source is {:?} and not an ingestion",
                     o
                 );
-                return Err(StorageError::InvalidAlter { id });
+                return Err(StorageError::InvalidAlter(AlterError { id }));
             }
         };
 
@@ -3237,7 +3299,7 @@ where
                     prev_storage_dependencies,
                     new_storage_dependencies
                 );
-            return Err(StorageError::InvalidAlter { id });
+            return Err(StorageError::InvalidAlter(AlterError { id }));
         }
 
         Ok(())
@@ -3267,7 +3329,7 @@ where
         &mut self,
         collections: I,
         storage_dependencies: &[GlobalId],
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), StorageError<T>> {
         let dependency_since = self.determine_collection_since_joins(storage_dependencies)?;
         let enable_asserts = self.config().parameters.enable_dependency_read_hold_asserts;
 
@@ -3366,7 +3428,7 @@ where
         &self,
         id: GlobalId,
         ingestion: IngestionDescription,
-    ) -> Result<IngestionDescription<CollectionMetadata>, StorageError> {
+    ) -> Result<IngestionDescription<CollectionMetadata>, StorageError<T>> {
         // The ingestion metadata is simply the collection metadata of the collection with
         // the associated ingestion
         let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
@@ -3398,7 +3460,7 @@ where
     async fn read_handle_for_snapshot(
         &self,
         id: GlobalId,
-    ) -> Result<ReadHandle<SourceData, (), T, Diff>, StorageError> {
+    ) -> Result<ReadHandle<SourceData, (), T, Diff>, StorageError<T>> {
         let metadata = &self.collection(id)?.collection_metadata;
 
         let persist_client = self
@@ -3433,7 +3495,7 @@ where
         &self,
         id: GlobalId,
         as_of: T,
-    ) -> Result<BoxStream<(SourceData, T, Diff)>, StorageError> {
+    ) -> Result<BoxStream<(SourceData, T, Diff)>, StorageError<T>> {
         use futures::stream::StreamExt;
 
         let metadata = &self.collection(id)?.collection_metadata;

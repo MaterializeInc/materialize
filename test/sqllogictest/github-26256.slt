@@ -1,0 +1,35 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+query TT
+SELECT NULL AS "a", CAST(NULL AS int list)::text AS "b";
+----
+NULL
+NULL
+
+query TT
+SELECT NULL AS "a", CAST(NULL AS int4range) AS "b";
+----
+NULL
+NULL
+
+query TT
+SELECT NULL AS "a", CAST(NULL AS int2vector) AS "b";
+----
+NULL
+NULL
+
+statement ok
+CREATE TYPE t AS (x float, y text);
+
+query TT
+SELECT NULL, NULL::t;
+----
+NULL
+NULL

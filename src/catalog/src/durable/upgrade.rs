@@ -328,9 +328,13 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKi
     let snapshot: Vec<_> = unopened_catalog_state
         .snapshot
         .iter()
-        .map(|update| {
-            soft_assert_eq_or_log!(1, update.diff, "snapshot is consolidated, {update:?}");
-            V1::try_from(update.clone().kind).expect("invalid catalog data persisted")
+        .map(|(kind, ts, diff)| {
+            soft_assert_eq_or_log!(
+                1,
+                *diff,
+                "snapshot is consolidated, ({kind:?}, {ts:?}, {diff:?})"
+            );
+            V1::try_from(kind.clone()).expect("invalid catalog data persisted")
         })
         .collect();
 
@@ -352,14 +356,10 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKi
     if matches!(mode, Mode::Writable) {
         unopened_catalog_state.compare_and_append(updates).await?;
     } else {
+        let ts = unopened_catalog_state.upper;
         let updates = updates
             .into_iter()
-            .map(|(kind, diff)| StateUpdate {
-                kind,
-                ts: unopened_catalog_state.upper,
-                diff,
-            })
-            .collect();
+            .map(|(kind, diff)| StateUpdate { kind, ts, diff });
         unopened_catalog_state.apply_updates(updates)?;
     }
 

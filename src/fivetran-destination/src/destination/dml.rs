@@ -13,8 +13,7 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
-use bytes::Bytes;
-use futures::{SinkExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
@@ -645,39 +644,34 @@ async fn copy_files(
     let sink = client.copy_in(&copy_in_stmt).await?;
     let mut sink = std::pin::pin!(sink);
 
-    // Stream the files into the COPY FROM sink.
-    for path in files {
-        // Open the CSV file, returning an AsyncReader.
-        let file = load_file(file_config, path)
-            .await
-            .with_context(|| format!("loading delete file {path}"))?;
-        // Map the column order from the CSV to the order of the table.
-        let adapter = AsyncCsvReaderTableAdapter::new(file, table)
-            .await
-            .context("creating mapping adapter")?;
+    {
+        // Create a CSV Writer that will serialize ByteRecords into the COPY FROM sink.
+        let sink_writer = utils::CopyIntoAsyncWrite::new(sink.as_mut());
+        let mut csv_sink = csv_async::AsyncWriterBuilder::new()
+            .has_headers(false)
+            .create_writer(sink_writer);
 
-        // Transform the individual records back into a CSV format.
-        let bytes_stream = adapter.into_stream().map_ok(|record| {
-            // Pre-size the buffer to fit all of the fields, each with a comma, then a newline.
-            let mut buf = Vec::with_capacity(record.as_slice().len() + record.len() + 1);
-            let slices = Itertools::intersperse(record.into_iter(), b",");
-            for slice in slices {
-                buf.extend(slice);
+        // Stream the files into the COPY FROM sink.
+        for path in files {
+            // Open the CSV file, returning an AsyncReader.
+            let file = load_file(file_config, path)
+                .await
+                .with_context(|| format!("loading delete file {path}"))?;
+            // Map the column order from the CSV to the order of the table.
+            let adapter = AsyncCsvReaderTableAdapter::new(file, table)
+                .await
+                .context("creating mapping adapter")?;
+
+            // Write all of the ByteRecords into the sink.
+            let mut record_stream = adapter.into_stream();
+            while let Some(maybe_record) = record_stream.next().await {
+                let record = maybe_record?;
+                csv_sink.write_byte_record(&record).await?;
             }
-            buf.extend(b"\n");
-
-            Bytes::from(buf)
-        });
-        let mut bytes_stream = std::pin::pin!(bytes_stream);
-
-        // Sink all of this into the `COPY FROM ...`.
-        (&mut sink)
-            .sink_map_err(|e| OpErrorKind::from(e).context("sink"))
-            .send_all(&mut bytes_stream)
-            .await
-            .context("sinking data")?;
+        }
     }
-    let row_count = sink.finish().await.context("closing sink")?;
+
+    let row_count = sink.as_mut().finish().await.context("closing sink")?;
     tracing::info!(row_count, "copied rows into {temporary_table}");
 
     Ok(row_count)

@@ -219,7 +219,10 @@ pub trait StorageController: Debug {
     fn config(&self) -> &StorageConfiguration;
 
     /// Acquire an immutable reference to the collection state, should it exist.
-    fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
+    fn collection(
+        &self,
+        id: GlobalId,
+    ) -> Result<&CollectionState<Self::Timestamp>, StorageError<Self::Timestamp>>;
 
     /// Creates a storage instance with the specified ID.
     ///
@@ -259,7 +262,7 @@ pub trait StorageController: Debug {
     fn collection_mut(
         &mut self,
         id: GlobalId,
-    ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError>;
+    ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError<Self::Timestamp>>;
 
     /// Acquire an iterator over all collection states.
     fn collections(
@@ -274,7 +277,7 @@ pub trait StorageController: Debug {
     async fn migrate_collections(
         &mut self,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Create the sources described in the individual RunIngestionCommand commands.
     ///
@@ -298,7 +301,7 @@ pub trait StorageController: Debug {
         &mut self,
         register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Check that the collection associated with `id` can be altered to represent the given
     /// `ingestion`.
@@ -308,34 +311,37 @@ pub trait StorageController: Debug {
     fn check_alter_collection(
         &mut self,
         collections: &BTreeMap<GlobalId, IngestionDescription>,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Alter the identified collection to use the described ingestion.
     async fn alter_collection(
         &mut self,
         collections: BTreeMap<GlobalId, IngestionDescription>,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Acquire an immutable reference to the export state, should it exist.
-    fn export(&self, id: GlobalId) -> Result<&ExportState<Self::Timestamp>, StorageError>;
+    fn export(
+        &self,
+        id: GlobalId,
+    ) -> Result<&ExportState<Self::Timestamp>, StorageError<Self::Timestamp>>;
 
     /// Acquire a mutable reference to the export state, should it exist.
     fn export_mut(
         &mut self,
         id: GlobalId,
-    ) -> Result<&mut ExportState<Self::Timestamp>, StorageError>;
+    ) -> Result<&mut ExportState<Self::Timestamp>, StorageError<Self::Timestamp>>;
 
     /// Create the sinks described by the `ExportDescription`.
     async fn create_exports(
         &mut self,
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// For each identified export, update its `StorageSinkConnection`.
     async fn update_export_connection(
         &mut self,
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Drops the read capability for the tables and allows their resources to be reclaimed.
     fn drop_tables(
@@ -345,10 +351,16 @@ pub trait StorageController: Debug {
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
-    fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+    fn drop_sources(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
-    fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+    fn drop_sinks(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     ///
@@ -385,11 +397,17 @@ pub trait StorageController: Debug {
         write_ts: Self::Timestamp,
         advance_to: Self::Timestamp,
         commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
+    ) -> Result<
+        tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
+        StorageError<Self::Timestamp>,
+    >;
 
     /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
     /// append to the specified [`GlobalId`].
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError>;
+    fn monotonic_appender(
+        &self,
+        id: GlobalId,
+    ) -> Result<MonotonicAppender<Self::Timestamp>, StorageError<Self::Timestamp>>;
 
     /// Returns a shared [`WebhookStatistics`] which can be used to report user-facing
     /// statistics for this given webhhook, specified by the [`GlobalId`].
@@ -398,21 +416,24 @@ pub trait StorageController: Debug {
     // from outside the ordinary controller-clusterd path. Its possible to merge this with
     // `monotonic_appender`, whose only current user is webhooks, but given that they will
     // likely be moved to clusterd, we just leave this a special case.
-    fn webhook_statistics(&self, id: GlobalId) -> Result<Arc<WebhookStatistics>, StorageError>;
+    fn webhook_statistics(
+        &self,
+        id: GlobalId,
+    ) -> Result<Arc<WebhookStatistics>, StorageError<Self::Timestamp>>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
         &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<Vec<(Row, Diff)>, StorageError>;
+    ) -> Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot_cursor(
         &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
+    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
     where
         Self::Timestamp: Codec64 + Timestamp + Lattice;
 
@@ -422,7 +443,7 @@ pub trait StorageController: Debug {
         &self,
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats, StorageError>;
+    ) -> Result<SnapshotStats, StorageError<Self::Timestamp>>;
 
     /// Returns aggregate statistics about the contents of the local input named
     /// `id` at `as_of`.
@@ -430,7 +451,7 @@ pub trait StorageController: Debug {
         &self,
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotPartsStats, StorageError>;
+    ) -> Result<SnapshotPartsStats, StorageError<Self::Timestamp>>;
 
     /// Assigns a read policy to specific identifiers.
     ///
@@ -562,7 +583,10 @@ pub trait StorageController: Debug {
     /// TODO: This can be removed once we've flipped to the new txns system for
     /// good and there is no possibility of the old code running concurrently
     /// with the new code.
-    async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
+    async fn init_txns(
+        &mut self,
+        init_ts: Self::Timestamp,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 }
 
 /// State maintained about individual collections.
@@ -684,19 +708,25 @@ impl<T: Timestamp> ExportState<T> {
 ///
 /// See `CollectionManager::monotonic_appender` to acquire a [`MonotonicAppender`].
 #[derive(Clone, Debug)]
-pub struct MonotonicAppender {
+pub struct MonotonicAppender<T> {
     /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
-    tx: mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>,
+    tx: mpsc::Sender<(
+        Vec<(Row, Diff)>,
+        oneshot::Sender<Result<(), StorageError<T>>>,
+    )>,
 }
 
-impl MonotonicAppender {
+impl<T> MonotonicAppender<T> {
     pub fn new(
-        tx: mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>,
+        tx: mpsc::Sender<(
+            Vec<(Row, Diff)>,
+            oneshot::Sender<Result<(), StorageError<T>>>,
+        )>,
     ) -> Self {
         MonotonicAppender { tx }
     }
 
-    pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError> {
+    pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError<T>> {
         let (tx, rx) = oneshot::channel();
 
         // Make sure there is space available on the channel.
