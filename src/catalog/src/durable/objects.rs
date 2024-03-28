@@ -223,7 +223,6 @@ pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
-    pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
@@ -326,7 +325,6 @@ impl DurableType<ClusterReplicaKey, ClusterReplicaValue> for ClusterReplica {
 pub struct ReplicaConfig {
     pub location: ReplicaLocation,
     pub logging: ReplicaLogging,
-    pub idle_arrangement_merge_effort: Option<u32>,
 }
 
 impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
@@ -334,7 +332,6 @@ impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
         Self {
             location: config.location.into(),
             logging: config.compute.logging,
-            idle_arrangement_merge_effort: config.compute.idle_arrangement_merge_effort,
         }
     }
 }

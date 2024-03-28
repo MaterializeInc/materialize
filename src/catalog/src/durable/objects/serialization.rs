@@ -126,7 +126,6 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 size,
                 availability_zones,
                 logging,
-                idle_arrangement_merge_effort,
                 replication_factor,
                 disk,
                 optimizer_feature_overrides,
@@ -135,8 +134,6 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
                 logging: Some(logging.into_proto()),
-                idle_arrangement_merge_effort: idle_arrangement_merge_effort
-                    .map(|effort| proto::ReplicaMergeEffort { effort }),
                 replication_factor: *replication_factor,
                 disk: *disk,
                 optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
@@ -156,9 +153,6 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                     logging: managed
                         .logging
                         .into_rust_if_some("ManagedCluster::logging")?,
-                    idle_arrangement_merge_effort: managed
-                        .idle_arrangement_merge_effort
-                        .map(|e| e.effort),
                     replication_factor: managed.replication_factor,
                     disk: managed.disk,
                     optimizer_feature_overrides: managed.optimizer_feature_overrides.into_rust()?,
@@ -174,9 +168,6 @@ impl RustType<proto::ReplicaConfig> for ReplicaConfig {
         proto::ReplicaConfig {
             logging: Some(self.logging.into_proto()),
             location: Some(self.location.into_proto()),
-            idle_arrangement_merge_effort: self
-                .idle_arrangement_merge_effort
-                .map(|effort| proto::ReplicaMergeEffort { effort }),
         }
     }
 
@@ -186,7 +177,6 @@ impl RustType<proto::ReplicaConfig> for ReplicaConfig {
                 .location
                 .into_rust_if_some("ReplicaConfig::location")?,
             logging: proto.logging.into_rust_if_some("ReplicaConfig::logging")?,
-            idle_arrangement_merge_effort: proto.idle_arrangement_merge_effort.map(|e| e.effort),
         })
     }
 }
