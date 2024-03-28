@@ -190,7 +190,8 @@ where
                     {
                         Ok(client) => {
                             let dyncfg = Arc::clone(&self.dyncfg);
-                            Ok(SequentialHydration::new(client, dyncfg))
+                            let metrics = self.metrics.clone();
+                            Ok(SequentialHydration::new(client, dyncfg, metrics))
                         }
                         Err(e) => {
                             if state.i >= mz_service::retry::INFO_MIN_RETRIES {

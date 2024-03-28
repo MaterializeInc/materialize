@@ -44,6 +44,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use mz_compute_types::dyncfgs::HYDRATION_CONCURRENCY;
 use mz_dyncfg::ConfigSet;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_eq_or_log;
 use mz_repr::GlobalId;
@@ -52,6 +53,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::debug;
 
+use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
 use crate::service::ComputeClient;
@@ -66,6 +68,8 @@ pub(super) struct SequentialHydration<C, T> {
     client: C,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
+    /// Tracked metrics.
+    metrics: ReplicaMetrics,
     /// Tracked collections.
     ///
     /// Entries are inserted in response to observed `CreateDataflow` commands.
@@ -87,10 +91,11 @@ where
     T: Timestamp,
 {
     /// Create a new `SequentialHydration` client.
-    pub fn new(client: C, dyncfg: Arc<ConfigSet>) -> Self {
+    pub fn new(client: C, dyncfg: Arc<ConfigSet>, metrics: ReplicaMetrics) -> Self {
         Self {
             client,
             dyncfg,
+            metrics,
             collections: Default::default(),
             hydration_queue: Default::default(),
             hydration_token: Default::default(),
@@ -213,6 +218,10 @@ where
             let token = Arc::clone(&self.hydration_token);
             collection.set_hydrating(token);
         }
+
+        let queue_size = u64::cast_from(self.hydration_queue.len());
+        self.metrics.inner.hydration_queue_size.set(queue_size);
+
         Ok(())
     }
 }

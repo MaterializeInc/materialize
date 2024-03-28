@@ -2519,6 +2519,8 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count == 1, f"got {count}"
     count = metrics.get_value("mz_compute_controller_collection_count")
     assert count > 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_collection_unscheduled_count")
+    assert count == 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_peek_count")
     assert count == 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_subscribe_count")
@@ -2527,6 +2529,8 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count < 10, f"got {count}"
     count = metrics.get_value("mz_compute_controller_response_queue_size")
     assert count < 10, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_hydration_queue_size")
+    assert count == 0, f"got {count}"
 
     # mz_compute_controller_history_command_count
     count = metrics.get_controller_history_command_count("create_timely")
