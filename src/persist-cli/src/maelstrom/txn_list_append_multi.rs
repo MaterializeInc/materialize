@@ -314,7 +314,7 @@ impl Transactor {
         data_ids: impl Iterator<Item = &ShardId>,
     ) {
         debug!("unblock_and_read_at {}", read_ts);
-        let txn = self.txns.begin();
+        let mut txn = self.txns.begin();
         match txn.commit_at(&mut self.txns, read_ts).await {
             Ok(apply) => {
                 self.tidy.merge(apply.apply(&mut self.txns).await);

@@ -576,13 +576,26 @@ where
                                 )
                                 .await;
                             }
-                            Unapplied::Batch(batch_raw) => {
-                                crate::apply_caa(&mut data_write, batch_raw, unapplied_ts.clone())
-                                    .await;
-                                // NB: Protos are not guaranteed to exactly roundtrip the
-                                // encoded bytes, so we intentionally use the raw batch so that
-                                // it definitely retracts.
-                                ret.push((batch_raw.clone(), (T::encode(unapplied_ts), data_id)));
+                            Unapplied::Batch(batch_raws) => {
+                                let batch_raws = batch_raws
+                                    .into_iter()
+                                    .map(|batch_raw| batch_raw.as_slice())
+                                    .collect();
+                                crate::apply_caa(
+                                    &mut data_write,
+                                    &batch_raws,
+                                    unapplied_ts.clone(),
+                                )
+                                .await;
+                                for batch_raw in batch_raws {
+                                    // NB: Protos are not guaranteed to exactly roundtrip the
+                                    // encoded bytes, so we intentionally use the raw batch so that
+                                    // it definitely retracts.
+                                    ret.push((
+                                        batch_raw.to_vec(),
+                                        (T::encode(unapplied_ts), data_id),
+                                    ));
+                                }
                             }
                         }
                     }

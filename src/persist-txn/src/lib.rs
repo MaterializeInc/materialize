@@ -441,7 +441,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 #[instrument(level = "debug", fields(shard=%data_write.shard_id(), ts=?commit_ts))]
 async fn apply_caa<K, V, T, D>(
     data_write: &mut WriteHandle<K, V, T, D>,
-    batch_raw: &[u8],
+    batch_raws: &Vec<&[u8]>,
     commit_ts: T,
 ) where
     K: Debug + Codec,
@@ -449,12 +449,17 @@ async fn apply_caa<K, V, T, D>(
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let batch = ProtoIdBatch::parse(batch_raw);
-    let mut batch = data_write.batch_from_transmittable_batch(batch);
+    let mut batches = batch_raws
+        .into_iter()
+        .map(|batch| ProtoIdBatch::parse(batch))
+        .map(|batch| data_write.batch_from_transmittable_batch(batch))
+        .collect::<Vec<_>>();
     let Some(mut upper) = data_write.shared_upper().into_option() else {
         // Shard is closed, which means the upper must be past init_ts.
-        // Mark the batch as consumed, so we don't get warnings in the logs.
-        batch.into_hollow_batch();
+        // Mark the batches as consumed, so we don't get warnings in the logs.
+        for batch in batches {
+            batch.into_hollow_batch();
+        }
         return;
     };
     loop {
@@ -464,24 +469,27 @@ async fn apply_caa<K, V, T, D>(
                 data_write.shard_id().to_string(),
                 commit_ts
             );
-            // Mark the batch as consumed, so we don't get warnings in the logs.
-            batch.into_hollow_batch();
+            // Mark the batches as consumed, so we don't get warnings in the logs.
+            for batch in batches {
+                batch.into_hollow_batch();
+            }
             return;
         }
         debug!(
-            "CaA data {:.9} apply b={} t={:?} [{:?},{:?})",
+            "CaA data {:.9} apply b={:?} t={:?} [{:?},{:?})",
             data_write.shard_id().to_string(),
-            batch_raw.hashed(),
+            batch_raws
+                .iter()
+                .map(|batch_raw| batch_raw.hashed())
+                .collect::<Vec<_>>(),
             commit_ts,
             upper,
             commit_ts.step_forward(),
         );
-        // If we both spill to s3 in `Txn::write`` _and_ add the ability to
-        // merge two `Txn`s and then commit them together, then we need to do
-        // all the batches for a given `(shard, ts)` at once.
+        let mut batches = batches.iter_mut().collect::<Vec<_>>();
         let res = data_write
             .compare_and_append_batch(
-                &mut [&mut batch],
+                batches.as_mut_slice(),
                 Antichain::from_elem(upper.clone()),
                 Antichain::from_elem(commit_ts.step_forward()),
             )
@@ -554,7 +562,7 @@ pub mod tests {
     use prost::Message;
 
     use crate::operator::DataSubscribe;
-    use crate::txn_write::Txn;
+    use crate::txn_write::{Txn, TxnWrite};
 
     use super::*;
 
@@ -585,8 +593,10 @@ pub mod tests {
             let () = self.tx.send(update).unwrap();
         }
 
+        // TODO(jkosh44) This doesn't really work because we remove all the batches from a txn once
+        // it's committed.
         pub fn record_txn(&self, commit_ts: u64, txn: &Txn<String, (), i64>) {
-            for (data_id, writes) in txn.writes.iter() {
+            for (data_id, TxnWrite { batches, writes }) in txn.writes.iter() {
                 for (k, (), d) in writes.iter() {
                     self.record((*data_id, k.clone(), commit_ts, *d));
                 }
