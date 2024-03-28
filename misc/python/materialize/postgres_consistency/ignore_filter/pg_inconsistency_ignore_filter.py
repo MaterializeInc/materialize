@@ -51,6 +51,9 @@ from materialize.output_consistency.input_data.operations.jsonb_operations_provi
 from materialize.output_consistency.input_data.operations.text_operations_provider import (
     TAG_REGEX,
 )
+from materialize.output_consistency.input_data.return_specs.jsonb_return_spec import (
+    JsonbReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
@@ -240,6 +243,8 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             return_type_spec = expression.args[0].resolve_return_type_spec()
             if isinstance(return_type_spec, TextReturnTypeSpec):
                 return YesIgnore("#22002: ordering on text different (<, <=, ...)")
+            if isinstance(return_type_spec, JsonbReturnTypeSpec):
+                return YesIgnore("#26309: ordering on JSON different")
 
         return NoIgnore()
 
