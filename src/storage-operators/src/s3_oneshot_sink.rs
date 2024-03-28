@@ -15,7 +15,6 @@ use std::str::FromStr;
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
 use bytesize::ByteSize;
-use differential_dataflow::Collection;
 use http::Uri;
 use mz_aws_util::s3_uploader::{
     CompletedUpload, S3MultiPartUploadError, S3MultiPartUploader, S3MultiPartUploaderConfig,
@@ -29,7 +28,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::S3UploadInfo;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::{debug, info};
@@ -38,8 +37,8 @@ use tracing::{debug, info};
 /// `onetime_callback` is used to send the final count of rows uploaded to s3,
 /// or an error message if the operator failed.
 pub fn copy_to<G, F>(
-    input_collection: Collection<G, ((Row, u64), ()), Diff>,
-    err_collection: Collection<G, ((DataflowError, u64), ()), Diff>,
+    input_collection: Stream<G, Vec<(((Row, u64), ()), G::Timestamp, Diff)>>,
+    err_collection: Stream<G, Vec<(((DataflowError, u64), ()), G::Timestamp, Diff)>>,
     up_to: Antichain<G::Timestamp>,
     connection_details: S3UploadInfo,
     connection_context: ConnectionContext,
@@ -55,14 +54,14 @@ pub fn copy_to<G, F>(
 
     let mut builder = AsyncOperatorBuilder::new("CopyToS3".to_string(), scope);
 
-    let mut input_handle = builder.new_disconnected_input(&input_collection.inner, Pipeline);
-    let mut error_handle = builder.new_disconnected_input(&err_collection.inner, Pipeline);
+    let mut input_handle = builder.new_disconnected_input(&input_collection, Pipeline);
+    let mut error_handle = builder.new_disconnected_input(&err_collection, Pipeline);
 
     builder.build(move |_caps| async move {
         while let Some(event) = error_handle.next().await {
             match event {
                 AsyncEvent::Data(_ts, data) => {
-                    for (((error, _), _), ts, _) in data {
+                    for (((error, _), _), ts, _) in data.into_iter().flatten() {
                         if !up_to.less_equal(&ts) {
                             onetime_callback(Err(error.to_string()));
                             return;
@@ -95,22 +94,29 @@ pub fn copy_to<G, F>(
         while let Some(event) = input_handle.next().await {
             match event {
                 AsyncEvent::Data(_ts, data) => {
-                    for (((row, batch), ()), ts, diff) in data {
+                    for (((row, batch), ()), ts, diff) in data.into_iter().flatten() {
                         if !up_to.less_equal(&ts) {
                             if diff < 0 {
                                 onetime_callback(Err(format!(
-                                    "Invalid data in source errors, saw retractions ({}) for row that does not exist", diff * -1,
+                                    "Invalid data in source errors, saw retractions ({}) \
+                                    for row that does not exist",
+                                    diff * -1,
                                 )));
                                 return;
                             }
                             row_count += u64::try_from(diff).unwrap();
-                            let uploader = s3_uploaders
-                                .entry(batch)
-                                .or_insert_with(|| {
-                                    debug!("worker_id: {} will be handling batch: {}", worker_id, batch);
-                                    let file_name_prefix = format!("batch-{:04}", batch);
-                                    CopyToS3Uploader::new(sdk_config.clone(), connection_details.clone(), file_name_prefix)
-                                });
+                            let uploader = s3_uploaders.entry(batch).or_insert_with(|| {
+                                debug!(
+                                    "worker_id: {} will be handling batch: {}",
+                                    worker_id, batch
+                                );
+                                let file_name_prefix = format!("batch-{:04}", batch);
+                                CopyToS3Uploader::new(
+                                    sdk_config.clone(),
+                                    connection_details.clone(),
+                                    file_name_prefix,
+                                )
+                            });
                             for _ in 0..diff {
                                 match uploader.append_row(&row).await {
                                     Ok(()) => {}

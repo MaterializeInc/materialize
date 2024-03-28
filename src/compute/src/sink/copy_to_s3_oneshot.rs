@@ -18,7 +18,7 @@ use mz_compute_types::sinks::{ComputeSinkDesc, CopyToS3OneshotSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::consolidate_pact;
+use mz_timely_util::operator::consolidate_pact_raw;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
@@ -59,16 +59,17 @@ where
             }
         };
 
-        // Splitting the data across a known number of batches to distribute load across the cluster.
-        // Each worker will be handling data belonging to 0 or more batches. We are doing this so that
-        // we can write files to s3 deterministically across different replicas of different sizes
-        // using the batch ID. Each worker will split a batch's data into 1 or more
+        // Splitting the data across a known number of batches to distribute load across the
+        // cluster. Each worker will be handling data belonging to 0 or more batches. We are doing
+        // this so that we can write files to s3 deterministically across different replicas of
+        // different sizes using the batch ID. Each worker will split a batch's data into 1 or more
         // files based on the user provided `MAX_FILE_SIZE`.
         let batch_count = self.output_batch_count;
 
-        // TODO(#25835): Note, even though we do get deterministic output currently
-        // after the exchange below, it's not explicitly supported and we should change it.
-        let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
+        // Use `consolidate_pact_raw` rather than `consolidate_pact` to receive the full
+        // consolidation (for each batch) in one event to preserve ordering, since ordering
+        // is not guaranteed across a timely stream.
+        let input = consolidate_pact_raw::<KeyBatcher<_, _, _>, _, _, _, _, _>(
             &sinked_collection.map(move |row| {
                 let batch = row.hashed() % batch_count;
                 ((row, batch), ())
@@ -77,7 +78,7 @@ where
             "Consolidated COPY TO S3 input",
         );
 
-        let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
+        let error = consolidate_pact_raw::<KeyBatcher<_, _, _>, _, _, _, _, _>(
             &err_collection.map(move |row| {
                 let batch = row.hashed() % batch_count;
                 ((row, batch), ())
