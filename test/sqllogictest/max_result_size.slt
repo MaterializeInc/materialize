@@ -23,6 +23,7 @@ SELECT workers FROM mz_internal.mz_cluster_replica_sizes JOIN mz_cluster_replica
 2
 2
 2
+2
 8
 
 statement ok
