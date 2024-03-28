@@ -28,7 +28,7 @@ http = "0.2.8"
 itertools = "0.10.5"
 once_cell = "1.16.0"
 launchdarkly-server-sdk = { version = "1.0.0", default_features = false, features = [
-  "hypertls",
+    "hypertls",
 ] }
 maplit = "1.0.2"
 mz-adapter-types = { path = "../adapter-types" }
@@ -78,10 +78,10 @@ qcell = "0.5"
 rand = "0.8.5"
 rand_chacha = "0.3"
 rdkafka = { version = "0.29.0", features = [
-  "cmake-build",
-  "ssl-vendored",
-  "libz-static",
-  "zstd",
+    "cmake-build",
+    "ssl-vendored",
+    "libz-static",
+    "zstd",
 ] }
 regex = "1.7.0"
 reqwest = "0.11.13"
@@ -93,7 +93,7 @@ sha2 = "0.10.6"
 smallvec = { version = "1.10.0", features = ["union"] }
 static_assertions = "1.1"
 timely = { version = "0.12.0", default-features = false, features = [
-  "bincode",
+    "bincode",
 ] }
 tokio = { version = "1.32.0", features = ["rt", "time"] }
 tokio-postgres = { version = "0.7.8" }
@@ -110,7 +110,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 criterion = { version = "0.4.0", features = ["async_tokio"] }
-datadriven = "0.6.0"
+datadriven = "0.8.0"
 
 
 [[bench]]

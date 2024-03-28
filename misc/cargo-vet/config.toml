@@ -32,6 +32,10 @@ audit-as-crates-io = true
 [policy.mz-avro]
 audit-as-crates-io = true
 
+[policy.mz-pgtest]
+criteria = "safe-to-run"
+notes = "This crate is only depended on in tests."
+
 [policy.openssh]
 audit-as-crates-io = true
 

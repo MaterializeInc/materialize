@@ -1679,12 +1679,12 @@ checksum = "3ee2393c4a91429dffb4bedf19f4d6abf27d8a732c8ce4980305d782e5426d57"
 
 [[package]]
 name = "datadriven"
-version = "0.6.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c496e3277b660041bd6a2c0618593e99c3ba450b30d5f8d89035f78c87b4106"
+checksum = "e6922deacb7b9c86bb7f8ce1fb565212f4e6a9427aad6ce3bd14a2622adf520f"
 dependencies = [
- "anyhow",
  "futures",
+ "thiserror",
 ]
 
 [[package]]
