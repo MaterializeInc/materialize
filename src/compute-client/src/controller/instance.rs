@@ -33,6 +33,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
 use mz_storage_types::read_policy::ReadPolicy;
+use proptest::bits::u64;
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
@@ -383,12 +384,18 @@ impl<T: Timestamp> Instance<T> {
     /// This method is invoked by `ActiveComputeController::process`, which we expect to
     /// be periodically called during normal operation.
     fn refresh_state_metrics(&self) {
+        let unscheduled_collections_count =
+            self.collections.values().filter(|c| !c.scheduled).count();
+
         self.metrics
             .replica_count
             .set(u64::cast_from(self.replicas.len()));
         self.metrics
             .collection_count
             .set(u64::cast_from(self.collections.len()));
+        self.metrics
+            .collection_unscheduled_count
+            .set(u64::cast_from(unscheduled_collections_count));
         self.metrics
             .peek_count
             .set(u64::cast_from(self.peeks.len()));
