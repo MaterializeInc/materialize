@@ -607,6 +607,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "scenarios", nargs="*", default=None, help="run specified Scenarios"
     )
     parser.add_argument("--find-minimal-memory", action="store_true")
+    parser.add_argument("--memory-search-step", default=0.2, type=float)
     args = parser.parse_args()
 
     for scenario in SCENARIOS:
@@ -624,7 +625,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"+++ Running scenario {scenario.name} ...")
 
         if args.find_minimal_memory:
-            run_memory_search(c, scenario)
+            run_memory_search(c, scenario, args.memory_search_step)
         else:
             run_scenario(
                 c,
@@ -682,10 +683,12 @@ def try_run_scenario(
         return False
 
 
-def run_memory_search(c: Composition, scenario: Scenario) -> None:
+def run_memory_search(
+    c: Composition, scenario: Scenario, memory_search_step_in_gb: float
+) -> None:
+    assert memory_search_step_in_gb > 0
     materialized_memory = scenario.materialized_memory
     clusterd_memory = scenario.clusterd_memory
-    step_size_in_gb = 0.2
 
     print(f"Starting memory search for scenario {scenario.name}")
 
@@ -694,7 +697,7 @@ def run_memory_search(c: Composition, scenario: Scenario) -> None:
         scenario,
         materialized_memory=materialized_memory,
         clusterd_memory=clusterd_memory,
-        reduce_materialized_memory_by_gb=step_size_in_gb,
+        reduce_materialized_memory_by_gb=memory_search_step_in_gb,
         reduce_clusterd_memory_by_gb=0,
     )
     materialized_memory, clusterd_memory = find_minimal_memory(
@@ -703,7 +706,7 @@ def run_memory_search(c: Composition, scenario: Scenario) -> None:
         materialized_memory=materialized_memory,
         clusterd_memory=clusterd_memory,
         reduce_materialized_memory_by_gb=0,
-        reduce_clusterd_memory_by_gb=step_size_in_gb,
+        reduce_clusterd_memory_by_gb=memory_search_step_in_gb,
     )
 
     print(f"Found minimal memory for scenario {scenario.name}:")
