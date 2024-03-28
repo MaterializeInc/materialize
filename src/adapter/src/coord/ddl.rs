@@ -1225,6 +1225,7 @@ impl Coordinator {
                     | CatalogItem::Func(_) => {}
                 },
                 Op::AlterRole { .. }
+                | Op::AlterRetainHistory { .. }
                 | Op::AlterSetCluster { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }

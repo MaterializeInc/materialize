@@ -62,9 +62,6 @@ def run_test_with_mv_on_table(c: Composition) -> None:
 
             > SELECT count(*) FROM retain_history_mv1;
             2
-
-            ! ALTER MATERIALIZED VIEW retain_history_mv1 SET RETAIN HISTORY FOR '1s';
-            ALTER RETAIN HISTORY not yet supported
             """,
         )
     )
@@ -216,6 +213,25 @@ def run_test_with_mv_on_table(c: Composition) -> None:
             # retain period in future
             ! SELECT * FROM retain_history_mv_on_mv1 AS OF '{mz_time_in_far_future}'::TIMESTAMP;
             timeout
+            """,
+        )
+    )
+
+    # Verify we can still read the most recent timestamp, then reduce the retain history and verify
+    # we can't read any more.
+    #
+    # TODO: This doesn't work due to retries. The error will be retried until it occurs, and so the
+    # test will always eventually hit it.
+    c.testdrive(
+        dedent(
+            f"""
+            > SELECT count(*) FROM retain_history_mv1 WHERE key = 1 AS OF '{mz_time4}'::TIMESTAMP;
+            1
+
+            > ALTER MATERIALIZED VIEW retain_history_mv1 SET RETAIN HISTORY FOR '1s';
+
+            ! SELECT count(*) FROM retain_history_mv1 WHERE key = 1 AS OF '{mz_time4}'::TIMESTAMP;
+            contains: is not valid for all inputs
             """,
         )
     )

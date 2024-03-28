@@ -19,6 +19,7 @@ use std::sync::Arc;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_sql::ast::Value;
 use mz_sql::session::metadata::SessionMetadata;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
@@ -1165,6 +1166,59 @@ impl Catalog {
             match op {
                 Op::TransactionDryRun => {
                     unreachable!("TransactionDryRun can only be used a final element of ops")
+                }
+                Op::AlterRetainHistory { id, value } => {
+                    let entry = state.get_entry(&id);
+                    if id.is_system() {
+                        let name = entry.name();
+                        let full_name =
+                            state.resolve_full_name(name, session.map(|session| session.conn_id()));
+                        return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                            full_name.to_string(),
+                        ))));
+                    }
+
+                    let mut new_entry = entry.clone();
+                    let previous = new_entry
+                        .item
+                        .update_retain_history(value.clone())
+                        .map_err(|_| {
+                            AdapterError::Catalog(Error::new(ErrorKind::Internal(
+                            "planner should have rejected invalid alter retain history item type"
+                                .to_string(),
+                        )))
+                        })?;
+
+                    builtin_table_updates.extend(state.pack_item_update(id, -1));
+
+                    if Self::should_audit_log_item(new_entry.item()) {
+                        let details = EventDetails::AlterRetainHistoryV1(
+                            mz_audit_log::AlterRetainHistoryV1 {
+                                id: id.to_string(),
+                                old_history: previous.map(|previous| previous.to_string()),
+                                new_history: value.map(|v| v.to_string()),
+                            },
+                        );
+                        state.add_to_audit_log(
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Alter,
+                            catalog_type_to_audit_object_type(new_entry.item().typ()),
+                            details,
+                        )?;
+                    }
+
+                    Self::update_item(
+                        state,
+                        builtin_table_updates,
+                        id,
+                        new_entry.name.clone(),
+                        new_entry.item().clone(),
+                    )?;
+                    tx.update_item(id, new_entry.into())?;
                 }
                 Op::AlterRole {
                     id,
@@ -3423,6 +3477,10 @@ impl From<UpdatePrivilegeVariant> for EventType {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    AlterRetainHistory {
+        id: GlobalId,
+        value: Option<Value>,
+    },
     AlterSetCluster {
         id: GlobalId,
         cluster: ClusterId,
@@ -4134,7 +4192,6 @@ impl SessionCatalog for ConnCatalog<'_> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
     use std::{env, iter};
 
     use itertools::Itertools;
@@ -5247,7 +5304,6 @@ mod tests {
 
         // Execute the function as much as possible, ensuring no panics occur, but
         // otherwise ignoring eval errors. We also do various other checks.
-        let start = Instant::now();
         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
         if let Ok(hir) = res {
             if let Ok(mut mir) = hir.lower_uncorrelated() {
