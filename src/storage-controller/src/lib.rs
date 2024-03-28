@@ -1651,24 +1651,25 @@ where
                 updated_frontiers = Some(Response::FrontierUpdates(updates));
             }
             Some(StorageResponse::DroppedIds(ids)) => {
-                let shards_to_finalize = ids.iter().filter_map(|id| {
-                    // Note: All handles to the id should be dropped by now and the since of
-                    // the collection should be downgraded to the empty antichain. If handles
-                    // to the shard still exist, then we will incorrectly report the shard as
-                    // alive, and if the since of the shard has not been downgraded, then we
-                    // will continuously fail to finalize it.
-                    //
-                    // TODO(parkmycar): Should we be asserting that .remove(...) is some? In
-                    // other words that we know about the collection we're receiving an event
-                    // for.
-                    self.collections
-                        .remove(id)
-                        .map(|state| state.collection_metadata.data_shard)
-                });
+                let shards_to_finalize = ids
+                    .iter()
+                    .filter_map(|id| {
+                        // Note: All handles to the id should be dropped by now and the since of
+                        // the collection should be downgraded to the empty antichain. If handles
+                        // to the shard still exist, then we will incorrectly report the shard as
+                        // alive, and if the since of the shard has not been downgraded, then we
+                        // will continuously fail to finalize it.
+                        //
+                        // TODO(parkmycar): Should we be asserting that .remove(...) is some? In
+                        // other words that we know about the collection we're receiving an event
+                        // for.
+                        self.collections
+                            .remove(id)
+                            .map(|state| state.collection_metadata.data_shard)
+                    })
+                    .collect();
 
-                self.finalizable_shards.extend(shards_to_finalize);
-
-                self.finalize_shards().await;
+                self.finalize_shards(shards_to_finalize).await;
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -2187,11 +2188,13 @@ where
         // dropped from the catalog, but the dataflow is still running on a
         // worker, assuming the shard is safe to finalize on reboot may cause
         // the cluster to panic.
-        self.finalizable_shards.extend(
-            txn.get_unfinalized_shards()
-                .into_iter()
-                .map(|shard| ShardId::from_str(&shard).expect("deserialization corrupted")),
-        );
+        if self.config.parameters.finalize_shards {
+            self.finalizable_shards.extend(
+                txn.get_unfinalized_shards()
+                    .into_iter()
+                    .map(|shard| ShardId::from_str(&shard).expect("deserialization corrupted")),
+            );
+        }
 
         Ok(())
     }
@@ -2915,12 +2918,18 @@ where
     /// Attempts to close all shards marked for finalization.
     #[allow(dead_code)]
     #[instrument(level = "debug")]
-    async fn finalize_shards(&mut self) {
+    async fn finalize_shards(&mut self, new_shards: Vec<ShardId>) {
         if !self.config.parameters.finalize_shards {
             info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
             return;
         }
+
         info!("triggering shard finalization due to dropped storage object");
+
+        self.finalizable_shards.extend(new_shards);
+        if self.finalizable_shards.is_empty() {
+            info!("no shards to finalize");
+        }
 
         // Open a persist client to delete unused shards.
         let persist_client = self

@@ -2408,7 +2408,15 @@ impl CatalogState {
     pub(super) fn update_storage_metadata(&mut self, tx: &Transaction<'_>) {
         use mz_storage_client::controller::StorageTxn;
         self.storage_metadata.collection_metadata = tx.get_collection_metadata();
-        self.storage_metadata.unfinalized_shards = tx.get_unfinalized_shards();
+        // If we will not perform shard finalization in storage, there's no
+        // benefit in exerting memory pressure on `envd` to cache all of these
+        // unused values.
+        if self
+            .system_configuration
+            .enable_storage_shard_finalization()
+        {
+            self.storage_metadata.unfinalized_shards = tx.get_unfinalized_shards();
+        }
     }
 
     /// Returns a read-only view of the current [`StorageMetadata`].
