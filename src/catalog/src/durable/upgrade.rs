@@ -170,14 +170,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v42, v43, v44, v45, v46, v47, v48, v49, v50, v51, v52);
+objects!(v42, v43, v44, v45, v46, v47, v48, v49, v50, v51, v52, v53);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 52;
+pub const CATALOG_VERSION: u64 = 53;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -199,6 +199,7 @@ mod v48_to_v49;
 mod v49_to_v50;
 mod v50_to_v51;
 mod v51_to_v52;
+mod v52_to_v53;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -312,6 +313,10 @@ pub(crate) async fn upgrade(
             }
             51 => {
                 run_versioned_upgrade(unopened_catalog_state, mode, version, v51_to_v52::upgrade)
+                    .await
+            }
+            52 => {
+                run_versioned_upgrade(unopened_catalog_state, mode, version, v52_to_v53::upgrade)
                     .await
             }
 
