@@ -509,7 +509,8 @@ where
         + Codec64
         + Unpin
         + From<EpochMillis>
-        + TimestampManipulation,
+        + TimestampManipulation
+        + std::fmt::Display,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
     StorageCommand<T>: RustType<ProtoStorageCommand>,

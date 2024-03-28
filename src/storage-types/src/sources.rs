@@ -42,7 +42,7 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::controller::{CollectionMetadata, StorageError};
+use crate::controller::{AlterError, CollectionMetadata};
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
@@ -114,7 +114,7 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
         &self,
         id: GlobalId,
         other: &IngestionDescription<S>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -177,7 +177,7 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
                     other
                 );
 
-                return Err(StorageError::InvalidAlter { id });
+                return Err(AlterError { id });
             }
         }
 
@@ -727,7 +727,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for SourceDesc<C> {
     /// Determines if `self` is compatible with another `SourceDesc`, in such a
     /// way that it is possible to turn `self` into `other` through a valid
     /// series of transformations (e.g. no transformation or `ALTER SOURCE`).
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -759,7 +759,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for SourceDesc<C> {
                     other
                 );
 
-                return Err(StorageError::InvalidAlter { id });
+                return Err(AlterError { id });
             }
         }
 
@@ -886,7 +886,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -896,7 +896,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> 
             (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
                 conn.alter_compatible(id, other)
             }
-            _ => Err(StorageError::InvalidAlter { id }),
+            _ => Err(AlterError { id }),
         };
 
         if r.is_err() {

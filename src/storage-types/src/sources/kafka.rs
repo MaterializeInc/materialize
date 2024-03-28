@@ -28,7 +28,7 @@ use crate::connections::inline::{
     ReferencedConnection,
 };
 use crate::connections::ConnectionContext;
-use crate::controller::StorageError;
+use crate::controller::AlterError;
 use crate::sources::{MzOffset, SourceConnection, SourceTimestamp};
 
 include!(concat!(
@@ -184,7 +184,7 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -223,7 +223,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
                     other
                 );
 
-                return Err(StorageError::InvalidAlter { id });
+                return Err(AlterError { id });
             }
         }
 

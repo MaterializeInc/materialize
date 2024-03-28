@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
-use std::fmt::{self, Debug};
+use std::fmt::{self, Debug, Display};
 
 use itertools::Itertools;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -20,8 +20,10 @@ use mz_persist_types::{PersistLocation, ShardId};
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_stash_types::StashError;
+use mz_timely_util::antichain::AntichainExt;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
 use tracing::error;
 
 use crate::errors::DataflowError;
@@ -53,7 +55,7 @@ impl crate::AlterCompatible for CollectionMetadata {
         &self,
         id: mz_repr::GlobalId,
         other: &Self,
-    ) -> Result<(), self::StorageError> {
+    ) -> Result<(), self::AlterError> {
         if self == other {
             return Ok(());
         }
@@ -86,7 +88,7 @@ impl crate::AlterCompatible for CollectionMetadata {
                     other
                 );
 
-                return Err(StorageError::InvalidAlter { id });
+                return Err(AlterError { id });
             }
         }
 
@@ -160,7 +162,7 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
 }
 
 #[derive(Debug)]
-pub enum StorageError {
+pub enum StorageError<T> {
     /// The source identifier was re-created after having been dropped,
     /// or installed with a different description.
     SourceIdReused(GlobalId),
@@ -176,7 +178,7 @@ pub enum StorageError {
     /// The read was at a timestamp before the collection's since
     ReadBeforeSince(GlobalId),
     /// The expected upper of one or more appends was different from the actual upper of the collection
-    InvalidUppers(Vec<GlobalId>),
+    InvalidUppers(Vec<InvalidUpper<T>>),
     /// An operation failed to read or write state
     IOError(StashError),
     /// The (client for) the requested cluster instance is missing.
@@ -192,7 +194,7 @@ pub enum StorageError {
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
     /// Response to an invalid/unsupported `ALTER..` command.
-    InvalidAlter { id: GlobalId },
+    InvalidAlter(AlterError),
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
@@ -205,7 +207,7 @@ pub enum StorageError {
     Generic(anyhow::Error),
 }
 
-impl Error for StorageError {
+impl<T: Debug + Display + 'static> Error for StorageError<T> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::SourceIdReused(_) => None,
@@ -228,7 +230,7 @@ impl Error for StorageError {
     }
 }
 
-impl fmt::Display for StorageError {
+impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("storage error: ")?;
         match self {
@@ -255,7 +257,11 @@ impl fmt::Display for StorageError {
                 write!(
                     f,
                     "expected upper was different from the actual upper for: {}",
-                    id.iter().map(|id| id.to_string()).join(", ")
+                    id.iter()
+                        .map(|InvalidUpper { id, current_upper }| {
+                            format!("(id: {}; actual upper: {})", id, current_upper.pretty())
+                        })
+                        .join(", ")
                 )
             }
             Self::IngestionInstanceMissing {
@@ -280,9 +286,7 @@ impl fmt::Display for StorageError {
             // N.B. For these errors, the underlying error is reported in `source()`, and it
             // is the responsibility of the caller to print the chain of errors, when desired.
             Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
-            Self::InvalidAlter { id } => {
-                write!(f, "{id} cannot be altered in the requested way")
-            }
+            Self::InvalidAlter(err) => std::fmt::Display::fmt(err, f),
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
             Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
             Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
@@ -291,13 +295,38 @@ impl fmt::Display for StorageError {
     }
 }
 
-impl From<StashError> for StorageError {
+#[derive(Debug, Clone)]
+pub struct InvalidUpper<T> {
+    pub id: GlobalId,
+    pub current_upper: Antichain<T>,
+}
+
+#[derive(Debug)]
+pub struct AlterError {
+    pub id: GlobalId,
+}
+
+impl Error for AlterError {}
+
+impl fmt::Display for AlterError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} cannot be altered in the requested way", self.id)
+    }
+}
+
+impl<T> From<AlterError> for StorageError<T> {
+    fn from(error: AlterError) -> Self {
+        Self::InvalidAlter(error)
+    }
+}
+
+impl<T> From<StashError> for StorageError<T> {
     fn from(error: StashError) -> Self {
         Self::IOError(error)
     }
 }
 
-impl From<DataflowError> for StorageError {
+impl<T> From<DataflowError> for StorageError<T> {
     fn from(error: DataflowError) -> Self {
         Self::DataflowError(error)
     }

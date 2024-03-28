@@ -15,7 +15,7 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, Row, RowArena};
+use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaders, WebhookValidation, WebhookValidationSecret};
@@ -55,7 +55,7 @@ pub enum AppendWebhookError {
     #[error("internal error: {0:?}")]
     InternalError(#[from] anyhow::Error),
     #[error("internal storage failure! {0:?}")]
-    StorageError(#[from] StorageError),
+    StorageError(#[from] StorageError<mz_repr::Timestamp>),
 }
 
 /// Contains all of the components necessary for running webhook validation.
@@ -247,7 +247,7 @@ pub struct AppendWebhookResponse {
 /// gets modified.
 #[derive(Clone, Debug)]
 pub struct WebhookAppender {
-    tx: MonotonicAppender,
+    tx: MonotonicAppender<Timestamp>,
     guard: WebhookAppenderGuard,
     // Shared statistics related to this webhook.
     stats: Arc<WebhookStatistics>,
@@ -293,7 +293,7 @@ impl WebhookAppender {
     }
 
     pub(crate) fn new(
-        tx: MonotonicAppender,
+        tx: MonotonicAppender<Timestamp>,
         guard: WebhookAppenderGuard,
         stats: Arc<WebhookStatistics>,
     ) -> Self {

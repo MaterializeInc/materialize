@@ -193,7 +193,7 @@ pub enum AdapterError {
         new_state: crate::catalog::CatalogState,
     },
     /// An error occurred in the storage layer
-    Storage(mz_storage_types::controller::StorageError),
+    Storage(mz_storage_types::controller::StorageError<mz_repr::Timestamp>),
     /// An error occurred in the compute layer
     Compute(anyhow::Error),
     /// An error in the orchestrator layer
@@ -818,8 +818,8 @@ impl From<oneshot::error::RecvError> for AdapterError {
     }
 }
 
-impl From<StorageError> for AdapterError {
-    fn from(e: StorageError) -> Self {
+impl From<StorageError<mz_repr::Timestamp>> for AdapterError {
+    fn from(e: StorageError<mz_repr::Timestamp>) -> Self {
         AdapterError::Storage(e)
     }
 }

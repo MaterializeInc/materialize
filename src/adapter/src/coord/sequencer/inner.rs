@@ -4184,7 +4184,7 @@ impl CachedStatisticsOracle {
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<T>,
         storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
-    ) -> Result<Self, StorageError> {
+    ) -> Result<Self, StorageError<T>> {
         let mut cache = BTreeMap::new();
 
         for id in ids {
