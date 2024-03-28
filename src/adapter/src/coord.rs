@@ -433,6 +433,9 @@ pub struct CopyToContext {
     pub format_params: CopyFormatParams<'static>,
     /// Approximate max file size of each uploaded file.
     pub max_file_size: u64,
+    /// Number of batches the output of the COPY TO will be partitioned into
+    /// to distribute the load across workers deterministically.
+    pub output_batch_count: Option<u64>,
 }
 
 #[derive(Debug)]

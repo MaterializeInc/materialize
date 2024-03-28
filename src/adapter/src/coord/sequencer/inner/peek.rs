@@ -17,6 +17,7 @@ use itertools::Either;
 use maplit::btreemap;
 use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
+use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, task};
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -142,6 +143,8 @@ impl Coordinator {
                     connection_id,
                     format_params,
                     max_file_size,
+                    // This will be set in `peek_stage_validate` stage below.
+                    output_batch_count: None,
                 }),
                 explain_ctx: ExplainContext::None,
             }),
@@ -297,6 +300,12 @@ impl Coordinator {
             .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
             .override_from(&explain_ctx);
 
+        if cluster.replicas().next().is_none() {
+            return Err(AdapterError::NoClusterReplicasAvailable(
+                cluster.name.clone(),
+            ));
+        }
+
         let optimizer = match copy_to_ctx {
             None => {
                 // Collect optimizer parameters specific to the peek::Optimizer.
@@ -317,7 +326,23 @@ impl Coordinator {
                     self.optimizer_metrics(),
                 ))
             }
-            Some(copy_to_ctx) => {
+            Some(mut copy_to_ctx) => {
+                // Getting the max worker count across replicas
+                // and using that value for the number of batches to
+                // divide the copy output into.
+                let max_worker_count = match cluster
+                    .replicas()
+                    .map(|r| r.config.location.workers())
+                    .max()
+                {
+                    Some(count) => u64::cast_from(count),
+                    None => {
+                        return Err(AdapterError::NoClusterReplicasAvailable(
+                            cluster.name.clone(),
+                        ))
+                    }
+                };
+                copy_to_ctx.output_batch_count = Some(max_worker_count);
                 // Build an optimizer for this COPY TO.
                 Either::Right(optimize::copy_to::Optimizer::new(
                     Arc::clone(&catalog),
@@ -341,12 +366,6 @@ impl Coordinator {
                     })
             })
             .transpose()?;
-
-        if cluster.replicas().next().is_none() {
-            return Err(AdapterError::NoClusterReplicasAvailable(
-                cluster.name.clone(),
-            ));
-        }
 
         let source_ids = plan.source.depends_on();
         let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
@@ -942,7 +961,6 @@ impl Coordinator {
         stage: PeekStageExplainPushdown,
     ) -> Result<ExecuteResponse, AdapterError> {
         use futures::stream::TryStreamExt;
-        use mz_ore::cast::CastFrom;
 
         let as_of = stage.determination.timestamp_context.antichain();
         let mz_now = stage
