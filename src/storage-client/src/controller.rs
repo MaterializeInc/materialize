@@ -348,7 +348,7 @@ pub trait StorageController: Debug {
         &mut self,
         identifiers: Vec<GlobalId>,
         ts: Self::Timestamp,
-    ) -> Result<(), StorageError>;
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     fn drop_sources(
