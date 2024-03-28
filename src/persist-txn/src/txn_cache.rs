@@ -327,7 +327,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         let batches = self
             .unapplied_batches
             .values()
-            .map(|(data_id, batch, ts)| (data_id, Unapplied::Batch(batch), ts));
+            .fold(
+                BTreeMap::new(),
+                |mut accum: BTreeMap<_, Vec<_>>, (data_id, batch, ts)| {
+                    accum.entry((ts, data_id)).or_default().push(batch);
+                    accum
+                },
+            )
+            .into_iter()
+            .map(|((ts, data_id), batches)| (data_id, Unapplied::Batch(batches), ts));
         // This will emit registers and forgets before batches at the same timestamp. Currently,
         // this is fine because for a single data shard you can't combine registers, forgets, and
         // batches at the same timestamp. In the future if we allow combining these operations in
@@ -983,7 +991,7 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
 #[derive(Debug)]
 pub(crate) enum Unapplied<'a> {
     RegisterForget,
-    Batch(&'a Vec<u8>),
+    Batch(Vec<&'a Vec<u8>>),
 }
 
 #[cfg(test)]
