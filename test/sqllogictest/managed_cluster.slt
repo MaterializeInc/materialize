@@ -121,6 +121,9 @@ CREATE CLUSTER baz REPLICAS (), INTROSPECTION DEBUGGING = true
 statement error db error: ERROR: INTROSPECTION INTERVAL not supported for unmanaged clusters
 CREATE CLUSTER baz REPLICAS (), INTROSPECTION INTERVAL 1
 
+statement error db error: ERROR: ARRANGEMENT MERGE EFFORT not supported for unmanaged clusters
+CREATE CLUSTER baz REPLICAS (), ARRANGEMENT MERGE EFFORT 0
+
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
