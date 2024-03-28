@@ -805,8 +805,16 @@ async fn determine_sink_resume_upper(
     .await
     .add_context("error registering kafka progress topic for sink")?;
 
+    // We are about to spawn a blocking task that cannot be aborted by simply calling .abort() on
+    // its handle but we must be able to cancel it prompty so as to not leave long running
+    // operations around when interest to this task is lost. To accomplish this we create a shared
+    // token of which a weak reference is given to the task and a strong reference is held by the
+    // parent task. The task periodically checks if its weak reference is still valid before
+    // continuing its work.
+    let parent_token = Arc::new(());
+    let child_token = Arc::downgrade(&parent_token);
     let task_name = format!("get_latest_ts:{sink_id}");
-    task::spawn_blocking(|| task_name, move || {
+    let result = task::spawn_blocking(|| task_name, move || {
         let progress_topic = progress_topic.as_ref();
         // Ensure the progress topic has exactly one partition. Kafka only
         // guarantees ordering within a single partition, and we need a strict
@@ -894,6 +902,9 @@ async fn determine_sink_resume_upper(
 
         // Helper to get the progress consumer's current position.
         let get_position = || {
+            if child_token.strong_count() == 0 {
+                bail!("operation cancelled");
+            }
             let position = progress_client_read_committed
                 .position()?
                 .find_partition(progress_topic, partition)
@@ -988,7 +999,10 @@ async fn determine_sink_resume_upper(
         // the high water mark, and therefore `last_timestamp` contains the
         // most recent timestamp for the sink under consideration.
         Ok(last_upper)
-    }).await.unwrap().check_ssh_status(&ctx)
+    }).await.unwrap().check_ssh_status(&ctx);
+    // Express interest to the computation until after we've received its result
+    drop(parent_token);
+    result
 }
 
 /// This is the legacy struct that used to be emitted as part of a transactional produce and
