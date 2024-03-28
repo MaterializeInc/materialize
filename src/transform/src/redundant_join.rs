@@ -190,7 +190,8 @@ impl RedundantJoin {
                     // We only do this once per invocation to keep our sanity, but we could
                     // rewrite it to iterate. We can avoid looking for any relation that
                     // does not have keys, as it cannot be redundant in that case.
-                    if let Some((remove_input_idx, mut bindings)) = (0..input_types.len())
+                    if let Some((remove_input_idx, (mut bindings, predicates))) = (0..input_types
+                        .len())
                         .rev()
                         .filter(|i| !input_types[*i].keys.is_empty())
                         .flat_map(|i| {
@@ -271,7 +272,11 @@ impl RedundantJoin {
                         // Unset implementation, as irrevocably hosed by this transformation.
                         *implementation = mz_expr::JoinImplementation::Unimplemented;
 
-                        *relation = relation.take_dangerous().map(bindings).project(projection);
+                        *relation = relation
+                            .take_dangerous()
+                            .map(bindings)
+                            .project(projection)
+                            .filter(predicates);
                         // The projection will gum up provenance reasoning anyhow, so don't work hard.
                         // We will return to this expression again with the same analysis.
                         Ok(Vec::new())
@@ -282,7 +287,7 @@ impl RedundantJoin {
                         let mut results = Vec::new();
                         for (input, input_prov) in input_prov.into_iter().enumerate() {
                             for mut prov in input_prov {
-                                prov.exact = false;
+                                prov.exact = None;
                                 let mut projection = vec![None; old_input_mapper.total_columns()];
                                 for (local_col, global_col) in
                                     old_input_mapper.global_columns(input).enumerate()
@@ -298,11 +303,21 @@ impl RedundantJoin {
                     }
                 }
 
-                MirRelationExpr::Filter { input, .. } => {
+                MirRelationExpr::Filter { input, predicates } => {
                     // Filter may drop records, and so we unset `exact`.
                     let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
-                        prov.exact = false;
+                        if let Some(preds) = &mut prov.exact {
+                            if predicates.iter().all(|expr| {
+                                expr.support()
+                                    .iter()
+                                    .all(|c| prov.dereferenced_projection[*c].is_some())
+                            }) {
+                                preds.extend(predicates.iter().cloned())
+                            } else {
+                                prov.exact = None;
+                            }
+                        }
                     }
                     Ok(result)
                 }
@@ -353,7 +368,30 @@ impl RedundantJoin {
                             .collect_vec();
                         projection.extend((0..aggregates.len()).map(|_| None));
                         prov.dereferenced_projection = projection;
+
+                        // If all exact predicates are supported by `group_key` renumber, otherwise set to `None`
+                        if let Some(predicates) = &mut prov.exact {
+                            if predicates.iter().all(|expr| {
+                                expr.support()
+                                    .iter()
+                                    .all(|c| group_key.contains(&MirScalarExpr::Column(*c)))
+                            }) {
+                                for expr in predicates.iter_mut() {
+                                    expr.visit_pre_mut(|e| {
+                                        if let MirScalarExpr::Column(c) = e {
+                                            *c = group_key
+                                                .iter()
+                                                .position(|k| k == &MirScalarExpr::Column(*c))
+                                                .unwrap();
+                                        }
+                                    })
+                                }
+                            } else {
+                                prov.exact = None;
+                            }
+                        }
                     }
+
                     // TODO: For min, max aggregates, we could preserve provenance
                     // if the expression references a column. We would need to un-set
                     // the `exact` bit in that case, and so we would want to keep both
@@ -365,7 +403,7 @@ impl RedundantJoin {
                     // Threshold may drop records, and so we unset `exact`.
                     let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
-                        prov.exact = false;
+                        prov.exact = None;
                     }
                     Ok(result)
                 }
@@ -374,7 +412,7 @@ impl RedundantJoin {
                     // TopK may drop records, and so we unset `exact`.
                     let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
-                        prov.exact = false;
+                        prov.exact = None;
                     }
                     Ok(result)
                 }
@@ -389,6 +427,25 @@ impl RedundantJoin {
                             .map(|c| prov.dereference(&MirScalarExpr::Column(*c)))
                             .collect_vec();
                         prov.dereferenced_projection = projection;
+
+                        // if all predicates in exact are supported by outputs renumber them, else set to None
+                        // If all exact predicates are supported by `group_key` renumber, otherwise set to `None`
+                        if let Some(predicates) = &mut prov.exact {
+                            if predicates
+                                .iter()
+                                .all(|expr| expr.support().iter().all(|c| outputs.contains(c)))
+                            {
+                                for expr in predicates.iter_mut() {
+                                    expr.visit_pre_mut(|e| {
+                                        if let MirScalarExpr::Column(c) = e {
+                                            *c = outputs.iter().position(|k| k == c).unwrap();
+                                        }
+                                    })
+                                }
+                            } else {
+                                prov.exact = None;
+                            }
+                        }
                     }
                     Ok(result)
                 }
@@ -397,7 +454,7 @@ impl RedundantJoin {
                     // FlatMap may drop records, and so we unset `exact`.
                     let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
-                        prov.exact = false;
+                        prov.exact = None;
                         prov.dereferenced_projection
                             .extend((0..func.output_type().column_types.len()).map(|_| None));
                     }
@@ -412,7 +469,7 @@ impl RedundantJoin {
                     // "exact": cancellations would make this false.
                     let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
-                        prov.exact = false;
+                        prov.exact = None;
                     }
                     Ok(result)
                 }
@@ -454,7 +511,7 @@ pub struct ProvInfo {
     /// If true, all distinct projected source rows are present in the rows of
     /// the projection of the current collection. This constraint is lost as soon
     /// as a transformation may drop records.
-    exact: bool,
+    exact: Option<Vec<MirScalarExpr>>,
 }
 
 impl ProvInfo {
@@ -464,7 +521,7 @@ impl ProvInfo {
             dereferenced_projection: (0..arity)
                 .map(|c| Some(MirScalarExpr::column(c)))
                 .collect::<Vec<_>>(),
-            exact: true,
+            exact: Some(Vec::new()),
         }
     }
 
@@ -551,7 +608,8 @@ impl ProvInfo {
                 Some(ProvInfo {
                     id: self.id,
                     dereferenced_projection: resulting_projection,
-                    exact: self.exact && other.exact,
+                    // exact: self.exact && other.exact,
+                    exact: None,
                 })
             } else {
                 None
@@ -590,7 +648,7 @@ fn find_redundancy(
     input_mapper: &JoinInputMapper,
     equivalences: &[Vec<MirScalarExpr>],
     input_provs: &[Vec<ProvInfo>],
-) -> Option<Vec<MirScalarExpr>> {
+) -> Option<(Vec<MirScalarExpr>, Vec<MirScalarExpr>)> {
     // Whether the `equivalence` contains an expression that only references
     // `input` that leads to the same as `root_expr` once dereferenced.
     let contains_equivalent_expr_from_input = |equivalence: &[MirScalarExpr],
@@ -608,12 +666,13 @@ fn find_redundancy(
     };
     for input_prov in input_provs[input].iter() {
         // We can only elide if the input contains all records, and binds all columns.
-        if input_prov.exact
-            && input_prov
+        if let (Some(predicates), true) = (
+            &input_prov.exact,
+            input_prov
                 .dereferenced_projection
                 .iter()
-                .all(|e| e.is_some())
-        {
+                .all(|e| e.is_some()),
+        ) {
             // examine all *other* inputs that have not been removed...
             for other in (0..input_mapper.total_inputs()).filter(|other| other != &input) {
                 for other_prov in input_provs[other].iter().filter(|p| p.id == input_prov.id) {
@@ -672,8 +731,22 @@ fn find_redundancy(
                                 )
                             })
                             .collect_vec();
-                        if expressions.len() == input_prov.dereferenced_projection.len() {
-                            return Some(expressions);
+
+                        let preds = predicates
+                            .iter()
+                            .flat_map(|e| {
+                                try_build_expression_using_other(
+                                    &input_prov.dereference(e).unwrap(),
+                                    other,
+                                    other_prov,
+                                    input_mapper,
+                                )
+                            })
+                            .collect_vec();
+                        if expressions.len() == input_prov.dereferenced_projection.len()
+                            && preds.len() == predicates.len()
+                        {
+                            return Some((expressions, preds));
                         }
                     }
                 }

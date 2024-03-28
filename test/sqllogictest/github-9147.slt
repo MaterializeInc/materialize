@@ -17,17 +17,11 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE 1 in (SELECT 1 FROM (VALUES (0)) CONSTANT WHERE f1 > 1);
 ----
 Explained Query:
-  Project (#0, #1) // { arity: 2 }
-    Join on=(#0 = #2) type=differential // { arity: 3 }
-      implementation
-        %1[#0]UKA » %0:t1[#0]K
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        ReadStorage materialize.public.t1 // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Distinct project=[#0] // { arity: 1 }
-          Project (#0) // { arity: 1 }
-            Filter (#0 > 1) // { arity: 2 }
-              ReadStorage materialize.public.t1 // { arity: 2 }
+  Filter (#0 > 1) // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
+
+Source materialize.public.t1
+  filter=((#0 > 1))
 
 EOF
 

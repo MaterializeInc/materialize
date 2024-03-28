@@ -434,19 +434,12 @@ materialize.public.q04_primary_idx:
 materialize.public.q04:
   Reduce group_by=[#0{o_orderpriority}] aggregates=[count(*)] // { arity: 2 }
     Project (#5) // { arity: 1 }
-      Filter (#4{o_orderdate} >= 1993-07-01) AND (date_to_timestamp(#4{o_orderdate}) < 1993-10-01 00:00:00) // { arity: 11 }
-        Join on=(#0{o_orderkey} = #9{o_orderkey} = #10{l_orderkey}) type=delta // { arity: 11 }
+      Filter (#4{o_orderdate} >= 1993-07-01) AND (#0{o_orderkey}) IS NOT NULL AND (date_to_timestamp(#4{o_orderdate}) < 1993-10-01 00:00:00) // { arity: 10 }
+        Join on=(#0{o_orderkey} = #9{l_orderkey}) type=differential // { arity: 10 }
           implementation
-            %0:orders » %1[#0]UKA » %2[#0]UKA
-            %1 » %2[#0]UKA » %0:orders[#0]KAiif
-            %2 » %1[#0]UKA » %0:orders[#0]KAiif
+            %1[#0]UKA » %0:orders[#0]KAiif
           ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 9 }
-            ReadIndex on=orders pk_orders_orderkey=[delta join 1st input (full scan)] // { arity: 9 }
-          ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 1 }
-            Distinct project=[#0{o_orderkey}] // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Filter (#4{o_orderdate} >= 1993-07-01) AND (#0{o_orderkey}) IS NOT NULL AND (date_to_timestamp(#4{o_orderdate}) < 1993-10-01 00:00:00) // { arity: 9 }
-                  ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
+            ReadIndex on=orders pk_orders_orderkey=[differential join] // { arity: 9 }
           ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 1 }
             Distinct project=[#0{l_orderkey}] // { arity: 1 }
               Project (#0) // { arity: 1 }
@@ -454,7 +447,7 @@ materialize.public.q04:
                   ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
 
 Used Indexes:
-  - materialize.public.pk_orders_orderkey (*** full scan ***, delta join 1st input (full scan))
+  - materialize.public.pk_orders_orderkey (differential join)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
