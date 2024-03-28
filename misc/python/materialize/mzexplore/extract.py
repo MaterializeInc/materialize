@@ -17,15 +17,18 @@ import textwrap
 from contextlib import closing
 from pathlib import Path
 
+import pandas as pd
 from pg8000.dbapi import DatabaseError
 
 from materialize.mzexplore import sql
 from materialize.mzexplore.common import (
+    ArrangementSizesFile,
     CreateFile,
     ExplaineeType,
     ExplainFile,
     ExplainFlag,
     ExplainFormat,
+    ExplainOption,
     ExplainStage,
     ItemType,
     info,
@@ -78,7 +81,7 @@ def defs(
         # Extract materialized view definitions
         # -------------------------------------
 
-        for item in db.catalog_items(database, schema, name):
+        for item in db.catalog_items(database, schema, name, system=False):
             item_database = sql.identifier(item["database"])
             item_schema = sql.identifier(item["schema"])
             item_name = sql.identifier(item["name"])
@@ -130,10 +133,11 @@ def plans(
     db_pass: str | None,
     db_require_ssl: bool,
     explainee_type: ExplaineeType,
-    explain_flags: list[ExplainFlag],
+    explain_options: list[ExplainFlag] | list[ExplainOption],
     explain_stages: set[ExplainStage],
     explain_format: ExplainFormat,
     suffix: str | None = None,
+    system: bool = False,
 ) -> None:
     """
     Extract EXPLAIN plans for selected catalog items.
@@ -146,9 +150,18 @@ def plans(
     # actually a list) into a set explicitly.
     explain_stages = set(explain_stages)
 
-    if not explain_flags:
+    explain_options = [
+        (
+            ExplainOption(key=flag_or_opt.name)
+            if isinstance(flag_or_opt, ExplainFlag)
+            else flag_or_opt  # already an ExplainOption
+        )
+        for flag_or_opt in explain_options
+    ]
+
+    if not explain_options:
         # We should have at least arity for good measure.
-        explain_flags = [ExplainFlag.ARITY]
+        explain_options = [ExplainOption(key=ExplainFlag.ARITY.name)]
 
     with closing(
         sql.Database(
@@ -160,11 +173,14 @@ def plans(
             require_ssl=db_require_ssl,
         )
     ) as db:
-        for item in db.catalog_items(database, schema, name):
+        for item in db.catalog_items(database, schema, name, system):
             item_database = sql.identifier(item["database"])
             item_schema = sql.identifier(item["schema"])
             item_name = sql.identifier(item["name"])
-            fqname = f"{item_database}.{item_schema}.{item_name}"
+            if item["database"] == "mz":  # don't prepend pseudo-database `mz`
+                fqname = f"{item_schema}.{item_name}"
+            else:
+                fqname = f"{item_database}.{item_schema}.{item_name}"
 
             try:
                 item_type = ItemType(item["type"])
@@ -201,7 +217,7 @@ def plans(
                                 db,
                                 stage,
                                 explainee,
-                                explain_flags,
+                                explain_options,
                                 explain_format,
                             )
                         except DatabaseError as e:
@@ -249,7 +265,7 @@ def plans(
                             db,
                             stage,
                             explainee,
-                            explain_flags,
+                            explain_options,
                             explain_format,
                         )
                     except DatabaseError as e:
@@ -281,7 +297,7 @@ def plans(
                                 db,
                                 stage,
                                 explainee,
-                                explain_flags,
+                                explain_options,
                                 explain_format,
                             )
                         except DatabaseError as e:
@@ -297,6 +313,100 @@ def plans(
                     file.write(plan)
 
 
+def arrangement_sizes(
+    target: Path,
+    cluster: str,
+    cluster_replica: str,
+    database: str,
+    schema: str,
+    name: str,
+    db_port: int,
+    db_host: str,
+    db_user: str,
+    db_pass: str | None,
+    db_require_ssl: bool,
+    print_results: bool,
+) -> None:
+    """
+    Extract arrangement sizes for selected catalog items.
+    """
+
+    # Ensure that the target dir exists.
+    target.mkdir(parents=True, exist_ok=True)
+
+    with closing(
+        sql.Database(
+            port=db_port,
+            host=db_host,
+            user=db_user,
+            database=None,
+            password=db_pass,
+            require_ssl=db_require_ssl,
+        )
+    ) as db:
+        # Extract materialized view definitions
+        # -------------------------------------
+
+        with sql.update_environment(
+            db,
+            env=dict(
+                cluster=cluster,
+                cluster_replica=cluster_replica,
+            ),
+        ) as db:
+            for item in db.catalog_items(database, schema, name, system=False):
+                item_database = sql.identifier(item["database"])
+                item_schema = sql.identifier(item["schema"])
+                item_name = sql.identifier(item["name"])
+                fqname = f"{item_database}.{item_schema}.{item_name}"
+
+                try:
+                    item_type = ItemType(item["type"])
+                except ValueError:
+                    warn(f"Unsupported item type `{item['type']}` for {fqname}")
+                    continue
+
+                output_file = ArrangementSizesFile(
+                    database=item["database"],
+                    schema=item["schema"],
+                    name=item["name"],
+                    item_type=item_type,
+                )
+
+                if output_file.skip():
+                    continue
+
+                try:
+                    info(
+                        f"Extracting {item_type.sql()} arrangement sizes "
+                        f"in `{output_file.path()}`"
+                    )
+
+                    # Extract arrangement sizes into a DataFrame.
+                    df = pd.DataFrame.from_records(
+                        db.arrangement_sizes(item["id"]),
+                        coerce_float=True,
+                    )
+
+                    if not df.empty:
+                        # Compute a `total` row of numeric columns.
+                        df.loc["total"] = df.sum(numeric_only=True)
+
+                    if print_results:  # Print results if requested.
+                        print(df.to_string())
+
+                    # Ensure that the parent folder exists.
+                    (target / output_file.folder()).mkdir(parents=True, exist_ok=True)
+
+                    # Write CSV to the output file.
+                    with (target / output_file.path()).open("w") as file:
+                        file.write(df.to_string())
+                        # df.to_csv(file, index=False, quoting=csv.QUOTE_MINIMAL)
+
+                except DatabaseError as e:
+                    warn(f"Cannot export def {fqname}: {e}")
+
+
 # Utility methods
 # ---------------
 
@@ -305,14 +415,14 @@ def explain(
     db: sql.Database,
     explain_stage: ExplainStage,
     explainee: str,
-    explain_flags: list[ExplainFlag],
+    explain_options: list[ExplainOption],
     explain_format: ExplainFormat,
 ) -> str:
     explain_query = "\n".join(
         line
         for line in [
             f"EXPLAIN {explain_stage}",
-            f"WITH({', '.join(map(str, explain_flags))})" if explain_flags else "",
+            f"WITH({', '.join(map(str, explain_options))})" if explain_options else "",
             f"AS {explain_format} FOR",
             explainee,
         ]
@@ -335,19 +445,54 @@ def explain(
 
 def explain_item(item_type: ItemType, fqname: str, replan: bool) -> str | None:
     prefix = "REPLAN" if replan else ""
-    if item_type == ItemType.MATERIALIZED_VIEW:
-        return " ".join((prefix, "MATERIALIZED VIEW", fqname))
-    if item_type == ItemType.INDEX:
-        return " ".join((prefix, "INDEX", fqname))
+    if item_type in {ItemType.MATERIALIZED_VIEW, ItemType.VIEW, ItemType.INDEX}:
+        return " ".join((prefix, item_type.sql(), fqname)).strip()
     else:
         return None
 
 
 def supported_explain_stages(item_type: ItemType, optimize: bool) -> set[ExplainStage]:
-    if item_type in {ItemType.MATERIALIZED_VIEW, ItemType.INDEX}:
+    if item_type == ItemType.MATERIALIZED_VIEW:
         if optimize:
-            return set(ExplainStage)
+            return {
+                ExplainStage.RAW_PLAN,
+                ExplainStage.DECORRELATED_PLAN,
+                ExplainStage.LOCAL_PLAN,
+                ExplainStage.OPTIMIZED_PLAN,
+                ExplainStage.PHYSICAL_PLAN,
+                ExplainStage.OPTIMIZER_TRACE,
+            }
         else:
-            return set([ExplainStage.OPTIMIZED_PLAN, ExplainStage.PHYSICAL_PLAN])
+            return {
+                ExplainStage.RAW_PLAN,
+                ExplainStage.LOCAL_PLAN,
+                ExplainStage.OPTIMIZED_PLAN,
+                ExplainStage.PHYSICAL_PLAN,
+            }
+    elif item_type == ItemType.VIEW:
+        if optimize:
+            return {
+                ExplainStage.RAW_PLAN,
+                ExplainStage.DECORRELATED_PLAN,
+                ExplainStage.LOCAL_PLAN,
+                ExplainStage.OPTIMIZER_TRACE,
+            }
+        else:
+            return {
+                ExplainStage.RAW_PLAN,
+                ExplainStage.LOCAL_PLAN,
+            }
+    elif item_type == ItemType.INDEX:
+        if optimize:
+            return {
+                ExplainStage.OPTIMIZED_PLAN,
+                ExplainStage.PHYSICAL_PLAN,
+                ExplainStage.OPTIMIZER_TRACE,
+            }
+        else:
+            return {
+                ExplainStage.OPTIMIZED_PLAN,
+                ExplainStage.PHYSICAL_PLAN,
+            }
     else:
         return set()

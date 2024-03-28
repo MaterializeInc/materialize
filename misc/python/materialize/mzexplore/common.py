@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import re
 from dataclasses import dataclass, replace
 from enum import Enum
 from importlib import resources
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import cast
 
 import click
+from pg8000.native import literal
 
 
 class ExplaineeType(Enum):
@@ -46,6 +48,7 @@ class ExplainFormat(Enum):
 class ExplainStage(str, Enum):
     RAW_PLAN = "RAW PLAN"
     DECORRELATED_PLAN = "DECORRELATED PLAN"
+    LOCAL_PLAN = "LOCALLY OPTIMIZED PLAN"
     OPTIMIZED_PLAN = "OPTIMIZED PLAN"
     PHYSICAL_PLAN = "PHYSICAL PLAN"
     OPTIMIZER_TRACE = "OPTIMIZER TRACE"
@@ -54,7 +57,8 @@ class ExplainStage(str, Enum):
         return self.value
 
 
-class ExplainFlag(Enum):
+# TODO(aalexandrov): remove this type and its uses (use ExplainOption instead)
+class ExplainFlag(str, Enum):
     # Show the number of columns.
     ARITY = "ARITY"
     # Show cardinality information.
@@ -107,16 +111,88 @@ class ExplainFlag(Enum):
         return self.value
 
 
+@dataclass(frozen=True)
+class ExplainOption:
+    key: str
+    val: str | bool | int | None = None
+
+    def __str__(self):
+        key = self.key.replace("_", " ").upper()
+        if self.val is None:
+            return f"{key}"
+        else:
+            return f"{key} = {literal(self.val)}"  # type: ignore
+
+
+class ExplainOptionType(click.ParamType):
+    name = "ExplainOption"
+
+    pattern = re.compile(
+        r"(?P<key>[a-z0-9_]+)(\s*=\s*(?P<val>[a-z0-9_]+))?",
+        re.IGNORECASE,
+    )
+
+    def convert(self, value, param, ctx):  # type: ignore
+        m = ExplainOptionType.pattern.match(value)
+        try:
+            if m is None:
+                raise ValueError(f"bad {self.name} format")
+
+            key = str(m.group("key"))
+            val = str(m.group("val")) if m.group("val") else None
+
+            if val is None:
+                return ExplainOption(
+                    key=key,
+                    val=None,
+                )
+
+            try:  # try converting to bool
+                bool_values = dict(
+                    on=True,
+                    true=True,
+                    yes=True,
+                    y=True,
+                    off=False,
+                    false=False,
+                    no=False,
+                    n=False,
+                )
+                return ExplainOption(
+                    key=key,
+                    val=bool_values[val.lower()],
+                )
+            except KeyError:
+                pass
+
+            try:  # try converting to integer
+                return ExplainOption(
+                    key=key,
+                    val=int(val),
+                )
+            except ValueError:
+                pass
+
+            # cannot convert: use a single-quoted string
+            return ExplainOption(
+                key=key,
+                val=val,
+            )
+        except Exception as e:
+            raise ValueError(f"Bad explain option: {value}: {e!r}") from e
+
+
 class ItemType(str, Enum):
     CONNECTION = "connection"
+    FUNCTION = "function"
     INDEX = "index"
     MATERIALIZED_VIEW = "materialized-view"
     SECRET = "secret"
     SINK = "sink"
     SOURCE = "source"
     TABLE = "table"
-    VIEW = "view"
     TYPE = "type"
+    VIEW = "view"
 
     def sql(self) -> str:
         """Return the SQL string corresponding to this item type."""
@@ -241,6 +317,29 @@ def explain_file(path: Path) -> ExplainFile | None:
 
 def explain_diff(base: ExplainFile, diff_suffix: str) -> ExplainFile:
     return replace(base, explainee_type=ExplaineeType.REPLAN_ITEM, suffix=diff_suffix)
+
+
+@dataclass(frozen=True)
+class ArrangementSizesFile:
+    database: str
+    schema: str
+    name: str
+    item_type: ItemType
+
+    def file_name(self) -> str:
+        return f"{self.name}.arrangement-sizes.txt"
+
+    def folder(self) -> Path:
+        return Path(self.item_type.value, self.database, self.schema)
+
+    def path(self) -> Path:
+        return self.folder() / self.file_name()
+
+    def __str__(self) -> str:
+        return str(self.path())
+
+    def skip(self) -> bool:
+        return self.item_type not in {ItemType.MATERIALIZED_VIEW, ItemType.INDEX}
 
 
 def resource_path(name: str) -> Path:

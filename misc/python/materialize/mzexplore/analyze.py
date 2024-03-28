@@ -72,12 +72,12 @@ def changes(
             out.write(
                 dedent(
                     f"""
-                    - TODO(REGRESSION|IMPROVEMENT) in {item_type} `{database}.{schema}.{name}`
+                    - TODO(REGRESSION|IMPROVEMENT) in {item_type.sql()} `{database}.{schema}.{name}`
 
                       ```bash
                       code --diff \\
-                          {str(base)} \\
-                          {str(diff)}
+                          {target / base.path()} \\
+                          {target / diff.path()}
                       ```
 
                     """

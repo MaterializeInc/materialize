@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import contextlib
 import functools
 import logging
 import ssl
@@ -72,14 +73,19 @@ class Database:
             for row in cursor.fetchall():
                 yield {key: val for key, val in zip(cols, row)}
 
+    def execute(self, statement: str) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(statement)
+
     def catalog_items(
         self,
         database: str | None = None,
         schema: str | None = None,
         name: str | None = None,
+        system: bool = False,
     ) -> DictGenerator:
-        # Warning: this is not sanitizing the input!
-        q = parse_query(resource_path("catalog/items.sql"))
+        p = resource_path("catalog/s_items.sql" if system else "catalog/u_items.sql")
+        q = parse_query(p)
         yield from self.query_all(
             q.format(
                 database="'%'" if database is None else literal(database),
@@ -87,6 +93,51 @@ class Database:
                 name="'%'" if name is None else literal(name),
             )
         )
+
+    def object_clusters(
+        self,
+        object_ids: list[str],
+    ) -> DictGenerator:
+        p = resource_path("catalog/u_object_clusters.sql")
+        q = parse_query(p)
+        yield from self.query_all(
+            q.format(object_ids=", ".join(map(literal, object_ids)))
+        )
+
+    def clone_dependencies(
+        self,
+        source_ids: list[str],
+        cluster_id: str,
+    ) -> DictGenerator:
+        p = resource_path("catalog/u_clone_dependencies.sql")
+        q = parse_query(p)
+        yield from self.query_all(
+            q.format(
+                source_ids=", ".join(map(literal, source_ids)),
+                cluster_id=literal(cluster_id),
+            )
+        )
+
+    def arrangement_sizes(self, id: str) -> DictGenerator:
+        p = resource_path("catalog/u_arrangement_sizes.sql")
+        q = parse_query(p)
+        yield from self.query_all(q.format(id=literal(id)))
+
+
+@contextlib.contextmanager
+def update_environment(
+    db: Database, env: dict[str, str]
+) -> Generator[Database, None, None]:
+    original = dict()
+    for e in db.query_all("SHOW ALL"):
+        key, old_value = e["name"], e["setting"]
+        if key in env:
+            original[key] = old_value
+            new_value = env[key]
+            db.execute(f"SET {identifier(key)} = {literal(new_value)}")
+    yield db
+    for key, old_value in original.items():
+        db.execute(f"SET {identifier(key)} = {literal(old_value)}")
 
 
 # Utility functions
@@ -99,7 +150,7 @@ def parse_from_file(path: Path) -> list[str]:
 
 
 def parse_query(path: Path) -> str:
-    """Parses a *.sql file to a list of queries."""
+    """Parses a *.sql file to a single query."""
     queries = parse_from_file(path)
     assert len(queries) == 1, f"Exactly one query expected in {path}"
     return queries[0]
@@ -121,7 +172,7 @@ def try_mzfmt(sql: str) -> str:
         return sql.rstrip().rstrip(";")
 
 
-def identifier(s: str) -> str:
+def identifier(s: str, force_quote: bool = False) -> str:
     """
     A version of pg8000.native.identifier (1) that is _ACTUALLY_ compatible with
     the Postgres code (2).
@@ -160,7 +211,7 @@ def identifier(s: str) -> str:
     if s.upper() in keywords():
         quote = True
 
-    if quote:
+    if quote or force_quote:
         s = s.replace('"', '""')
         return f'"{s}"'
     else:
