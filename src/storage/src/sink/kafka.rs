@@ -74,21 +74,26 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use maplit::btreemap;
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
-use mz_kafka_util::client::{MzClientContext, TunnelingClientContext};
+use mz_kafka_util::client::{
+    GetPartitionsError, MzClientContext, TimeoutConfig, TunnelingClientContext,
+};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
-use mz_storage_client::sink::{ProgressRecord, TopicCleanupPolicy, TopicConfig};
+use mz_storage_client::sink::{TopicCleanupPolicy, TopicConfig};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
@@ -98,12 +103,14 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::KafkaError;
-use rdkafka::message::{Header, OwnedHeaders};
+use rdkafka::message::{Header, OwnedHeaders, ToBytes};
 use rdkafka::metadata::Metadata;
 use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
 use rdkafka::types::RDKafkaErrorCode;
-use rdkafka::Statistics;
+use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
+use serde::{Deserialize, Deserializer, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
@@ -527,12 +534,8 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             .await?;
             // Instantiating the transactional producer fences out all previous ones, making it
             // safe to determine the resume upper.
-            let resume_upper = mz_storage_client::sink::determine_sink_resume_upper(
-                sink_id,
-                &connection,
-                &storage_configuration,
-            )
-            .await?;
+            let resume_upper =
+                determine_sink_resume_upper(sink_id, &connection, &storage_configuration).await?;
 
             let resume_upper = match resume_upper {
                 Some(upper) => {
@@ -719,6 +722,324 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     (statuses, button.press_on_drop())
 }
 
+/// Determines the latest progress record from the specified topic for the given
+/// progress key.
+///
+/// IMPORTANT: to achieve exactly once guarantees, the producer that will resume
+/// production at the returned timestamp *must* have called `init_transactions`
+/// prior to calling this method.
+async fn determine_sink_resume_upper(
+    sink_id: GlobalId,
+    connection: &KafkaSinkConnection,
+    storage_configuration: &StorageConfiguration,
+) -> Result<Option<Antichain<Timestamp>>, ContextCreationError> {
+    // ****************************** WARNING ******************************
+    // Be VERY careful when editing the code in this function. It is very easy
+    // to accidentally introduce a correctness or liveness bug when refactoring
+    // this code.
+    // ****************************** WARNING ******************************
+
+    let TimeoutConfig {
+        fetch_metadata_timeout,
+        progress_record_fetch_timeout,
+        ..
+    } = storage_configuration.parameters.kafka_timeout_config;
+
+    let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
+    let group_id = connection.progress_group_id(&storage_configuration.connection_context, sink_id);
+    let progress_topic = connection
+        .progress_topic(&storage_configuration.connection_context)
+        .into_owned();
+    let progress_key = ProgressKey::new(sink_id);
+
+    let common_options = btreemap! {
+        // Consumer group ID, which may have been overridden by the user. librdkafka requires this,
+        // even though we'd prefer to disable the consumer group protocol entirely.
+        "group.id" => group_id,
+        // Allow Kafka monitoring tools to identify this consumer.
+        "client.id" => client_id,
+        "enable.auto.commit" => "false".into(),
+        "auto.offset.reset" => "earliest".into(),
+        // The fetch loop below needs EOF notifications to reliably detect that we have reached the
+        // high watermark.
+        "enable.partition.eof" => "true".into(),
+    };
+
+    // Construct two cliens in read committed and read uncommitted isolations respectively. See
+    // comment below for an explanation on why we need it.
+    let progress_client_read_committed: BaseConsumer<_> = {
+        let mut opts = common_options.clone();
+        opts.insert("isolation.level", "read_committed".into());
+        let ctx = MzClientContext::default();
+        connection
+            .connection
+            .create_with_context(storage_configuration, ctx, &opts)
+            .await?
+    };
+
+    let progress_client_read_uncommitted: BaseConsumer<_> = {
+        let mut opts = common_options;
+        opts.insert("isolation.level", "read_uncommitted".into());
+        let ctx = MzClientContext::default();
+        connection
+            .connection
+            .create_with_context(storage_configuration, ctx, &opts)
+            .await?
+    };
+
+    let ctx = Arc::clone(progress_client_read_committed.client().context());
+
+    // Ensure the progress topic exists.
+    mz_storage_client::sink::ensure_kafka_topic(
+        connection,
+        storage_configuration,
+        &progress_topic,
+        TopicConfig {
+            partition_count: 1,
+            // TODO: introduce and use `PROGRESS TOPIC REPLICATION FACTOR`
+            // on Kafka connections.
+            replication_factor: -1,
+            cleanup_policy: TopicCleanupPolicy::Compaction,
+        },
+    )
+    .await
+    .add_context("error registering kafka progress topic for sink")?;
+
+    let task_name = format!("get_latest_ts:{sink_id}");
+    task::spawn_blocking(|| task_name, move || {
+        let progress_topic = progress_topic.as_ref();
+        // Ensure the progress topic has exactly one partition. Kafka only
+        // guarantees ordering within a single partition, and we need a strict
+        // order on the progress messages we read and write.
+        let partitions = match mz_kafka_util::client::get_partitions(
+            progress_client_read_committed.client(),
+            progress_topic,
+            fetch_metadata_timeout,
+        ) {
+            Ok(partitions) => partitions,
+            Err(GetPartitionsError::TopicDoesNotExist) => {
+                // The progress topic doesn't exist, which indicates there is
+                // no committed timestamp.
+                return Ok(None);
+            }
+            e => e.with_context(|| {
+                format!(
+                    "Unable to fetch metadata about progress topic {}",
+                    progress_topic
+                )
+            })?,
+        };
+        if partitions.len() != 1 {
+            bail!(
+                    "Progress topic {} should contain a single partition, but instead contains {} partitions",
+                    progress_topic, partitions.len(),
+                );
+        }
+        let partition = partitions.into_element();
+
+        // We scan from the beginning and see if we can find a progress record. We have
+        // to do it like this because Kafka Control Batches mess with offsets. We
+        // therefore cannot simply take the last offset from the back and expect a
+        // progress message there. With a transactional producer, the OffsetTail(1) will
+        // not point to an progress message but a control message. With aborted
+        // transactions, there might even be a lot of garbage at the end of the
+        // topic or in between.
+
+        // First, determine the current high water mark for the progress topic.
+        // This is the position our `progress_client` consumer *must* reach
+        // before we can conclude that we've seen the latest progress record for
+        // the specified `progress_key`. A safety argument:
+        //
+        //   * Our caller has initialized transactions before calling this
+        //     method, which prevents the prior incarnation of this sink from
+        //     committing any further progress records.
+        //
+        //   * We use `read_uncommitted` isolation to ensure that we fetch the
+        //     true high water mark for the topic, even if there are pending
+        //     transactions in the topic. If we used the `read_committed`
+        //     isolation level, we'd instead get the "last stable offset" (LSO),
+        //     which is the offset of the first message in an open transaction,
+        //     which might not include the last progress message committed for
+        //     this sink! (While the caller of this function has fenced out
+        //     older producers for this sink, *other* sinks writing using the
+        //     same progress topic might have long-running transactions that
+        //     hold back the LSO.)
+        //
+        //   * If another sink spins up and fences out the producer for this
+        //     incarnation of the sink, we may not see the latest progress
+        //     record... but since the producer has been fenced out, it will be
+        //     unable to act on our stale information.
+        //
+        let (lo, hi) = progress_client_read_uncommitted
+            .fetch_watermarks(progress_topic, partition, fetch_metadata_timeout)
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to fetch metadata while reading from progress topic: {}",
+                    e
+                )
+            })?;
+
+        // Seek to the beginning of the progress topic.
+        let mut tps = TopicPartitionList::new();
+        tps.add_partition(progress_topic, partition);
+        tps.set_partition_offset(progress_topic, partition, Offset::Beginning)?;
+        progress_client_read_committed
+            .assign(&tps)
+            .with_context(|| {
+                format!(
+                    "Error seeking in progress topic {}:{}",
+                    progress_topic, partition
+                )
+            })?;
+
+        // Helper to get the progress consumer's current position.
+        let get_position = || {
+            let position = progress_client_read_committed
+                .position()?
+                .find_partition(progress_topic, partition)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "No position info found for progress topic {}",
+                        progress_topic
+                    )
+                })?
+                .offset();
+            match position {
+                Offset::Offset(position) => Ok(position),
+                // An invalid offset indicates the consumer has not yet read a
+                // message. Since we assigned the consumer to the beginning of
+                // the topic, it's safe to return 0 here, which indicates the
+                // position before the first possible message.
+                Offset::Invalid => Ok(0),
+                _ => bail!(
+                    "Consumer::position returned offset of wrong type: {:?}",
+                    position
+                ),
+            }
+        };
+
+        info!("fetching latest progress record for {progress_key}, lo/hi: {lo}/{hi}");
+
+        // Read messages until the consumer is positioned at or beyond the high
+        // water mark.
+        //
+        // We use `read_committed` isolation to ensure we don't see progress
+        // records for transactions that did not commit. This means we have to
+        // wait for the LSO to progress to the high water mark `hi`, which means
+        // waiting for any open transactions for other sinks using the same
+        // progress topic to complete. We set a short transaction timeout (10s)
+        // to ensure we never need to wait more than 10s.
+        //
+        // Note that the stall time on the progress topic is not a function of
+        // transaction size. We've designed our transactions so that the
+        // progress record is always written last, after all the data has been
+        // written, and so the window of time in which the progress topic has an
+        // open transaction is quite small. The only vulnerability is if another
+        // sink using the same progress topic crashes in that small window
+        // between writing the progress record and committing the transaction,
+        // in which case we have to wait out the transaction timeout.
+        //
+        // Important invariant: we only exit this loop successfully (i.e., not
+        // returning an error) if we have positive proof of a position at or
+        // beyond the high water mark. To make this invariant easy to check, do
+        // not use `break` in the body of the loop.
+        let mut last_upper = None;
+        while get_position()? < hi {
+            let message = match progress_client_read_committed.poll(progress_record_fetch_timeout) {
+                Some(Ok(message)) => message,
+                Some(Err(KafkaError::PartitionEOF(_))) => {
+                    // No message, but the consumer's position may have advanced
+                    // past a transaction control message that positions us at
+                    // or beyond the high water mark. Go around the loop again
+                    // to check.
+                    continue;
+                }
+                Some(Err(e)) => bail!("failed to fetch progress message {e}"),
+                None => {
+                    bail!(
+                        "timed out while waiting to reach high water mark of non-empty \
+                         topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}"
+                    );
+                }
+            };
+
+            if message.key() != Some(progress_key.to_bytes()) {
+                // This is a progress message for a different sink.
+                continue;
+            }
+
+            let Some(payload) = message.payload() else {
+                continue
+            };
+            let upper = parse_progress_record(payload)?;
+
+            match last_upper {
+                Some(last_upper) if !PartialOrder::less_equal(&last_upper, &upper) => {
+                    bail!(
+                        "upper regressed in topic {progress_topic}:{partition} \
+                        from {last_upper:?} to {upper:?}"
+                    );
+                }
+                _ => last_upper = Some(upper),
+            }
+        }
+
+        // If we get here, we are assured that we've read all messages up to
+        // the high water mark, and therefore `last_timestamp` contains the
+        // most recent timestamp for the sink under consideration.
+        Ok(last_upper)
+    }).await.unwrap().check_ssh_status(&ctx)
+}
+
+/// This is the legacy struct that used to be emitted as part of a transactional produce and
+/// contains the largest timestamp within the batch committed. Since it is just a timestamp it
+/// cannot encode the fact that a sink has finished and deviates from upper frontier semantics.
+/// Materialize no longer produces this record but it's possible that we encounter this in topics
+/// written by older versions. In those cases we convert it into upper semantics by stepping the
+/// timestamp forward.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct LegacyProgressRecord {
+    // Double Option to tell apart an omitted field from one set to null explicitly
+    // https://github.com/serde-rs/serde/issues/984
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub timestamp: Option<Option<Timestamp>>,
+}
+
+// Any value that is present is considered Some value, including null.
+fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
+/// This struct is emitted as part of a transactional produce, and contains the upper frontier of
+/// the batch committed. It is used to recover the frontier a sink needs to resume at.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProgressRecord {
+    pub frontier: Vec<Timestamp>,
+}
+
+fn parse_progress_record(payload: &[u8]) -> Result<Antichain<Timestamp>, anyhow::Error> {
+    Ok(match serde_json::from_slice::<ProgressRecord>(payload) {
+        Ok(progress) => Antichain::from(progress.frontier),
+        // If we fail to deserialize we might be reading a legacy progress record
+        Err(_) => match serde_json::from_slice::<LegacyProgressRecord>(payload) {
+            Ok(LegacyProgressRecord {
+                timestamp: Some(Some(time)),
+            }) => Antichain::from_elem(time.step_forward()),
+            Ok(LegacyProgressRecord {
+                timestamp: Some(None),
+            }) => Antichain::new(),
+            _ => match std::str::from_utf8(payload) {
+                Ok(payload) => bail!("invalid progress record: {payload}"),
+                Err(_) => bail!("invalid progress record bytes: {payload:?}"),
+            },
+        },
+    })
+}
+
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
 ///
 /// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
@@ -817,4 +1138,36 @@ fn encode_collection<G: Scope>(
     });
 
     (stream.as_collection(), statuses, button.press_on_drop())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[mz_ore::test]
+    fn progress_record_migration() {
+        assert!(parse_progress_record(b"{}").is_err());
+
+        assert_eq!(
+            parse_progress_record(b"{\"timestamp\":1}").unwrap(),
+            Antichain::from_elem(2.into()),
+        );
+
+        assert_eq!(
+            parse_progress_record(b"{\"timestamp\":null}").unwrap(),
+            Antichain::new(),
+        );
+
+        assert_eq!(
+            parse_progress_record(b"{\"frontier\":[1]}").unwrap(),
+            Antichain::from_elem(1.into()),
+        );
+
+        assert_eq!(
+            parse_progress_record(b"{\"frontier\":[]}").unwrap(),
+            Antichain::new(),
+        );
+
+        assert!(parse_progress_record(b"{\"frontier\":null}").is_err());
+    }
 }
