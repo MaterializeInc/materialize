@@ -1831,8 +1831,9 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     # can test reconciliation of system indexes too.
     c.sql(
         """
+        ALTER CLUSTER mz_introspection SET (MANAGED = false);
         DROP CLUSTER REPLICA mz_introspection.r1;
-        CREATE CLUSTER REPLICA mz_introspection.replica2 (
+        CREATE CLUSTER REPLICA mz_introspection.r1 (
             STORAGECTL ADDRESSES ['clusterd2:2100'],
             STORAGE ADDRESSES ['clusterd2:2103'],
             COMPUTECTL ADDRESSES ['clusterd2:2101'],
