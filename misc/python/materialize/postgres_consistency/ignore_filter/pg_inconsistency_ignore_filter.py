@@ -39,6 +39,9 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
     PostExecutionInconsistencyIgnoreFilterBase,
     PreExecutionInconsistencyIgnoreFilterBase,
 )
+from materialize.output_consistency.input_data.operations.equality_operations_provider import (
+    TAG_EQUALITY_ORDERING,
+)
 from materialize.output_consistency.input_data.operations.generic_operations_provider import (
     TAG_CASTING,
 )
@@ -141,7 +144,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         if db_function.function_name_in_lower_case in {"min", "max"}:
             return_type_spec = expression.args[0].resolve_return_type_spec()
             if isinstance(return_type_spec, TextReturnTypeSpec):
-                return YesIgnore("#22002: min/max on text different")
+                return YesIgnore("#22002: ordering on text different (min/max)")
 
         if db_function.function_name_in_lower_case == "replace":
             # replace is not working properly with empty text; however, it is not possible to reliably determine if an
@@ -232,6 +235,11 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 return YesIgnore(
                     "#24678: different specification of default DECIMAL type"
                 )
+
+        if db_operation.is_tagged(TAG_EQUALITY_ORDERING):
+            return_type_spec = expression.args[0].resolve_return_type_spec()
+            if isinstance(return_type_spec, TextReturnTypeSpec):
+                return YesIgnore("#22002: ordering on text different (<, <=, ...)")
 
         return NoIgnore()
 
