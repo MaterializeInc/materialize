@@ -25,8 +25,8 @@ use differential_dataflow::trace::Description;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
+use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::Blob;
@@ -38,7 +38,7 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug_span, error, trace_span, warn, Instrument};
+use tracing::{debug_span, error, trace_span, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::MiB;
@@ -89,17 +89,16 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     fn drop(&mut self) {
-        if self.batch.parts.len() > 0 {
-            warn!(
-                "un-consumed Batch, with {} dangling blob keys: {:?}",
-                self.batch.parts.len(),
-                self.batch
-                    .parts
-                    .iter()
-                    .map(|x| &x.key.0)
-                    .collect::<Vec<_>>(),
-            );
-        }
+        soft_assert_or_log!(
+            self.batch.parts.is_empty(),
+            "un-consumed Batch, with {} dangling blob keys: {:?}",
+            self.batch.parts.len(),
+            self.batch
+                .parts
+                .iter()
+                .map(|x| &x.key.0)
+                .collect::<Vec<_>>()
+        );
     }
 }
 
@@ -1152,6 +1151,7 @@ mod tests {
                 _ => panic!("unparseable blob key"),
             }
         }
+        batch.delete().await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -1199,6 +1199,7 @@ mod tests {
                 _ => panic!("unparseable blob key"),
             }
         }
+        batch.delete().await;
     }
 
     #[mz_ore::test]

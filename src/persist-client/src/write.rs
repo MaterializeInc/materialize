@@ -381,13 +381,13 @@ where
         loop {
             let res = self
                 .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone())
-                .await?;
+                .await;
             match res {
-                Ok(()) => {
+                Ok(Ok(())) => {
                     self.upper = upper;
                     return Ok(Ok(()));
                 }
-                Err(mismatch) => {
+                Ok(Err(mismatch)) => {
                     // We tried to to a non-contiguous append, that won't work.
                     if PartialOrder::less_than(&mismatch.current, &lower) {
                         self.upper = mismatch.current.clone();
@@ -414,6 +414,10 @@ where
 
                         return Ok(Ok(()));
                     }
+                }
+                Err(invalid_usage) => {
+                    batch.delete().await;
+                    return Err(invalid_usage);
                 }
             }
         }

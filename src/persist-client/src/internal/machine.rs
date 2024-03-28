@@ -1984,9 +1984,6 @@ pub mod datadriven {
         datadriven: &MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
-        let expected_upper = args.expect_antichain("expected_upper");
-        let new_upper = args.expect_antichain("new_upper");
-
         let mut batches: Vec<Batch<String, (), u64, i64>> = args
             .args
             .get("batches")
@@ -2009,6 +2006,23 @@ pub mod datadriven {
             })
             .collect();
 
+        let res = compare_and_append_batches_inner(datadriven, args, &mut batches).await;
+        if let Err(_) = &res {
+            for batch in batches {
+                batch.delete().await;
+            }
+        }
+        res
+    }
+
+    async fn compare_and_append_batches_inner(
+        datadriven: &MachineState,
+        args: DirectiveArgs<'_>,
+        batches: &mut Vec<Batch<String, (), u64, i64>>,
+    ) -> Result<String, anyhow::Error> {
+        let expected_upper = args.expect_antichain("expected_upper");
+        let new_upper = args.expect_antichain("new_upper");
+
         let mut writer = datadriven
             .client
             .open_writer(
@@ -2021,7 +2035,7 @@ pub mod datadriven {
 
         let mut batch_refs: Vec<_> = batches.iter_mut().collect();
 
-        let () = writer
+        writer
             .compare_and_append_batch(batch_refs.as_mut_slice(), expected_upper, new_upper)
             .await?
             .map_err(|err| anyhow!("upper mismatch: {:?}", err))?;
