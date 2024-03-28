@@ -1036,7 +1036,7 @@ fn add_new_builtin_cluster_replicas_migration(
             let replica_size = match cluster.config.variant {
                 ClusterVariant::Managed(ClusterVariantManaged { ref size, .. }) => size.clone(),
                 ClusterVariant::Unmanaged => {
-                    builtin_cluster_sizes.get_size(builtin_replica.name)?
+                    builtin_cluster_sizes.get_size(builtin_replica.cluster_name)?
                 }
             };
 
