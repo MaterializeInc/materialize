@@ -687,6 +687,8 @@ def run_memory_search(c: Composition, scenario: Scenario) -> None:
     clusterd_memory = scenario.clusterd_memory
     step_size_in_gb = 0.2
 
+    print(f"Starting memory search for scenario {scenario.name}")
+
     materialized_memory, clusterd_memory = find_minimal_memory(
         c,
         scenario,
@@ -705,8 +707,12 @@ def run_memory_search(c: Composition, scenario: Scenario) -> None:
     )
 
     print(f"Found minimal memory for scenario {scenario.name}:")
-    print(f"* materialized_memory={materialized_memory} (specified was: {scenario.materialized_memory})")
-    print(f"* clusterd_memory={clusterd_memory} (specified was: {scenario.clusterd_memory})")
+    print(
+        f"* materialized_memory={materialized_memory} (specified was: {scenario.materialized_memory})"
+    )
+    print(
+        f"* clusterd_memory={clusterd_memory} (specified was: {scenario.clusterd_memory})"
+    )
     print("Consider adding some buffer to avoid flakiness.")
 
 
@@ -732,6 +738,9 @@ def find_minimal_memory(
             # limit undercut
             break
 
+        scenario_desc = f"{scenario.name} with materialized_memory={new_materialized_memory} and clusterd_memory={new_clusterd_memory}"
+
+        print(f"Trying scenario {scenario_desc}")
         success = try_run_scenario(
             c,
             scenario,
@@ -740,9 +749,11 @@ def find_minimal_memory(
         )
 
         if success:
+            print(f"Scenario {scenario_desc} succeeded.")
             materialized_memory = new_materialized_memory
             clusterd_memory = new_clusterd_memory
         else:
+            print(f"Scenario {scenario_desc} failed.")
             break
 
     return materialized_memory, clusterd_memory
