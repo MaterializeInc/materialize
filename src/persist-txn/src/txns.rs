@@ -29,6 +29,8 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::metrics::Metrics;
+#[cfg(test)]
+use crate::tests::TestTxn;
 use crate::txn_cache::{TxnsCache, Unapplied};
 use crate::txn_write::Txn;
 use crate::TxnsCodecDefault;
@@ -186,7 +188,7 @@ where
 
     /// Returns a new, empty transaction that can involve the data shards
     /// registered with this handle.
-    pub fn begin(&self) -> Txn<K, V, D> {
+    pub fn begin(&self) -> Txn<K, V, T, D> {
         // TODO: This is a method on the handle because we'll need WriteHandles
         // once we start spilling to s3.
         Txn::new()
@@ -576,13 +578,26 @@ where
                                 )
                                 .await;
                             }
-                            Unapplied::Batch(batch_raw) => {
-                                crate::apply_caa(&mut data_write, batch_raw, unapplied_ts.clone())
-                                    .await;
-                                // NB: Protos are not guaranteed to exactly roundtrip the
-                                // encoded bytes, so we intentionally use the raw batch so that
-                                // it definitely retracts.
-                                ret.push((batch_raw.clone(), (T::encode(unapplied_ts), data_id)));
+                            Unapplied::Batch(batch_raws) => {
+                                let batch_raws = batch_raws
+                                    .into_iter()
+                                    .map(|batch_raw| batch_raw.as_slice())
+                                    .collect();
+                                crate::apply_caa(
+                                    &mut data_write,
+                                    &batch_raws,
+                                    unapplied_ts.clone(),
+                                )
+                                .await;
+                                for batch_raw in batch_raws {
+                                    // NB: Protos are not guaranteed to exactly roundtrip the
+                                    // encoded bytes, so we intentionally use the raw batch so that
+                                    // it definitely retracts.
+                                    ret.push((
+                                        batch_raw.to_vec(),
+                                        (T::encode(unapplied_ts), data_id),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -704,6 +719,23 @@ where
     /// Returns the [TxnsCache] used by this handle.
     pub fn read_cache(&self) -> &TxnsCache<T, C> {
         &self.txns_cache
+    }
+}
+
+#[cfg(test)]
+impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
+where
+    K: Debug + Codec + Clone,
+    V: Debug + Codec + Clone,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    D: Semigroup + Codec64 + Send + Sync + Clone,
+    O: Opaque + Debug + Codec64,
+    C: TxnsCodec,
+{
+    /// Returns a new, empty test transaction that can involve the data shards
+    /// registered with this handle.
+    pub(crate) fn begin_test(&self) -> TestTxn<K, V, T, D> {
+        TestTxn::new()
     }
 }
 
@@ -906,7 +938,7 @@ mod tests {
         let mut d0_write = writer(&client, d0).await;
 
         // Commit a write at ts 2...
-        let mut txn = txns.begin();
+        let mut txn = txns.begin_test();
         txn.write(&d0, "foo".into(), (), 1).await;
         let apply = txn.commit_at(&mut txns, 2).await.unwrap();
         log.record_txn(2, &txn);
@@ -1214,7 +1246,7 @@ mod tests {
                 data_id.to_string(),
                 self.ts
             );
-            let mut txn = self.txns.begin();
+            let mut txn = self.txns.begin_test();
             txn.tidy(std::mem::take(&mut self.tidy));
             txn.write(&data_id, self.key(), (), 1).await;
             let apply = txn.commit_at(&mut self.txns, self.ts).await?;

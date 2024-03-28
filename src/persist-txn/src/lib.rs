@@ -441,7 +441,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 #[instrument(level = "debug", fields(shard=%data_write.shard_id(), ts=?commit_ts))]
 async fn apply_caa<K, V, T, D>(
     data_write: &mut WriteHandle<K, V, T, D>,
-    batch_raw: &[u8],
+    batch_raws: &Vec<&[u8]>,
     commit_ts: T,
 ) where
     K: Debug + Codec,
@@ -449,12 +449,17 @@ async fn apply_caa<K, V, T, D>(
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let batch = ProtoIdBatch::parse(batch_raw);
-    let mut batch = data_write.batch_from_transmittable_batch(batch);
+    let mut batches = batch_raws
+        .into_iter()
+        .map(|batch| ProtoIdBatch::parse(batch))
+        .map(|batch| data_write.batch_from_transmittable_batch(batch))
+        .collect::<Vec<_>>();
     let Some(mut upper) = data_write.shared_upper().into_option() else {
         // Shard is closed, which means the upper must be past init_ts.
-        // Mark the batch as consumed, so we don't get warnings in the logs.
-        batch.into_hollow_batch();
+        // Mark the batches as consumed, so we don't get warnings in the logs.
+        for batch in batches {
+            batch.into_hollow_batch();
+        }
         return;
     };
     loop {
@@ -464,24 +469,27 @@ async fn apply_caa<K, V, T, D>(
                 data_write.shard_id().to_string(),
                 commit_ts
             );
-            // Mark the batch as consumed, so we don't get warnings in the logs.
-            batch.into_hollow_batch();
+            // Mark the batches as consumed, so we don't get warnings in the logs.
+            for batch in batches {
+                batch.into_hollow_batch();
+            }
             return;
         }
         debug!(
-            "CaA data {:.9} apply b={} t={:?} [{:?},{:?})",
+            "CaA data {:.9} apply b={:?} t={:?} [{:?},{:?})",
             data_write.shard_id().to_string(),
-            batch_raw.hashed(),
+            batch_raws
+                .iter()
+                .map(|batch_raw| batch_raw.hashed())
+                .collect::<Vec<_>>(),
             commit_ts,
             upper,
             commit_ts.step_forward(),
         );
-        // If we both spill to s3 in `Txn::write`` _and_ add the ability to
-        // merge two `Txn`s and then commit them together, then we need to do
-        // all the batches for a given `(shard, ts)` at once.
+        let mut batches = batches.iter_mut().collect::<Vec<_>>();
         let res = data_write
             .compare_and_append_batch(
-                &mut [&mut batch],
+                batches.as_mut_slice(),
                 Antichain::from_elem(upper.clone()),
                 Antichain::from_elem(commit_ts.step_forward()),
             )
@@ -543,6 +551,7 @@ pub(crate) async fn cads<T, O, C>(
 
 #[cfg(test)]
 pub mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::sync::Mutex;
 
@@ -554,9 +563,72 @@ pub mod tests {
     use prost::Message;
 
     use crate::operator::DataSubscribe;
-    use crate::txn_write::Txn;
+    use crate::txn_write::{Txn, TxnApply};
+    use crate::txns::{Tidy, TxnsHandle};
 
     use super::*;
+
+    /// A [`Txn`] wrapper that exposes extra functionality for tests.
+    #[derive(Debug)]
+    pub struct TestTxn<K, V, T, D>
+    where
+        T: Timestamp + Lattice + Codec64,
+    {
+        txn: Txn<K, V, T, D>,
+        /// A copy of every write to use in tests.
+        writes: BTreeMap<ShardId, Vec<(K, V, D)>>,
+    }
+
+    impl<K, V, T, D> TestTxn<K, V, T, D>
+    where
+        K: Debug + Codec + Clone,
+        V: Debug + Codec + Clone,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        D: Semigroup + Codec64 + Send + Sync + Clone,
+    {
+        pub(crate) fn new() -> Self {
+            Self {
+                txn: Txn::new(),
+                writes: BTreeMap::default(),
+            }
+        }
+
+        pub(crate) async fn write(&mut self, data_id: &ShardId, key: K, val: V, diff: D) {
+            self.writes
+                .entry(*data_id)
+                .or_default()
+                .push((key.clone(), val.clone(), diff.clone()));
+            self.txn.write(data_id, key, val, diff).await
+        }
+
+        pub(crate) async fn commit_at<O, C>(
+            &mut self,
+            handle: &mut TxnsHandle<K, V, T, D, O, C>,
+            commit_ts: T,
+        ) -> Result<TxnApply<T>, T>
+        where
+            O: Opaque + Debug + Codec64,
+            C: TxnsCodec,
+        {
+            self.txn.commit_at(handle, commit_ts).await
+        }
+
+        pub(crate) fn merge(&mut self, other: Self) {
+            for (data_id, writes) in other.writes {
+                self.writes.entry(data_id).or_default().extend(writes);
+            }
+            self.txn.merge(other.txn)
+        }
+
+        pub(crate) fn tidy(&mut self, tidy: Tidy) {
+            self.txn.tidy(tidy)
+        }
+
+        #[allow(dead_code)]
+        fn take_tidy(&mut self) -> Tidy {
+            self.txn.take_tidy()
+        }
+    }
 
     /// A test helper for collecting committed writes and later comparing them
     /// to reads for correctness.
@@ -585,7 +657,7 @@ pub mod tests {
             let () = self.tx.send(update).unwrap();
         }
 
-        pub fn record_txn(&self, commit_ts: u64, txn: &Txn<String, (), i64>) {
+        pub fn record_txn(&self, commit_ts: u64, txn: &TestTxn<String, (), u64, i64>) {
             for (data_id, writes) in txn.writes.iter() {
                 for (k, (), d) in writes.iter() {
                     self.record((*data_id, k.clone(), commit_ts, *d));

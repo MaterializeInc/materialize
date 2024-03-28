@@ -20,6 +20,7 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
+use mz_persist_client::batch::Batch;
 use mz_persist_client::ShardId;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
@@ -31,17 +32,54 @@ use tracing::debug;
 use crate::proto::ProtoIdBatch;
 use crate::txns::{Tidy, TxnsHandle};
 
+/// Pending writes to a shard for an in-progress transaction.
+#[derive(Debug)]
+pub(crate) struct TxnWrite<K, V, T, D>
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    pub(crate) batches: Vec<Batch<K, V, T, D>>,
+    pub(crate) writes: Vec<(K, V, D)>,
+}
+
+impl<K, V, T, D> TxnWrite<K, V, T, D>
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    /// Merges the staged writes in `other` into this.
+    pub fn merge(&mut self, other: Self) {
+        self.batches.extend(other.batches);
+        self.writes.extend(other.writes);
+    }
+}
+
+impl<K, V, T, D> Default for TxnWrite<K, V, T, D>
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    fn default() -> Self {
+        Self {
+            batches: Vec::default(),
+            writes: Vec::default(),
+        }
+    }
+}
+
 /// An in-progress transaction.
 #[derive(Debug)]
-pub struct Txn<K, V, D> {
-    pub(crate) writes: BTreeMap<ShardId, Vec<(K, V, D)>>,
+pub struct Txn<K, V, T, D>
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    pub(crate) writes: BTreeMap<ShardId, TxnWrite<K, V, T, D>>,
     tidy: Tidy,
 }
 
-impl<K, V, D> Txn<K, V, D>
+impl<K, V, T, D> Txn<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) fn new() -> Self {
@@ -62,6 +100,7 @@ where
         self.writes
             .entry(*data_id)
             .or_default()
+            .writes
             .push((key, val, diff))
     }
 
@@ -79,13 +118,12 @@ where
     ///
     /// Panics if any involved data shards were not registered before commit ts.
     #[instrument(level = "debug", fields(ts = ?commit_ts))]
-    pub async fn commit_at<T, O, C>(
-        &self,
+    pub async fn commit_at<O, C>(
+        &mut self,
         handle: &mut TxnsHandle<K, V, T, D, O, C>,
         commit_ts: T,
     ) -> Result<TxnApply<T>, T>
     where
-        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
@@ -128,50 +166,72 @@ where
                 );
 
                 let txn_batches_updates = FuturesUnordered::new();
-                for (data_id, updates) in self.writes.iter() {
-                    let mut data_write = handle.datas.take_write(data_id).await;
+                while let Some((data_id, updates)) = self.writes.pop_first() {
+                    let mut data_write = handle.datas.take_write(&data_id).await;
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
-                        let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
-                        for (k, v, d) in updates.iter() {
-                            batch.add(k, v, &commit_ts, d).await.expect("valid usage");
+                        let mut batches = updates
+                            .batches
+                            .into_iter()
+                            .map(|mut batch| {
+                                batch
+                                    .rewrite_ts(
+                                        &Antichain::from_elem(commit_ts.clone()),
+                                        Antichain::from_elem(commit_ts.step_forward()),
+                                    )
+                                    .expect("invalid usage");
+                                batch.into_transmittable_batch()
+                            })
+                            .collect::<Vec<_>>();
+                        if !updates.writes.is_empty() {
+                            let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
+                            for (k, v, d) in updates.writes.iter() {
+                                batch.add(k, v, &commit_ts, d).await.expect("valid usage");
+                            }
+                            let batch = batch
+                                .finish(Antichain::from_elem(commit_ts.step_forward()))
+                                .await
+                                .expect("valid usage");
+                            let batch = batch.into_transmittable_batch();
+                            batches.push(batch);
                         }
-                        let batch = batch
-                            .finish(Antichain::from_elem(commit_ts.step_forward()))
-                            .await
-                            .expect("valid usage");
-                        let batch = batch.into_transmittable_batch();
-                        // The code to handle retracting applied batches assumes
-                        // that the encoded representation of each is unique (it
-                        // works by retracting and cancelling out the raw
-                        // bytes). It's possible to make that code handle any
-                        // diff value but the complexity isn't worth it.
-                        //
-                        // So ensure that every committed batch has a unique
-                        // serialization. Technically, I'm pretty sure that
-                        // they're naturally unique but the justification is
-                        // long, subtle, and brittle. Instead, just slap a
-                        // random uuid on it.
-                        let batch_raw = ProtoIdBatch::new(batch.clone()).encode_to_vec();
-                        debug!(
-                            "wrote {:.9} batch {} len={}",
-                            data_id.to_string(),
-                            batch_raw.hashed(),
-                            updates.len()
-                        );
-                        let update = C::encode(TxnsEntry::Append(
-                            *data_id,
-                            T::encode(&commit_ts),
-                            batch_raw,
-                        ));
-                        (data_write, batch, update)
+
+                        let batch_updates = batches
+                            .into_iter()
+                            .map(|batch| {
+                                // The code to handle retracting applied batches assumes
+                                // that the encoded representation of each is unique (it
+                                // works by retracting and cancelling out the raw
+                                // bytes). It's possible to make that code handle any
+                                // diff value but the complexity isn't worth it.
+                                //
+                                // So ensure that every committed batch has a unique
+                                // serialization. Technically, I'm pretty sure that
+                                // they're naturally unique but the justification is
+                                // long, subtle, and brittle. Instead, just slap a
+                                // random uuid on it.
+                                let batch_raw = ProtoIdBatch::new(batch.clone()).encode_to_vec();
+                                debug!(
+                                    "wrote {:.9} batch {}",
+                                    data_id.to_string(),
+                                    batch_raw.hashed(),
+                                );
+                                let update = C::encode(TxnsEntry::Append(
+                                    data_id,
+                                    T::encode(&commit_ts),
+                                    batch_raw,
+                                ));
+                                (batch, update)
+                            })
+                            .collect::<Vec<_>>();
+                        (data_write, batch_updates)
                     })
                 }
                 let txn_batches_updates = txn_batches_updates.collect::<Vec<_>>().await;
-
                 let mut txns_updates = txn_batches_updates
                     .iter()
-                    .map(|(_, _, (key, val))| ((key, val), &commit_ts, 1))
+                    .flat_map(|(_, batch_updates)| batch_updates.iter().map(|(_, updates)| updates))
+                    .map(|(key, val)| ((key, val), &commit_ts, 1))
                     .collect::<Vec<_>>();
                 let apply_is_empty = txns_updates.is_empty();
 
@@ -211,14 +271,16 @@ where
                         );
                         // The batch we wrote at commit_ts did commit. Mark it as
                         // such to avoid a WARN in the logs.
-                        for (data_write, batch, _) in txn_batches_updates {
-                            let batch = data_write
-                                .batch_from_transmittable_batch(batch)
-                                .into_hollow_batch();
-                            handle.metrics.batches.commit_count.inc();
-                            let commit_bytes = &handle.metrics.batches.commit_bytes;
-                            for part in batch.parts.iter() {
-                                commit_bytes.inc_by(u64::cast_from(part.encoded_size_bytes));
+                        for (data_write, batch_updates) in txn_batches_updates {
+                            for (batch, _) in batch_updates {
+                                let batch = data_write
+                                    .batch_from_transmittable_batch(batch)
+                                    .into_hollow_batch();
+                                handle.metrics.batches.commit_count.inc();
+                                let commit_bytes = &handle.metrics.batches.commit_bytes;
+                                for part in batch.parts.iter() {
+                                    commit_bytes.inc_by(u64::cast_from(part.encoded_size_bytes));
+                                }
                             }
                             handle.datas.put_write(data_write);
                         }
@@ -231,16 +293,18 @@ where
                         handle.metrics.commit.retry_count.inc();
                         assert!(txns_upper < new_txns_upper);
                         txns_upper = new_txns_upper;
-                        // The batch we wrote at commit_ts didn't commit. At the
-                        // moment, we'll try writing it out again at some higher
-                        // commit_ts on the next loop around, so we're free to go
-                        // ahead and delete this one. When we do the TODO to
-                        // efficiently re-timestamp batches, this must be removed.
-                        for (data_write, batch, _) in txn_batches_updates {
-                            let () = data_write
-                                .batch_from_transmittable_batch(batch)
-                                .delete()
-                                .await;
+                        for (data_write, batch_updates) in txn_batches_updates {
+                            let batches = batch_updates
+                                .into_iter()
+                                .map(|(batch, _)| {
+                                    data_write.batch_from_transmittable_batch(batch.clone())
+                                })
+                                .collect();
+                            let txn_write = TxnWrite {
+                                writes: Vec::new(),
+                                batches,
+                            };
+                            self.writes.insert(data_write.shard_id(), txn_write);
                             handle.datas.put_write(data_write);
                         }
                         let () = handle.txns_cache.update_ge(&txns_upper).await;
@@ -255,7 +319,7 @@ where
     /// Merges the staged writes in the other txn into this one.
     pub fn merge(&mut self, other: Self) {
         for (data_id, writes) in other.writes {
-            self.writes.entry(data_id).or_default().extend(writes);
+            self.writes.entry(data_id).or_default().merge(writes);
         }
         self.tidy.merge(other.tidy);
     }
@@ -383,7 +447,7 @@ mod tests {
 
         // Non-empty txn means non-empty apply. Min unapplied ts is the commit
         // ts.
-        let mut txn = txns.begin();
+        let mut txn = txns.begin_test();
         txn.write(&d0, "2".into(), (), 1).await;
         let apply_2 = txn.commit_at(&mut txns, 2).await.unwrap();
         log.record_txn(2, &txn);
@@ -411,10 +475,10 @@ mod tests {
         let tidy_4 = txns.expect_commit_at(4, d0, &["4"], &log).await;
         cache.update_gt(&4).await;
         assert_eq!(cache.min_unapplied_ts(), &4);
-        let mut txn0 = txns.begin();
+        let mut txn0 = txns.begin_test();
         txn0.write(&d0, "5".into(), (), 1).await;
         txn0.tidy(tidy_4);
-        let mut txn1 = txns.begin();
+        let mut txn1 = txns.begin_test();
         txn1.merge(txn0);
         let apply_5 = txn1.commit_at(&mut txns, 5).await.unwrap();
         log.record_txn(5, &txn1);
@@ -470,7 +534,7 @@ mod tests {
         const NUM_WRITES: usize = 25;
         let tasks = FuturesUnordered::new();
         for idx in 0..NUM_WRITES {
-            let mut txn = txns.begin();
+            let mut txn = txns.begin_test();
             txn.write(&d0, format!("{:05}", idx), (), 1).await;
             let (txns_id, client, log) = (txns.txns_id(), client.clone(), log.clone());
 
