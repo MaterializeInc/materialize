@@ -653,6 +653,8 @@ async fn copy_files(
 
         // Stream the files into the COPY FROM sink.
         for path in files {
+            tracing::info!(?path, "starting copy");
+
             // Open the CSV file, returning an AsyncReader.
             let file = load_file(file_config, path)
                 .await
@@ -666,8 +668,14 @@ async fn copy_files(
             let mut record_stream = adapter.into_stream();
             while let Some(maybe_record) = record_stream.next().await {
                 let record = maybe_record?;
-                csv_sink.write_byte_record(&record).await?;
+                csv_sink
+                    .write_byte_record(&record)
+                    .await
+                    .context("writing record")?;
+                csv_sink.flush().await.context("flushing record")?;
             }
+
+            tracing::info!(?path, "finished copy");
         }
     }
 
