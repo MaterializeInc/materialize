@@ -4597,7 +4597,7 @@ fn plan_retain_history(
     scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
     let cw = match lcw {
         Some(duration) => duration.try_into()?,
-        None => CompactionWindow::DisableCompaction,
+        None => CompactionWindow::Default,
     };
     Ok(cw)
 }
