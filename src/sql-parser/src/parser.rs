@@ -3689,7 +3689,6 @@ impl<'a> Parser<'a> {
         let option = self.expect_one_of_keywords(&[
             AVAILABILITY,
             DISK,
-            IDLE,
             INTROSPECTION,
             MANAGED,
             REPLICAS,
@@ -3703,10 +3702,6 @@ impl<'a> Parser<'a> {
                 ClusterOptionName::AvailabilityZones
             }
             DISK => ClusterOptionName::Disk,
-            IDLE => {
-                self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
-                ClusterOptionName::IdleArrangementMergeEffort
-            }
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ClusterOptionName::IntrospectionDebugging,
                 INTERVAL => ClusterOptionName::IntrospectionInterval,
@@ -3784,7 +3779,6 @@ impl<'a> Parser<'a> {
             COMPUTE,
             COMPUTECTL,
             DISK,
-            IDLE,
             INTERNAL,
             INTROSPECTION,
             SIZE,
@@ -3809,10 +3803,6 @@ impl<'a> Parser<'a> {
                 ReplicaOptionName::ComputectlAddresses
             }
             DISK => ReplicaOptionName::Disk,
-            IDLE => {
-                self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
-                ReplicaOptionName::IdleArrangementMergeEffort
-            }
             INTERNAL => ReplicaOptionName::Internal,
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ReplicaOptionName::IntrospectionDebugging,

@@ -650,7 +650,6 @@ impl Catalog {
                     )?,
                     compute: ComputeReplicaConfig {
                         logging,
-                        idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
                     },
                 };
 
@@ -1700,7 +1699,6 @@ fn add_new_builtin_clusters_migration(
                         replication_factor: 1,
                         disk: is_cluster_size_v2(&cluster_size),
                         logging: default_logging_config(),
-                        idle_arrangement_merge_effort: None,
                         optimizer_feature_overrides: Default::default(),
                         schedule: Default::default(),
                     }),
@@ -1791,7 +1789,6 @@ pub(crate) fn builtin_cluster_replica_config(
             size: replica_size,
         },
         logging: default_logging_config(),
-        idle_arrangement_merge_effort: None,
     }
 }
 

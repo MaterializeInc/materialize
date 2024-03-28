@@ -3355,7 +3355,6 @@ generate_extracted_config!(
     ClusterOption,
     (AvailabilityZones, Vec<String>),
     (Disk, bool),
-    (IdleArrangementMergeEffort, u32),
     (IntrospectionDebugging, bool),
     (IntrospectionInterval, OptionalDuration),
     (Managed, bool),
@@ -3388,7 +3387,6 @@ pub fn plan_create_cluster(
 ) -> Result<Plan, PlanError> {
     let ClusterOptionExtracted {
         availability_zones,
-        idle_arrangement_merge_effort,
         introspection_debugging,
         introspection_interval,
         managed,
@@ -3422,7 +3420,6 @@ pub fn plan_create_cluster(
         let compute = plan_compute_replica_config(
             introspection_interval,
             introspection_debugging.unwrap_or(false),
-            idle_arrangement_merge_effort,
         )?;
 
         let replication_factor = replication_factor.unwrap_or(1);
@@ -3488,9 +3485,6 @@ pub fn plan_create_cluster(
         if replication_factor.is_some() {
             sql_bail!("REPLICATION FACTOR not supported for unmanaged clusters");
         }
-        if idle_arrangement_merge_effort.is_some() {
-            sql_bail!("IDLE ARRANGEMENT MERGE EFFORT not supported for unmanaged clusters");
-        }
         if introspection_debugging.is_some() {
             sql_bail!("INTROSPECTION DEBUGGING not supported for unmanaged clusters");
         }
@@ -3531,7 +3525,6 @@ generate_extracted_config!(
     (ComputeAddresses, Vec<String>),
     (ComputectlAddresses, Vec<String>),
     (Disk, bool),
-    (IdleArrangementMergeEffort, u32),
     (Internal, bool, Default(false)),
     (IntrospectionDebugging, bool, Default(false)),
     (IntrospectionInterval, OptionalDuration),
@@ -3551,7 +3544,6 @@ fn plan_replica_config(
         compute_addresses,
         computectl_addresses,
         disk: disk_in,
-        idle_arrangement_merge_effort,
         internal,
         introspection_debugging,
         introspection_interval,
@@ -3562,11 +3554,7 @@ fn plan_replica_config(
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
-    let compute = plan_compute_replica_config(
-        introspection_interval,
-        introspection_debugging,
-        idle_arrangement_merge_effort,
-    )?;
+    let compute = plan_compute_replica_config(introspection_interval, introspection_debugging)?;
 
     if disk_in.is_some() {
         scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
@@ -3685,7 +3673,6 @@ fn plan_replica_config(
 fn plan_compute_replica_config(
     introspection_interval: Option<OptionalDuration>,
     introspection_debugging: bool,
-    idle_arrangement_merge_effort: Option<u32>,
 ) -> Result<ComputeReplicaConfig, PlanError> {
     let introspection_interval = introspection_interval
         .map(|OptionalDuration(i)| i)
@@ -3700,10 +3687,7 @@ fn plan_compute_replica_config(
         }
         None => None,
     };
-    let compute = ComputeReplicaConfig {
-        introspection,
-        idle_arrangement_merge_effort,
-    };
+    let compute = ComputeReplicaConfig { introspection };
     Ok(compute)
 }
 
@@ -4568,7 +4552,6 @@ pub fn plan_alter_cluster(
         AlterClusterAction::SetOptions(set_options) => {
             let ClusterOptionExtracted {
                 availability_zones,
-                idle_arrangement_merge_effort,
                 introspection_debugging,
                 introspection_interval,
                 managed,
@@ -4610,11 +4593,6 @@ pub fn plan_alter_cluster(
                     }
                     if replication_factor.is_some() {
                         sql_bail!("REPLICATION FACTOR not supported for unmanaged clusters");
-                    }
-                    if idle_arrangement_merge_effort.is_some() {
-                        sql_bail!(
-                            "IDLE ARRANGEMENT MERGE EFFORT not supported for unmanaged clusters"
-                        );
                     }
                     if introspection_debugging.is_some() {
                         sql_bail!("INTROSPECTION DEBUGGING not supported for unmanaged clusters");
@@ -4667,10 +4645,6 @@ pub fn plan_alter_cluster(
             if let Some(availability_zones) = availability_zones {
                 options.availability_zones = AlterOptionParameter::Set(availability_zones);
             }
-            if let Some(idle_arrangement_merge_effort) = idle_arrangement_merge_effort {
-                options.idle_arrangement_merge_effort =
-                    AlterOptionParameter::Set(idle_arrangement_merge_effort);
-            }
             if let Some(introspection_debugging) = introspection_debugging {
                 options.introspection_debugging =
                     AlterOptionParameter::Set(introspection_debugging);
@@ -4712,7 +4686,6 @@ pub fn plan_alter_cluster(
                     Disk => options.disk = Reset,
                     IntrospectionInterval => options.introspection_interval = Reset,
                     IntrospectionDebugging => options.introspection_debugging = Reset,
-                    IdleArrangementMergeEffort => options.idle_arrangement_merge_effort = Reset,
                     Managed => options.managed = Reset,
                     Replicas => options.replicas = Reset,
                     ReplicationFactor => options.replication_factor = Reset,
