@@ -88,7 +88,7 @@ uuid = { version = "1.7.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
-datadriven = "0.6.0"
+datadriven = "0.8.0"
 mz-lowertest = { path = "../lowertest" }
 
 [package.metadata.cargo-udeps.ignore]

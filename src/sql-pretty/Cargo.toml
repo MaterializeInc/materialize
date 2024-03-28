@@ -16,7 +16,7 @@ thiserror = "1.0.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-datadriven = "0.6.0"
+datadriven = "0.8.0"
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 mz-sql-parser = { path = "../sql-parser", features = ["test"] }
 

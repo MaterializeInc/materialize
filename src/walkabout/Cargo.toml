@@ -18,7 +18,7 @@ syn = { version = "1.0.107", features = ["extra-traits", "full", "parsing"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-datadriven = "0.6.0"
+datadriven = "0.8.0"
 tempfile = "3.8.1"
 
 [features]
