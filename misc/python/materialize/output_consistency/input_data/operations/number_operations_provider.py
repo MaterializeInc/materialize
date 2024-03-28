@@ -30,6 +30,8 @@ from materialize.output_consistency.operation.operation import (
     OperationRelevance,
 )
 
+TAG_BITWISE_OP = "bitwise"
+
 NUMERIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 NUMERIC_OPERATION_TYPES.append(
@@ -88,7 +90,8 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
-        OperationRelevance.LOW,
+        relevance=OperationRelevance.LOW,
+        tags={TAG_BITWISE_OP},
     )
 )
 # Bitwise OR
@@ -101,7 +104,8 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
-        OperationRelevance.LOW,
+        relevance=OperationRelevance.LOW,
+        tags={TAG_BITWISE_OP},
     )
 )
 # Bitwise XOR
@@ -114,7 +118,8 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
-        OperationRelevance.LOW,
+        relevance=OperationRelevance.LOW,
+        tags={TAG_BITWISE_OP},
     )
 )
 # Bitwise NOT
@@ -126,6 +131,7 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         NumericReturnTypeSpec(),
         relevance=OperationRelevance.LOW,
+        tags={TAG_BITWISE_OP},
     )
 )
 # Bitwise left shift
@@ -138,7 +144,8 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
-        OperationRelevance.LOW,
+        relevance=OperationRelevance.LOW,
+        tags={TAG_BITWISE_OP},
     )
 )
 # Bitwise right shift
@@ -151,7 +158,8 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
-        OperationRelevance.LOW,
+        relevance=OperationRelevance.LOW,
+        tags={TAG_BITWISE_OP},
     )
 )
 
