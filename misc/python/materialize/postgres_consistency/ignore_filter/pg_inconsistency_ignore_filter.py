@@ -225,6 +225,15 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             )
 
         if (
+            db_operation.pattern in {"$ < $", "$ > $"}
+            and db_operation.params[0].get_declared_type_category()
+            == DataTypeCategory.NUMERIC
+            and db_operation.params[1].get_declared_type_category()
+            == DataTypeCategory.NUMERIC
+        ):
+            return YesIgnore("#26323: imprecise comparison between REAL and DECIMAL")
+
+        if (
             db_operation.pattern in {"$ || $"}
             and db_operation.params[0].get_declared_type_category()
             == DataTypeCategory.JSONB
