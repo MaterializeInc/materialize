@@ -281,9 +281,11 @@ class CargoBuild(CargoPreImage):
         rustflags = (
             rustc_flags.coverage
             if rd.coverage
-            else rustc_flags.sanitizer[rd.sanitizer]
-            if rd.sanitizer != Sanitizer.none
-            else ["--cfg=tokio_unstable"]
+            else (
+                rustc_flags.sanitizer[rd.sanitizer]
+                if rd.sanitizer != Sanitizer.none
+                else ["--cfg=tokio_unstable"]
+            )
         )
         cflags = (
             [
@@ -428,7 +430,16 @@ class CargoBuild(CargoPreImage):
                     # Some crates are built for both the host and the target.
                     # Ignore the built-for-host out dir.
                     continue
-                package = message["package_id"].split()[0]
+                # parse the package name from a package_id that looks like one of:
+                # git+https://github.com/MaterializeInc/rust-server-sdk#launchdarkly-server-sdk@1.0.0
+                # path+file:///Users/roshan/materialize/src/catalog#mz-catalog@0.0.0
+                # registry+https://github.com/rust-lang/crates.io-index#num-rational@0.4.0
+                # file:///path/to/my-package#0.1.0
+                package_id = message["package_id"]
+                if "@" in package_id:
+                    package = package_id.split("@")[0].split("#")[-1]
+                else:
+                    package = message["package_id"].split("#")[0].split("/")[-1]
                 for src, dst in self.extract.get(package, {}).items():
                     spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
 

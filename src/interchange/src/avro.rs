@@ -119,8 +119,10 @@ mod tests {
             (
                 ScalarType::TimestampTz { precision: None },
                 Datum::TimestampTz(
-                    CheckedTimestamp::from_timestamplike(DateTime::from_utc(date_time, Utc))
-                        .unwrap(),
+                    CheckedTimestamp::from_timestamplike(DateTime::from_naive_utc_and_offset(
+                        date_time, Utc,
+                    ))
+                    .unwrap(),
                 ),
                 Value::Timestamp(date_time),
             ),

@@ -187,7 +187,7 @@ pub trait DateLike: chrono::Datelike {
             .unwrap()
             .and_hms_opt(0, 0, 0)
             .unwrap();
-        naive_date.timestamp()
+        naive_date.and_utc().timestamp()
     }
 
     fn millennium(&self) -> i32 {
@@ -319,7 +319,9 @@ pub trait TimestampLike:
         let num_days_from_monday = i64::from(self.date().weekday().num_days_from_monday());
         let new_date = NaiveDate::from_ymd_opt(self.year(), self.month(), self.day())
             .unwrap()
-            .checked_sub_signed(Duration::days(num_days_from_monday))
+            .checked_sub_signed(
+                Duration::try_days(num_days_from_monday).ok_or(TimestampError::OutOfRange)?,
+            )
             .ok_or(TimestampError::OutOfRange)?;
         Ok(Self::new(
             new_date,
@@ -470,11 +472,11 @@ impl TimestampLike for chrono::NaiveDateTime {
     }
 
     fn timestamp(&self) -> i64 {
-        self.timestamp()
+        self.and_utc().timestamp()
     }
 
     fn timestamp_subsec_micros(&self) -> u32 {
-        self.timestamp_subsec_micros()
+        self.and_utc().timestamp_subsec_micros()
     }
 
     fn timezone_offset(&self) -> &'static str {
@@ -516,7 +518,7 @@ impl TimestampLike for chrono::DateTime<chrono::Utc> {
     }
 
     fn from_date_time(dt: NaiveDateTime) -> Self {
-        DateTime::<Utc>::from_utc(dt, Utc)
+        DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)
     }
 
     fn timestamp(&self) -> i64 {
@@ -584,16 +586,16 @@ impl<T: Serialize> Serialize for CheckedTimestamp<T> {
 // 16:47:04.192 to 292278994-08-17 07:12:55.807.
 // - Avro also supports i64 microseconds since the Unix epoch: -290308-12-21
 //   19:59:05.224192 to 294247-01-10 04:00:54.775807.
-// - chrono's NaiveDate supports January 1, 262145 BCE to December 31, 262143
+// - chrono's NaiveDate supports January 1, 262144 BCE to December 31, 262142
 //   CE.
 //
 // Thus on the low end we have 4713-12-31 BC from Postgres, and on the high end
-// 262143-12-31 from chrono.
+// 262142-12-31 from chrono.
 
 pub static LOW_DATE: Lazy<NaiveDate> =
     Lazy::new(|| NaiveDate::from_ymd_opt(-4713, 12, 31).unwrap());
 pub static HIGH_DATE: Lazy<NaiveDate> =
-    Lazy::new(|| NaiveDate::from_ymd_opt(262143, 12, 31).unwrap());
+    Lazy::new(|| NaiveDate::from_ymd_opt(262142, 12, 31).unwrap());
 
 impl<T: TimestampLike> CheckedTimestamp<T> {
     pub fn from_timestamplike(t: T) -> Result<Self, TimestampError> {
@@ -823,7 +825,7 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
         }
         // this is copied from [`chrono::round::duration_round`]
         // but using microseconds instead of nanoseconds precision
-        let stamp = original.timestamp_micros();
+        let stamp = original.and_utc().timestamp_micros();
         let dt = {
             let delta_down = stamp % round_to_micros;
             if delta_down == 0 {
@@ -1008,7 +1010,7 @@ mod test {
         let updated = dt
             .round_to_precision(Some(TimestampPrecision(precision)))
             .unwrap();
-        assert_eq!(expected, updated.timestamp_micros());
+        assert_eq!(expected, updated.and_utc().timestamp_micros());
     }
 
     #[mz_ore::test]
@@ -1042,44 +1044,44 @@ mod test {
         let high =
             CheckedTimestamp::try_from(HIGH_DATE.and_hms_nano_opt(0, 0, 0, 123456789).unwrap())
                 .unwrap();
-        assert_round_to_precision(high, 0, 8210298326400000000);
-        assert_round_to_precision(high, 1, 8210298326400100000);
-        assert_round_to_precision(high, 2, 8210298326400120000);
-        assert_round_to_precision(high, 3, 8210298326400123000);
-        assert_round_to_precision(high, 4, 8210298326400123500);
-        assert_round_to_precision(high, 5, 8210298326400123460);
-        assert_round_to_precision(high, 6, 8210298326400123457);
+        assert_round_to_precision(high, 0, 8210266790400000000);
+        assert_round_to_precision(high, 1, 8210266790400100000);
+        assert_round_to_precision(high, 2, 8210266790400120000);
+        assert_round_to_precision(high, 3, 8210266790400123000);
+        assert_round_to_precision(high, 4, 8210266790400123500);
+        assert_round_to_precision(high, 5, 8210266790400123460);
+        assert_round_to_precision(high, 6, 8210266790400123457);
     }
 
     #[mz_ore::test]
     fn test_precision_edge_cases() {
         let result = mz_ore::panic::catch_unwind(|| {
-            let date =
-                CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_micros(123456).unwrap())
-                    .unwrap();
+            let date = CheckedTimestamp::try_from(
+                DateTime::from_timestamp_micros(123456).unwrap().naive_utc(),
+            )
+            .unwrap();
             let _ = date.round_to_precision(Some(TimestampPrecision(7)));
         });
         assert!(result.is_err());
 
-        let date =
-            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_micros(123456).unwrap())
-                .unwrap();
+        let date = CheckedTimestamp::try_from(
+            DateTime::from_timestamp_micros(123456).unwrap().naive_utc(),
+        )
+        .unwrap();
         let date = date.round_to_precision(None).unwrap();
-        assert_eq!(123456, date.timestamp_micros());
+        assert_eq!(123456, date.and_utc().timestamp_micros());
     }
 
     #[mz_ore::test]
     fn test_equality_with_same_precision() {
         let date1 =
-            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123456).unwrap())
-                .unwrap();
+            CheckedTimestamp::try_from(DateTime::from_timestamp(0, 123456).unwrap()).unwrap();
         let date1 = date1
             .round_to_precision(Some(TimestampPrecision(0)))
             .unwrap();
 
         let date2 =
-            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123456789).unwrap())
-                .unwrap();
+            CheckedTimestamp::try_from(DateTime::from_timestamp(0, 123456789).unwrap()).unwrap();
         let date2 = date2
             .round_to_precision(Some(TimestampPrecision(0)))
             .unwrap();
@@ -1089,15 +1091,13 @@ mod test {
     #[mz_ore::test]
     fn test_equality_with_different_precisions() {
         let date1 =
-            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123500000).unwrap())
-                .unwrap();
+            CheckedTimestamp::try_from(DateTime::from_timestamp(0, 123500000).unwrap()).unwrap();
         let date1 = date1
             .round_to_precision(Some(TimestampPrecision(5)))
             .unwrap();
 
         let date2 =
-            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123456789).unwrap())
-                .unwrap();
+            CheckedTimestamp::try_from(DateTime::from_timestamp(0, 123456789).unwrap()).unwrap();
         let date2 = date2
             .round_to_precision(Some(TimestampPrecision(4)))
             .unwrap();

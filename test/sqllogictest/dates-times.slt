@@ -1391,21 +1391,21 @@ select ('0001-01-01'::date - '1721389days'::interval)::date
 4714-12-31 BC
 
 query T
-select ('0001-01-01'::date + '262142years 11months 30days'::interval)::date
+select ('0001-01-01'::date + '262141years 11months 30days'::interval)::date
 ----
-262143-12-31
+262142-12-31
 
 # Out of range for both dates and timestamps, but timestamp triggers first.
 query error timestamp out of range
 select ('0001-01-01'::date - '4713years 1months 8days')::date
 
 query error timestamp out of range
-select ('0001-01-01'::date + '262142years 11months 30days')::date + '1day'
+select ('0001-01-01'::date + '262141years 11months 30days')::date + '1day'
 
 query II
-select ('0001-01-01'::date - '1721389days'::interval)::date - ('0001-01-01'::date + '262142years 11months 30days'::interval)::date, ('0001-01-01'::date + '262142years 11months 30days'::interval)::date - ('0001-01-01'::date - '1721389days'::interval)::date
+select ('0001-01-01'::date - '1721389days'::interval)::date - ('0001-01-01'::date + '262141years 11months 30days'::interval)::date, ('0001-01-01'::date + '262141years 11months 30days'::interval)::date - ('0001-01-01'::date - '1721389days'::interval)::date
 ----
--97467152 97467152
+-97466787 97466787
 
 query error timestamp out of range
 SELECT to_timestamp(9223372036854775808::float8);

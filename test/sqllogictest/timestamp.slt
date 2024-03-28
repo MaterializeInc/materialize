@@ -194,12 +194,12 @@ true
 true
 
 query T
-SELECT '99999-01-01'::TIMESTAMP + '162144 y';
+SELECT '99999-01-01'::TIMESTAMP + '162143 y';
 ----
-262143-01-01 00:00:00
+262142-01-01 00:00:00
 
 query error timestamp out of range
-SELECT '99999-01-01'::TIMESTAMP + '162145 y';
+SELECT '99999-01-01'::TIMESTAMP + '162144 y';
 
 # date_bin_hopping
 simple conn=mz_system,user=mz_system

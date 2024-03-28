@@ -132,7 +132,7 @@ impl Generator for Auction {
                         packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // seller
                         packer.push(Datum::String(AUCTIONS.choose(&mut rng).unwrap())); // item
                         packer.push(Datum::TimestampTz(
-                            (now + chrono::Duration::seconds(10))
+                            (now + chrono::Duration::try_seconds(10).unwrap())
                                 .try_into()
                                 .expect("timestamp must fit"),
                         )); // end time
@@ -148,9 +148,10 @@ impl Generator for Auction {
                                 packer.push(Datum::Int64(counter)); // auction id
                                 packer.push(Datum::Int32(rng.gen_range(1..100))); // amount
                                 packer.push(Datum::TimestampTz(
-                                    (now + chrono::Duration::seconds(i))
-                                        .try_into()
-                                        .expect("timestamp must fit"),
+                                    (now + chrono::Duration::try_seconds(i)
+                                        .expect("time must fit"))
+                                    .try_into()
+                                    .expect("timestamp must fit"),
                                 )); // bid time
                                 bid
                             };

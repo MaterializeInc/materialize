@@ -96,6 +96,7 @@ impl ConfigFile {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)?;
 
         let mut buffer = String::new();

@@ -63,10 +63,10 @@ impl Date {
     pub const LOW_DAYS: i32 = -2451545; // 4714-11-24 BC
 
     /// Largest date support by Materialize. Although Postgres can go up to
-    /// 5874897-12-31, chrono is limited to December 31, 262143, which we mirror
+    /// 5874897-12-31, chrono is limited to December 31, 262142, which we mirror
     /// here so we can use chrono's formatting methods and have guaranteed safe
     /// conversions.
-    pub const HIGH_DAYS: i32 = 95_015_644;
+    pub const HIGH_DAYS: i32 = 95_015_279;
 
     /// Constructs a new `Date` as the days since the postgres epoch
     /// (2000-01-01).

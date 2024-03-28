@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.66"
 async-trait = "0.1.68"
-chrono = { version = "0.4.23", default-features = false, features = ["std"] }
+chrono = { version = "0.4.35", default-features = false, features = ["std"] }
 futures = "0.3.25"
 http = "0.2.8"
 itertools = "0.10.5"
