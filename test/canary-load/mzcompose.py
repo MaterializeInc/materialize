@@ -17,6 +17,7 @@ from textwrap import dedent
 import pg8000
 from pg8000.exceptions import InterfaceError
 
+from materialize.cloudtest.util.jwt_key import fetch_jwt
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -42,6 +43,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         Mz(region=REGION, environment=ENVIRONMENT, app_password=APP_PASSWORD)
     ):
         host = c.cloud_hostname()
+
+        token = fetch_jwt(
+            email=USERNAME,
+            password=APP_PASSWORD,
+            host="admin.cloud.materialize.com/frontegg",
+            scheme="https",
+        )
+
+        result = requests.post(
+            'https://{host}/api/sql?options={"application_name":"canary-load","cluster":"mz_introspection"}',
+            headers={"authorization": f"Bearer {token}"},
+        )
+        print(result)
+        sys.exit(1)
 
         with c.override(
             Testdrive(
