@@ -386,6 +386,11 @@ impl RelationDesc {
         }
     }
 
+    /// Check if the `RelationDesc` is empty.
+    pub fn is_empty(&self) -> bool {
+        self == &Self::empty()
+    }
+
     /// Constructs a new `RelationDesc` from a `RelationType` and an iterator
     /// over column names.
     ///

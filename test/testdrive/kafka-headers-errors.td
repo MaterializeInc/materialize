@@ -45,4 +45,4 @@ contains:INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER
   INCLUDE HEADERS
-contains:INCLUDE HEADERS with non-Kafka sources not supported
+contains:INCLUDE metadata only supported with `KEY VALUE` load generators

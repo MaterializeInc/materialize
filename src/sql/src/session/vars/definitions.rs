@@ -1997,6 +1997,13 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_load_generator_key_value,
+        desc: "Create a LOAD GENERATOR KEY VALUE",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_expressions_in_limit_syntax,
         desc: "LIMIT <expr> syntax",
         default: false,

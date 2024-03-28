@@ -84,7 +84,10 @@ use mz_storage_types::sources::envelope::{
     KeyEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
-use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
+use mz_storage_types::sources::load_generator::{
+    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
+    LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
+};
 use mz_storage_types::sources::mysql::{
     MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
 };
@@ -638,7 +641,11 @@ pub fn plan_create_source(
         // TODO(guswynn): should this be `bail_unsupported!`?
         sql_bail!("INCLUDE HEADERS with non-Kafka sources not supported");
     }
-    if !matches!(connection, CreateSourceConnection::Kafka { .. }) && !include_metadata.is_empty() {
+    if !matches!(
+        connection,
+        CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. }
+    ) && !include_metadata.is_empty()
+    {
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
@@ -1079,7 +1086,7 @@ pub fn plan_create_source(
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let (load_generator, available_subsources) =
-                load_generator_ast_to_generator(generator, options)?;
+                load_generator_ast_to_generator(scx, generator, options, include_metadata)?;
             let available_subsources = available_subsources
                 .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
 
@@ -1224,10 +1231,36 @@ pub fn plan_create_source(
             });
             (key_desc, value_desc)
         }
-        None => (None, external_connection.value_desc()),
+        None => (
+            Some(external_connection.key_desc()),
+            external_connection.value_desc(),
+        ),
     };
 
-    let mut key_envelope = get_key_envelope(include_metadata, encoding.as_ref())?;
+    // KEY VALUE load generators are the only UPSERT source that
+    // has no encoding but defaults to `INCLUDE KEY`.
+    //
+    // As discussed
+    // <https://github.com/MaterializeInc/materialize/pull/26246#issuecomment-2023558097>,
+    // removing this special case amounts to deciding how to handle null keys
+    // from sources, in a holistic way. We aren't yet prepared to do this, so we leave
+    // this special case in.
+    //
+    // Note that this is safe because this generator is
+    // 1. The only source with no encoding that can have its key included.
+    // 2. Never produces null keys (or values, for that matter).
+    let key_envelope_no_encoding = matches!(
+        external_connection,
+        GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+            load_generator: LoadGenerator::KeyValue(_),
+            ..
+        })
+    );
+    let mut key_envelope = get_key_envelope(
+        include_metadata,
+        encoding.as_ref(),
+        key_envelope_no_encoding,
+    )?;
 
     match (&envelope, &key_envelope) {
         (ast::SourceEnvelope::Debezium, KeyEnvelope::None) => {}
@@ -1267,9 +1300,15 @@ pub fn plan_create_source(
         ast::SourceEnvelope::Upsert => {
             let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
                 None => {
-                    bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
+                    if !key_envelope_no_encoding {
+                        bail_unsupported!(format!(
+                            "UPSERT requires a key/value format: {:?}",
+                            format
+                        ))
+                    }
+                    None
                 }
-                Some(key_encoding) => key_encoding,
+                Some(key_encoding) => Some(key_encoding),
             };
             // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
             // specified.
@@ -1617,7 +1656,14 @@ generate_extracted_config!(
     LoadGeneratorOption,
     (TickInterval, Duration),
     (ScaleFactor, f64),
-    (MaxCardinality, u64)
+    (MaxCardinality, u64),
+    (Keys, u64),
+    (SnapshotRounds, u64),
+    (TransactionalSnapshot, bool),
+    (ValueSize, u64),
+    (Seed, u64),
+    (Partitions, u64),
+    (BatchSize, u64)
 );
 
 impl LoadGeneratorOptionExtracted {
@@ -1635,6 +1681,16 @@ impl LoadGeneratorOptionExtracted {
             ast::LoadGenerator::Marketing => &[TickInterval],
             ast::LoadGenerator::Datums => &[TickInterval],
             ast::LoadGenerator::Tpch => &[TickInterval, ScaleFactor],
+            ast::LoadGenerator::KeyValue => &[
+                TickInterval,
+                Keys,
+                SnapshotRounds,
+                TransactionalSnapshot,
+                ValueSize,
+                Seed,
+                Partitions,
+                BatchSize,
+            ],
         };
 
         for o in permitted_options {
@@ -1654,8 +1710,10 @@ impl LoadGeneratorOptionExtracted {
 }
 
 pub(crate) fn load_generator_ast_to_generator(
+    scx: &StatementContext,
     loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
+    include_metadata: &[SourceIncludeMetadata],
 ) -> Result<
     (
         LoadGenerator,
@@ -1665,6 +1723,10 @@ pub(crate) fn load_generator_ast_to_generator(
 > {
     let extracted: LoadGeneratorOptionExtracted = options.to_vec().try_into()?;
     extracted.ensure_only_valid_options(loadgen)?;
+
+    if loadgen != &ast::LoadGenerator::KeyValue && !include_metadata.is_empty() {
+        sql_bail!("INCLUDE metadata only supported with `KEY VALUE` load generators");
+    }
 
     let load_generator = match loadgen {
         ast::LoadGenerator::Auction => LoadGenerator::Auction,
@@ -1711,6 +1773,82 @@ pub(crate) fn load_generator_ast_to_generator(
                 count_clerk,
             }
         }
+        mz_sql_parser::ast::LoadGenerator::KeyValue => {
+            scx.require_feature_flag(&vars::ENABLE_LOAD_GENERATOR_KEY_VALUE)?;
+            let LoadGeneratorOptionExtracted {
+                keys,
+                snapshot_rounds,
+                transactional_snapshot,
+                value_size,
+                tick_interval,
+                seed,
+                partitions,
+                batch_size,
+                ..
+            } = extracted;
+
+            let mut include_offset = None;
+            for im in include_metadata {
+                match im {
+                    SourceIncludeMetadata::Offset { alias } => {
+                        include_offset = match alias {
+                            Some(alias) => Some(alias.to_string()),
+                            None => Some(LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT.to_string()),
+                        }
+                    }
+                    SourceIncludeMetadata::Key { .. } => continue,
+
+                    _ => {
+                        sql_bail!("only `INCLUDE OFFSET` and `INCLUDE KEY` is supported");
+                    }
+                };
+            }
+
+            let lgkv = KeyValueLoadGenerator {
+                keys: keys.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires KEYS"))?,
+                snapshot_rounds: snapshot_rounds
+                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires SNAPSHOT ROUNDS"))?,
+                // Defaults to true.
+                transactional_snapshot: transactional_snapshot.unwrap_or(true),
+                value_size: value_size
+                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires VALUE SIZE"))?,
+                partitions: partitions
+                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires PARTITIONS"))?,
+                tick_interval,
+                batch_size: batch_size
+                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires BATCH SIZE"))?,
+                seed: seed.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires SEED"))?,
+                include_offset,
+            };
+
+            if lgkv.keys == 0
+                || lgkv.partitions == 0
+                || lgkv.value_size == 0
+                || lgkv.batch_size == 0
+            {
+                sql_bail!("LOAD GENERATOR KEY VALUE options must be non-zero")
+            }
+
+            if lgkv.keys % lgkv.partitions != 0 {
+                sql_bail!("KEYS must be a multiple of PARTITIONS")
+            }
+
+            if lgkv.batch_size > lgkv.keys {
+                sql_bail!("KEYS must be larger than BATCH SIZE")
+            }
+
+            // This constraints simplifies the source implementation.
+            // We can lift it later.
+            if (lgkv.keys / lgkv.partitions) % lgkv.batch_size != 0 {
+                sql_bail!("PARTITIONS * BATCH SIZE must be a divisor of KEYS")
+            }
+
+            if lgkv.snapshot_rounds == 0 {
+                sql_bail!("SNAPSHOT ROUNDS must be larger than 0")
+            }
+
+            LoadGenerator::KeyValue(lgkv)
+        }
     };
 
     let mut available_subsources = BTreeMap::new();
@@ -1723,6 +1861,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),
+                LoadGenerator::KeyValue { .. } => "key_value".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },
@@ -2014,6 +2153,7 @@ fn get_encoding_inner(
 fn get_key_envelope(
     included_items: &[SourceIncludeMetadata],
     encoding: Option<&SourceDataEncoding<ReferencedConnection>>,
+    key_envelope_no_encoding: bool,
 ) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
@@ -2021,7 +2161,11 @@ fn get_key_envelope(
     if let Some(SourceIncludeMetadata::Key { alias }) = key_definition {
         match (alias, encoding.and_then(|e| e.key.as_ref())) {
             (Some(name), Some(_)) => Ok(KeyEnvelope::Named(name.as_str().to_string())),
-            (None, Some(key)) => get_unnamed_key_envelope(key),
+            (None, Some(key)) => get_unnamed_key_envelope(Some(key)),
+            (Some(name), _) if key_envelope_no_encoding => {
+                Ok(KeyEnvelope::Named(name.as_str().to_string()))
+            }
+            (None, _) if key_envelope_no_encoding => get_unnamed_key_envelope(None),
             (_, None) => {
                 // `kd.alias` == `None` means `INCLUDE KEY`
                 // `kd.alias` == `Some(_) means INCLUDE KEY AS ___`
@@ -2040,17 +2184,20 @@ fn get_key_envelope(
 /// Gets the key envelope for a given key encoding when no name for the key has
 /// been requested by the user.
 fn get_unnamed_key_envelope(
-    key: &DataEncoding<ReferencedConnection>,
+    key: Option<&DataEncoding<ReferencedConnection>>,
 ) -> Result<KeyEnvelope, PlanError> {
     // If the key is requested but comes from an unnamed type then it gets the name "key"
     //
     // Otherwise it gets the names of the columns in the type
     let is_composite = match key {
-        DataEncoding::Bytes | DataEncoding::Json | DataEncoding::Text => false,
-        DataEncoding::Avro(_)
-        | DataEncoding::Csv(_)
-        | DataEncoding::Protobuf(_)
-        | DataEncoding::Regex { .. } => true,
+        Some(DataEncoding::Bytes | DataEncoding::Json | DataEncoding::Text) => false,
+        Some(
+            DataEncoding::Avro(_)
+            | DataEncoding::Csv(_)
+            | DataEncoding::Protobuf(_)
+            | DataEncoding::Regex { .. },
+        ) => true,
+        None => false,
     };
 
     if is_composite {

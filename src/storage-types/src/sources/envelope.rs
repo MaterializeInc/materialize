@@ -251,8 +251,8 @@ impl UnplannedSourceEnvelope {
                 ..
             } => {
                 let key_desc = match key_desc {
-                    Some(desc) => desc,
-                    None => {
+                    Some(desc) if !desc.is_empty() => desc,
+                    _ => {
                         return Ok((
                             self.into_source_envelope(None, None, None),
                             value_desc.concat(metadata_desc),
