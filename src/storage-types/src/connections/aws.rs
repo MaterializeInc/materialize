@@ -24,6 +24,8 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::controller::AlterError;
+use crate::AlterCompatible;
 use crate::{
     configuration::StorageConfiguration,
     connections::{ConnectionContext, StringOrSecret},
@@ -80,6 +82,13 @@ impl RustType<ProtoAwsConnection> for AwsConnection {
             region: proto.region,
             endpoint: proto.endpoint,
         })
+    }
+}
+
+impl AlterCompatible for AwsConnection {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+        // Every element of the AWS connection is configurable.
+        Ok(())
     }
 }
 

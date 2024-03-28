@@ -190,8 +190,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
         }
 
         let KafkaSourceConnection {
-            // Connection details may change
-            connection: _,
+            connection,
             connection_id,
             topic,
             start_offsets,
@@ -201,6 +200,10 @@ impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
         } = self;
 
         let compatibility_checks = [
+            (
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
+            ),
             (connection_id == &other.connection_id, "connection_id"),
             (topic == &other.topic, "topic"),
             (start_offsets == &other.start_offsets, "start_offsets"),
