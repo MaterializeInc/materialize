@@ -7,10 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.input_data.params.any_operation_param import (
-    AnyLikeOtherOperationParam,
-    AnyOperationParam,
-)
 from materialize.output_consistency.input_data.params.boolean_operation_param import (
     BooleanOperationParam,
 )
@@ -23,14 +19,6 @@ from materialize.output_consistency.operation.operation import (
 )
 
 BOOLEAN_OPERATION_TYPES: list[DbOperationOrFunction] = []
-
-BOOLEAN_OPERATION_TYPES.append(
-    DbOperation(
-        "$ = $",
-        [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
-        BooleanReturnTypeSpec(),
-    )
-)
 
 BOOLEAN_OPERATION_TYPES.append(
     DbOperation(
