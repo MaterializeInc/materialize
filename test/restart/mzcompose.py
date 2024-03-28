@@ -440,6 +440,123 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     )
 
 
+def workflow_index_compute_dependencies(c: Composition) -> None:
+    """
+    Assert that materialized views and index catalog items see and use only
+    indexes created before them upon restart.
+
+    Various parts of the optimizer internals and tooling, such as
+
+    - `EXPLAIN REPLAN`
+    - `bin/mzcompose clone defs`
+
+    are currently depending on the fact that the `GlobalId` ordering respects
+    dependency ordering. In other words, if an index `i` is created after a
+    catalog item `x`, then `x` cannot use `i` even after restart.
+
+    This test should codify this assumption so we can get an early signal if
+    this is broken for some reason in the future.
+    """
+    c.up("testdrive_no_reset", persistent=True)
+    c.up("materialized")
+
+    def depends_on(c: Composition, obj_name: str, dep_name: str, expected: bool):
+        """Check whether `(obj_name, dep_name)` is a compute dependency or not."""
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent(
+                f"""
+                > (
+                    SELECT
+                      true
+                    FROM
+                      mz_catalog.mz_objects as obj
+                    WHERE
+                      obj.name = '{obj_name}' AND
+                      obj.id IN (
+                        SELECT
+                          cd.object_id
+                        FROM
+                          mz_internal.mz_compute_dependencies cd JOIN
+                          mz_objects dep ON (cd.dependency_id = dep.id)
+                        WHERE
+                          dep.name = '{dep_name}'
+                      )
+                  ) UNION (
+                    SELECT
+                      false
+                    FROM
+                      mz_catalog.mz_objects as obj
+                    WHERE
+                      obj.name = '{obj_name}' AND
+                      obj.id NOT IN (
+                        SELECT
+                          cd.object_id
+                        FROM
+                          mz_internal.mz_compute_dependencies cd JOIN
+                          mz_objects dep ON (cd.dependency_id = dep.id)
+                        WHERE
+                          dep.name = '{dep_name}'
+                      )
+                  );
+                {str(expected).lower()}
+                """
+            ),
+        )
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > DROP TABLE IF EXISTS t1 CASCADE;
+            > DROP TABLE IF EXISTS t2 CASCADE;
+
+            > CREATE TABLE t1(x int, y int);
+            > CREATE TABLE t2(y int, z int);
+
+            > CREATE INDEX ON t1(y);
+
+            > CREATE VIEW v1 AS SELECT * FROM t1 JOIN t2 USING (y);
+            > CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM v1;
+            > CREATE INDEX ix1 ON v1(x);
+
+            > CREATE INDEX ON t2(y);
+
+            > CREATE VIEW v2 AS SELECT * FROM t2 JOIN t1 USING (y);
+            > CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM v2;
+            > CREATE INDEX ix2 ON v2(x);
+            """
+        ),
+    )
+
+    # Verify that mv1 and ix1 depend on t1_y_idx but not on t2_y_idx.
+    depends_on(c, "mv1", "t1_y_idx", True)
+    depends_on(c, "mv1", "t2_y_idx", False)
+    depends_on(c, "ix1", "t1_y_idx", True)
+    depends_on(c, "ix1", "t2_y_idx", False)
+    # Verify that mv2 and ix2 depend on both t1_y_idx and t2_y_idx.
+    depends_on(c, "mv2", "t1_y_idx", True)
+    depends_on(c, "mv2", "t2_y_idx", True)
+    depends_on(c, "ix2", "t1_y_idx", True)
+    depends_on(c, "ix2", "t2_y_idx", True)
+
+    # Restart mz. We expect the index on t2(y) to not be visible to ix1 and mv1
+    # after the restart as well.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Verify that mv1 and ix1 depend on t1_y_idx but not on t2_y_idx.
+    depends_on(c, "mv1", "t1_y_idx", True)
+    depends_on(c, "mv1", "t2_y_idx", False)
+    depends_on(c, "ix1", "t1_y_idx", True)
+    depends_on(c, "ix1", "t2_y_idx", False)
+    # Verify that mv2 and ix2 depend on both t1_y_idx and t2_y_idx.
+    depends_on(c, "mv2", "t1_y_idx", True)
+    depends_on(c, "mv2", "t2_y_idx", True)
+    depends_on(c, "ix2", "t1_y_idx", True)
+    depends_on(c, "ix2", "t2_y_idx", True)
+
+
 def workflow_default(c: Composition) -> None:
     for name in c.workflows:
         if name == "default":
