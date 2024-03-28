@@ -107,8 +107,7 @@ INSERT INTO add_columns VALUES (2, 'ab');
 
 > SELECT * from add_columns;
 1
-# TODO: #24630 (refresh delay)
-# 2
+2
 
 
 #
@@ -178,10 +177,9 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_add_nullability MODIFY f1 INTEGER NOT NULL;
 INSERT INTO alter_add_nullability VALUES (1);
 
-# TODO: #24630 (refresh delay)
-# > select * from alter_add_nullability;
-# 1
-# 1
+> select * from alter_add_nullability;
+1
+1
 
 # TODO: #25040 (changes to columns)
 # ? EXPLAIN SELECT * FROM alter_add_nullability WHERE f1 IS NULL;
@@ -212,10 +210,9 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_add_pk ADD PRIMARY KEY(f1);
 INSERT INTO alter_add_pk VALUES (2);
 
-# TODO: #24630 (refresh delay)
-# > SELECT * FROM alter_add_pk;
-# 1
-# 2
+> SELECT * FROM alter_add_pk;
+1
+2
 
 
 #
@@ -244,11 +241,9 @@ ALTER TABLE alter_cycle_pk_off ADD PRIMARY KEY(f1);
 ALTER TABLE alter_cycle_pk_off DROP PRIMARY KEY;
 INSERT INTO alter_cycle_pk_off VALUES (1);
 
-# TODO: #24630 (refresh delay)
-# > SELECT * FROM alter_cycle_pk_off;
-# 1
-# 1
-
+> SELECT * FROM alter_cycle_pk_off;
+1
+1
 
 #
 # Drop unique
@@ -273,10 +268,9 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_add_unique MODIFY f1 INTEGER UNIQUE;
 INSERT INTO alter_add_unique VALUES (2);
 
-# TODO: #24630 (refresh delay)
-# > SELECT * FROM alter_add_unique;
-# 1
-# 2
+> SELECT * FROM alter_add_unique;
+1
+2
 
 
 #
@@ -365,25 +359,18 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_table_supported ADD COLUMN f3 int;
 INSERT INTO alter_table_supported (f1, f2, f3) VALUES (2, 2, 2);
 
-# TODO: #24630 (refresh delay): remove when the statement after this one works
-> SELECT * from alter_table_supported WHERE f1 = 1;
+> SELECT * from alter_table_supported;
 1 1
-
-# TODO: #24630 (refresh delay)
-# > SELECT * from alter_table_supported;
-# 1 1
-# 2 2
-
+2 2
 
 $ mysql-execute name=mysql
 ALTER TABLE alter_table_supported DROP COLUMN f3;
 INSERT INTO alter_table_supported (f1, f2) VALUES (3, 3);
 
-# TODO: #24630 (refresh delay)
-# > SELECT * from alter_table_supported;
-# 1 1
-# 2 2
-# 3 3
+> SELECT * from alter_table_supported;
+1 1
+2 2
+3 3
 
 $ mysql-execute name=mysql
 ALTER TABLE alter_table_supported DROP COLUMN f2;

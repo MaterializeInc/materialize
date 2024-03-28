@@ -42,15 +42,20 @@ fn table_ident(name: &str, current_schema: &str) -> Result<MySqlTableName, Trans
 /// the database, unless the query is logged row-based.' This means that we can
 /// expect any DDL changes to be represented as QueryEvents, which we must parse
 /// to figure out if any of the tables we care about have been affected.
+///
+/// This function returns a bool to represent whether the event that was handled
+/// represents a 'complete' event that should cause the frontier to advance beyond
+/// the current GTID.
 pub(super) async fn handle_query_event(
     event: QueryEvent<'_>,
     ctx: &mut ReplContext<'_>,
     new_gtid: &GtidPartition,
-) -> Result<(), TransientError> {
+) -> Result<bool, TransientError> {
     let (id, worker_id) = (ctx.config.id, ctx.config.worker_id);
 
     let query = event.query();
     let current_schema = event.schema();
+    let mut is_complete_event = false;
 
     // MySQL does not permit transactional DDL, so luckily we don't need to
     // worry about tracking BEGIN/COMMIT query events. We only need to look
@@ -58,17 +63,19 @@ pub(super) async fn handle_query_event(
     let mut query_iter = query.split_ascii_whitespace();
     let first = query_iter.next();
     let second = query_iter.next();
-    if let (Some(first), Some(second)) = (first, second) {
+    match (
+        first.map(str::to_ascii_lowercase).as_deref(),
+        second.map(str::to_ascii_lowercase).as_deref(),
+    ) {
         // Detect `ALTER TABLE <tbl>`, `RENAME TABLE <tbl>` statements
-        if (first.eq_ignore_ascii_case("alter") | first.eq_ignore_ascii_case("rename"))
-            && second.eq_ignore_ascii_case("table")
-        {
+        (Some("alter") | Some("rename"), Some("table")) => {
             let table = table_ident(
                 query_iter.next().ok_or_else(|| {
                     TransientError::Generic(anyhow::anyhow!("Invalid DDL query: {}", query))
                 })?,
                 &current_schema,
             )?;
+            is_complete_event = true;
             if ctx.table_info.contains_key(&table) {
                 trace!(%id, "timely-{worker_id} DDL change detected \
                        for {table:?}");
@@ -100,10 +107,10 @@ pub(super) async fn handle_query_event(
                     ctx.errored_tables.insert(table.clone());
                 }
             }
-
+        }
         // Detect `DROP TABLE [IF EXISTS] <tbl>, <tbl>` statements. Since
         // this can drop multiple tables we just check all tables we care about
-        } else if first.eq_ignore_ascii_case("drop") && second.eq_ignore_ascii_case("table") {
+        (Some("drop"), Some("table")) => {
             let mut conn = ctx
                 .connection_config
                 .connect(
@@ -119,6 +126,7 @@ pub(super) async fn handle_query_event(
                 .collect::<Vec<_>>();
             let schema_errors =
                 verify_schemas(&mut *conn, &expected, ctx.text_columns, ctx.ignore_columns).await?;
+            is_complete_event = true;
             for (dropped_table, err) in schema_errors {
                 if ctx.table_info.contains_key(dropped_table)
                     && !ctx.errored_tables.contains(dropped_table)
@@ -134,9 +142,11 @@ pub(super) async fn handle_query_event(
                     }
                 }
             }
-
+        }
         // Detect `TRUNCATE [TABLE] <tbl>` statements
-        } else if first.eq_ignore_ascii_case("truncate") {
+        (Some("truncate"), Some(_)) => {
+            // We need the original un-lowercased version of 'second' since it might be a table ref
+            let second = second.expect("known to be Some");
             let table = if second.eq_ignore_ascii_case("table") {
                 table_ident(
                     query_iter.next().ok_or_else(|| {
@@ -147,6 +157,7 @@ pub(super) async fn handle_query_event(
             } else {
                 table_ident(second, &current_schema)?
             };
+            is_complete_event = true;
             if ctx.table_info.contains_key(&table) {
                 trace!(%id, "timely-{worker_id} TRUNCATE detected \
                        for {table:?}");
@@ -169,9 +180,15 @@ pub(super) async fn handle_query_event(
                 }
             }
         }
-    };
+        // Detect `COMMIT` statements which signify the end of a transaction on non-XA capable
+        // storage engines
+        (Some("commit"), None) => {
+            is_complete_event = true;
+        }
+        _ => {}
+    }
 
-    Ok(())
+    Ok(is_complete_event)
 }
 
 /// Handles RowsEvents from the MySQL replication stream. These events contain
