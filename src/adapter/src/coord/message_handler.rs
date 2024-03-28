@@ -27,10 +27,8 @@ use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_types::controller::CollectionMetadata;
-use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
-use tracing::{event, info_span, warn, Instrument, Level};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
+use tracing::{event, info_span, warn, Instrument, Level, Span};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::command::Command;
@@ -56,19 +54,11 @@ impl Coordinator {
     /// callsite so that we can correctly instrument the boxed future here _and_
     /// so that we can stitch up the OpenTelemetryContext when we're processing
     /// a `Message::Command` or other commands that pass around a context.
-    pub(crate) fn handle_message<'a>(
-        &'a mut self,
-        span: tracing::Span,
-        msg: Message,
-    ) -> LocalBoxFuture<'a, ()> {
+    pub(crate) fn handle_message<'a>(&'a mut self, msg: Message) -> LocalBoxFuture<'a, ()> {
         async move {
             match msg {
-                Message::Command(otel_ctx, cmd) => {
-                    // TODO: We need a Span that is not none for the otel_ctx to attach the parent
-                    // relationship to. If we swap the otel_ctx in `Command::Message` for a Span, we
-                    // can downgrade this to a debug_span.
-                    let span = tracing::info_span!("message_command").or_current();
-                    span.in_scope(|| otel_ctx.attach_as_parent());
+                Message::Command( cmd) => {
+                    let span = tracing::info_span!("message_command");
                     self.message_command(cmd).instrument(span).await
                 }
                 Message::ControllerReady => {
@@ -93,10 +83,8 @@ impl Coordinator {
                 Message::WriteLockGrant(write_lock_guard) => {
                     self.message_write_lock_grant(write_lock_guard).await;
                 }
-                Message::GroupCommitInitiate(span, permit) => {
-                    // Add an OpenTelemetry link to our current span.
-                    tracing::Span::current().add_link(span.context().span().span_context().clone());
-                    self.try_group_commit(permit).instrument(span).await
+                Message::GroupCommitInitiate(permit) => {
+                    self.try_group_commit(permit).await
                 }
                 Message::GroupCommitApply(timestamp, responses, write_lock_guard, permit) => {
                     self.group_commit_apply(timestamp, responses, write_lock_guard, permit)
@@ -204,7 +192,6 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(span)
         .boxed_local()
     }
 
@@ -256,7 +243,10 @@ impl Coordinator {
 
             // It is not an error for shard sizes to become ready after
             // `internal_cmd_rx` is dropped.
-            if let Err(e) = internal_cmd_tx.send(Message::StorageUsageUpdate(shard_sizes)) {
+            if let Err(e) = internal_cmd_tx.send((
+                info_span!(parent: None, "StorageUsageUpdate"),
+                Message::StorageUsageUpdate(shard_sizes),
+            )) {
                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
             }
         });
@@ -288,7 +278,9 @@ impl Coordinator {
                 task::spawn(|| "storage_usage_update_table_updates", async move {
                     table_updates.instrument(task_span).await;
                     // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                    if let Err(e) = internal_cmd_tx.send(Message::StorageUsageSchedule) {
+                    if let Err(e) =
+                        internal_cmd_tx.send((Span::current(), Message::StorageUsageSchedule))
+                    {
                         warn!("internal_cmd_rx dropped before we could send: {e:?}");
                     }
                 });
@@ -341,7 +333,13 @@ impl Coordinator {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         task::spawn(|| "storage_usage_collection", async move {
             tokio::time::sleep(next_collection_interval).await;
-            if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
+            if internal_cmd_tx
+                .send((
+                    info_span!(parent: None, "StorageUsageFetch"),
+                    Message::StorageUsageFetch,
+                ))
+                .is_err()
+            {
                 // If sending fails, the main thread has shutdown.
             }
         });
@@ -813,7 +811,10 @@ impl Coordinator {
             task::spawn(|| "deferred_read_txns", async move {
                 tokio::time::sleep(remaining_ms).await;
                 // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                let result = internal_cmd_tx.send(Message::LinearizeReads);
+                let result = internal_cmd_tx.send((
+                    info_span!(parent: None, "LinearizeReads"),
+                    Message::LinearizeReads,
+                ));
                 if let Err(e) = result {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                 }

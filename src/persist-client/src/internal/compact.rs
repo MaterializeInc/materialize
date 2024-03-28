@@ -38,7 +38,7 @@ use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::metrics::ShardMetrics;
-use crate::internal::state::{HollowBatch, HollowBatchPart};
+use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::Consolidator;
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
@@ -298,7 +298,7 @@ where
             .inputs
             .iter()
             .flat_map(|batch| batch.parts.iter())
-            .map(|parts| parts.encoded_size_bytes)
+            .map(|parts| parts.encoded_size_bytes())
             .sum::<usize>();
         let timeout = Duration::max(
             // either our minimum timeout
@@ -375,6 +375,10 @@ where
                         }
                         metrics.compaction.noop.inc();
                         for part in res.output.parts {
+                            let part = match part {
+                                BatchPart::Hollow(x) => x,
+                                BatchPart::Inline(_) => continue,
+                            };
                             let key = part.key.complete(&machine.shard_id());
                             retry_external(
                                 &metrics.retries.external.compaction_noop_delete,
@@ -551,7 +555,7 @@ where
         cfg: &CompactConfig,
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
-    ) -> Vec<(Vec<(&'a Description<T>, &'a [HollowBatchPart<T>])>, usize)> {
+    ) -> Vec<(Vec<(&'a Description<T>, &'a [BatchPart<T>])>, usize)> {
         let ordered_runs = Self::order_runs(req);
         let mut ordered_runs = ordered_runs.iter().peekable();
 
@@ -562,7 +566,7 @@ where
             let run_greatest_part_size = run
                 .1
                 .iter()
-                .map(|x| x.encoded_size_bytes)
+                .map(|x| x.encoded_size_bytes())
                 .max()
                 .unwrap_or(cfg.batch.blob_target_size);
             current_chunk.push(*run);
@@ -572,7 +576,7 @@ where
                 let next_run_greatest_part_size = next_run
                     .1
                     .iter()
-                    .map(|x| x.encoded_size_bytes)
+                    .map(|x| x.encoded_size_bytes())
                     .max()
                     .unwrap_or(cfg.batch.blob_target_size);
 
@@ -623,7 +627,7 @@ where
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
     /// ```
-    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &[HollowBatchPart<T>])> {
+    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &[BatchPart<T>])> {
         let total_number_of_runs = req.inputs.iter().map(|x| x.runs.len() + 1).sum::<usize>();
 
         let mut batch_runs: VecDeque<_> = req
@@ -652,7 +656,7 @@ where
         cfg: &'a CompactConfig,
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
-        runs: Vec<(&'a Description<T>, &'a [HollowBatchPart<T>])>,
+        runs: Vec<(&'a Description<T>, &'a [BatchPart<T>])>,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
@@ -686,7 +690,7 @@ where
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
             Arc::clone(&blob),
-            isolated_runtime,
+            Arc::clone(&isolated_runtime),
             shard_id.clone(),
             cfg.version.clone(),
             desc.since().clone(),
@@ -737,7 +741,17 @@ where
             }
             tokio::task::yield_now().await;
         }
-        let batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
+        let mut batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
+        // Use compaction as a method of getting inline writes out of state, to
+        // make room for more inline writes.
+        let () = batch
+            .flush_to_blob(
+                &cfg.batch,
+                &metrics.compaction.batch,
+                &isolated_runtime,
+                &real_schemas,
+            )
+            .await;
         let hollow_batch = batch.into_hollow_batch();
 
         timings.record(&metrics);
@@ -871,7 +885,10 @@ mod tests {
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 1);
         assert_eq!(res.output.parts.len(), 1);
-        let part = &res.output.parts[0];
+        let part = match &res.output.parts[0] {
+            BatchPart::Hollow(x) => x,
+            BatchPart::Inline(_) => panic!("test outputs a hollow part"),
+        };
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
@@ -954,7 +971,10 @@ mod tests {
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 2);
         assert_eq!(res.output.parts.len(), 1);
-        let part = &res.output.parts[0];
+        let part = match &res.output.parts[0] {
+            BatchPart::Hollow(x) => x,
+            BatchPart::Inline(_) => panic!("test outputs a hollow part"),
+        };
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),

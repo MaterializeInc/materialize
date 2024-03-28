@@ -187,8 +187,8 @@ impl Coordinator {
                 async move {
                     tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
                     // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                    let result =
-                        internal_cmd_tx.send(Message::GroupCommitInitiate(Span::current(), permit));
+                    let result = internal_cmd_tx
+                        .send((Span::current(), Message::GroupCommitInitiate(permit)));
                     if let Err(e) = result {
                         warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                     }
@@ -405,7 +405,7 @@ impl Coordinator {
                 drop(write_lock_guard);
 
                 // Advance other timelines.
-                if let Err(e) = internal_cmd_tx.send(Message::AdvanceTimelines) {
+                if let Err(e) = internal_cmd_tx.send((Span::current(), Message::AdvanceTimelines)) {
                     warn!("Server closed with non-advanced timelines, {e}");
                 }
 
@@ -451,7 +451,7 @@ impl Coordinator {
         // transactions. We send the `AdvanceTimelines` message here out of convenience, because we
         // know at least the real-time timeline will have a read hold that can be updated.
         self.internal_cmd_tx
-            .send(Message::AdvanceTimelines)
+            .send((Span::current(), Message::AdvanceTimelines))
             .expect("sending to self.internal_cmd_tx cannot fail");
     }
 
@@ -482,7 +482,10 @@ impl Coordinator {
         task::spawn(|| format!("defer_write:{id}"), async move {
             let guard = write_lock.lock_owned().await;
             // It is not an error for this lock to be released after `internal_cmd_rx` to be dropped.
-            let result = internal_cmd_tx.send(Message::WriteLockGrant(guard));
+            let result = internal_cmd_tx.send((
+                tracing::info_span!(parent: None, "WriteLockGrant"),
+                Message::WriteLockGrant(guard),
+            ));
             if let Err(e) = result {
                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
             }

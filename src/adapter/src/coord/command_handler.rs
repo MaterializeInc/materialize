@@ -668,15 +668,16 @@ impl Coordinator {
                     .await
                     .map_err(|e| e.into());
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
-                    let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
-                        PurifiedStatementReady {
+                    let result = internal_cmd_tx.send((
+                        tracing::info_span!(parent: None, "PurifiedStatementReady"),
+                        Message::PurifiedStatementReady(PurifiedStatementReady {
                             ctx,
                             result,
                             params,
                             resolved_ids,
                             original_stmt,
                             otel_ctx,
-                        },
+                        }),
                     ));
                     if let Err(e) = result {
                         tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);

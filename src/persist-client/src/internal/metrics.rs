@@ -96,6 +96,8 @@ pub struct Metrics {
     pub tasks: TasksMetrics,
     /// Metrics for columnar data encoding and decoding.
     pub columnar: ColumnarMetrics,
+    /// Metrics for inline writes.
+    pub inline: InlineMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -153,6 +155,7 @@ impl Metrics {
             blob_cache_mem: BlobMemCache::new(registry),
             tasks: TasksMetrics::new(registry),
             columnar,
+            inline: InlineMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob,
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
@@ -670,13 +673,19 @@ pub struct BatchPartReadMetrics {
     pub(crate) compaction: ReadMetrics,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ReadMetrics {
     pub(crate) part_bytes: IntCounter,
     pub(crate) part_goodbytes: IntCounter,
     pub(crate) part_count: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) ts_rewrite: IntCounter,
+}
+
+impl std::fmt::Debug for ReadMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadMetrics").finish_non_exhaustive()
+    }
 }
 
 // This one is Clone in contrast to the others because it has to get moved into
@@ -1204,7 +1213,9 @@ pub struct ShardsMetrics {
     backpressure_emitted_bytes: IntCounterVec,
     backpressure_last_backpressured_bytes: UIntGaugeVec,
     backpressure_retired_bytes: IntCounterVec,
-    rewrite_part_count: mz_ore::metrics::UIntGaugeVec,
+    rewrite_part_count: UIntGaugeVec,
+    inline_part_count: UIntGaugeVec,
+    inline_part_bytes: UIntGaugeVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1389,9 +1400,19 @@ impl ShardsMetrics {
                 help:"A counter with the number of bytes retired by downstream processing.",
                 var_labels: ["shard", "name"],
             )),
-            rewrite_part_count: registry.register(metric!(
-                name: "mz_persist_shard_rewrite_part_count",
-                help: "count of batch parts with rewrites by shard",
+                   rewrite_part_count: registry.register(metric!(
+                           name: "mz_persist_shard_rewrite_part_count",
+                           help: "count of batch parts with rewrites by shard",
+                var_labels: ["shard", "name"],
+            )),
+            inline_part_count: registry.register(metric!(
+                name: "mz_persist_shard_inline_part_count",
+                help: "WIP",
+                var_labels: ["shard", "name"],
+            )),
+            inline_part_bytes: registry.register(metric!(
+                name: "mz_persist_shard_inline_part_bytes",
+                help: "WIP",
                 var_labels: ["shard", "name"],
             )),
             shards,
@@ -1472,6 +1493,8 @@ pub struct ShardMetrics {
         Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
     pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
     pub rewrite_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub inline_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub inline_part_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1583,6 +1606,12 @@ impl ShardMetrics {
             ),
             rewrite_part_count: shards_metrics
                 .rewrite_part_count
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            inline_part_count: shards_metrics
+                .inline_part_count
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            inline_part_bytes: shards_metrics
+                .inline_part_bytes
                 .get_delete_on_drop_gauge(vec![shard, name.to_string()]),
         }
     }
@@ -2755,6 +2784,45 @@ impl TasksMetrics {
         let heartbeat_read = TaskMetrics::new("heartbeat_read");
         registry.register_collector(heartbeat_read.clone());
         TasksMetrics { heartbeat_read }
+    }
+}
+
+#[derive(Debug)]
+pub struct InlineMetrics {
+    pub backpressure_count: IntCounter,
+    // WIP redundant with backpressure_write,
+    pub backpressure_bytes: IntCounter,
+    pub backpressure_write: BatchWriteMetrics,
+    pub flush_part_count: IntCounter,
+    pub flush_part_bytes: IntCounter,
+    pub flush_part_seconds: Counter,
+}
+
+impl InlineMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        InlineMetrics {
+            backpressure_count: registry.register(metric!(
+                name: "mz_persist_inline_backpressure_count",
+                help: "The count of backpressured inline write attempts.",
+            )),
+            backpressure_bytes: registry.register(metric!(
+                name: "mz_persist_inline_backpressure_bytes_WIP",
+                help: "Total bytes of backpressured inline write attempts.",
+            )),
+            backpressure_write: BatchWriteMetrics::new(registry, "inline_backpressure"),
+            flush_part_count: registry.register(metric!(
+                name: "mz_persist_inline_flush_part_count",
+                help: "WIP",
+            )),
+            flush_part_bytes: registry.register(metric!(
+                name: "mz_persist_inline_flush_part_bytes",
+                help: "WIP",
+            )),
+            flush_part_seconds: registry.register(metric!(
+                name: "mz_persist_inline_flush_part_seconds",
+                help: "WIP",
+            )),
+        }
     }
 }
 

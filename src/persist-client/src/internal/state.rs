@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -22,6 +23,7 @@ use differential_dataflow::trace::Description;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
@@ -35,7 +37,7 @@ use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{parse_id, LazyPartStats};
+use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};
@@ -169,6 +171,79 @@ pub struct HandleDebugState {
     pub purpose: String,
 }
 
+/// Part of the updates in a Batch.
+///
+/// Either a pointer to ones stored in Blob or the updates themselves inlined.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type")]
+pub enum BatchPart<T> {
+    Hollow(HollowBatchPart<T>),
+    Inline(LazyInlineBatchPart),
+}
+
+impl<T> BatchPart<T> {
+    pub fn encoded_size_bytes(&self) -> usize {
+        match self {
+            BatchPart::Hollow(x) => x.encoded_size_bytes,
+            BatchPart::Inline(x) => x.encoded_size_bytes(),
+        }
+    }
+
+    pub fn key(&self) -> Option<&PartialBatchKey> {
+        match self {
+            BatchPart::Hollow(x) => Some(&x.key),
+            BatchPart::Inline(_) => None,
+        }
+    }
+
+    pub fn stats(&self) -> Option<&LazyPartStats> {
+        match self {
+            BatchPart::Hollow(x) => x.stats.as_ref(),
+            BatchPart::Inline(_) => None,
+        }
+    }
+
+    pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
+        match self {
+            BatchPart::Hollow(x) => x.ts_rewrite.as_ref(),
+            BatchPart::Inline(_) => None,
+        }
+    }
+}
+
+impl<T: Timestamp + Codec64> BatchPart<T> {
+    pub fn key_lower<'a>(&'a self) -> Cow<'a, [u8]> {
+        match self {
+            BatchPart::Hollow(x) => Cow::Borrowed(x.key_lower.as_slice()),
+            BatchPart::Inline(x) => {
+                // WIP decoding this whole thing seems pretty inefficient!
+                let x: BlobTraceBatchPart<T> = x.decode().expect("WIP");
+                let x = x.updates.first().expect("WIP");
+                let ((key, _), _, _) = x.get(0).expect("WIP");
+                tracing::info!("WIP key_lower {:?}: {:?}", key, x);
+                return Cow::Owned(key.to_owned());
+            }
+        }
+    }
+}
+
+impl<T: Ord> PartialOrd for BatchPart<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Ord> Ord for BatchPart<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (BatchPart::Hollow(s), BatchPart::Hollow(o)) => s.cmp(o),
+            (BatchPart::Inline(s), BatchPart::Inline(o)) => s.cmp(o),
+            (BatchPart::Hollow(_), BatchPart::Inline(_)) => Ordering::Less,
+            (BatchPart::Inline(_), BatchPart::Hollow(_)) => Ordering::Greater,
+        }
+    }
+}
+
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HollowBatchPart<T> {
@@ -201,7 +276,7 @@ pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
     /// Pointers usable to retrieve the updates.
-    pub parts: Vec<HollowBatchPart<T>>,
+    pub parts: Vec<BatchPart<T>>,
     /// The number of updates in the batch.
     pub len: usize,
     /// Runs of sequential sorted batch parts, stored as indices into `parts`.
@@ -306,6 +381,16 @@ impl<T> HollowBatch<T> {
             emitted_implicit: false,
         }
     }
+
+    pub(crate) fn inline_bytes(&self) -> usize {
+        self.parts
+            .iter()
+            .map(|x| match x {
+                BatchPart::Inline(x) => x.encoded_size_bytes(),
+                BatchPart::Hollow(_) => 0,
+            })
+            .sum()
+    }
 }
 
 pub(crate) struct HollowBatchRunIter<'a, T> {
@@ -315,7 +400,7 @@ pub(crate) struct HollowBatchRunIter<'a, T> {
 }
 
 impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
-    type Item = &'a [HollowBatchPart<T>];
+    type Item = &'a [BatchPart<T>];
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.batch.parts.is_empty() {
@@ -379,7 +464,7 @@ impl<T: Timestamp> HollowBatch<T> {
             ));
         }
         for part in self.parts.iter() {
-            let Some(ts_rewrite) = part.ts_rewrite.as_ref() else {
+            let Some(ts_rewrite) = part.ts_rewrite() else {
                 continue;
             };
             if PartialOrder::less_than(frontier, ts_rewrite) {
@@ -397,7 +482,10 @@ impl<T: Timestamp> HollowBatch<T> {
             self.desc.since().clone(),
         );
         for part in &mut self.parts {
-            part.ts_rewrite = Some(frontier.clone());
+            match part {
+                BatchPart::Hollow(part) => part.ts_rewrite = Some(frontier.clone()),
+                BatchPart::Inline(_) => unimplemented!("WIP"),
+            }
         }
         Ok(())
     }
@@ -499,6 +587,7 @@ pub enum CompareAndAppendBreak<T> {
         writer_upper: Antichain<T>,
     },
     InvalidUsage(InvalidUsage<T>),
+    InlineBackpressure(usize),
 }
 
 #[derive(Debug)]
@@ -640,6 +729,7 @@ where
         lease_duration_ms: u64,
         idempotency_token: &IdempotencyToken,
         debug_info: &HandleDebugState,
+        inline_update_max_bytes: usize,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -684,7 +774,7 @@ where
                 InvalidUsage::InvalidEmptyTimeInterval {
                     lower: batch.desc.lower().clone(),
                     upper: batch.desc.upper().clone(),
-                    keys: batch.parts.iter().map(|x| x.key.clone()).collect(),
+                    keys: batch.parts.iter().flat_map(|x| x.key().cloned()).collect(),
                 },
             ));
         }
@@ -710,6 +800,16 @@ where
                 shard_upper: shard_upper.clone(),
                 writer_upper: writer_state.most_recent_write_upper.clone(),
             });
+        }
+
+        let new_inline_bytes = batch.inline_bytes();
+        if new_inline_bytes > 0 {
+            let mut existing_inline_bytes = 0;
+            self.trace
+                .map_batches(|x| existing_inline_bytes += x.inline_bytes());
+            if existing_inline_bytes + new_inline_bytes >= inline_update_max_bytes {
+                return Break(CompareAndAppendBreak::InlineBackpressure(new_inline_bytes));
+            }
         }
 
         let merge_reqs = if batch.desc.upper() != batch.desc.lower() {
@@ -1324,9 +1424,16 @@ where
 
                 let mut batch_size = 0;
                 for x in x.parts.iter() {
-                    batch_size += x.encoded_size_bytes;
-                    if x.ts_rewrite.is_some() {
+                    batch_size += x.encoded_size_bytes();
+                    if x.ts_rewrite().is_some() {
                         ret.rewrite_part_count += 1;
+                    }
+                    match x {
+                        BatchPart::Hollow(_) => {}
+                        BatchPart::Inline(x) => {
+                            ret.inline_part_count += 1;
+                            ret.inline_part_bytes += x.encoded_size_bytes();
+                        }
                     }
                 }
                 ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);
@@ -1592,6 +1699,8 @@ pub struct StateSizeMetrics {
     pub state_batches_bytes: usize,
     pub state_rollups_bytes: usize,
     pub state_rollup_count: usize,
+    pub inline_part_count: usize,
+    pub inline_part_bytes: usize,
 }
 
 #[derive(Default)]
@@ -1652,6 +1761,8 @@ pub(crate) mod tests {
                     (Antichain::from_elem(t1), Antichain::from_elem(t0))
                 };
                 let since = Antichain::from_elem(since);
+                // WIP also gen inline batch parts?
+                let parts = parts.into_iter().map(BatchPart::Hollow).collect::<Vec<_>>();
                 let runs = if runs { vec![parts.len()] } else { vec![] };
                 HollowBatch {
                     desc: Description::new(lower, upper, since),
@@ -1816,12 +1927,14 @@ pub(crate) mod tests {
             ),
             parts: keys
                 .iter()
-                .map(|x| HollowBatchPart {
-                    key: PartialBatchKey((*x).to_owned()),
-                    encoded_size_bytes: 0,
-                    key_lower: vec![],
-                    stats: None,
-                    ts_rewrite: None,
+                .map(|x| {
+                    BatchPart::Hollow(HollowBatchPart {
+                        key: PartialBatchKey((*x).to_owned()),
+                        encoded_size_bytes: 0,
+                        key_lower: vec![],
+                        stats: None,
+                        ts_rewrite: None,
+                    })
                 })
                 .collect(),
             len,
@@ -2006,6 +2119,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             ),
             Break(CompareAndAppendBreak::Upper {
                 shard_upper: Antichain::from_elem(0),
@@ -2022,6 +2136,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2034,6 +2149,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
@@ -2050,6 +2166,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidEmptyTimeInterval {
@@ -2069,6 +2186,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
     }
@@ -2113,6 +2231,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2183,6 +2302,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2211,6 +2331,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2271,6 +2392,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
         assert!(state
@@ -2282,6 +2404,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2336,6 +2459,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
 
@@ -2354,6 +2478,7 @@ pub(crate) mod tests {
                 LEASE_DURATION_MS,
                 &IdempotencyToken::new(),
                 &debug_state(),
+                0,
             )
             .is_continue());
     }
@@ -2386,6 +2511,7 @@ pub(crate) mod tests {
             LEASE_DURATION_MS,
             &IdempotencyToken::new(),
             &debug_state(),
+            0,
         );
         assert_eq!(state.maybe_gc(false), None);
 

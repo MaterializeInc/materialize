@@ -10,6 +10,7 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::anyhow;
+use std::borrow::Cow;
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -34,7 +35,7 @@ use tracing::{debug_span, Instrument};
 use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter, LeasedBatchPart};
 use crate::internal::metrics::{BatchPartReadMetrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
-use crate::internal::state::HollowBatchPart;
+use crate::internal::state::{BatchPart, HollowBatchPart};
 use crate::metrics::Metrics;
 use crate::read::SubscriptionLeaseReturner;
 use crate::ShardId;
@@ -77,12 +78,16 @@ pub(crate) enum FetchData<T> {
     },
     AlreadyFetched,
 }
+
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     fn maybe_unconsolidated(&self) -> bool {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
         match self {
             FetchData::Unleased { part, .. } => part.key.split().0 >= min_version,
-            FetchData::Leased { part, .. } => part.part.key.split().0 >= min_version,
+            FetchData::Leased { part, .. } => match part.part.key() {
+                Some(key) => key.split().0 >= min_version,
+                None => true,
+            },
             FetchData::AlreadyFetched => false,
         }
     }
@@ -91,11 +96,11 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         mem::replace(self, FetchData::AlreadyFetched)
     }
 
-    fn key_lower(&self) -> &[u8] {
+    fn key_lower<'a>(&'a self) -> Cow<'a, [u8]> {
         match self {
-            FetchData::Unleased { part, .. } => part.key_lower.as_slice(),
-            FetchData::Leased { part, .. } => part.part.key_lower.as_slice(),
-            FetchData::AlreadyFetched => &[],
+            FetchData::Unleased { part, .. } => Cow::Borrowed(part.key_lower.as_slice()),
+            FetchData::Leased { part, .. } => part.part.key_lower(),
+            FetchData::AlreadyFetched => Cow::Borrowed(&[]),
         }
     }
 
@@ -130,7 +135,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
             } => {
                 // We do not use fetch_leased_part, since that requires more type info
                 // than we have available here.
-                let fetched = fetch_batch_part(
+                let fetched = EncodedPart::fetch(
                     &part.shard_id,
                     &*blob,
                     &part.metrics,
@@ -192,19 +197,19 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
         Self::Sorted { data, index: 0 }
     }
 
-    fn kvt_lower(&mut self) -> Option<(&[u8], &[u8], T)> {
+    fn kvt_lower(&mut self) -> Option<(Cow<'_, [u8]>, &[u8], T)> {
         match self {
             ConsolidationPart::Queued { data } => Some((data.key_lower(), &[], T::minimum())),
             ConsolidationPart::Prefetched { key_lower, .. } => {
-                Some((key_lower.as_slice(), &[], T::minimum()))
+                Some((Cow::Borrowed(key_lower.as_slice()), &[], T::minimum()))
             }
             ConsolidationPart::Encoded { part, cursor } => {
                 let (k, v, t, _) = cursor.peek(part)?;
-                Some((k, v, t))
+                Some((Cow::Borrowed(k), v, t))
             }
             ConsolidationPart::Sorted { data, index } => {
                 let ((k, v), t, _) = data.get(*index)?;
-                Some((k.as_slice(), v.as_slice(), t.clone()))
+                Some((Cow::Borrowed(k.as_slice()), v.as_slice(), t.clone()))
             }
         }
     }
@@ -237,7 +242,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 #[derive(Debug)]
 pub(crate) struct Consolidator<T, D> {
     metrics: Arc<Metrics>,
-    runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
+    pub(crate) runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
     // NB: this is the tricky part!
@@ -286,23 +291,32 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: &Arc<ShardMetrics>,
         desc: &Description<T>,
-        parts: impl IntoIterator<Item = &'a HollowBatchPart<T>>,
+        parts: impl IntoIterator<Item = &'a BatchPart<T>>,
     ) {
         let run = parts
             .into_iter()
-            .map(|part: &HollowBatchPart<T>| {
-                let c_part = ConsolidationPart::Queued {
-                    data: FetchData::Unleased {
-                        shard_id,
-                        blob: Arc::clone(blob),
-                        metrics: Arc::clone(metrics),
-                        read_metrics,
-                        shard_metrics: Arc::clone(shard_metrics),
-                        part_desc: desc.clone(),
-                        part: part.clone(),
-                    },
-                };
-                (c_part, part.encoded_size_bytes)
+            .map(|part: &BatchPart<T>| match part {
+                BatchPart::Hollow(part) => {
+                    let c_part = ConsolidationPart::Queued {
+                        data: FetchData::Unleased {
+                            shard_id,
+                            blob: Arc::clone(blob),
+                            metrics: Arc::clone(metrics),
+                            read_metrics,
+                            shard_metrics: Arc::clone(shard_metrics),
+                            part_desc: desc.clone(),
+                            part: part.clone(),
+                        },
+                    };
+                    (c_part, part.encoded_size_bytes)
+                }
+                BatchPart::Inline(inline) => {
+                    // WIP do we feel okay about doing the decode step here?
+                    let read_metrics = read_metrics(&metrics.read).clone();
+                    let part = EncodedPart::from_inline(read_metrics, desc.clone(), inline);
+                    let c_part = ConsolidationPart::from_encoded(part, &self.filter, true);
+                    (c_part, inline.encoded_size_bytes())
+                }
             })
             .collect();
         self.runs.push(run);
@@ -320,7 +334,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         let run = parts
             .into_iter()
             .map(|part: LeasedBatchPart<T>| {
-                let size = part.part.encoded_size_bytes;
+                let size = part.part.encoded_size_bytes();
                 let queued = ConsolidationPart::Queued {
                     data: FetchData::Leased {
                         blob: Arc::clone(blob),
@@ -410,7 +424,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
             return Ok(());
         };
         let (k, v) = (k.to_vec(), v.to_vec());
-        let global_lower = (k.as_slice(), v.as_slice(), t);
+        let global_lower = (Cow::Owned(k), v.as_slice(), t);
 
         let mut ready_futures: FuturesUnordered<_> = self
             .runs
@@ -709,7 +723,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
 pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
     parts: Vec<ConsolidationPartIter<'a, T, D>>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
-    upper_bound: Option<(&'a [u8], &'a [u8], T)>,
+    upper_bound: Option<(Cow<'a, [u8]>, &'a [u8], T)>,
     state: Option<TupleRef<'a, T, D>>,
     drop_stash: &'a mut Option<Tuple<T, D>>,
 }
@@ -746,7 +760,7 @@ where
 
     /// Set an upper bound based on the stats from an unfetched part. If there's already
     /// an upper bound set, keep the most conservative / smallest one.
-    fn push_upper(&mut self, upper: (&'a [u8], &'a [u8], T)) {
+    fn push_upper(&mut self, upper: (Cow<'a, [u8]>, &'a [u8], T)) {
         let update_bound = self
             .upper_bound
             .as_ref()
@@ -770,6 +784,16 @@ where
                         Ordering::Greater => {
                             // Don't want to log the entire KV, but it's interesting to know
                             // whether it's KVs going backwards or 'just' timestamps.
+                            tracing::info!(
+                                "WIP out of order\n  ({:?},{:?},{:?})\n  ({:?},{:?},{:?})\n  {:?}",
+                                *k0,
+                                *v0,
+                                *t0,
+                                *k1,
+                                *v1,
+                                *t1,
+                                part
+                            );
                             panic!(
                                 "data arrived at the consolidator out of order (kvs equal? {})",
                                 (*k0, *v0) == (*k1, *v1)
@@ -788,7 +812,7 @@ where
                     // Don't start consolidating a new KVT that's past our provided upper bound,
                     // since that data may also live in some unfetched part.
                     if let Some((k0, v0, t0)) = &self.upper_bound {
-                        if (k0, v0, t0) <= (k1, v1, t1) {
+                        if (k0, v0, t0) <= (&Cow::Borrowed(k1), v1, t1) {
                             return None;
                         }
                     }
@@ -964,14 +988,16 @@ mod tests {
             for run in runs {
                 let parts: Vec<_> = run
                     .into_iter()
-                    .map(|encoded_size_bytes| HollowBatchPart {
-                        key: PartialBatchKey(
-                            "n0000000/p00000000-0000-0000-0000-000000000000".into(),
-                        ),
-                        encoded_size_bytes,
-                        key_lower: vec![],
-                        stats: None,
-                        ts_rewrite: None,
+                    .map(|encoded_size_bytes| {
+                        BatchPart::Hollow(HollowBatchPart {
+                            key: PartialBatchKey(
+                                "n0000000/p00000000-0000-0000-0000-000000000000".into(),
+                            ),
+                            encoded_size_bytes,
+                            key_lower: vec![],
+                            stats: None,
+                            ts_rewrite: None,
+                        })
                     })
                     .collect();
                 consolidator.enqueue_run(

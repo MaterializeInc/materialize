@@ -320,6 +320,15 @@ impl StateVersions {
                 shard_metrics
                     .live_writers
                     .set(u64::cast_from(new_state.collections.writers.len()));
+                shard_metrics
+                    .rewrite_part_count
+                    .set(u64::cast_from(size_metrics.rewrite_part_count));
+                shard_metrics
+                    .inline_part_count
+                    .set(u64::cast_from(size_metrics.inline_part_count));
+                shard_metrics
+                    .inline_part_bytes
+                    .set(u64::cast_from(size_metrics.inline_part_bytes));
                 Ok((CaSResult::Committed, new))
             }
             CaSResult::ExpectationMismatch => {
@@ -1120,14 +1129,15 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         let inc_parts: HashSet<_> = self
             .inc_batches
             .iter()
+            // WIP probably want inline in here somehow
             .flat_map(|x| x.parts.iter())
-            .map(|x| &*x.key)
+            .flat_map(|x| x.key())
             .collect();
         let full_parts = self
             .full_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| &*x.key)
+            .flat_map(|x| x.key())
             .collect();
         assert_eq!(inc_parts, full_parts);
 

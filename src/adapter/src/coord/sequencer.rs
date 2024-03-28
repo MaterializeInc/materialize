@@ -17,7 +17,6 @@ use futures::FutureExt;
 use inner::return_if_err;
 use mz_controller_types::ClusterId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogError;
@@ -509,14 +508,14 @@ impl Coordinator {
                         Ok(portal_name) => {
                             let (tx, _, session, extra) = ctx.into_parts();
                             self.internal_cmd_tx
-                                .send(Message::Command(
-                                    OpenTelemetryContext::obtain(),
-                                    Command::Execute {
+                                .send((
+                                    tracing::info_span!("Execute WIP"),
+                                    Message::Command(Command::Execute {
                                         portal_name,
                                         session,
                                         tx: tx.take(),
                                         outer_ctx_extra: Some(extra),
-                                    },
+                                    }),
                                 ))
                                 .expect("sending to self.internal_cmd_tx cannot fail");
                         }
@@ -633,13 +632,13 @@ impl Coordinator {
                 };
                 otel_ctx.attach_as_parent();
                 let (sub_tx, sub_rx) = oneshot::channel();
-                let _ = internal_cmd_tx.send(Message::Command(
-                    otel_ctx,
-                    Command::Commit {
+                let _ = internal_cmd_tx.send((
+                    Span::current(),
+                    Message::Command(Command::Commit {
                         action: EndTransactionAction::Commit,
                         session,
                         tx: sub_tx,
-                    },
+                    }),
                 ));
                 let Ok(commit_response) = sub_rx.await else {
                     // Coordinator went away.

@@ -466,7 +466,9 @@ where
             states.state().map_blobs(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     for live_part in &batch.parts {
-                        assert_eq!(batch_parts_to_delete.get(&live_part.key), None);
+                        if let Some(key) = live_part.key() {
+                            assert_eq!(batch_parts_to_delete.get(key), None);
+                        }
                     }
                 }
                 HollowBlobRef::Rollup(live_rollup) => {
@@ -524,7 +526,9 @@ where
                             // we use BTreeSets for fast lookups elsewhere, but we should never
                             // see repeat blob insertions within a single GC run, otherwise we
                             // have a logic error or our diffs are incorrect (!)
-                            assert!(batch_parts_to_delete.insert(part.key.to_owned()));
+                            if let Some(key) = part.key() {
+                                assert!(batch_parts_to_delete.insert(key.to_owned()));
+                            }
                         }
                     }
                     HollowBlobRef::Rollup(rollup) => {

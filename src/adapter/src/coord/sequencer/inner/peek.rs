@@ -428,29 +428,35 @@ impl Coordinator {
                 // We ship the timestamp oracle off to an async task, so that we
                 // don't block the main task while we wait.
 
-                let span = tracing::debug_span!("linearized timestamp task");
+                let span = tracing::debug_span!("linearized timestamp task").or_current();
                 mz_ore::task::spawn(|| "linearized timestamp task", async move {
-                    let oracle_read_ts = oracle.read_ts().instrument(span).await;
+                    let oracle_read_ts = oracle.read_ts().instrument(span.clone()).await;
                     let stage = build_stage(Some(oracle_read_ts));
 
                     let stage = PeekStage::RealTimeRecency(stage);
                     // Ignore errors if the coordinator has shut down.
-                    let _ = internal_cmd_tx.send(Message::PeekStageReady {
-                        ctx,
-                        otel_ctx: root_otel_ctx,
-                        stage,
-                    });
+                    let _ = internal_cmd_tx.send((
+                        span,
+                        Message::PeekStageReady {
+                            ctx,
+                            otel_ctx: root_otel_ctx,
+                            stage,
+                        },
+                    ));
                 });
             }
             Some(_) | None => {
                 let stage = build_stage(None);
                 let stage = PeekStage::RealTimeRecency(stage);
                 // Ignore errors if the coordinator has shut down.
-                let _ = internal_cmd_tx.send(Message::PeekStageReady {
-                    ctx,
-                    otel_ctx: root_otel_ctx,
-                    stage,
-                });
+                let _ = internal_cmd_tx.send((
+                    tracing::Span::current(),
+                    Message::PeekStageReady {
+                        ctx,
+                        otel_ctx: root_otel_ctx,
+                        stage,
+                    },
+                ));
             }
         }
     }
@@ -664,11 +670,16 @@ impl Coordinator {
                 };
 
                 // Ignore errors if the coordinator has shut down.
-                let _ = internal_cmd_tx.send(Message::PeekStageReady {
-                    ctx,
-                    otel_ctx: root_otel_ctx,
-                    stage,
-                });
+                let mut span = tracing::info_span!(parent: None, "PeekStageReady");
+                root_otel_ctx.attach_as_parent_to(&mut span);
+                let _ = internal_cmd_tx.send((
+                    span,
+                    Message::PeekStageReady {
+                        ctx,
+                        otel_ctx: root_otel_ctx,
+                        stage,
+                    },
+                ));
             },
         );
     }
@@ -693,6 +704,8 @@ impl Coordinator {
             Some(fut) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
+                let mut span = tracing::info_span!(parent: None, "RealTimeRecencyTimestamp");
+                root_otel_ctx.attach_as_parent_to(&mut span);
                 self.pending_real_time_recency_timestamp.insert(
                     conn_id.clone(),
                     RealTimeRecencyContext::Peek {
@@ -709,12 +722,14 @@ impl Coordinator {
                 );
                 task::spawn(|| "real_time_recency_peek", async move {
                     let real_time_recency_ts = fut.await;
-                    // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
-                    let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
-                        conn_id: conn_id.clone(),
-                        real_time_recency_ts,
-                        validity,
-                    });
+                    let result = internal_cmd_tx.send((
+                        span,
+                        Message::RealTimeRecencyTimestamp {
+                            conn_id: conn_id.clone(),
+                            real_time_recency_ts,
+                            validity,
+                        },
+                    ));
                     if let Err(e) = result {
                         warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                     }

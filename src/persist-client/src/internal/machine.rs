@@ -32,6 +32,7 @@ use timely::PartialOrder;
 use tracing::{debug, info, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
+use crate::batch::INLINE_UPDATE_MAX_BYTES;
 use crate::cache::StateCache;
 use crate::cfg::RetryParameters;
 use crate::critical::CriticalReaderId;
@@ -220,7 +221,7 @@ where
         writer_id: &WriterId,
         debug_info: &HandleDebugState,
         heartbeat_timestamp_ms: u64,
-    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
+    ) -> CompareAndAppendRes<T> {
         let idempotency_token = IdempotencyToken::new();
         loop {
             let res = self
@@ -234,8 +235,16 @@ where
                 )
                 .await;
             match res {
-                Ok(x) => return Ok(x),
-                Err((seqno, _current_upper)) => {
+                CompareAndAppendRes::Success(seqno, maintenance) => {
+                    return CompareAndAppendRes::Success(seqno, maintenance)
+                }
+                CompareAndAppendRes::InvalidUsage(x) => {
+                    return CompareAndAppendRes::InvalidUsage(x)
+                }
+                CompareAndAppendRes::InlineBackpressure(x) => {
+                    return CompareAndAppendRes::InlineBackpressure(x)
+                }
+                CompareAndAppendRes::UpperMismatch(seqno, _current_upper) => {
                     // If the state machine thinks that the shard upper is not
                     // far enough along, it could be because the caller of this
                     // method has found out that it advanced via some some
@@ -243,12 +252,13 @@ where
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
                     self.applier.fetch_and_update_state(Some(seqno)).await;
-                    let current_upper = self.applier.clone_upper();
+                    let (current_seqno, current_upper) =
+                        self.applier.upper(|seqno, upper| (seqno, upper.clone()));
 
                     // We tried to to a compare_and_append with the wrong
                     // expected upper, that won't work.
                     if &current_upper != batch.desc.lower() {
-                        return Err(Upper(current_upper));
+                        return CompareAndAppendRes::UpperMismatch(current_seqno, current_upper);
                     } else {
                         // The upper stored in state was outdated. Retry after
                         // updating.
@@ -269,7 +279,7 @@ where
         // making it a parameter allows us to simulate hitting an indeterminate
         // error on the first attempt in tests.
         mut indeterminate: Option<Indeterminate>,
-    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, (SeqNo, Upper<T>)> {
+    ) -> CompareAndAppendRes<T> {
         let metrics = Arc::clone(&self.applier.metrics);
         let lease_duration_ms = self
             .applier
@@ -370,7 +380,7 @@ where
         loop {
             let cmd_res = self
                 .applier
-                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, _, state| {
+                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, cfg, state| {
                     writer_was_present = state.writers.contains_key(writer_id);
                     state.compare_and_append(
                         batch,
@@ -379,6 +389,7 @@ where
                         lease_duration_ms,
                         idempotency_token,
                         debug_info,
+                        INLINE_UPDATE_MAX_BYTES.get(cfg),
                     )
                 })
                 .await;
@@ -420,7 +431,7 @@ where
                     if !writer_was_present {
                         metrics.state.writer_added.inc();
                     }
-                    return Ok(Ok((seqno, writer_maintenance)));
+                    return CompareAndAppendRes::Success(seqno, writer_maintenance);
                 }
                 Err(CompareAndAppendBreak::AlreadyCommitted) => {
                     // A previous iteration through this loop got an
@@ -431,7 +442,7 @@ where
                     if !writer_was_present {
                         metrics.state.writer_added.inc();
                     }
-                    return Ok(Ok((seqno, WriterMaintenance::default())));
+                    return CompareAndAppendRes::Success(seqno, WriterMaintenance::default());
                 }
                 Err(CompareAndAppendBreak::InvalidUsage(err)) => {
                     // InvalidUsage is (or should be) a deterministic function
@@ -439,7 +450,12 @@ where
                     // state. It's handed back via a Break, so we never even try
                     // to commit it. No network, no Indeterminate.
                     assert!(indeterminate.is_none());
-                    return Ok(Err(err));
+                    return CompareAndAppendRes::InvalidUsage(err);
+                }
+                Err(CompareAndAppendBreak::InlineBackpressure(bytes)) => {
+                    // We tried to write an inline part, but there was already
+                    // too much in state. Flush it out to s3 and try again.
+                    return CompareAndAppendRes::InlineBackpressure(bytes);
                 }
                 Err(CompareAndAppendBreak::Upper {
                     shard_upper,
@@ -459,14 +475,14 @@ where
                         // No way this could have committed in some previous
                         // attempt of this loop: the upper of the writer is
                         // strictly less than the proposed new upper.
-                        return Err((seqno, Upper(shard_upper)));
+                        return CompareAndAppendRes::UpperMismatch(seqno, shard_upper);
                     }
                     if indeterminate.is_none() {
                         // No way this could have committed in some previous
                         // attempt of this loop: we never saw an indeterminate
                         // error (thus there was no previous iteration of the
                         // loop).
-                        return Err((seqno, Upper(shard_upper)));
+                        return CompareAndAppendRes::UpperMismatch(seqno, shard_upper);
                     }
                     // This is the bad case. We can't distinguish if some
                     // previous attempt that got an Indeterminate error
@@ -993,6 +1009,24 @@ where
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum CompareAndAppendRes<T> {
+    Success(SeqNo, WriterMaintenance<T>),
+    InvalidUsage(InvalidUsage<T>),
+    UpperMismatch(SeqNo, Antichain<T>),
+    InlineBackpressure(usize),
+}
+
+#[cfg(test)]
+impl<T: Debug> CompareAndAppendRes<T> {
+    fn unwrap(self) -> (SeqNo, WriterMaintenance<T>) {
+        match self {
+            CompareAndAppendRes::Success(seqno, maintenance) => (seqno, maintenance),
+            x => panic!("{:?}", x),
+        }
+    }
+}
+
 impl<K, V, T, D> Machine<K, V, T, D>
 where
     K: Debug + Codec,
@@ -1236,14 +1270,15 @@ pub mod datadriven {
 
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BLOB_TARGET_SIZE,
+        BLOB_TARGET_SIZE, INLINE_UPDATE_THRESHOLD_BYTES,
     };
-    use crate::fetch::{fetch_batch_part, Cursor};
+    use crate::fetch::{Cursor, EncodedPart};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
+    use crate::internal::state::BatchPart;
     use crate::internal::state_versions::EncodedRollup;
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
     use crate::rpc::NoopPubSubSender;
@@ -1275,6 +1310,7 @@ pub mod datadriven {
             client
                 .cfg
                 .set_config(&BLOB_TARGET_SIZE, *BLOB_TARGET_SIZE.default());
+            client.cfg.set_config(&INLINE_UPDATE_THRESHOLD_BYTES, 0);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
@@ -1550,7 +1586,10 @@ pub mod datadriven {
         if let Some(size) = parts_size_override {
             let mut batch = batch.clone();
             for part in batch.parts.iter_mut() {
-                part.encoded_size_bytes = size;
+                match part {
+                    BatchPart::Hollow(part) => part.encoded_size_bytes = size,
+                    BatchPart::Inline(_) => {}
+                }
             }
             datadriven.batches.insert(output.to_owned(), batch);
         } else {
@@ -1570,24 +1609,26 @@ pub mod datadriven {
         let mut s = String::new();
         for (idx, part) in batch.parts.iter().enumerate() {
             write!(s, "<part {idx}>\n");
-            if stats == Some("lower") && !part.key_lower.is_empty() {
-                writeln!(s, "<key lower={}>", std::str::from_utf8(&part.key_lower)?)
-            }
-            let blob_batch = datadriven
-                .client
-                .blob
-                .get(&part.key.complete(&datadriven.shard_id))
-                .await;
-            match blob_batch {
-                Ok(Some(_)) | Err(_) => {}
-                // don't try to fetch/print the keys of the batch part
-                // if the blob store no longer has it
-                Ok(None) => {
-                    s.push_str("<empty>\n");
-                    continue;
+            if let BatchPart::Hollow(part) = part {
+                if stats == Some("lower") && !part.key_lower.is_empty() {
+                    writeln!(s, "<key lower={}>", std::str::from_utf8(&part.key_lower)?)
                 }
-            };
-            let part = fetch_batch_part(
+                let blob_batch = datadriven
+                    .client
+                    .blob
+                    .get(&part.key.complete(&datadriven.shard_id))
+                    .await;
+                match blob_batch {
+                    Ok(Some(_)) | Err(_) => {}
+                    // don't try to fetch/print the keys of the batch part
+                    // if the blob store no longer has it
+                    Ok(None) => {
+                        s.push_str("<empty>\n");
+                        continue;
+                    }
+                };
+            }
+            let part = EncodedPart::fetch(
                 &datadriven.shard_id,
                 datadriven.client.blob.as_ref(),
                 datadriven.client.metrics.as_ref(),
@@ -1651,7 +1692,10 @@ pub mod datadriven {
         let size = args.expect("size");
         let batch = datadriven.batches.get_mut(input).expect("unknown batch");
         for part in batch.parts.iter_mut() {
-            part.encoded_size_bytes = size;
+            match part {
+                BatchPart::Hollow(x) => x.encoded_size_bytes = size,
+                BatchPart::Inline(_) => panic!("set_batch_parts_size only supports hollow parts"),
+            }
         }
         Ok("ok\n".to_string())
     }
@@ -1826,7 +1870,7 @@ pub mod datadriven {
                 writeln!(result, "<run {run}>");
                 for (part_id, part) in parts.into_iter().enumerate() {
                     writeln!(result, "<part {part_id}>");
-                    let part = fetch_batch_part(
+                    let part = EncodedPart::fetch(
                         &datadriven.shard_id,
                         datadriven.client.blob.as_ref(),
                         datadriven.client.metrics.as_ref(),
@@ -2002,7 +2046,11 @@ pub mod datadriven {
                     true,
                     Arc::clone(&datadriven.client.metrics),
                     Arc::clone(&datadriven.client.blob),
-                    datadriven.shard_id,
+                    datadriven
+                        .client
+                        .metrics
+                        .shards
+                        .shard(&datadriven.shard_id, "test"),
                     datadriven.client.cfg.build_version.clone(),
                     hollow,
                 )
@@ -2075,7 +2123,7 @@ pub mod datadriven {
             .optional::<String>("prev_indeterminate")
             .map(|x| Indeterminate::new(anyhow::Error::msg(x)));
         let now = (datadriven.client.cfg.now)();
-        let (_, maintenance) = datadriven
+        let res = datadriven
             .machine
             .compare_and_append_idempotent(
                 &batch,
@@ -2085,9 +2133,14 @@ pub mod datadriven {
                 &HandleDebugState::default(),
                 indeterminate,
             )
-            .await
-            .map_err(|(_seqno, upper)| anyhow!("{:?}", upper))?
-            .expect("invalid usage");
+            .await;
+        let maintenance = match res {
+            CompareAndAppendRes::Success(_, x) => x,
+            CompareAndAppendRes::UpperMismatch(_seqno, upper) => {
+                return Err(anyhow!("{:?}", Upper(upper)))
+            }
+            _ => panic!("{:?}", res),
+        };
         // TODO: Don't throw away writer maintenance. It's slightly tricky
         // because we need a WriterId for Compactor.
         datadriven.routine.push(maintenance.routine);
@@ -2184,8 +2237,7 @@ pub mod tests {
                     (write.cfg.now)(),
                 )
                 .await
-                .expect("invalid usage")
-                .expect("unexpected upper");
+                .unwrap();
             writer_maintenance
                 .perform(&write.machine, &write.gc, write.compact.as_ref())
                 .await;
