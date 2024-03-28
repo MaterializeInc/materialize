@@ -29,7 +29,7 @@ use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
 use sha2::{Digest, Sha256};
 use tokio::time::MissedTickBehavior;
-use tracing::debug;
+use tracing::{debug, info_span};
 use uuid::Uuid;
 
 use crate::coord::{ConnMeta, Coordinator};
@@ -217,7 +217,10 @@ impl Coordinator {
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
-                let _ = internal_cmd_tx.send(Message::DrainStatementLog);
+                let _ = internal_cmd_tx.send((
+                    info_span!(parent: None, "DrainStatementLog"),
+                    Message::DrainStatementLog,
+                ));
             }
         });
     }

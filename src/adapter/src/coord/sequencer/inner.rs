@@ -164,7 +164,8 @@ impl Coordinator {
                             return;
                         }
                     };
-                    let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
+                    let _ =
+                        internal_cmd_tx.send((parent_span.clone(), next.message(ctx, parent_span)));
                 });
             }
             StageResult::Response(resp) => {
@@ -435,8 +436,9 @@ impl Coordinator {
                 };
 
                 // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
-                let result = internal_cmd_tx.send(Message::CreateConnectionValidationReady(
-                    CreateConnectionValidationReady {
+                let result = internal_cmd_tx.send((
+                    tracing::info_span!(parent: None, "CreateConnectionValidationReady"),
+                    Message::CreateConnectionValidationReady(CreateConnectionValidationReady {
                         ctx,
                         result,
                         connection_gid,
@@ -448,7 +450,7 @@ impl Coordinator {
                             role_metadata,
                         },
                         otel_ctx,
-                    },
+                    }),
                 ));
                 if let Err(e) = result {
                     tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -1717,12 +1719,15 @@ impl Coordinator {
             }
             Ok((Some(TransactionOps::SingleStatement { stmt, params }), _)) => {
                 self.internal_cmd_tx
-                    .send(Message::ExecuteSingleStatementTransaction {
-                        ctx,
-                        otel_ctx: OpenTelemetryContext::obtain(),
-                        stmt,
-                        params,
-                    })
+                    .send((
+                        Span::current(),
+                        Message::ExecuteSingleStatementTransaction {
+                            ctx,
+                            otel_ctx: OpenTelemetryContext::obtain(),
+                            stmt,
+                            params,
+                        },
+                    ))
                     .expect("must send");
                 return;
             }
@@ -1958,11 +1963,14 @@ impl Coordinator {
                 task::spawn(|| "real_time_recency_explain_timestamp", async move {
                     let real_time_recency_ts = fut.await;
                     // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
-                    let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
-                        conn_id,
-                        real_time_recency_ts,
-                        validity,
-                    });
+                    let result = internal_cmd_tx.send((
+                        tracing::info_span!(parent: None, "RealTimeRecencyTimestamp"),
+                        Message::RealTimeRecencyTimestamp {
+                            conn_id,
+                            real_time_recency_ts,
+                            validity,
+                        },
+                    ));
                     if let Err(e) = result {
                         warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                     }
@@ -2462,9 +2470,12 @@ impl Coordinator {
                             // best-effort and doesn't guarantee we won't
                             // receive a response.
                             // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
-                            let result = internal_cmd_tx.send(Message::CancelPendingPeeks {
-                                conn_id: ctx.session().conn_id().clone(),
-                            });
+                            let result = internal_cmd_tx.send((
+                                Span::current(),
+                                Message::CancelPendingPeeks {
+                                    conn_id: ctx.session().conn_id().clone(),
+                                },
+                            ));
                             if let Err(e) = result {
                                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                             }
@@ -2989,8 +3000,9 @@ impl Coordinator {
                     };
 
                     // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
-                    let result = internal_cmd_tx.send(Message::AlterConnectionValidationReady(
-                        AlterConnectionValidationReady {
+                    let result = internal_cmd_tx.send((
+                        tracing::info_span!(parent: None, "AlterConnectionValidationReady"),
+                        Message::AlterConnectionValidationReady(AlterConnectionValidationReady {
                             ctx,
                             result,
                             connection_gid: id,
@@ -3002,7 +3014,7 @@ impl Coordinator {
                                 role_metadata,
                             },
                             otel_ctx,
-                        },
+                        }),
                     ));
                     if let Err(e) = result {
                         tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);

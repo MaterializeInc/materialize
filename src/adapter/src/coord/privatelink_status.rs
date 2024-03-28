@@ -46,8 +46,10 @@ impl Coordinator {
                         rate_limiter.until_ready().await;
 
                         // Send the event batch to the coordinator to be written
-                        let _ =
-                            internal_cmd_tx.send(Message::PrivateLinkVpcEndpointEvents(new_events));
+                        let _ = internal_cmd_tx.send((
+                            tracing::info_span!(parent: None, "PrivateLinkVpcEndpointEvents"),
+                            Message::PrivateLinkVpcEndpointEvents(new_events),
+                        ));
                     }
                 }
             });

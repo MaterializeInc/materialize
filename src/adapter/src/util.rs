@@ -46,7 +46,7 @@ where
     <T as Transmittable>::Allowed: 'static,
 {
     tx: Option<oneshot::Sender<Response<T>>>,
-    internal_cmd_tx: UnboundedSender<Message>,
+    internal_cmd_tx: UnboundedSender<(Span, Message)>,
     /// Expresses an optional soft-assert on the set of values allowed to be
     /// sent from `self`.
     allowed: Option<&'static [T::Allowed]>,
@@ -56,7 +56,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
     /// Creates a new client transmitter.
     pub fn new(
         tx: oneshot::Sender<Response<T>>,
-        internal_cmd_tx: UnboundedSender<Message>,
+        internal_cmd_tx: UnboundedSender<(Span, Message)>,
     ) -> ClientTransmitter<T> {
         ClientTransmitter {
             tx: Some(tx),
@@ -96,12 +96,12 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
             })
         {
             self.internal_cmd_tx
-                .send(Message::Command(
+                .send((
                     Span::current(),
-                    Command::Terminate {
+                    Message::Command(Command::Terminate {
                         conn_id: res.session.conn_id().clone(),
                         tx: None,
-                    },
+                    }),
                 ))
                 .expect("coordinator unexpectedly gone");
         }
