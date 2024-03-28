@@ -1502,6 +1502,7 @@ class DropKafkaSourceAction(Action):
             query = f"DROP SOURCE {source}"
             exe.execute(query)
             exe.db.kafka_sources.remove(source)
+            source.executor.mz_conn.close()
         return True
 
 
@@ -1568,6 +1569,7 @@ class DropMySqlSourceAction(Action):
             query = f"DROP SOURCE {source.executor.source}"
             exe.execute(query)
             exe.db.mysql_sources.remove(source)
+            source.executor.mz_conn.close()
         return True
 
 
@@ -1634,6 +1636,7 @@ class DropPostgresSourceAction(Action):
             query = f"DROP SOURCE {source.executor.source}"
             exe.execute(query)
             exe.db.postgres_sources.remove(source)
+            source.executor.mz_conn.close()
         return True
 
 
