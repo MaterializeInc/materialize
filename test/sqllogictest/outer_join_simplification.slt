@@ -405,8 +405,8 @@ Explained Query:
               ArrangeBy keys=[[#0]] // { keys: "([0])" }
                 Distinct project=[#0] // { keys: "([0])" }
                   Project (#0) // { keys: "()" }
-                    Get l0 // { keys: "()" }
-          Get l0 // { keys: "()" }
+                    Get l0 // { keys: "([0, 1, 2, 3])" }
+          Get l0 // { keys: "([0, 1, 2, 3])" }
 
 EOF
 
@@ -568,31 +568,31 @@ Explained Query:
     cte l2 =
       Distinct project=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
         Union // { keys: "()" }
-          Project (#0..=#3) // { keys: "()" }
-            Join on=(#0 = #4) type=differential // { keys: "()" }
-              ArrangeBy keys=[[#0]] // { keys: "()" }
-                Get l2 // { keys: "()" }
+          Project (#0..=#3) // { keys: "([0, 1, 2, 3])" }
+            Join on=(#0 = #4) type=differential // { keys: "([0, 1, 2, 3])" }
+              ArrangeBy keys=[[#0]] // { keys: "([0, 1, 2, 3])" }
+                Get l2 // { keys: "([0, 1, 2, 3])" }
               ArrangeBy keys=[[#0]] // { keys: "([0])" }
                 Get l0 // { keys: "([0])" }
-          Get l2 // { keys: "()" }
+          Get l2 // { keys: "([0, 1, 2, 3])" }
     cte l1 =
       Distinct project=[#0, #1] // { keys: "([0, 1])" }
         Union // { keys: "()" }
           ReadStorage materialize.public.bar // { keys: "([0])" }
           Project (#0, #2) // { keys: "()" }
-            Get l2 // { keys: "()" }
+            Get l2 // { keys: "([0, 1, 2, 3])" }
     cte l0 =
       Project (#0) // { keys: "([0])" }
         Join on=(#0 = #1) type=differential // { keys: "([0])" }
           ArrangeBy keys=[[#0]] // { keys: "([0])" }
             Distinct project=[#0] // { keys: "([0])" }
               Project (#0) // { keys: "()" }
-                Get l2 // { keys: "()" }
+                Get l2 // { keys: "([0, 1, 2, 3])" }
           ArrangeBy keys=[[#0]] // { keys: "([0])" }
             TopK group_by=[#0] limit=1 // { keys: "([0])" }
               Project (#0) // { keys: "()" }
-                Filter (#0) IS NOT NULL // { keys: "()" }
-                  Get l1 // { keys: "()" }
+                Filter (#0) IS NOT NULL // { keys: "([0, 1])" }
+                  Get l1 // { keys: "([0, 1])" }
 
 EOF
 
@@ -712,8 +712,8 @@ Explained Query:
               ReadStorage materialize.public.foo_raw // { keys: "()" }
           ArrangeBy keys=[[#0]] // { keys: "()" }
             Project (#0, #2) // { keys: "()" }
-              Filter (#0) IS NOT NULL // { keys: "()" }
-                Get l1 // { keys: "()" }
+              Filter (#0) IS NOT NULL // { keys: "([0, 1, 2, 3, 4])" }
+                Get l1 // { keys: "([0, 1, 2, 3, 4])" }
 
 EOF
 

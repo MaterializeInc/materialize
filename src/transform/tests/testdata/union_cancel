@@ -42,34 +42,37 @@ Union
   Project (#0)
     Get x
 
-build apply=UnionBranchCancellation
-(union [(map (get x) [#0]) (project (get x) [#0])])
-----
-Union
-  Map (#0)
-    Get x
-  Project (#0)
-    Get x
+## Malformed expression
+# build apply=UnionBranchCancellation
+# (union [(map (get x) [#0]) (project (get x) [#0])])
+# ----
+# Union
+#   Map (#0)
+#     Get x
+#   Project (#0)
+#     Get x
 
-build apply=UnionBranchCancellation
-(union [(filter (get x) [#0]) (project (get x) [#0])])
-----
-Union
-  Filter #0
-    Get x
-  Project (#0)
-    Get x
+## Malformed expression
+# build apply=UnionBranchCancellation
+# (union [(filter (get x) [#0]) (project (get x) [#0])])
+# ----
+# Union
+#   Filter #0
+#     Get x
+#   Project (#0)
+#     Get x
 
-build apply=UnionBranchCancellation
-(union [(negate (filter (get x) [#0])) (project (negate (get x)) [#0])])
-----
-Union
-  Negate
-    Filter #0
-      Get x
-  Project (#0)
-    Negate
-      Get x
+## Malformed expression
+# build apply=UnionBranchCancellation
+# (union [(negate (filter (get x) [#0])) (project (negate (get x)) [#0])])
+# ----
+# Union
+#   Negate
+#     Filter #0
+#       Get x
+#   Project (#0)
+#     Negate
+#       Get x
 
 # negated branches
 

@@ -197,6 +197,8 @@ mod support {
 
     use std::collections::BTreeMap;
 
+    use itertools::Itertools;
+
     use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
 
     pub(super) fn replace_bindings_from_map(
@@ -247,8 +249,40 @@ mod support {
     /// This method errors if the scalar type information has changed (number of columns, or types).
     /// It only refreshes the nullability and unique key information. As this information can regress,
     /// we do not error if the type weakens, even though that may be something we want to look into.
+    ///
+    /// The method relies on the `analysis::{UniqueKeys, RelationType}` analyses to improve its type
+    /// information for `LetRec` stages.
     pub(super) fn refresh_types(expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         let mut types = BTreeMap::new();
+
+        // Assemble type information once for the whole expression.
+        use crate::analysis::{DerivedBuilder, RelationType, UniqueKeys};
+        let mut builder = DerivedBuilder::default();
+        builder.require::<RelationType>();
+        builder.require::<UniqueKeys>();
+        let derived = builder.visit(expr);
+        let derived_view = derived.as_view();
+
+        let mut todo = vec![(&*expr, derived_view)];
+        while let Some((expr, view)) = todo.pop() {
+            if let MirRelationExpr::LetRec { ids, .. } = expr {
+                // The `skip(1)` skips the `body` child, and is followed by binding children.
+                for (id, view) in ids.iter().rev().zip_eq(view.children_rev().skip(1)) {
+                    let cols = view
+                        .value::<RelationType>()
+                        .expect("RelationType required")
+                        .clone()
+                        .expect("Expression not well typed");
+                    let keys = view
+                        .value::<UniqueKeys>()
+                        .expect("UniqueKeys required")
+                        .clone();
+                    types.insert(*id, mz_repr::RelationType::new(cols).with_keys(keys));
+                }
+            }
+            todo.extend(expr.children().rev().zip_eq(view.children_rev()));
+        }
+
         refresh_types_helper(expr, &mut types)
     }
 
@@ -266,9 +300,25 @@ mod support {
         {
             for (id, value) in ids.iter().zip(values.iter_mut()) {
                 refresh_types_helper(value, types)?;
-                let typ = value.typ();
-                let prior = types.insert(*id, typ);
-                assert!(prior.is_none());
+                let mut typ = value.typ();
+                if let Some(prior) = types.remove(id) {
+                    // TODO: Assert some relationship between `typ` and `prior`.
+                    for (new, old) in typ.column_types.iter_mut().zip(prior.column_types.iter()) {
+                        new.nullable = new.nullable && old.nullable
+                    }
+                    for key in prior.keys.iter() {
+                        // antichain_insert(&mut typ.keys, key.clone());
+                        let into = &mut typ.keys;
+                        let item = key.clone();
+                        if into.iter().all(|key| !key.iter().all(|k| item.contains(k))) {
+                            into.retain(|key| !key.iter().all(|k| item.contains(k)));
+                            into.push(item);
+                        }
+                    }
+                } else {
+                    panic!("`types` improperly prepared");
+                }
+                types.insert(*id, typ);
             }
             refresh_types_helper(body, types)?;
             // Not strictly necessary, but good hygiene.

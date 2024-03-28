@@ -40,9 +40,8 @@ Explained Query:
     Get l0 // { arity: 3 }
   With Mutually Recursive
     cte l0 =
-      Map (42) // { arity: 3 }
-        Distinct project=[#0, #1] monotonic // { arity: 2 }
-          Project (#0, #1) // { arity: 2 }
-            Get l0 // { arity: 3 }
+      Project (#0, #1, #3) // { arity: 3 }
+        Map (42) // { arity: 4 }
+          Get l0 // { arity: 3 }
 
 EOF

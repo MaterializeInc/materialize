@@ -1282,27 +1282,13 @@ Explained Query:
         raw=true
   With Mutually Recursive
     cte l1 =
-      ArrangeBy
-        input_key=[#0]
+      Get::Collection l1
+        project=(#1)
+        map=((#0 - █))
         raw=true
-        Reduce::Distinct
-          val_plan
-            project=()
-          key_plan
-            project=(#1)
-            map=((#0 - █))
-          Get::PassArrangements l1
-            raw=true
     cte [recursion_limit=5] l0 =
-      ArrangeBy
-        input_key=[#0]
+      Get::PassArrangements l0
         raw=true
-        Reduce::Distinct
-          val_plan
-            project=()
-          key_plan=id
-          Get::PassArrangements l0
-            raw=true
 
 EOF
 

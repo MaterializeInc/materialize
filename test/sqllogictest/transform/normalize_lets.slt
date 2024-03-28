@@ -185,11 +185,9 @@ Explained Query:
       Get l1
   With Mutually Recursive
     cte l1 =
-      Distinct project=[#0] monotonic
-        Get l1
+      Get l1
     cte l0 =
-      Distinct project=[#0] monotonic
-        Get l0
+      Get l0
 
 EOF
 
@@ -364,11 +362,11 @@ Explained Query:
       Get l1
   With Mutually Recursive
     cte [recursion_limit=7] l1 =
-      Distinct project=[(#0 - 2)] monotonic
-        Get l1
+      Project (#1)
+        Map ((#0 - 2))
+          Get l1
     cte [recursion_limit=5] l0 =
-      Distinct project=[#0] monotonic
-        Get l0
+      Get l0
 
 EOF
 
@@ -395,11 +393,11 @@ Explained Query:
       Get l1
   With Mutually Recursive [recursion_limit=27]
     cte l1 =
-      Distinct project=[(#0 - 2)] monotonic
-        Get l1
+      Project (#1)
+        Map ((#0 - 2))
+          Get l1
     cte l0 =
-      Distinct project=[#0] monotonic
-        Get l0
+      Get l0
 
 EOF
 

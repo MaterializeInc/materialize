@@ -65,15 +65,15 @@ Threshold
 build apply=ThresholdElision
 (threshold
   (union [
-    (reduce (get x) [#1 #2] [])
+    (reduce (get x) [#0 #1] [])
     (negate
-      (reduce (filter (get x) [(call_binary lt #0 (7 Int64))]) [#1 #2] [])) ]))
+      (reduce (filter (get x) [(call_binary lt #0 (7 Int64))]) [#0 #1] [])) ]))
 ----
 Union
-  Distinct project=[#1, #2]
+  Distinct project=[#0, #1]
     Get x
   Negate
-    Distinct project=[#1, #2]
+    Distinct project=[#0, #1]
       Filter (#0 < 7)
         Get x
 
@@ -112,16 +112,16 @@ With
 build apply=ThresholdElision
 (threshold
   (union [
-    (reduce (get x) [#1 #2] [])
+    (reduce (get x) [#0 #1] [])
     (negate
-      (reduce (filter (get y) [(call_binary lt #0 (7 Int64))]) [#1 #2] [])) ]))
+      (reduce (filter (get y) [(call_binary lt #0 (7 Int64))]) [#0 #1] [])) ]))
 ----
 Threshold
   Union
-    Distinct project=[#1, #2]
+    Distinct project=[#0, #1]
       Get x
     Negate
-      Distinct project=[#1, #2]
+      Distinct project=[#0, #1]
         Filter (#0 < 7)
           Get y
 

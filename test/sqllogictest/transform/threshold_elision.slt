@@ -487,10 +487,10 @@ Explained Query:
           Threshold // { non_negative: true }
             Union // { non_negative: false }
               Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
-                Get l0 // { non_negative: false }
+                Get l0 // { non_negative: true }
               Negate // { non_negative: false }
                 Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
                   Filter (#0 > 1) // { non_negative: false }
-                    Get l0 // { non_negative: false }
+                    Get l0 // { non_negative: true }
 
 EOF

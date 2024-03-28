@@ -95,8 +95,6 @@ EOF
 
 # Similar to the previous test, but
 #  - Has UNION instead of UNION ALL. This means that there is a Distinct at the root of l0.
-#  - The second input of the UNION has a DISTINCT. This should be eliminated later by `ReduceElision` after we make the
-#    unique key inference smarter for `LetRec`.
 query T multiline
 EXPLAIN WITH(arity, join implementations, keys)
 WITH MUTUALLY RECURSIVE
@@ -127,8 +125,7 @@ Explained Query:
                     ReadStorage materialize.public.x // { arity: 2, keys: "()" }
               ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
                 ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
-          Distinct project=[#0..=#3] // { arity: 4, keys: "([0, 1, 2, 3])" }
-            Get l0 // { arity: 4, keys: "()" }
+          Get l0 // { arity: 4, keys: "([0, 1, 2, 3])" }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
