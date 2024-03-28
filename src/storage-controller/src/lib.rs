@@ -359,30 +359,6 @@ where
         self.replicas.remove(&instance_id);
     }
 
-    // Add new migrations below and precede them with a short summary of the
-    // migration's purpose and optional additional commentary about safety or
-    // approach.
-    //
-    // Note that:
-    // - The sum of all migrations must be idempotent because all migrations run
-    //   every time the catalog opens, unless migrations are explicitly
-    //   disabled. This might mean changing code outside the migration itself,
-    //   or only executing some migrations when encountering certain versions.
-    // - Migrations must preserve backwards compatibility with all past releases
-    //   of Materialize.
-    #[instrument(level = "debug")]
-    async fn migrate_collections(
-        &mut self,
-        _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        // Collection migrations look something like this:
-        // let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.stash).await?;
-        // do_migration(&mut durable_metadata)?;
-        // self.upsert_collection_metadata(&mut durable_metadata, remap_shard_migration_delta)
-        //     .await;
-        Ok(())
-    }
-
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
     // a method/move individual parts to their own methods.
     #[instrument(name = "storage::create_collections")]
