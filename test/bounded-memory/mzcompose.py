@@ -377,7 +377,8 @@ SCENARIOS = [
             {int(ITERATIONS * 20 * REPEAT / 16)}
             """
         ),
-        clusterd_memory="3.6Gb",
+        materialized_memory="7Gb",
+        clusterd_memory="4.6Gb",
     ),
     KafkaScenario(
         name="upsert-snapshot",
