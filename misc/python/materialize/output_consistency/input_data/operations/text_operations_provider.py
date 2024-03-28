@@ -87,6 +87,7 @@ TEXT_OPERATION_TYPES.append(
         "$ !~ $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
+        tags={TAG_REGEX},
     )
 )
 
@@ -96,6 +97,7 @@ TEXT_OPERATION_TYPES.append(
         "$ !~* $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
+        tags={TAG_REGEX},
     )
 )
 
