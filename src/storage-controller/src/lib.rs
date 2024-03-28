@@ -147,7 +147,8 @@ struct PendingCompactionCommand<T> {
 }
 
 /// A storage controller for a storage instance.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
 {
     /// The build information for this process.
@@ -184,6 +185,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
     pending_compaction_commands: Vec<PendingCompactionCommand<T>>,
+    /// Futures for table handle drops to await while processing compaction commands.
+    #[derivative(Debug = "ignore")]
+    pending_table_handle_drops: BTreeMap<GlobalId, BoxFuture<'static, ()>>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -1173,6 +1177,40 @@ where
         Ok(())
     }
 
+    fn drop_tables(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+        ts: Self::Timestamp,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        assert!(
+            identifiers
+                .iter()
+                .all(|id| self.collections[id].description.is_table()),
+            "identifiers contain non-tables: {:?}",
+            identifiers
+                .iter()
+                .filter(|id| !self.collections[id].description.is_table())
+                .collect::<Vec<_>>()
+        );
+        let drop_notif = self
+            .persist_table_worker
+            .drop_handles(identifiers.clone(), ts);
+        let (tx, _) = tokio::sync::broadcast::channel(1);
+        for id in &identifiers {
+            let mut rx = tx.subscribe();
+            let drop_notif = async move {
+                let _ = rx.recv().await;
+            }
+            .boxed();
+            self.pending_table_handle_drops.insert(*id, drop_notif);
+        }
+        mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
+            drop_notif.await;
+            let _ = tx.send(());
+        });
+        self.drop_sources(identifiers)
+    }
+
     fn drop_sources(
         &mut self,
         identifiers: Vec<GlobalId>,
@@ -1799,8 +1837,7 @@ where
                 let drop_notif = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) if read_frontier.is_empty() => {
                         pending_collection_drops.push(id);
-                        // TODO(jkosh44) Batch all table drops into single call to `drop_handles`.
-                        Some(self.persist_table_worker.drop_handles(vec![id]))
+                        self.pending_table_handle_drops.remove(&id)
                     }
                     DataSource::Webhook | DataSource::Introspection(_)
                         if read_frontier.is_empty() =>
@@ -2392,6 +2429,7 @@ where
             txns_metrics,
             stashed_response: None,
             pending_compaction_commands: vec![],
+            pending_table_handle_drops: BTreeMap::new(),
             collection_manager,
             collection_status_manager,
             introspection_ids,
