@@ -2784,13 +2784,12 @@ Explained Query:
     cte l17 =
       Distinct project=[#0..=#5] // { arity: 6 }
         Union // { arity: 6 }
-          Map (0) // { arity: 6 }
-            Union // { arity: 5 }
-              Project (#1, #0, #0, #2, #1) // { arity: 5 }
-                Map (1450, false, 0) // { arity: 3 }
+          Project (#1, #0, #0, #2..=#4) // { arity: 6 }
+            Map (0, false, 0) // { arity: 5 }
+              Union // { arity: 2 }
+                Map (1450, false) // { arity: 2 }
                   Get l16 // { arity: 0 }
-              Project (#1, #0, #0, #2, #3) // { arity: 5 }
-                Map (15393162796819, true, 0, false) // { arity: 4 }
+                Map (15393162796819, true) // { arity: 2 }
                   Get l16 // { arity: 0 }
           Project (#0..=#3, #7, #8) // { arity: 6 }
             Map ((#4 OR coalesce((#3 > #6), false)), (#5 + 1)) // { arity: 9 }
@@ -3962,14 +3961,15 @@ Explained Query:
       cte l8 =
         Distinct project=[#0..=#5] // { arity: 6 }
           Union // { arity: 6 }
-            Map (0) // { arity: 6 }
-              Union // { arity: 5 }
-                Project (#12, #1, #1, #13, #12) // { arity: 5 }
-                  Map (false, 0) // { arity: 14 }
-                    ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(655)] // { arity: 12 }
-                Project (#12, #1, #1, #13, #14) // { arity: 5 }
-                  Map (true, 0, false) // { arity: 15 }
-                    ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(1138)] // { arity: 12 }
+            Project (#1, #0, #0, #2..=#4) // { arity: 6 }
+              Map (0, false, 0) // { arity: 5 }
+                Union // { arity: 2 }
+                  Project (#1, #12) // { arity: 2 }
+                    Map (false) // { arity: 13 }
+                      ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(655)] // { arity: 12 }
+                  Project (#1, #12) // { arity: 2 }
+                    Map (true) // { arity: 13 }
+                      ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(1138)] // { arity: 12 }
             Project (#0..=#3, #7, #8) // { arity: 6 }
               Map ((#4 OR coalesce((#3 > #6), false)), (#5 + 1)) // { arity: 9 }
                 CrossJoin type=delta // { arity: 7 }
