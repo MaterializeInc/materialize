@@ -810,9 +810,10 @@ impl Coordinator {
                 AlterSourceAction::ResetOptions(names) => names.clone(),
                 _ => vec![],
             };
-            if names
-                .iter()
-                .all(|n| matches!(n, CreateSourceOptionName::RetainHistory))
+            if !names.is_empty()
+                && names
+                    .iter()
+                    .all(|n| matches!(n, CreateSourceOptionName::RetainHistory))
             {
                 return false;
             }
