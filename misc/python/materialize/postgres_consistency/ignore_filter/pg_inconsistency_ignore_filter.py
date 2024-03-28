@@ -539,6 +539,19 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             error, query_template, contains_aggregation
         )
 
+    def _shall_ignore_content_type_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        if error.value1 == int and error.value2 == float:
+            return YesIgnore("#26306: float instead of int returned")
+
+        return self._shall_ignore_content_mismatch(
+            error, query_template, contains_aggregation
+        )
+
 
 def matches_float_comparison(expression: Expression) -> bool:
     if isinstance(expression, ExpressionWithArgs) and isinstance(
