@@ -49,6 +49,8 @@ pub(crate) struct KafkaSinkMetricDefs {
     /// The number of disconnections, whether triggered by the broker, the network, the load
     /// balancer, or something else across all brokers.
     pub rdkafka_disconnects: IntGaugeVec,
+    /// The number of outstanding progress records that need to be read before the sink can resume.
+    pub outstanding_progress_records: UIntGaugeVec,
 }
 
 impl KafkaSinkMetricDefs {
@@ -133,6 +135,11 @@ impl KafkaSinkMetricDefs {
                       network, the load balancer, or something else across all brokers.",
                 var_labels: ["sink_id"],
             )),
+            outstanding_progress_records: registry.register(metric!(
+                name: "mz_sink_oustanding_progress_records",
+                help: "The number of outstanding progress records that need to be read before the sink can resume.",
+                var_labels: ["sink_id"],
+            )),
         }
     }
 }
@@ -171,6 +178,8 @@ pub(crate) struct KafkaSinkMetrics {
     /// The number of disconnections, whether triggered by the broker, the network, the load
     /// balancer, or something else across all brokers.
     pub rdkafka_disconnects: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    /// The number of outstanding progress records that need to be read before the sink can resume.
+    pub outstanding_progress_records: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl KafkaSinkMetrics {
@@ -220,6 +229,9 @@ impl KafkaSinkMetrics {
                 .get_delete_on_drop_gauge(labels.to_vec()),
             rdkafka_disconnects: defs
                 .rdkafka_disconnects
+                .get_delete_on_drop_gauge(labels.to_vec()),
+            outstanding_progress_records: defs
+                .outstanding_progress_records
                 .get_delete_on_drop_gauge(labels.to_vec()),
         }
     }
