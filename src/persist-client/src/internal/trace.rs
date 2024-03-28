@@ -210,6 +210,12 @@ impl<T: Timestamp + Lattice> Trace<T> {
             mut fueling_merges,
         } = value;
 
+        // If the flattened representation has spine batches, we know to preserve the structure for
+        // this trace.
+        // Note that for empty spines, roundtrip_structure will default to false. This is done for
+        // backwards-compatability.
+        let roundtrip_structure = !spine_batches.is_empty();
+
         // We need to look up legacy batches somehow, but we don't have a spine id for them.
         // Instead, we rely on the fact that the spine must store them in antichain order.
         let compare_chains = |left: &Antichain<T>, right: &Antichain<T>| {
@@ -221,19 +227,14 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 Ordering::Equal
             }
         };
-
         let mut legacy_batches: Vec<_> = legacy_batches.into_iter().map(|(k, _)| k).collect();
-        legacy_batches.sort_by(|a, b| compare_chains(a.desc.lower(), b.desc.lower()));
+        legacy_batches.sort_by(|a, b| compare_chains(a.desc.lower(), b.desc.lower()).reverse());
 
-        let mut legacy_batches = legacy_batches.into_iter();
         let mut pop_batch = |id: SpineId, spine_desc: &Description<T>| -> Result<_, String> {
-            let batch = if let Some(batch) = hollow_batches.remove(&id) {
-                batch
-            } else {
-                legacy_batches
-                    .next()
-                    .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?
-            };
+            let batch = hollow_batches
+                .remove(&id)
+                .or_else(|| legacy_batches.pop())
+                .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
 
             if !PartialOrder::less_equal(spine_desc.lower(), batch.desc.lower())
                 || !PartialOrder::less_equal(batch.desc.upper(), spine_desc.upper())
@@ -292,17 +293,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
             merging[level] = state;
         }
 
-        fn check_empty(name: &str, len: usize) -> Result<(), String> {
-            if len != 0 {
-                Err(format!("{len} {name} left after reconstructing spine"))
-            } else {
-                Ok(())
-            }
-        }
-
-        check_empty("hollow batches", hollow_batches.len())?;
-        check_empty("merges", fueling_merges.len())?;
-
         let mut trace = Trace {
             spine: Spine {
                 effort: 1,
@@ -311,15 +301,27 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 upper,
                 merging,
             },
-            roundtrip_structure: true,
+            roundtrip_structure,
         };
 
-        // If the structure wasn't actually serialized, we may have legacy batches left over.
-        // Apply them, but record that isn't a structured batch.
-        for batch in legacy_batches {
-            trace.push_batch_no_merge_reqs(Arc::unwrap_or_clone(batch));
-            trace.roundtrip_structure = false;
+        fn check_empty(name: &str, len: usize) -> Result<(), String> {
+            if len != 0 {
+                Err(format!("{len} {name} left after reconstructing spine"))
+            } else {
+                Ok(())
+            }
         }
+
+        if roundtrip_structure {
+            check_empty("legacy batches", legacy_batches.len())?;
+        } else {
+            // If the structure wasn't actually serialized, we may have legacy batches left over.
+            for batch in legacy_batches.into_iter().rev() {
+                trace.push_batch_no_merge_reqs(Arc::unwrap_or_clone(batch));
+            }
+        }
+        check_empty("hollow batches", hollow_batches.len())?;
+        check_empty("merges", fueling_merges.len())?;
 
         debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
 
