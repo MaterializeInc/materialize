@@ -107,6 +107,7 @@ where
     let source_as_of = None;
     let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source(
         &mut desired_collection.scope(),
+        "persist_sink".to_string(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
         target.clone(),

@@ -130,6 +130,7 @@ impl Subtime {
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn persist_source<G>(
     scope: &mut G,
+    reason: String,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
@@ -192,7 +193,7 @@ where
 
         let (stream, source_tokens) = persist_source_core(
             scope,
-            format!("persist_source({})", source_id),
+            format!("persist_source({}, {})", source_id, reason),
             source_id,
             Arc::clone(&persist_clients),
             metadata.clone(),
