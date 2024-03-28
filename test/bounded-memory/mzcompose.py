@@ -663,14 +663,16 @@ def run_scenario(
         """
         )
 
+        testdrive_timeout_arg = "--default-timeout=5m"
+
         c.up("testdrive", persistent=True)
-        c.testdrive(scenario.pre_restart)
+        c.testdrive(scenario.pre_restart, args=[testdrive_timeout_arg])
 
         # Restart Mz to confirm that re-hydration is also bounded memory
         c.kill("materialized", "clusterd")
         c.up("materialized", "clusterd")
 
-        c.testdrive(scenario.post_restart)
+        c.testdrive(scenario.post_restart, args=[testdrive_timeout_arg])
 
 
 def try_run_scenario(
