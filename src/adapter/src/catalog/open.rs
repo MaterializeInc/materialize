@@ -1702,6 +1702,7 @@ fn add_new_builtin_clusters_migration(
                         logging: default_logging_config(),
                         idle_arrangement_merge_effort: None,
                         optimizer_feature_overrides: Default::default(),
+                        schedule: Default::default(),
                     }),
                 },
             )?;
