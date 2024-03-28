@@ -622,36 +622,40 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         else:
             print(f"+++ Running scenario {scenario.name} ...")
 
-        c.down(destroy_volumes=True)
+        run_scenario(c, scenario)
 
-        with c.override(
-            Materialized(memory=scenario.materialized_memory),
-            Clusterd(memory=scenario.clusterd_memory),
-        ):
-            c.up("redpanda", "materialized", "postgres", "clusterd")
 
-            c.sql(
-                "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
-                port=6877,
-                user="mz_system",
-            )
+def run_scenario(c: Composition, scenario: Scenario) -> None:
+    c.down(destroy_volumes=True)
 
-            c.sql(
-                """
-                CREATE CLUSTER clusterd REPLICAS (r1 (
-                    STORAGECTL ADDRESSES ['clusterd:2100'],
-                    STORAGE ADDRESSES ['clusterd:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd:2101'],
-                    COMPUTE ADDRESSES ['clusterd:2102']
-                ))
+    with c.override(
+        Materialized(memory=scenario.materialized_memory),
+        Clusterd(memory=scenario.clusterd_memory),
+    ):
+        c.up("redpanda", "materialized", "postgres", "clusterd")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
             """
-            )
+            CREATE CLUSTER clusterd REPLICAS (r1 (
+                STORAGECTL ADDRESSES ['clusterd:2100'],
+                STORAGE ADDRESSES ['clusterd:2103'],
+                COMPUTECTL ADDRESSES ['clusterd:2101'],
+                COMPUTE ADDRESSES ['clusterd:2102']
+            ))
+        """
+        )
 
-            c.up("testdrive", persistent=True)
-            c.testdrive(scenario.pre_restart)
+        c.up("testdrive", persistent=True)
+        c.testdrive(scenario.pre_restart)
 
-            # Restart Mz to confirm that re-hydration is also bounded memory
-            c.kill("materialized", "clusterd")
-            c.up("materialized", "clusterd")
+        # Restart Mz to confirm that re-hydration is also bounded memory
+        c.kill("materialized", "clusterd")
+        c.up("materialized", "clusterd")
 
-            c.testdrive(scenario.post_restart)
+        c.testdrive(scenario.post_restart)
