@@ -10,10 +10,15 @@
 use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
+use mz_audit_log::{
+    CreateClusterReplicaV1, DropClusterReplicaV1, EventDetails, EventType, ObjectType,
+    VersionedEvent,
+};
 use semver::Version;
 use tracing::info;
 
-use mz_catalog::durable::Transaction;
+use mz_catalog::durable::{ReplicaLocation, Transaction};
+use mz_controller::clusters::ManagedReplicaLocation;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::GlobalId;
@@ -230,8 +235,8 @@ fn ast_rewrite_create_source_loadgen_options_0_92_0(
 // Durable migrations
 
 /// Migrations that run only on the durable catalog before any data is loaded into memory.
-pub(crate) fn durable_migrate(tx: &mut Transaction) -> Result<(), anyhow::Error> {
-    catalog_fix_system_cluster_replica_ids_v_0_95_0(tx)?;
+pub(crate) fn durable_migrate(tx: &mut Transaction, ts: EpochMillis) -> Result<(), anyhow::Error> {
+    catalog_fix_system_cluster_replica_ids_v_0_95_0(tx, ts)?;
     Ok(())
 }
 
@@ -247,6 +252,7 @@ pub(crate) fn durable_migrate(tx: &mut Transaction) -> Result<(), anyhow::Error>
 
 fn catalog_fix_system_cluster_replica_ids_v_0_95_0(
     tx: &mut Transaction,
+    ts: EpochMillis,
 ) -> Result<(), anyhow::Error> {
     let updated_replicas: Vec<_> = tx
         .get_cluster_replicas()
@@ -264,6 +270,55 @@ fn catalog_fix_system_cluster_replica_ids_v_0_95_0(
             updated_replica.config,
             updated_replica.owner_id,
         )?;
+
+        // Update audit log.
+        if let mz_controller::clusters::ReplicaLocation::Managed(ManagedReplicaLocation {
+            size,
+            disk,
+            billed_as,
+            internal,
+            ..
+        }) = &updated_replica.config.location
+        {
+            let cluster = tx
+                .get_clusters()
+                .filter(|cluster| cluster.id == updated_replica.cluster_id)
+                .next()
+                .expect("missing cluster");
+            let drop_audit_id = tx.allocate_audit_log_id()?;
+            let remove_event = VersionedEvent::new(
+                drop_audit_id,
+                EventType::Drop,
+                ObjectType::ClusterReplica,
+                EventDetails::DropClusterReplicaV1(DropClusterReplicaV1 {
+                    cluster_id: updated_replica.cluster_id.to_string(),
+                    cluster_name: cluster.name.clone(),
+                    replica_id: Some(replica_id.to_string()),
+                    replica_name: updated_replica.name.clone(),
+                }),
+                None,
+                ts,
+            );
+            let create_audit_id = tx.allocate_audit_log_id()?;
+            let create_event = VersionedEvent::new(
+                create_audit_id,
+                EventType::Create,
+                ObjectType::ClusterReplica,
+                EventDetails::CreateClusterReplicaV1(CreateClusterReplicaV1 {
+                    cluster_id: updated_replica.cluster_id.to_string(),
+                    cluster_name: cluster.name.clone(),
+                    replica_id: Some(updated_replica.replica_id.to_string()),
+                    replica_name: updated_replica.name,
+                    logical_size: size.clone(),
+                    disk: *disk,
+                    billed_as: billed_as.clone(),
+                    internal: *internal,
+                }),
+                None,
+                ts,
+            );
+            tx.insert_audit_log_events([remove_event, create_event]);
+        }
     }
     Ok(())
 }

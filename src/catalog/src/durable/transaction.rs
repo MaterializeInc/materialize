@@ -49,9 +49,9 @@ use crate::durable::objects::{
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
-    SystemConfiguration, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    SystemConfiguration, AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY,
+    DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
@@ -607,10 +607,12 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self
-            .get_and_increment_id_by(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string(), 1)?
-            .into_element();
+        let id = self.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
         Ok(ReplicaId::System(id))
+    }
+
+    pub fn allocate_audit_log_id(&mut self) -> Result<u64, CatalogError> {
+        self.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())
     }
 
     /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any

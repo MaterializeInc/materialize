@@ -2198,8 +2198,7 @@ impl CatalogState {
             Some(ts) => ts.into(),
             _ => oracle_write_ts.into(),
         };
-        let id =
-            tx.get_and_increment_id(mz_catalog::durable::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+        let id = tx.allocate_audit_log_id()?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
         audit_events.push(event.clone());
