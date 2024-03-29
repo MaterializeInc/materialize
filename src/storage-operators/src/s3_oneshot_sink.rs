@@ -32,8 +32,11 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::PartialOrder;
-use tracing::info;
+use tracing::{debug, info};
 
+/// Copy the rows from the input collection to s3.
+/// `onetime_callback` is used to send the final count of rows uploaded to s3,
+/// or an error message if the operator failed.
 pub fn copy_to<G, F>(
     input_collection: Collection<G, ((Row, u64), ()), Diff>,
     err_collection: Collection<G, ((DataflowError, u64), ()), Diff>,
@@ -104,7 +107,7 @@ pub fn copy_to<G, F>(
                             let uploader = s3_uploaders
                                 .entry(batch)
                                 .or_insert_with(|| {
-                                    info!("worker_id: {} will be handling batch: {}", worker_id, batch);
+                                    debug!("worker_id: {} will be handling batch: {}", worker_id, batch);
                                     let file_name_prefix = format!("batch-{:04}", batch);
                                     CopyToS3Uploader::new(sdk_config.clone(), connection_details.clone(), file_name_prefix)
                                 });

@@ -435,6 +435,8 @@ pub struct CopyToContext {
     pub max_file_size: u64,
     /// Number of batches the output of the COPY TO will be partitioned into
     /// to distribute the load across workers deterministically.
+    /// This is only an option since it's not set when CopyToContext is instantiated
+    /// but immediately after in the PeekStageValidate stage.
     pub output_batch_count: Option<u64>,
 }
 
