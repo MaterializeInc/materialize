@@ -22,13 +22,13 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
-use crate::connections::ConnectionContext;
-use crate::controller::{AlterError, CollectionMetadata};
-
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
+use crate::connections::ConnectionContext;
+use crate::controller::{AlterError, CollectionMetadata};
+use crate::AlterCompatible;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sinks.rs"));
 
@@ -46,7 +46,7 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
 }
 
 impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + PartialOrder>
-    crate::AlterCompatible for StorageSinkDesc<S, T>
+    AlterCompatible for StorageSinkDesc<S, T>
 {
     /// Determines if `self` is compatible with another `StorageSinkDesc`, in
     /// such a way that it is possible to turn `self` into `other` through a
@@ -462,8 +462,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
         }
         let KafkaSinkConnection {
             connection_id,
-            // The details of the Kafka connection itself may change
-            connection: _,
+            connection,
             format,
             relation_key_indices,
             key_desc_and_indices,
@@ -476,6 +475,10 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
 
         let compatibility_checks = [
             (connection_id == &other.connection_id, "connection_id"),
+            (
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
+            ),
             (format.alter_compatible(id, &other.format).is_ok(), "format"),
             (
                 relation_key_indices == &other.relation_key_indices,
@@ -674,18 +677,23 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 Self::Avro {
                     key_schema,
                     value_schema,
-                    // Connections may change
-                    csr_connection: _,
+                    csr_connection,
                 },
                 Self::Avro {
                     key_schema: other_key_schema,
                     value_schema: other_value_schema,
-                    csr_connection: _,
+                    csr_connection: other_csr_connection,
                 },
             ) => {
                 let compatibility_checks = [
                     (key_schema == other_key_schema, "key_schema"),
                     (value_schema == other_value_schema, "value_schema"),
+                    (
+                        csr_connection
+                            .alter_compatible(id, other_csr_connection)
+                            .is_ok(),
+                        "csr_connection",
+                    ),
                 ];
                 for (compatible, field) in compatibility_checks {
                     if !compatible {

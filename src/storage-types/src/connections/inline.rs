@@ -23,6 +23,8 @@ use proptest::prelude::Arbitrary;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::AlterCompatible;
+
 use super::Connection;
 
 /// Permits any struct to take a `GlobalId` into an inlined connection.
@@ -62,8 +64,17 @@ pub trait ConnectionAccess:
         + PartialEq
         + Hash
         + Serialize
-        + for<'a> Deserialize<'a>;
-    type Pg: Arbitrary + Clone + Debug + Eq + PartialEq + Hash + Serialize + for<'a> Deserialize<'a>;
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
+    type Pg: Arbitrary
+        + Clone
+        + Debug
+        + Eq
+        + PartialEq
+        + Hash
+        + Serialize
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
     type Ssh: Arbitrary
         + Clone
         + Debug
@@ -71,7 +82,8 @@ pub trait ConnectionAccess:
         + PartialEq
         + Hash
         + Serialize
-        + for<'a> Deserialize<'a>;
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
     type Csr: Arbitrary
         + Clone
         + Debug
@@ -79,7 +91,8 @@ pub trait ConnectionAccess:
         + PartialEq
         + Hash
         + Serialize
-        + for<'a> Deserialize<'a>;
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
     type MySql: Arbitrary
         + Clone
         + Debug
@@ -87,7 +100,8 @@ pub trait ConnectionAccess:
         + PartialEq
         + Hash
         + Serialize
-        + for<'a> Deserialize<'a>;
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
 }
 
 /// Expresses that the struct contains references to connections. Use a
