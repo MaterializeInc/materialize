@@ -226,3 +226,20 @@ fn ast_rewrite_create_source_loadgen_options_0_92_0(
 
     Ok(())
 }
+
+// Durable migrations
+
+/// Migrations that run only on the durable catalog before any data is loaded into memory.
+pub(crate) fn durable_migrate(tx: &mut Transaction<'_>) -> Result<(), anyhow::Error> {
+    Ok(())
+}
+
+// Add new migrations below their appropriate heading, and precede them with a
+// short summary of the migration's purpose and optional additional commentary
+// about safety or approach.
+//
+// The convention is to name the migration function using snake case:
+// > <category>_<description>_<version>
+//
+// Please include the adapter team on any code reviews that add or edit
+// migrations.

@@ -256,6 +256,8 @@ impl Catalog {
             let is_read_only = storage.is_read_only();
             let mut txn = storage.transaction().await?;
 
+            migrate::durable_migrate(&mut txn)?;
+
             state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
             let databases = txn.get_databases();
