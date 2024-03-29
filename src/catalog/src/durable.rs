@@ -271,6 +271,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = id.into_element();
         Ok(ReplicaId::User(id))
     }
+
+    /// Allocates and returns a system [`ReplicaId`].
+    async fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
+        let id = self.allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, 1).await?;
+        let id = id.into_element();
+        Ok(ReplicaId::System(id))
+    }
 }
 
 /// Creates an openable durable catalog state implemented using persist.
