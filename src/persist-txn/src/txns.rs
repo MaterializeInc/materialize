@@ -29,8 +29,6 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::metrics::Metrics;
-#[cfg(test)]
-use crate::tests::TestTxn;
 use crate::txn_cache::{TxnsCache, Unapplied};
 use crate::txn_write::Txn;
 use crate::TxnsCodecDefault;
@@ -719,23 +717,6 @@ where
     /// Returns the [TxnsCache] used by this handle.
     pub fn read_cache(&self) -> &TxnsCache<T, C> {
         &self.txns_cache
-    }
-}
-
-#[cfg(test)]
-impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
-where
-    K: Debug + Codec + Clone,
-    V: Debug + Codec + Clone,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Semigroup + Codec64 + Send + Sync + Clone,
-    O: Opaque + Debug + Codec64,
-    C: TxnsCodec,
-{
-    /// Returns a new, empty test transaction that can involve the data shards
-    /// registered with this handle.
-    pub(crate) fn begin_test(&self) -> TestTxn<K, V, T, D> {
-        TestTxn::new()
     }
 }
 

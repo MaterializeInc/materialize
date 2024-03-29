@@ -568,6 +568,22 @@ pub mod tests {
 
     use super::*;
 
+    impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
+    where
+        K: Debug + Codec + Clone,
+        V: Debug + Codec + Clone,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        D: Semigroup + Codec64 + Send + Sync + Clone,
+        O: Opaque + Debug + Codec64,
+        C: TxnsCodec,
+    {
+        /// Returns a new, empty test transaction that can involve the data shards
+        /// registered with this handle.
+        pub(crate) fn begin_test(&self) -> TestTxn<K, V, T, D> {
+            TestTxn::new()
+        }
+    }
+
     /// A [`Txn`] wrapper that exposes extra functionality for tests.
     #[derive(Debug)]
     pub struct TestTxn<K, V, T, D>
