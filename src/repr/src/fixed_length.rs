@@ -18,33 +18,17 @@ use std::borrow::Borrow;
 use std::iter::{empty, Empty};
 
 use crate::row::DatumListIter;
-use crate::{ColumnType, Datum, Row};
+use crate::{Datum, Row};
 
-/// A helper trait to get references to `Row` based on type information that only manifests
-/// at runtime (typically originating from inferred schemas).
+/// A helper trait to get references to `Row.
 pub trait IntoRowByTypes: Sized {
     /// An iterator type for use in `into_datum_iter`.
     type DatumIter<'a>: IntoIterator<Item = Datum<'a>>
     where
         Self: 'a;
 
-    /// Obtains a reference to `Row` for an instance of `Self`, given a `Row` buffer and
-    /// a schema provided by `types`.
-    ///
-    /// Implementations are free to not use `row_buf` if a zero-copy implementation
-    /// can be provided. If the Row buffer is used, then the reference returned is to it.
-    /// Implementations are also free to place specific requirements on the given schema.
-    #[inline]
-    fn into_row<'a>(&'a self, row_buf: &'a mut Row) -> &'a Row {
-        let mut packer = row_buf.packer();
-        packer.extend(self.into_datum_iter());
-        row_buf
-    }
-
     /// Obtains an iterator of datums out of an instance of `Self`, given a schema provided
     /// by `types`.
-    ///
-    /// Implementations are free to place specific requirements on the given schema.
     fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a>;
 }
 
@@ -60,46 +44,18 @@ impl IntoRowByTypes for Row {
     /// Datum iterator for `Row`.
     type DatumIter<'a> = DatumListIter<'a>;
 
-    /// Performs a zero-copy reference forwarding without employing the `Row` buffer.
-    ///
-    /// This implementation panics if `types` other than `None` are provided. This is because
-    /// `Row` is already self-describing and can use variable-length types, so we are
-    /// explicitly not validating the given schema.
-    #[inline]
-    fn into_row<'a>(&'a self, _row_buf: &'a mut Row) -> &'a Row {
-        self
-    }
-
     /// Borrows `self` and gets an iterator from it.
-    ///
-    /// This implementation panics if `types` other than `None` are provided. This is because
-    /// `Row` is already self-describing and can use variable-length types, so we are
-    /// explicitly not validating the given schema.
     #[inline]
     fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
         self.iter()
     }
 }
 
-/// A helper trait to construct target values from input `Row` instances based on type
-/// information that only manifests at runtime (typically originating from inferred schemas).
-/// Typically, the target type will be of fixed-length without tags per column or `Row` itself.
+/// A helper trait to construct target values from input `Row` instances.
 pub trait FromRowByTypes: Sized + Default {
-    /// Obtains an instance of `Self` given an instance of `Row` and a schema provided
-    /// by `types`.
-    ///
-    /// Implementations are free to place specific requirements on the given schema.
-    #[inline]
-    fn from_row(&mut self, row: Row, types: Option<&[ColumnType]>) -> Self {
-        let iter = row.iter();
-        self.from_datum_iter(iter, types)
-    }
-
     /// Obtains an instance of `Self' given an iterator of borrowed datums and a schema
     /// provided by `types`.
-    ///
-    /// Implementations are free to place specific requirements on the given schema.
-    fn from_datum_iter<'a, I, D>(&mut self, datum_iter: I, types: Option<&[ColumnType]>) -> Self
+    fn from_datum_iter<'a, I, D>(&mut self, datum_iter: I) -> Self
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>;
@@ -107,65 +63,34 @@ pub trait FromRowByTypes: Sized + Default {
     /// Obtains an instance of `Self' given an iterator of results of borrowed datums and a schema
     /// provided by `types`.
     ///
-    /// Implementations are free to place specific requirements on the given schema.
-    ///
     /// In the case the iterator produces an error, the pushing of datums is terminated and the
     /// error returned.
-    fn try_from_datum_iter<'a, I, D, E>(
-        &mut self,
-        datum_iter: I,
-        types: Option<&[ColumnType]>,
-    ) -> Result<Self, E>
+    fn try_from_datum_iter<'a, I, D, E>(&mut self, datum_iter: I) -> Result<Self, E>
     where
         I: IntoIterator<Item = Result<D, E>>,
         D: Borrow<Datum<'a>>;
 }
 
 impl FromRowByTypes for Row {
-    /// Returns the provided row itself.
-    ///
-    /// This implementation panics if `types` other than `None` provided. This is because
-    /// `Row` is already self-describing and can use variable-length types, so we are
-    /// explicitly not validating the given schema.
-    #[inline]
-    fn from_row(&mut self, row: Row, types: Option<&[ColumnType]>) -> Self {
-        assert!(types.is_none());
-        row
-    }
-
     /// Packs into `self` the given iterator of datums and returns a clone.
-    ///
-    /// This implementation panics if non-empty `types` are provided. This is because
-    /// `Row` is already self-describing and can use variable-length types, so we are
-    /// explicitly not validating the given schema.
     #[inline]
-    fn from_datum_iter<'a, I, D>(&mut self, datum_iter: I, types: Option<&[ColumnType]>) -> Self
+    fn from_datum_iter<'a, I, D>(&mut self, datum_iter: I) -> Self
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        assert!(types.is_none());
         self.packer().extend(datum_iter);
         self.clone()
     }
 
     /// Packs into `self` by using the packer's `try_extend` method on the given iterator
     /// and returns a clone.
-    ///
-    /// This implementation panics if non-empty `types` are provided. This is because
-    /// `Row` is already self-describing and can use variable-length types, so we are
-    /// explicitly not validating the given schema.
     #[inline]
-    fn try_from_datum_iter<'a, I, D, E>(
-        &mut self,
-        datum_iter: I,
-        types: Option<&[ColumnType]>,
-    ) -> Result<Self, E>
+    fn try_from_datum_iter<'a, I, D, E>(&mut self, datum_iter: I) -> Result<Self, E>
     where
         I: IntoIterator<Item = Result<D, E>>,
         D: Borrow<Datum<'a>>,
     {
-        assert!(types.is_none());
         self.packer().try_extend(datum_iter)?;
         Ok(self.clone())
     }
@@ -175,20 +100,7 @@ impl IntoRowByTypes for () {
     /// Empty iterator for unit.
     type DatumIter<'a> = Empty<Datum<'a>>;
 
-    /// Returns the `Row` buffer, which is assumed to be empty, without touching it.
-    ///
-    /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
-    /// unit values need to have an empty schema.
-    #[inline]
-    fn into_row<'a>(&'a self, row_buf: &'a mut Row) -> &'a Row {
-        debug_assert!(row_buf.is_empty());
-        row_buf
-    }
-
     /// Returns an empty iterator.
-    ///
-    /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
-    /// unit values need to have an empty schema.
     #[inline]
     fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
         empty()
@@ -196,53 +108,24 @@ impl IntoRowByTypes for () {
 }
 
 impl FromRowByTypes for () {
-    /// Obtains a unit value from an empty `Row`.
-    ///
-    /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
-    /// unit values need to have an empty schema.
-    #[inline]
-    fn from_row(&mut self, row: Row, types: Option<&[ColumnType]>) -> Self {
-        let Some(&[]) = types else {
-            panic!("Non-empty schema with unit values")
-        };
-        debug_assert!(row.is_empty());
-        ()
-    }
-
     /// Obtains a unit value from an empty datum iterator.
-    ///
-    /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
-    /// unit values need to have an empty schema.
     #[inline]
-    fn from_datum_iter<'a, I, D>(&mut self, datum_iter: I, types: Option<&[ColumnType]>) -> Self
+    fn from_datum_iter<'a, I, D>(&mut self, datum_iter: I) -> Self
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        let Some(&[]) = types else {
-            panic!("Non-empty schema with unit values")
-        };
         debug_assert!(datum_iter.into_iter().next().is_none());
         ()
     }
 
     /// Obtains a unit value from an empty iterator of results of datums.
-    ///
-    /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
-    /// unit values need to have an empty schema.
     #[inline]
-    fn try_from_datum_iter<'a, I, D, E>(
-        &mut self,
-        datum_iter: I,
-        types: Option<&[ColumnType]>,
-    ) -> Result<Self, E>
+    fn try_from_datum_iter<'a, I, D, E>(&mut self, datum_iter: I) -> Result<Self, E>
     where
         I: IntoIterator<Item = Result<D, E>>,
         D: Borrow<Datum<'a>>,
     {
-        let Some(&[]) = types else {
-            panic!("Non-empty schema with unit values")
-        };
         debug_assert!(datum_iter.into_iter().next().is_none());
         Ok(())
     }

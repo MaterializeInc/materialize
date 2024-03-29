@@ -1079,7 +1079,7 @@ where
                 // Emtpy value specialization.
                 let (oks, errs) = oks.map_fallible(
                     "FormArrangementKey [val: empty]",
-                    specialized_arrangement_key(key.clone(), thinning.clone(), None, Some(vec![])),
+                    specialized_arrangement_key(key.clone(), thinning.clone()),
                 );
                 let name = &format!("{} [val: empty]", name);
                 let oks = oks.mz_arrange::<RowSpine<_, _>>(name);
@@ -1094,7 +1094,7 @@ where
         // Catch-all: Just use RowRow.
         let (oks, errs) = oks.map_fallible(
             "FormArrangementKey",
-            specialized_arrangement_key(key.clone(), thinning.clone(), None, None),
+            specialized_arrangement_key(key.clone(), thinning.clone()),
         );
         let oks = oks.mz_arrange::<RowRowSpine<_, _>>(name);
         (SpecializedArrangement::RowRow(oks), errs)
@@ -1130,8 +1130,6 @@ fn derive_key_val_types(
 fn specialized_arrangement_key<K, V>(
     key: Vec<MirScalarExpr>,
     thinning: Vec<usize>,
-    key_types: Option<Vec<ColumnType>>,
-    val_types: Option<Vec<ColumnType>>,
 ) -> impl FnMut(Row) -> Result<(K, V), DataflowError>
 where
     K: Columnation + Data + FromRowByTypes,
@@ -1146,11 +1144,8 @@ where
         let temp_storage = RowArena::new();
         let val_datum_iter = thinning.iter().map(|c| datums[*c]);
         Ok::<(K, V), DataflowError>((
-            key_buf.try_from_datum_iter(
-                key.iter().map(|k| k.eval(&datums, &temp_storage)),
-                key_types.as_deref(),
-            )?,
-            val_buf.from_datum_iter(val_datum_iter, val_types.as_deref()),
+            key_buf.try_from_datum_iter(key.iter().map(|k| k.eval(&datums, &temp_storage)))?,
+            val_buf.from_datum_iter(val_datum_iter),
         ))
     }
 }

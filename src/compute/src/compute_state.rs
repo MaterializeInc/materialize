@@ -43,7 +43,7 @@ use mz_persist_client::Diagnostics;
 use mz_persist_txn::txn_cache::TxnsCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
-use mz_repr::{ColumnType, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
@@ -1162,12 +1162,7 @@ impl IndexPeek {
             SpecializedTraceHandle::RowUnit(oks_handle) => {
                 // Explicit types required due to Rust type inference limitations.
                 use crate::typedefs::RowSpine;
-                Self::collect_ok_finished_data::<RowSpine<_, _>>(
-                    peek,
-                    oks_handle,
-                    None,
-                    max_result_size,
-                )
+                Self::collect_ok_finished_data::<RowSpine<_, _>>(peek, oks_handle, max_result_size)
             }
             SpecializedTraceHandle::RowRow(oks_handle) => {
                 // Explicit types required due to Rust type inference limitations.
@@ -1175,7 +1170,6 @@ impl IndexPeek {
                 Self::collect_ok_finished_data::<RowRowSpine<_, _>>(
                     peek,
                     oks_handle,
-                    None,
                     max_result_size,
                 )
             }
@@ -1186,7 +1180,6 @@ impl IndexPeek {
     fn collect_ok_finished_data<Tr>(
         peek: &mut Peek<Timestamp>,
         oks_handle: &mut TraceAgent<Tr>,
-        key_types: Option<&[ColumnType]>,
         max_result_size: u64,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
@@ -1242,8 +1235,7 @@ impl IndexPeek {
                         Some(current_literal) => {
                             // NOTE(vmarcos): We expect the extra allocations below to be manageable
                             // since we only perform as many of them as there are literals.
-                            let current_literal =
-                                key_buf.from_row(current_literal.clone(), key_types);
+                            let current_literal = key_buf.from_datum_iter(current_literal.iter());
                             cursor.seek_key_owned(&storage, &current_literal);
                             if !cursor.key_valid(&storage) {
                                 return Ok(results);

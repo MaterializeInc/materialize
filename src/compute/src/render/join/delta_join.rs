@@ -23,7 +23,7 @@ use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, Del
 use mz_compute_types::plan::join::JoinClosure;
 use mz_expr::MirScalarExpr;
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
-use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
@@ -329,7 +329,6 @@ where
         SpecializedArrangement::RowUnit(inner) => build_halfjoin::<_, RowAgent<_, _>, _>(
             updates,
             inner,
-            None,
             prev_key,
             prev_thinning,
             comparison,
@@ -339,7 +338,6 @@ where
         SpecializedArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, _>(
             updates,
             inner,
-            None,
             prev_key,
             prev_thinning,
             comparison,
@@ -372,7 +370,6 @@ where
         SpecializedArrangementImport::RowUnit(inner) => build_halfjoin::<_, RowEnter<_, _, _>, _>(
             updates,
             inner,
-            None,
             prev_key,
             prev_thinning,
             comparison,
@@ -383,7 +380,6 @@ where
             build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                 updates,
                 inner,
-                None,
                 prev_key,
                 prev_thinning,
                 comparison,
@@ -407,7 +403,6 @@ where
 fn build_halfjoin<G, Tr, CF>(
     updates: Collection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
-    trace_key_types: Option<Vec<ColumnType>>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
@@ -425,7 +420,6 @@ where
     for<'a> Tr::Val<'a>: IntoRowByTypes,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    let updates_key_types = trace_key_types.clone();
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -437,7 +431,6 @@ where
                 prev_key
                     .iter()
                     .map(|e| e.eval(&datums_local, &temp_storage)),
-                updates_key_types.as_deref(),
             )?;
             let binding = SharedRow::get();
             let mut row_builder = binding.borrow_mut();
