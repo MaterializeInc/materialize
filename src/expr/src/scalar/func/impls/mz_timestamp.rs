@@ -107,7 +107,8 @@ sqlfunc!(
     fn cast_timestamp_to_mz_timestamp(
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<Timestamp, EvalError> {
-        a.timestamp_millis()
+        a.and_utc()
+            .timestamp_millis()
             .try_into()
             .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
     }

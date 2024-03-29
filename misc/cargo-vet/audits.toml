@@ -30,6 +30,26 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "1.0.1"
 
+[[audits.chrono]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.4.35"
+
+[[audits.chrono-tz]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.8.1"
+
+[[audits.chrono-tz-build]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+
+[[audits.chrono-tz-build]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.2.1"
+
 [[audits.core_affinity]]
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "safe-to-deploy"
@@ -321,6 +341,46 @@ version = "1.7.0"
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "0.2.4"
+
+[[audits.windows-targets]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.4"
+
+[[audits.windows_aarch64_gnullvm]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.4"
+
+[[audits.windows_aarch64_msvc]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.4"
+
+[[audits.windows_i686_gnu]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.4"
+
+[[audits.windows_i686_msvc]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.4"
+
+[[audits.windows_x86_64_gnu]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.4"
+
+[[audits.windows_x86_64_gnullvm]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.4"
+
+[[audits.windows_x86_64_msvc]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.4"
 
 [[audits.winreg]]
 who = "Matt Jibson <matt.jibson@gmail.com>"

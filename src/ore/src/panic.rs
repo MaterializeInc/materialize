@@ -24,7 +24,7 @@ use std::process;
 use tokio::task_local;
 
 thread_local! {
-    static CATCHING_UNWIND: RefCell<bool> = RefCell::new(false);
+    static CATCHING_UNWIND: RefCell<bool> = const { RefCell::new(false) };
 }
 
 #[cfg(feature = "async")]

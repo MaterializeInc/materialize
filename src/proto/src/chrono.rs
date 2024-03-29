@@ -98,7 +98,10 @@ impl RustType<ProtoNaiveDateTime> for DateTime<Utc> {
     }
 
     fn from_proto(proto: ProtoNaiveDateTime) -> Result<Self, TryFromProtoError> {
-        Ok(DateTime::from_utc(NaiveDateTime::from_proto(proto)?, Utc))
+        Ok(DateTime::from_naive_utc_and_offset(
+            NaiveDateTime::from_proto(proto)?,
+            Utc,
+        ))
     }
 }
 
@@ -143,7 +146,7 @@ pub fn any_naive_datetime() -> impl Strategy<Value = NaiveDateTime> {
 }
 
 pub fn any_datetime() -> impl Strategy<Value = DateTime<Utc>> {
-    any_naive_datetime().prop_map(|x| DateTime::from_utc(x, Utc))
+    any_naive_datetime().prop_map(|x| DateTime::from_naive_utc_and_offset(x, Utc))
 }
 
 pub fn any_fixed_offset() -> impl Strategy<Value = FixedOffset> {

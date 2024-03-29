@@ -26,7 +26,7 @@
 use std::io::Cursor;
 use std::str::FromStr;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate};
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::resolve_schemas;
 use mz_avro::types::{DecimalValue, Value};
@@ -445,12 +445,12 @@ fn test_datetime_resolutions() {
         ("f1".into(), Value::Int(1000)),
         (
             "f2".into(),
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(12345, 0).unwrap()),
+            Value::Timestamp(DateTime::from_timestamp(12345, 0).unwrap().naive_utc()),
         ),
         ("f3".into(), Value::Long(23456000)),
         (
             "f4".into(),
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(34567, 0).unwrap()),
+            Value::Timestamp(DateTime::from_timestamp(34567, 0).unwrap().naive_utc()),
         ),
         ("f5".into(), Value::Int(365 * 2)),
         ("f6".into(), Value::Date(365 * 3 + 1)),
@@ -459,15 +459,15 @@ fn test_datetime_resolutions() {
     let datum_to_read = Value::Record(vec![
         (
             "f1".into(),
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(1, 0).unwrap()),
+            Value::Timestamp(DateTime::from_timestamp(1, 0).unwrap().naive_utc()),
         ),
         (
             "f2".into(),
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(12345, 0).unwrap()),
+            Value::Timestamp(DateTime::from_timestamp(12345, 0).unwrap().naive_utc()),
         ),
         (
             "f3".into(),
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(23456, 0).unwrap()),
+            Value::Timestamp(DateTime::from_timestamp(23456, 0).unwrap().naive_utc()),
         ),
         ("f4".into(), Value::Long(34567000000)),
         ("f5".into(), Value::Date(365 * 2)),

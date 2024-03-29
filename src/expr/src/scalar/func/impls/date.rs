@@ -83,10 +83,11 @@ impl<'a> EagerUnaryFunc<'a> for CastDateToTimestampTz {
     type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
     fn call(&self, a: Date) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-        let out = CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
-            NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(),
-            Utc,
-        ))?;
+        let out =
+            CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_naive_utc_and_offset(
+                NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(),
+                Utc,
+            ))?;
         let updated = out.round_to_precision(self.0)?;
         Ok(updated)
     }

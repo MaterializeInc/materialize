@@ -866,8 +866,9 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let ts = i64::from_le_bytes(read_byte_array(data, offset));
             let secs = ts.div_euclid(1_000_000_000);
             let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
-            let ndt = NaiveDateTime::from_timestamp_opt(secs, nsecs)
-                .expect("We only write round-trippable timestamps");
+            let ndt = DateTime::from_timestamp(secs, nsecs)
+                .expect("We only write round-trippable timestamps")
+                .naive_utc();
             Datum::Timestamp(
                 CheckedTimestamp::from_timestamplike(ndt).expect("unexpected timestamp"),
             )
@@ -876,11 +877,10 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let ts = i64::from_le_bytes(read_byte_array(data, offset));
             let secs = ts.div_euclid(1_000_000_000);
             let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
-            let ndt = NaiveDateTime::from_timestamp_opt(secs, nsecs)
+            let dt = DateTime::from_timestamp(secs, nsecs)
                 .expect("We only write round-trippable timestamps");
             Datum::TimestampTz(
-                CheckedTimestamp::from_timestamplike(DateTime::from_utc(ndt, Utc))
-                    .expect("unexpected timestamp"),
+                CheckedTimestamp::from_timestamplike(dt).expect("unexpected timestamp"),
             )
         }
         Tag::Timestamp => {
@@ -895,8 +895,11 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
             Datum::TimestampTz(
-                CheckedTimestamp::from_timestamplike(DateTime::from_utc(date.and_time(time), Utc))
-                    .expect("unexpected timestamptz"),
+                CheckedTimestamp::from_timestamplike(DateTime::from_naive_utc_and_offset(
+                    date.and_time(time),
+                    Utc,
+                ))
+                .expect("unexpected timestamptz"),
             )
         }
         Tag::Interval => {
@@ -1119,7 +1122,7 @@ fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
     if subsec_nanos >= 1_000_000_000 {
         return None;
     }
-    let as_ns = dt.timestamp().checked_mul(1_000_000_000)?;
+    let as_ns = dt.and_utc().timestamp().checked_mul(1_000_000_000)?;
     as_ns.checked_add(i64::from(subsec_nanos))
 }
 
@@ -2427,7 +2430,7 @@ impl std::ops::Deref for SharedRow {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+    use chrono::{DateTime, NaiveDate};
 
     use crate::ScalarType;
 
@@ -2531,11 +2534,8 @@ mod tests {
                 .unwrap(),
             ),
             Datum::TimestampTz(
-                CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
-                    NaiveDateTime::from_timestamp_opt(61, 0).unwrap(),
-                    Utc,
-                ))
-                .unwrap(),
+                CheckedTimestamp::from_timestamplike(DateTime::from_timestamp(61, 0).unwrap())
+                    .unwrap(),
             ),
             Datum::Interval(Interval {
                 months: 312,
@@ -2777,16 +2777,13 @@ mod tests {
             ),
             Datum::Timestamp(
                 CheckedTimestamp::from_timestamplike(
-                    NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
+                    DateTime::from_timestamp(0, 0).unwrap().naive_utc(),
                 )
                 .unwrap(),
             ),
             Datum::TimestampTz(
-                CheckedTimestamp::from_timestamplike(DateTime::from_utc(
-                    NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
-                    Utc,
-                ))
-                .unwrap(),
+                CheckedTimestamp::from_timestamplike(DateTime::from_timestamp(0, 0).unwrap())
+                    .unwrap(),
             ),
             Datum::Interval(Interval::default()),
             Datum::Bytes(&[]),

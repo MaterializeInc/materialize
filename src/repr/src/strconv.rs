@@ -481,7 +481,7 @@ pub fn parse_timestamptz(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, Par
                 Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
                     Some(offset) => offset.fix(),
                     None => {
-                        dt += Duration::hours(1);
+                        dt += Duration::try_hours(1).unwrap();
                         tz.offset_from_local_datetime(&dt)
                             .latest()
                             .ok_or_else(|| "invalid timezone conversion".to_owned())?
@@ -489,7 +489,7 @@ pub fn parse_timestamptz(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, Par
                     }
                 },
             };
-            Ok(DateTime::from_utc(dt - offset, Utc))
+            Ok(DateTime::from_naive_utc_and_offset(dt - offset, Utc))
         })
         .map_err(|e| {
             ParseError::invalid_input_syntax("timestamp with time zone", s).with_details(e)

@@ -53,26 +53,18 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
         }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMilli) => {
             let ts = n.as_i64().unwrap();
-            // TODO(benesch): rewrite to avoid `as`.
-            #[allow(clippy::as_conversions)]
             Ok(Value::Timestamp(
-                chrono::NaiveDateTime::from_timestamp_opt(
-                    ts / 1_000,
-                    ((ts % 1_000).abs() * 1_000_000) as u32,
-                )
-                .unwrap(),
+                chrono::DateTime::from_timestamp_millis(ts)
+                    .ok_or(anyhow!("timestamp out of bounds"))?
+                    .naive_utc(),
             ))
         }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMicro) => {
             let ts = n.as_i64().unwrap();
-            // TODO(benesch): rewrite to avoid `as`.
-            #[allow(clippy::as_conversions)]
             Ok(Value::Timestamp(
-                chrono::NaiveDateTime::from_timestamp_opt(
-                    ts / 1_000_000,
-                    ((ts % 1_000_000).abs() * 1_000) as u32,
-                )
-                .unwrap(),
+                chrono::DateTime::from_timestamp_micros(ts)
+                    .ok_or(anyhow!("timestamp out of bounds"))?
+                    .naive_utc(),
             ))
         }
         (JsonValue::Array(items), SchemaPiece::Array(inner)) => Ok(Value::Array(
@@ -278,8 +270,8 @@ impl Debug for DebugValue {
                 f,
                 "Timestamp(\"{:?}\", {} micros, {} millis)",
                 t,
-                t.timestamp_micros(),
-                t.timestamp_millis()
+                t.and_utc().timestamp_micros(),
+                t.and_utc().timestamp_millis()
             ),
             Value::Date(d) => write!(
                 f,
