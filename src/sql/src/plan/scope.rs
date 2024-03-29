@@ -444,7 +444,18 @@ impl Scope {
 
     /// Look to see if there is an already-calculated instance of this expr.
     /// Failing to find one is not an error, so this just returns Option
-    pub fn resolve_expr<'a>(&'a self, expr: &mz_sql_parser::ast::Expr<Aug>) -> Option<ColumnRef> {
+    pub fn resolve_expr<'a>(&'a self, expr: &Expr<Aug>) -> Option<ColumnRef> {
+        // Literal values should not be treated as "cached" because their types
+        // in scope will have already been determined, but the type of the
+        // reoccurence of the expr might want to have a different type.
+        //
+        // This is most evident in the case of literal `NULL` values. The first
+        // occurrence is likely to be cast as `ScalarType::String`, but
+        // subsequent `NULL` values should be untyped.
+        if matches!(expr, Expr::Value(_)) {
+            return None;
+        }
+
         self.items
             .iter()
             .enumerate()

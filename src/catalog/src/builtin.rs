@@ -2612,12 +2612,12 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::ne
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_STATEMENT_EXECUTION_HISTORY_REDACTED_OID,
     column_defs: None,
-    // everything but `params`
+    // everything but `params` and `error_message`
     sql: "
 SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
 cluster_name, transaction_isolation, execution_timestamp, transaction_id,
 transient_index_id, mz_version, began_at, finished_at, finished_status,
-error_message, rows_returned, execution_strategy
+rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
     access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 });
@@ -2745,7 +2745,15 @@ pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: Lazy<BuiltinView> = Lazy::new(|| Bui
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_REDACTED_OID,
     column_defs: None,
-    sql: "SELECT mralt.*, mrst.redacted_sql
+    // Includes all the columns in mz_recent_activity_log_thinned except 'error_message'.
+    sql: "SELECT mralt.execution_id, mralt.sample_rate, mralt.cluster_id, mralt.application_name,
+    mralt.cluster_name, mralt.transaction_isolation, mralt.execution_timestamp,
+    mralt.transient_index_id, mralt.params, mralt.mz_version, mralt.began_at, mralt.finished_at,
+    mralt.finished_status, mralt.rows_returned, mralt.execution_strategy, mralt.transaction_id,
+    mralt.prepared_statement_id, mralt.sql_hash, mralt.prepared_statement_name, mralt.session_id,
+    mralt.prepared_at, mralt.statement_type, mralt.throttled_count,
+    mralt.initial_application_name, mralt.authenticated_user,
+    mrst.redacted_sql
 FROM mz_internal.mz_recent_activity_log_thinned mralt,
      mz_internal.mz_recent_sql_text mrst
 WHERE mralt.sql_hash = mrst.sql_hash",

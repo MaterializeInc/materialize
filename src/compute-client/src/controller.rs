@@ -301,6 +301,68 @@ impl<T: Timestamp> ComputeController<T> {
         }
         result
     }
+
+    /// Returns the state of the [`ComputeController`] formatted as JSON.
+    ///
+    /// The returned value is not guaranteed to be stable and may change at any point in time.
+    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        // Note: We purposefully use the `Debug` formatting for the value of all fields in the
+        // returned object as a tradeoff between usability and stability. `serde_json` will fail
+        // to serialize an object if the keys aren't strings, so `Debug` formatting the values
+        // prevents a future unrelated change from silently breaking this method.
+
+        // Destructure `self` here so we don't forget to consider dumping newly added fields.
+        let Self {
+            instances,
+            build_info: _,
+            initialized,
+            config: _,
+            default_idle_arrangement_merge_effort,
+            default_arrangement_exert_proportionality,
+            stashed_replica_response,
+            envd_epoch,
+            metrics: _,
+            response_rx: _,
+            response_tx: _,
+            introspection_rx: _,
+            introspection_tx: _,
+            maintenance_ticker: _,
+            maintenance_scheduled,
+        } = self;
+
+        let instances: BTreeMap<_, _> = instances
+            .iter()
+            .map(|(id, instance)| Ok((id.to_string(), instance.dump()?)))
+            .collect::<Result<_, anyhow::Error>>()?;
+
+        fn field(
+            key: &str,
+            value: impl Serialize,
+        ) -> Result<(String, serde_json::Value), anyhow::Error> {
+            let value = serde_json::to_value(value)?;
+            Ok((key.to_string(), value))
+        }
+
+        let map = serde_json::Map::from_iter([
+            field("instances", instances)?,
+            field("initialized", initialized)?,
+            field(
+                "default_idle_arrangement_merge_effort",
+                default_idle_arrangement_merge_effort,
+            )?,
+            field(
+                "default_arrangement_exert_proportionality",
+                default_arrangement_exert_proportionality,
+            )?,
+            field(
+                "stashed_replica_response",
+                format!("{stashed_replica_response:?}"),
+            )?,
+            field("envd_epoch", envd_epoch)?,
+            field("maintenance_scheduled", maintenance_scheduled)?,
+        ]);
+        Ok(serde_json::Value::Object(map))
+    }
 }
 
 impl<T> ComputeController<T>

@@ -72,6 +72,7 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::AlterCompatible;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
@@ -3043,6 +3044,16 @@ impl Coordinator {
             _ => {}
         };
 
+        match self.catalog.get_entry(&id).item() {
+            CatalogItem::Connection(curr_conn) => {
+                curr_conn
+                    .connection
+                    .alter_compatible(id, &connection.connection)
+                    .map_err(StorageError::from)?;
+            }
+            _ => unreachable!("known to be a connection"),
+        };
+
         let ops = vec![catalog::Op::UpdateItem {
             id,
             name: self.catalog.get_entry(&id).name().clone(),
@@ -4184,7 +4195,7 @@ impl CachedStatisticsOracle {
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<T>,
         storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
-    ) -> Result<Self, StorageError> {
+    ) -> Result<Self, StorageError<T>> {
         let mut cache = BTreeMap::new();
 
         for id in ids {

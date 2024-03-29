@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+import math
 from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
@@ -225,6 +225,38 @@ SCENARIOS = [
             0
             """
         ),
+    ),
+    PgCdcScenario(
+        name="pg-cdc-large-tx",
+        pre_restart=PgCdcScenario.PG_SETUP
+        + PgCdcScenario.MZ_SETUP
+        + "$ postgres-execute connection=postgres://postgres:postgres@postgres\n"
+        + "BEGIN;\n"
+        + "\n".join(
+            [
+                dedent(
+                    f"""
+                    INSERT INTO t1 (f3) SELECT '{i}' || REPEAT('a', {PAD_LEN}) FROM generate_series(1, {int(REPEAT / 16)});
+                    """
+                )
+                for i in range(0, ITERATIONS * 20)
+            ]
+        )
+        + "COMMIT;\n"
+        + dedent(
+            f"""
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+            {int(ITERATIONS * 20 * REPEAT / 16)}
+            """
+        ),
+        post_restart=dedent(
+            f"""
+            # We do not do DELETE post-restart, as it will cause OOM for clusterd
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+            {int(ITERATIONS * 20 * REPEAT / 16)}
+            """
+        ),
+        materialized_memory="4.5Gb",
     ),
     KafkaScenario(
         name="upsert-snapshot",
@@ -606,6 +638,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "scenarios", nargs="*", default=None, help="run specified Scenarios"
     )
+    parser.add_argument("--find-minimal-memory", action="store_true")
+    parser.add_argument("--memory-search-step", default=0.2, type=float)
     args = parser.parse_args()
 
     for scenario in SCENARIOS:
@@ -622,36 +656,157 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         else:
             print(f"+++ Running scenario {scenario.name} ...")
 
-        c.down(destroy_volumes=True)
-
-        with c.override(
-            Materialized(memory=scenario.materialized_memory),
-            Clusterd(memory=scenario.clusterd_memory),
-        ):
-            c.up("redpanda", "materialized", "postgres", "clusterd")
-
-            c.sql(
-                "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
-                port=6877,
-                user="mz_system",
+        if args.find_minimal_memory:
+            run_memory_search(c, scenario, args.memory_search_step)
+        else:
+            run_scenario(
+                c,
+                scenario,
+                materialized_memory=scenario.materialized_memory,
+                clusterd_memory=scenario.clusterd_memory,
             )
 
-            c.sql(
-                """
-                CREATE CLUSTER clusterd REPLICAS (r1 (
-                    STORAGECTL ADDRESSES ['clusterd:2100'],
-                    STORAGE ADDRESSES ['clusterd:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd:2101'],
-                    COMPUTE ADDRESSES ['clusterd:2102']
-                ))
+
+def run_scenario(
+    c: Composition, scenario: Scenario, materialized_memory: str, clusterd_memory: str
+) -> None:
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Materialized(memory=materialized_memory),
+        Clusterd(memory=clusterd_memory),
+    ):
+        c.up("redpanda", "materialized", "postgres", "clusterd")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
             """
-            )
+            CREATE CLUSTER clusterd REPLICAS (r1 (
+                STORAGECTL ADDRESSES ['clusterd:2100'],
+                STORAGE ADDRESSES ['clusterd:2103'],
+                COMPUTECTL ADDRESSES ['clusterd:2101'],
+                COMPUTE ADDRESSES ['clusterd:2102']
+            ))
+        """
+        )
 
-            c.up("testdrive", persistent=True)
-            c.testdrive(scenario.pre_restart)
+        testdrive_timeout_arg = "--default-timeout=5m"
 
-            # Restart Mz to confirm that re-hydration is also bounded memory
-            c.kill("materialized", "clusterd")
-            c.up("materialized", "clusterd")
+        c.up("testdrive", persistent=True)
+        c.testdrive(scenario.pre_restart, args=[testdrive_timeout_arg])
 
-            c.testdrive(scenario.post_restart)
+        # Restart Mz to confirm that re-hydration is also bounded memory
+        c.kill("materialized", "clusterd")
+        c.up("materialized", "clusterd")
+
+        c.testdrive(scenario.post_restart, args=[testdrive_timeout_arg])
+
+
+def try_run_scenario(
+    c: Composition, scenario: Scenario, materialized_memory: str, clusterd_memory: str
+) -> bool:
+    try:
+        run_scenario(c, scenario, materialized_memory, clusterd_memory)
+        return True
+    except:
+        return False
+
+
+def run_memory_search(
+    c: Composition, scenario: Scenario, memory_search_step_in_gb: float
+) -> None:
+    assert memory_search_step_in_gb > 0
+    materialized_memory = scenario.materialized_memory
+    clusterd_memory = scenario.clusterd_memory
+
+    print(f"Starting memory search for scenario {scenario.name}")
+
+    materialized_memory, clusterd_memory = find_minimal_memory(
+        c,
+        scenario,
+        materialized_memory=materialized_memory,
+        clusterd_memory=clusterd_memory,
+        reduce_materialized_memory_by_gb=memory_search_step_in_gb,
+        reduce_clusterd_memory_by_gb=0,
+    )
+    materialized_memory, clusterd_memory = find_minimal_memory(
+        c,
+        scenario,
+        materialized_memory=materialized_memory,
+        clusterd_memory=clusterd_memory,
+        reduce_materialized_memory_by_gb=0,
+        reduce_clusterd_memory_by_gb=memory_search_step_in_gb,
+    )
+
+    print(f"Found minimal memory for scenario {scenario.name}:")
+    print(
+        f"* materialized_memory={materialized_memory} (specified was: {scenario.materialized_memory})"
+    )
+    print(
+        f"* clusterd_memory={clusterd_memory} (specified was: {scenario.clusterd_memory})"
+    )
+    print("Consider adding some buffer to avoid flakiness.")
+
+
+def find_minimal_memory(
+    c: Composition,
+    scenario: Scenario,
+    materialized_memory: str,
+    clusterd_memory: str,
+    reduce_materialized_memory_by_gb: float,
+    reduce_clusterd_memory_by_gb: float,
+) -> tuple[str, str]:
+    assert reduce_materialized_memory_by_gb > 0 or reduce_clusterd_memory_by_gb > 0
+
+    while True:
+        new_materialized_memory = _reduce_memory(
+            materialized_memory, reduce_materialized_memory_by_gb
+        )
+        new_clusterd_memory = _reduce_memory(
+            clusterd_memory, reduce_clusterd_memory_by_gb
+        )
+
+        if new_materialized_memory is None or new_clusterd_memory is None:
+            # limit undercut
+            break
+
+        scenario_desc = f"{scenario.name} with materialized_memory={new_materialized_memory} and clusterd_memory={new_clusterd_memory}"
+
+        print(f"Trying scenario {scenario_desc}")
+        success = try_run_scenario(
+            c,
+            scenario,
+            materialized_memory=new_materialized_memory,
+            clusterd_memory=new_clusterd_memory,
+        )
+
+        if success:
+            print(f"Scenario {scenario_desc} succeeded.")
+            materialized_memory = new_materialized_memory
+            clusterd_memory = new_clusterd_memory
+        else:
+            print(f"Scenario {scenario_desc} failed.")
+            break
+
+    return materialized_memory, clusterd_memory
+
+
+def _reduce_memory(memory_spec: str, reduce_by_gb: float) -> str | None:
+    if not memory_spec.endswith("Gb"):
+        raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
+
+    if math.isclose(reduce_by_gb, 0.0, abs_tol=0.01):
+        return memory_spec
+
+    current_gb = float(memory_spec.removesuffix("Gb"))
+    new_gb = current_gb - reduce_by_gb
+
+    if new_gb <= 0.2:
+        return None
+
+    return f"{new_gb}Gb"

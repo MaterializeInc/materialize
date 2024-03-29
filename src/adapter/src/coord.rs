@@ -1567,9 +1567,9 @@ impl Coordinator {
         debug!("coordinator init: optimizing dataflow plans");
         self.bootstrap_dataflow_plans(&entries)?;
 
-        // Discover what indexes MVs depend on. Needed for as-of selection below.
-        // This step relies on the dataflow plans created by `bootstrap_dataflow_plans`.
-        let mut index_dependent_matviews = self.collect_index_dependent_matviews();
+        // Discover storage constrains on compute dataflows. Needed for as-of selection below.
+        // These steps rely on the dataflow plans created by `bootstrap_dataflow_plans`.
+        let mut dataflow_storage_constraints = self.collect_dataflow_storage_constraints();
 
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
@@ -1624,9 +1624,9 @@ impl Coordinator {
                             .clone();
 
                         // Timestamp selection
-                        let dependent_matviews = index_dependent_matviews
+                        let storage_constraints = dataflow_storage_constraints
                             .remove(&entry.id())
-                            .expect("all index dependants were collected");
+                            .expect("all dataflow storage constraints were collected");
 
                         let compaction_window = if idx.is_retained_metrics_object {
                             let retention =
@@ -1644,10 +1644,10 @@ impl Coordinator {
                             idx.custom_logical_compaction_window.unwrap_or_default()
                         };
 
-                        let as_of = self.bootstrap_index_as_of(
+                        let as_of = self.bootstrap_dataflow_as_of(
                             &df_desc,
                             idx.cluster_id,
-                            dependent_matviews,
+                            storage_constraints,
                             compaction_window,
                         );
                         df_desc.set_as_of(as_of);
@@ -1695,7 +1695,16 @@ impl Coordinator {
                         .clone();
 
                     // Timestamp selection
-                    let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
+                    let storage_constraints = dataflow_storage_constraints
+                        .remove(&entry.id())
+                        .expect("all dataflow storage constraints were collected");
+
+                    let as_of = self.bootstrap_dataflow_as_of(
+                        &df_desc,
+                        mview.cluster_id,
+                        storage_constraints,
+                        mview.custom_logical_compaction_window.unwrap_or_default(),
+                    );
                     df_desc.set_as_of(as_of);
 
                     // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
@@ -2131,178 +2140,220 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Collects for each index the materialized views that depend on it, either directly or
-    /// transitively through other indexes (but not through other MVs).
+    /// Collects for each compute dataflow (index, MV) the storage collections that constrain
+    /// timestamp selection.
     ///
-    /// The returned information is required during coordinator bootstrap for index as-of
-    /// selection, to ensure that selected as-ofs satisfy the requirements of downstream MVs.
+    /// The returned information is required during coordinator bootstrap for index and MV as-of
+    /// selection, to ensure that selected as-ofs satisfy these constraints.
     ///
     /// This method expects all dataflow plans to be available, so it must run after
     /// [`Coordinator::bootstrap_dataflow_plans`].
-    fn collect_index_dependent_matviews(&self) -> BTreeMap<GlobalId, BTreeSet<GlobalId>> {
-        // Collect imports of all indexes and MVs in the catalog.
-        let mut index_imports = BTreeMap::new();
-        let mut mv_imports = BTreeMap::new();
+    fn collect_dataflow_storage_constraints(&self) -> BTreeMap<GlobalId, StorageConstraints> {
+        let is_storage_collection = |id: &GlobalId| self.controller.storage.collection(*id).is_ok();
+
+        // Collect index imports and direct storage constraints for all dataflows.
+        let mut index_imports: BTreeMap<_, Vec<_>> = Default::default();
+        let mut constraints: BTreeMap<_, StorageConstraints> = Default::default();
         let catalog = self.catalog();
         for entry in catalog.entries() {
             let id = entry.id();
             if let Some(plan) = catalog.try_get_physical_plan(&id) {
-                let imports: Vec<_> = plan.import_ids().collect();
-                if entry.is_index() {
-                    index_imports.insert(id, imports);
-                } else if entry.is_materialized_view() {
-                    mv_imports.insert(id, imports);
+                let index_import_ids = plan.index_imports.keys().copied().collect();
+                let storage_import_ids = plan.source_imports.keys().copied().collect();
+                let sink_export_ids = plan.sink_exports.keys().copied();
+                let storage_export_ids = sink_export_ids.filter(is_storage_collection).collect();
+
+                index_imports.insert(id, index_import_ids);
+                constraints.insert(
+                    id,
+                    StorageConstraints {
+                        dependencies: storage_import_ids,
+                        dependants: storage_export_ids,
+                    },
+                );
+            }
+        }
+
+        // Collect transitive constraints through indexes.
+        //
+        // Objects with larger IDs tend to depend on objects with smaller IDs. We don't want to
+        // rely on that being true, but we can use it to be more efficient. We do so by having two
+        // fixpoint loops. The first iterates forwards through the index dependencies to propagate
+        // `dependencies` constraints, the seconds iterates backwards through the index
+        // dependencies to propagate `dependants` constraints.
+
+        fn fixpoint(mut step: impl FnMut(&mut bool)) {
+            loop {
+                let mut changed = false;
+                step(&mut changed);
+                if !changed {
+                    break;
                 }
             }
         }
 
-        // Start with an empty set of dependants for each index.
-        let mut dependants: BTreeMap<_, _> = index_imports
-            .keys()
-            .map(|id| (*id, BTreeSet::new()))
-            .collect();
-
-        // Collect direct dependants first.
-        for (mv_id, mv_deps) in &mv_imports {
-            for dep_id in mv_deps {
-                if let Some(ids) = dependants.get_mut(dep_id) {
-                    ids.insert(*mv_id);
-                } else {
-                    // `dep_id` references a source import.
-                    // We ignore it since we only want to collect dependants on indexes.
+        fixpoint(|changed| {
+            for (id, idx_deps) in index_imports.iter() {
+                let transitive_deps: Vec<_> = idx_deps
+                    .iter()
+                    .flat_map(|dep_id| constraints[dep_id].dependencies.iter().copied())
+                    .collect();
+                let entry = constraints.get_mut(id).expect("inserted above");
+                for dep_id in transitive_deps {
+                    *changed |= entry.dependencies.insert(dep_id);
                 }
             }
-        }
-
-        // Collect transitive dependants.
-        loop {
-            let mut changed = false;
-
-            // Objects with larger IDs tend to depend on objects with smaller IDs. We don't want to
-            // rely on that being true, but we can use it to be more efficient.
-            for (idx_id, idx_deps) in index_imports.iter().rev() {
-                // For each dependency of this index, and each MV depending on this index, add the
-                // transitive dependency to `dependants`.
-                //
-                // I.e., if `dep_id <- idx_id` and `idx_id <- mv_id`, then we add `dep_id <- mv_id`
-                // to `dependants`.
-
-                let mv_ids = dependants.get(idx_id).expect("inserted above").clone();
-                if mv_ids.is_empty() {
+        });
+        fixpoint(|changed| {
+            for (id, idx_deps) in index_imports.iter().rev() {
+                let transitive_depts = constraints[id].dependants.clone();
+                if transitive_depts.is_empty() {
                     continue;
                 }
-
                 for dep_id in idx_deps {
-                    let Some(ids) = dependants.get_mut(dep_id) else {
-                        continue; // `dep_id` references a source import
-                    };
-                    for mv_id in &mv_ids {
-                        changed |= ids.insert(*mv_id);
+                    let entry = constraints.get_mut(dep_id).expect("inserted above");
+                    for dept_id in &transitive_depts {
+                        *changed |= entry.dependants.insert(*dept_id);
                     }
                 }
             }
+        });
 
-            if !changed {
-                break;
-            }
-        }
-
-        dependants
+        constraints
     }
 
-    /// Returns an `as_of` suitable for bootstrapping the given index dataflow.
-    fn bootstrap_index_as_of(
+    /// Returns an `as_of` suitable for bootstrapping the given index or materialized view
+    /// dataflow.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given dataflow exports neither an index nor a materialized view.
+    fn bootstrap_dataflow_as_of(
         &self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
-        dependent_matviews: BTreeSet<GlobalId>,
+        storage_constraints: StorageConstraints,
         compaction_window: CompactionWindow,
     ) -> Antichain<Timestamp> {
-        // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
-        // the `since`s of all dependencies.
-        let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
-        let min_as_of = self.least_valid_read(&id_bundle);
-
-        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
-        // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
-        // might still be installed on replicas, but ideally not much farther as that would just
-        // increase the wait time until the index becomes readable, and would also prevent warmup.
-        // We advance the `as_of` to `least_valid_write` - 1. (`least_valid_write` is the meet of
-        // the `upper`s of all dependencies.) This works because we know that no replica could have
-        // produced output at `least_valid_write`, so their write frontiers can't be later. Also,
-        // subtracting 1 is still ok, because we can assume that the compaction window is at least
-        // 1.
-        let warmup_frontier = self.greatest_available_read(&id_bundle);
-
-        let write_frontier = self.least_valid_write(&id_bundle);
-
-        // We wouldn't be able to calculate a `max_compaction_frontier` if `write_frontier` is
-        // empty. (This can happen for constant collections, and for an index on a REFRESH MV that
-        // is past its last refresh.)
-        if write_frontier.is_empty() {
-            tracing::info!(
-                export_ids = %dataflow.display_export_ids(),
-                %cluster_id,
-                min_as_of = ?min_as_of.elements(),
-                write_frontier = ?write_frontier.elements(),
-                "selecting index `as_of` as {:?} (`write_frontier` is empty)",
-                min_as_of.elements(),
-            );
-
-            return min_as_of;
-        }
-
-        // The compaction frontier might be earlier than the warmup frontier.
-        let write_frontier_time = write_frontier.clone().into_option().expect("checked above");
-        let max_compaction_frontier =
-            Antichain::from_elem(compaction_window.lag_from(write_frontier_time));
-        soft_assert_or_log!(
-            !max_compaction_frontier.is_empty(),
-            "`max_compaction_frontier` unexpectedly empty",
+        // Supporting multi-export dataflows is not impossible but complicates the logic, so we
+        // punt on it until we actually want to create such dataflows.
+        assert!(
+            dataflow.export_ids().count() <= 1,
+            "multi-export dataflows not supported"
         );
 
+        // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
+        // the `since`s of all dependencies.
+        let direct_dependencies = dataflow_import_id_bundle(dataflow, cluster_id);
+        let min_as_of = self.least_valid_read(&direct_dependencies);
+
         // We must not select an `as_of` that is beyond any times that have not yet been written to
-        // downstream materialized views. If we would, we might skip times in the output of these
-        // materialized views, violating correctness. So our chosen `as_of` must be at most the
-        // meet of the `upper`s of all dependent materialized views.
+        // downstream storage collections (i.e., materialized views). If we would, we might skip
+        // times in the output of these storage collections, violating correctness. So our chosen
+        // `as_of` must be at most the meet of the `upper`s of all dependent storage collections.
         //
-        // An exception are materialized views that have an `upper` that's less than their `since`
-        // (most likely because they have not yet produced their snapshot). For these views we only
-        // need to provide output starting from their `since`s, so these serve as upper bounds for
-        // our `as_of`.
+        // An exception are storage collections that have an `upper` that's less than their `since`
+        // (most likely because they have not yet produced their snapshot). For these collections
+        // we only need to provide output starting from their `since`s, so these serve as upper
+        // bounds for our `as_of`.
         let mut max_as_of = Antichain::new();
-        for mv_id in &dependent_matviews {
-            let since = self.storage_implied_capability(*mv_id);
-            let upper = self.storage_write_frontier(*mv_id);
+        for id in &storage_constraints.dependants {
+            let since = self.storage_implied_capability(*id);
+            let upper = self.storage_write_frontier(*id);
             max_as_of.meet_assign(&since.join(upper));
         }
 
+        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
+        // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
+        // might still be installed on replicas, but ideally not much farther as that would prevent
+        // dataflow warmup.
+        //
+        // The compute controller maintains warmup capabilities for each dataflow, at the meet of
+        // the greatest available read frontiers (i.e. `upper.step_back()`) of all dataflow inputs.
+        // Dataflows installed on replicas are thus prevented from compacting beyond these warmup
+        // frontiers, so if we can reconstruct them, we know that reconciliation will succeed. Note
+        // that to reconstruct a warmup frontier, we must only take into account the frontiers of
+        // (transitive) storage dependencies: The frontiers of index dependencies can regress
+        // across restarts, so we'd risk ending up with a warmup frontier that is too early to
+        // ensure successful reconciliation.
+        //
+        // Note that choosing the warmup frontier only based on storage dependencies means that the
+        // dataflow might have to wait for indexes in between to catch up to this frontier, if
+        // their `as_of` is selected earlier.
+        let storage_dependencies = storage_constraints.dependencies_bundle();
+        let warmup_frontier = self.greatest_available_read(&storage_dependencies);
+
+        // Apply additional constraints based on whether this dataflow exports an index or a
+        // materialized view.
+        let write_frontier;
+        let candidate_as_of = if dataflow.exported_index_ids().next().is_some() {
+            // Index dataflow.
+
+            write_frontier = self.least_valid_write(&storage_dependencies);
+            if let Some(ts) = write_frontier.as_option() {
+                // If the index has a compaction window configured, we should hold back the `as_of`
+                // to ensure this window is queryable after the index was created. Doing so should
+                // not break compute reconciliation because the compute controller should have
+                // prevented replicas from compacting their installed dataflows into the compaction
+                // window.
+                let max_compaction_frontier = Antichain::from_elem(compaction_window.lag_from(*ts));
+                soft_assert_or_log!(
+                    !max_compaction_frontier.is_empty(),
+                    "`max_compaction_frontier` unexpectedly empty",
+                );
+                max_compaction_frontier
+            } else {
+                // The write frontier is empty. This can happen for constant collections, and for
+                // an index on a REFRESH MV that is past its last refresh. Installing an index with
+                // an empty frontier is not useful since that index would not be readable, so we
+                // bail using the minimum frontier instead. This is something we could refine in
+                // the future.
+                min_as_of.clone()
+            }
+        } else if let Some(sink_id) = dataflow.persist_sink_ids().next() {
+            // Materialized view dataflow.
+
+            write_frontier = self.storage_write_frontier(sink_id).clone();
+            // Materialized view dataflows are only depended on by their target storage collection,
+            // so `write_frontier` should never be greater than `max_as_of`.
+            soft_assert_or_log!(
+                PartialOrder::less_equal(&write_frontier, &max_as_of),
+                "`write_frontier` unexpectedly greater than `max_as_of`",
+            );
+
+            // If the target storage collection of a materialized view is already sealed, there is
+            // no need to install a dataflow in the first place.
+            if write_frontier.is_empty() {
+                Antichain::new()
+            } else {
+                warmup_frontier.clone()
+            }
+        } else {
+            // Neither an index nor a materialized view dataflow.
+            panic!("bootstrapping only supports indexes and materialized views");
+        };
+
         let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
-            // Take the earlier of `warmup_frontier` and `compaction_frontier`,
-            // and finally bound from below and above by `min_as_of` and `max_as_of`.
-            warmup_frontier
-                .meet(&max_compaction_frontier)
-                .join(&min_as_of)
-                .meet(&max_as_of)
+            // Determine the `as_of` by bounding the candidate from below and above by the
+            // correctness constraints `min_as_of` and `max_as_of`, respectively.
+            candidate_as_of.join(&min_as_of).meet(&max_as_of)
         } else {
             // This should not happen. If we get here that means we _will_ skip times in some of
-            // the dependent materialized views, which is a correctness bug. However, skipping
-            // times in materialized views is probably preferable to panicking and thus making the
-            // entire environment unavailable. So we chose to handle this case gracefully and only
-            // log an error, unless soft-asserts are enabled, and continue with the `min_as_of` to
-            // make the dependent materialized views skip as few times as possible.
-
+            // the dependent storage collections, which is a correctness bug. However, skipping
+            // times is probably preferable to panicking and thus making the entire environment
+            // unavailable. So we chose to handle this case gracefully and only log an error,
+            // unless soft-asserts are enabled, and continue with the `min_as_of` to make us skip
+            // as few times as possible.
             mz_ore::soft_panic_or_log!(
-                "error bootstrapping index `as_of`: \
+                "error bootstrapping dataflow `as_of`: \
                  `min_as_of` {:?} greater than `max_as_of` {:?} \
-                 (import_ids={}, export_ids={}, dependent_matviews={:?})",
+                 (import_ids={}, export_ids={}, storage_constraints={:?})",
                 min_as_of.elements(),
                 max_as_of.elements(),
                 dataflow.display_import_ids(),
                 dataflow.display_export_ids(),
-                dependent_matviews,
+                storage_constraints,
             );
-
             min_as_of.clone()
         };
 
@@ -2315,57 +2366,8 @@ impl Coordinator {
             warmup_frontier = ?warmup_frontier.elements(),
             write_frontier = ?write_frontier.elements(),
             ?compaction_window,
-            max_compaction_frontier = ?max_compaction_frontier.elements(),
-            "bootstrapping index `as_of`",
-        );
-
-        as_of
-    }
-
-    /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
-    fn bootstrap_materialized_view_as_of(
-        &self,
-        dataflow: &DataflowDescription<Plan>,
-        cluster_id: ComputeInstanceId,
-    ) -> Antichain<Timestamp> {
-        // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
-        // the `since`s of all dependencies.
-        let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
-        let min_as_of = self.least_valid_read(&id_bundle);
-
-        let sink_id = dataflow
-            .sink_exports
-            .keys()
-            .exactly_one()
-            .expect("MV dataflow must export a sink");
-
-        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
-        // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
-        // might still be installed on replicas, but we don't want to advance it so far that it
-        // would prevent dataflow warmup. Similarly to `bootstrap_index_as_of`, we can use
-        // `greatest_available_read`, but for MVs there is an additional constraint: we should
-        // also make sure that we don't advance the `as_of` past the MV's storage collection's
-        // `upper`, because then we'd skip times in the MV output.
-        let warmup_frontier = self.greatest_available_read(&id_bundle);
-        let max_as_of = self.storage_write_frontier(*sink_id);
-        let candidate_as_of = if max_as_of.is_empty() {
-            // If the storage collection is already sealed, there is no need for warmup.
-            max_as_of.clone()
-        } else {
-            warmup_frontier.meet(max_as_of)
-        };
-
-        let as_of = min_as_of.join(&candidate_as_of);
-
-        tracing::info!(
-            export_ids = %dataflow.display_export_ids(),
-            %cluster_id,
-            as_of = ?as_of.elements(),
-            min_as_of = ?min_as_of.elements(),
-            warmup_frontier = ?warmup_frontier.elements(),
-            max_as_of = ?max_as_of.elements(),
-            candidate_as_of = ?candidate_as_of.elements(),
-            "bootstrapping materialized view `as_of`",
+            ?storage_constraints,
+            "bootstrapping dataflow `as_of`",
         );
 
         as_of
@@ -2799,6 +2801,7 @@ impl Coordinator {
                 "pending_linearize_read_txns".to_string(),
                 serde_json::to_value(pending_linearize_read_txns)?,
             ),
+            ("controller".to_string(), self.controller.dump()?),
         ]);
         Ok(serde_json::Value::Object(map))
     }
@@ -3291,5 +3294,26 @@ pub async fn load_remote_system_parameters(
         }
     } else {
         Ok(None)
+    }
+}
+
+/// The set of storage collections that constrain bootstrap timestamp selection for a given
+/// dataflow.
+///
+/// The set of constraints includes both dependencies and dependants, which constrain the valid
+/// timestamps from below and above, respectively. It includes transitive dependencies/dependants
+/// through indexes, but not through other storage collections.
+#[derive(Debug, Default)]
+struct StorageConstraints {
+    dependencies: BTreeSet<GlobalId>,
+    dependants: BTreeSet<GlobalId>,
+}
+
+impl StorageConstraints {
+    fn dependencies_bundle(&self) -> CollectionIdBundle {
+        CollectionIdBundle {
+            storage_ids: self.dependencies.clone(),
+            compute_ids: Default::default(),
+        }
     }
 }

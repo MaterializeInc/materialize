@@ -35,6 +35,13 @@ _src_name_  | The name for the source.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
 **SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
 **MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
+**KEYS**                    | Valid for [`KEY VALUE` generator](#key-value).
+**SNAPSHOT ROUNDS**         | Valid for [`KEY VALUE` generator](#key-value).
+**TRANSACTIONAL SNAPSHOT**  | Valid for [`KEY VALUE` generator](#key-value).
+**VALUE SIZE**              | Valid for [`KEY VALUE` generator](#key-value).
+**SEED**                    | Valid for [`KEY VALUE` generator](#key-value).
+**PARTITIONS**              | Valid for [`KEY VALUE` generator](#key-value).
+**BATCH SIZE**              | Valid for [`KEY VALUE` generator](#key-value).
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 
@@ -168,6 +175,37 @@ The TPCH source must be used with `FOR ALL TABLES`, which will create the standa
 If `TICK INTERVAL` is specified, after the initial data load, an order and its lineitems will be changed at this interval.
 If not specified, the dataset will not change over time.
 
+### KEY VALUE
+
+{{< private-preview />}}
+
+The `KEY VALUE` load generator produces keyed data that is intended to be passed though the [`UPSERT` envelope](/sql/create-source/#upsert-envelope).
+Its size and performance can be configured in detailed ways.
+
+The schema of the data is:
+
+Field      | Type       | Description
+-----------|------------|------------
+key        | [`uint8`]  | The key for the value
+partition  | [`uint8`]  | The partition this key belongs to
+value      | [`bytea`]  | Random data associated with the key.
+offset     | [`uint8`]  | The offset of the data (if `INCLUDE OFFSET` is configured).
+
+The following options are supported:
+
+- `KEYS`: The number of keys in the source. For now, this must be divisible by `PARTITIONS` * `BATCH SIZE`,
+    though this constraint may be lifted in the future.
+- `SNAPSHOT ROUNDS`: The number of rounds of data (1 update per key in each round) to produce
+    as the source starts up. Can be used to scale the size of the snapshot without changing the number
+    of keys.
+- `TRANSACTIONAL SNAPSHOT`: Whether or not to emit the snapshot as a singular transaction.
+- `VALUE SIZE`: The number of bytes in each `value`.
+- `TICK INTERVAL`: The _minimum interval_ (as an [`interval`]) to produce batches of data (within each partition) after snapshotting.
+- `SEED`: A per-source [`uint8`] seed for seeding the random data.
+- `PARTITIONS`: The number of partitions to spread the keys across. Can be used to scale concurrency independent of
+    the replica size.
+- `BATCH SIZE`: The number of keys per partition to produce in each update (based on `TICK INTERVAL`).
+
 ### Monitoring source progress
 
 By default, load generator sources expose progress metadata as a subsource that
@@ -177,9 +215,9 @@ AS` clause; otherwise, it will be named `<src_name>_progress`.
 
 The following metadata is available for each source as a progress subsource:
 
-Field          | Type                                     | Meaning
----------------|------------------------------------------|--------
-`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The greatest offset generated, which equates to the number of times the load generator has emitted data.
+Field          | Type        | Meaning
+---------------|-------------|--------
+`offset`       | [`uint8`]   | The minimum offset for which updates to this sources are still undetermined.
 
 And can be queried using:
 
@@ -407,5 +445,8 @@ ORDER BY
 [`bigint`]: /sql/types/bigint
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
+[`bytea`]: /sql/types/bytea
+[`interval`]: /sql/types/interval
+[`uint8`]: /sql/types/uint/#uint8-info
 [`timestamp with time zone`]: /sql/types/timestamp
 [feature request]: https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml

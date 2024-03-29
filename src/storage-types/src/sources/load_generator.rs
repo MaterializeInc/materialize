@@ -9,8 +9,10 @@
 
 //! Types related to load generator sources
 
+use std::time::Duration;
+
 use mz_ore::now::NowFn;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
 use once_cell::sync::Lazy;
@@ -24,6 +26,8 @@ include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.load_generator.rs"
 ));
+
+pub const LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT: &str = "offset";
 
 /// Data and progress events of the native stream.
 pub enum Event<F: IntoIterator, D> {
@@ -52,7 +56,13 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     }
 
     fn key_desc(&self) -> RelationDesc {
-        RelationDesc::empty()
+        match &self.load_generator {
+            LoadGenerator::KeyValue(_) => {
+                // `"key"` is overridden by the key_envelope in planning.
+                RelationDesc::empty().with_column("key", ScalarType::UInt64.nullable(false))
+            }
+            _ => RelationDesc::empty(),
+        }
     }
 
     fn value_desc(&self) -> RelationDesc {
@@ -85,6 +95,16 @@ impl SourceConnection for LoadGeneratorSourceConnection {
             }
             LoadGenerator::Marketing => RelationDesc::empty(),
             LoadGenerator::Tpch { .. } => RelationDesc::empty(),
+            LoadGenerator::KeyValue(KeyValueLoadGenerator { include_offset, .. }) => {
+                let mut desc = RelationDesc::empty()
+                    .with_column("partition", ScalarType::UInt64.nullable(false))
+                    .with_column("value", ScalarType::Bytes.nullable(false));
+
+                if let Some(offset_name) = include_offset.as_deref() {
+                    desc = desc.with_column(offset_name, ScalarType::UInt64.nullable(false));
+                }
+                desc
+            }
         }
     }
 
@@ -121,6 +141,7 @@ pub enum LoadGenerator {
         count_orders: i64,
         count_clerk: i64,
     },
+    KeyValue(KeyValueLoadGenerator),
 }
 
 impl LoadGenerator {
@@ -363,6 +384,7 @@ impl LoadGenerator {
                     ),
                 ]
             }
+            LoadGenerator::KeyValue(_) => vec![],
         }
     }
 
@@ -376,6 +398,7 @@ impl LoadGenerator {
             LoadGenerator::Marketing => false,
             LoadGenerator::Datums => true,
             LoadGenerator::Tpch { .. } => false,
+            LoadGenerator::KeyValue(_) => true,
         }
     }
 }
@@ -416,6 +439,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_clerk: *count_clerk,
                 }),
                 LoadGenerator::Datums => Kind::Datums(()),
+                LoadGenerator::KeyValue(kv) => Kind::KeyValue(kv.into_proto()),
             }),
             tick_micros: self.tick_micros,
         }
@@ -447,8 +471,87 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_clerk,
                 },
                 Kind::Datums(()) => LoadGenerator::Datums,
+                Kind::KeyValue(kv) => LoadGenerator::KeyValue(kv.into_rust()?),
             },
             tick_micros: proto.tick_micros,
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+pub struct KeyValueLoadGenerator {
+    /// The keyspace of the source.
+    pub keys: u64,
+    /// The number of rounds to emit values for each key in the snapshot.
+    /// This lets users scale the snapshot size independent of the keyspace.
+    ///
+    /// Please use `transactional_snapshot` and `non_transactional_snapshot_rounds`.
+    pub snapshot_rounds: u64,
+    /// When false, this lets us quickly produce updates, as opposed to a single-value
+    /// per key during a transactional snapshot
+    pub transactional_snapshot: bool,
+    /// The number of random bytes for each value.
+    pub value_size: u64,
+    /// The number of partitions. The keyspace is spread evenly across the partitions.
+    /// This lets users scale the concurrency of the source independently of the replica size.
+    pub partitions: u64,
+    /// If provided, the maximum rate at which new batches of updates, per-partition will be
+    /// produced after the snapshot.
+    pub tick_interval: Option<Duration>,
+    /// The number of keys in each update batch.
+    pub batch_size: u64,
+    /// A per-source seed.
+    pub seed: u64,
+    /// Whether or not to include the offset in the value. The string is the column name.
+    pub include_offset: Option<String>,
+}
+
+impl KeyValueLoadGenerator {
+    /// The number of transactional snapshot rounds.
+    pub fn transactional_snapshot_rounds(&self) -> u64 {
+        if self.transactional_snapshot {
+            self.snapshot_rounds
+        } else {
+            0
+        }
+    }
+
+    /// The number of non-transactional snapshot rounds.
+    pub fn non_transactional_snapshot_rounds(&self) -> u64 {
+        if self.transactional_snapshot {
+            0
+        } else {
+            self.snapshot_rounds
+        }
+    }
+}
+
+impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
+    fn into_proto(&self) -> ProtoKeyValueLoadGenerator {
+        ProtoKeyValueLoadGenerator {
+            keys: self.keys,
+            snapshot_rounds: self.snapshot_rounds,
+            transactional_snapshot: self.transactional_snapshot,
+            value_size: self.value_size,
+            partitions: self.partitions,
+            tick_interval: self.tick_interval.into_proto(),
+            batch_size: self.batch_size,
+            seed: self.seed,
+            include_offset: self.include_offset.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoKeyValueLoadGenerator) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            keys: proto.keys,
+            snapshot_rounds: proto.snapshot_rounds,
+            transactional_snapshot: proto.transactional_snapshot,
+            value_size: proto.value_size,
+            partitions: proto.partitions,
+            tick_interval: proto.tick_interval.into_rust()?,
+            batch_size: proto.batch_size,
+            seed: proto.seed,
+            include_offset: proto.include_offset,
         })
     }
 }

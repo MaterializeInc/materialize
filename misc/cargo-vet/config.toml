@@ -32,6 +32,10 @@ audit-as-crates-io = true
 [policy.mz-avro]
 audit-as-crates-io = true
 
+[policy.mz-pgtest]
+criteria = "safe-to-run"
+notes = "This crate is only depended on in tests."
+
 [policy.openssh]
 audit-as-crates-io = true
 
@@ -260,18 +264,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.cast]]
 version = "0.3.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.chrono]]
-version = "0.4.25"
-criteria = "safe-to-deploy"
-
-[[exemptions.chrono-tz]]
-version = "0.8.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.chrono-tz-build]]
-version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.chunked_transfer]]

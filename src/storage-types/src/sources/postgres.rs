@@ -11,7 +11,6 @@
 
 use std::collections::BTreeMap;
 
-use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -26,8 +25,9 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::controller::StorageError;
+use crate::controller::AlterError;
 use crate::sources::SourceConnection;
+use crate::AlterCompatible;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -106,16 +106,23 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
 
         let PostgresSourceConnection {
             connection_id,
-            // Connection details may change
-            connection: _,
-            table_casts,
+            connection,
+            // Table casts may change and we will not, in the long term, have a
+            // means of understanding which tables are actually being used by
+            // the source so it's unclear if these changes will be breaking or
+            // not. This suggests that we might not want to maintain this
+            // information here statically––we could, instead, derive these
+            // casts dynamically from the table's schema for the subsource, and
+            // then the subsource itself understands how to cast its data from
+            // the source.
+            table_casts: _,
             publication,
             publication_details,
         } = self;
@@ -123,20 +130,14 @@ impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C>
         let compatibility_checks = [
             (connection_id == &other.connection_id, "connection_id"),
             (
-                table_casts
-                    .iter()
-                    .merge_join_by(&other.table_casts, |(l_key, _), (r_key, _)| {
-                        l_key.cmp(r_key)
-                    })
-                    .all(|r| match r {
-                        Both((_, l_val), (_, r_val)) => l_val == r_val,
-                        _ => true,
-                    }),
-                "table_casts",
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
             ),
             (publication == &other.publication, "publication"),
             (
-                publication_details == &other.publication_details,
+                publication_details
+                    .alter_compatible(id, &other.publication_details)
+                    .is_ok(),
                 "publication_details",
             ),
         ];
@@ -149,7 +150,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C>
                     other
                 );
 
-                return Err(StorageError::InvalidAlter { id });
+                return Err(AlterError { id });
             }
         }
 
@@ -300,5 +301,34 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
             slot: proto.slot,
             timeline_id: proto.timeline_id,
         })
+    }
+}
+
+impl AlterCompatible for PostgresSourcePublicationDetails {
+    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+        let PostgresSourcePublicationDetails {
+            tables: _,
+            slot,
+            timeline_id,
+        } = self;
+
+        let compatibility_checks = [
+            (slot == &other.slot, "slot"),
+            (timeline_id == &other.timeline_id, "timeline_id"),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "PostgresSourcePublicationDetails incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
     }
 }

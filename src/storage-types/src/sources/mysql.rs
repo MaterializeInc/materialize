@@ -32,7 +32,9 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
+use crate::controller::AlterError;
 use crate::sources::{SourceConnection, SourceTimestamp};
+use crate::AlterCompatible;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -165,8 +167,46 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
     }
 }
 
-// TODO(roshan): implement alter comaptibility logic
-impl<C: ConnectionAccess> crate::AlterCompatible for MySqlSourceConnection<C> {}
+impl<C: ConnectionAccess> AlterCompatible for MySqlSourceConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let MySqlSourceConnection {
+            connection_id,
+            connection,
+            details,
+            text_columns,
+            ignore_columns,
+        } = self;
+
+        let compatibility_checks = [
+            (connection_id == &other.connection_id, "connection_id"),
+            (
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
+            ),
+            (details == &other.details, "details"),
+            (text_columns == &other.text_columns, "text_columns"),
+            (ignore_columns == &other.ignore_columns, "ignore_columns"),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "MySqlSourceConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
+    }
+}
 
 impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
     fn into_proto(&self) -> ProtoMySqlSourceConnection {

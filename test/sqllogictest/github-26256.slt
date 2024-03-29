@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -8,8 +6,30 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-#
-# lint-versions - Check rust version
 
-grep "rust-version = " Cargo.toml | grep -q "1\.77\.0" || \
-(echo "Please validate new Rust versions for compilation time performance regressions or ask Team Testing to do so. Afterwards change the tested version in bin/lint-versions" && exit 1)
+query TT
+SELECT NULL AS "a", CAST(NULL AS int list)::text AS "b";
+----
+NULL
+NULL
+
+query TT
+SELECT NULL AS "a", CAST(NULL AS int4range) AS "b";
+----
+NULL
+NULL
+
+query TT
+SELECT NULL AS "a", CAST(NULL AS int2vector) AS "b";
+----
+NULL
+NULL
+
+statement ok
+CREATE TYPE t AS (x float, y text);
+
+query TT
+SELECT NULL, NULL::t;
+----
+NULL
+NULL

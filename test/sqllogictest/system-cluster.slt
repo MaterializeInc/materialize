@@ -493,7 +493,7 @@ COMPLETE 0
 statement error system cluster 'mz_introspection' cannot be modified
 CREATE MATERIALIZED VIEW live_keys AS ( SELECT key FROM bar );
 
-statement error system cluster 'mz_introspection' cannot be modified
+statement error  cannot modify managed cluster mz_introspection
 CREATE CLUSTER REPLICA mz_introspection.backup SIZE '1';
 
 statement error system cluster 'mz_introspection' cannot be modified

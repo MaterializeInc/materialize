@@ -203,6 +203,16 @@ fn ast_rewrite_create_source_loadgen_options_0_92_0(
                         LoadGenerator::Marketing => &[TickInterval],
                         LoadGenerator::Datums => &[TickInterval],
                         LoadGenerator::Tpch => &[TickInterval, ScaleFactor],
+                        LoadGenerator::KeyValue => &[
+                            TickInterval,
+                            Keys,
+                            SnapshotRounds,
+                            TransactionalSnapshot,
+                            ValueSize,
+                            Seed,
+                            Partitions,
+                            BatchSize,
+                        ],
                     };
 
                     options.retain(|o| permitted_options.contains(&o.name));

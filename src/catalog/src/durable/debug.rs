@@ -313,7 +313,7 @@ impl Trace {
     }
 }
 
-pub struct DebugCatalogState(pub UnopenedPersistCatalogState);
+pub struct DebugCatalogState(pub(crate) UnopenedPersistCatalogState);
 
 impl DebugCatalogState {
     /// Manually update value of `key` in collection `T` to `value`.

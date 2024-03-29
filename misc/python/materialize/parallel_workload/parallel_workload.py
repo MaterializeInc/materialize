@@ -9,6 +9,7 @@
 
 import argparse
 import datetime
+import gc
 import os
 import random
 import sys
@@ -364,6 +365,9 @@ def run(
         # Dropping the database also releases the long running connections
         # used by database objects.
         database.drop(Executor(rng, cur, database))
+
+        # Make sure all unreachable connections are closed too
+        gc.collect()
 
         stopping_time = datetime.datetime.now() + datetime.timedelta(seconds=30)
         while datetime.datetime.now() < stopping_time:

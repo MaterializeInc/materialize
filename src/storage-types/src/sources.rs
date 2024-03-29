@@ -42,7 +42,7 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::controller::{CollectionMetadata, StorageError};
+use crate::controller::{AlterError, CollectionMetadata};
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
@@ -107,14 +107,12 @@ impl<S> IngestionDescription<S> {
     }
 }
 
-impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
-    for IngestionDescription<S>
-{
+impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionDescription<S> {
     fn alter_compatible(
         &self,
         id: GlobalId,
         other: &IngestionDescription<S>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -127,7 +125,7 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
         } = self;
 
         let compatibility_checks = [
-            (self.desc.alter_compatible(id, desc).is_ok(), "desc"),
+            (desc.alter_compatible(id, &other.desc).is_ok(), "desc"),
             (
                 ingestion_metadata == &other.ingestion_metadata,
                 "ingestion_metadata",
@@ -177,7 +175,7 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
                     other
                 );
 
-                return Err(StorageError::InvalidAlter { id });
+                return Err(AlterError { id });
             }
         }
 
@@ -562,7 +560,7 @@ impl FromStr for Timeline {
 }
 
 /// A connection to an external system
-pub trait SourceConnection: Debug + Clone + PartialEq + crate::AlterCompatible {
+pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// The name of the external system (e.g kafka, postgres, etc).
     fn name(&self) -> &'static str;
 
@@ -699,22 +697,23 @@ impl<C: ConnectionAccess> SourceDesc<C> {
                 connection: GenericSourceConnection::MySql(_),
                 ..
             } => false,
+            // Upsert and CdcV2 may produce retractions.
+            SourceDesc {
+                envelope: SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
+                connection:
+                    GenericSourceConnection::Kafka(_) | GenericSourceConnection::LoadGenerator(_),
+                ..
+            } => false,
             // Loadgen can produce retractions (deletes)
             SourceDesc {
                 connection: GenericSourceConnection::LoadGenerator(g),
                 ..
             } => g.load_generator.is_monotonic(),
-            // Other sources the `None` envelope are append-only.
+            // Other sources with the `None` envelope are append-only.
             SourceDesc {
                 envelope: SourceEnvelope::None(_),
                 ..
             } => true,
-            // Other combinations may produce retractions.
-            SourceDesc {
-                envelope: SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
-                connection: GenericSourceConnection::Kafka(_),
-                ..
-            } => false,
         }
     }
 
@@ -723,11 +722,11 @@ impl<C: ConnectionAccess> SourceDesc<C> {
     }
 }
 
-impl<C: ConnectionAccess> crate::AlterCompatible for SourceDesc<C> {
+impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
     /// Determines if `self` is compatible with another `SourceDesc`, in such a
     /// way that it is possible to turn `self` into `other` through a valid
     /// series of transformations (e.g. no transformation or `ALTER SOURCE`).
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -743,7 +742,13 @@ impl<C: ConnectionAccess> crate::AlterCompatible for SourceDesc<C> {
                 connection.alter_compatible(id, &other.connection).is_ok(),
                 "connection",
             ),
-            (encoding == &other.encoding, "encoding"),
+            (
+                match (encoding, &other.encoding) {
+                    (Some(s), Some(o)) => s.alter_compatible(id, o).is_ok(),
+                    (s, o) => s == o,
+                },
+                "encoding",
+            ),
             (envelope == &other.envelope, "envelope"),
             (
                 timestamp_interval == &other.timestamp_interval,
@@ -759,7 +764,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for SourceDesc<C> {
                     other
                 );
 
-                return Err(StorageError::InvalidAlter { id });
+                return Err(AlterError { id });
             }
         }
 
@@ -886,17 +891,18 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
         let r = match (self, other) {
             (Self::Kafka(conn), Self::Kafka(other)) => conn.alter_compatible(id, other),
             (Self::Postgres(conn), Self::Postgres(other)) => conn.alter_compatible(id, other),
+            (Self::MySql(conn), Self::MySql(other)) => conn.alter_compatible(id, other),
             (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
                 conn.alter_compatible(id, other)
             }
-            _ => Err(StorageError::InvalidAlter { id }),
+            _ => Err(AlterError { id }),
         };
 
         if r.is_err() {

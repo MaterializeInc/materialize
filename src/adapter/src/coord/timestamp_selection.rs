@@ -12,7 +12,7 @@
 use std::fmt;
 
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
@@ -659,9 +659,11 @@ impl Coordinator {
             ScalarType::TimestampTz { .. } => {
                 evaled.unwrap_timestamptz().timestamp_millis().try_into()?
             }
-            ScalarType::Timestamp { .. } => {
-                evaled.unwrap_timestamp().timestamp_millis().try_into()?
-            }
+            ScalarType::Timestamp { .. } => evaled
+                .unwrap_timestamp()
+                .and_utc()
+                .timestamp_millis()
+                .try_into()?,
             _ => coord_bail!(
                 "can't use {} as a mz_timestamp for AS OF or UP TO",
                 catalog.for_session(session).humanize_column_type(&ty)
@@ -730,7 +732,7 @@ impl DisplayableInTimeline for mz_repr::Timestamp {
         if let Some(Timeline::EpochMilliseconds) = timeline {
             let ts_ms: u64 = self.into();
             if let Ok(ts_ms) = i64::try_from(ts_ms) {
-                if let Some(ndt) = NaiveDateTime::from_timestamp_millis(ts_ms) {
+                if let Some(ndt) = DateTime::from_timestamp_millis(ts_ms) {
                     return write!(f, "{:13} ({})", self, ndt.format("%Y-%m-%d %H:%M:%S%.3f"));
                 }
             }
@@ -822,7 +824,7 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
         writeln!(
             f,
             "              session wall time: {:13} ({})",
-            self.session_wall_time.naive_local().timestamp_millis(),
+            self.session_wall_time.timestamp_millis(),
             self.session_wall_time.format("%Y-%m-%d %H:%M:%S%.3f"),
         )?;
 

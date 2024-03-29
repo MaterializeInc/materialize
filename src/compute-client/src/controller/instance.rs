@@ -31,6 +31,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
 use mz_storage_types::read_policy::ReadPolicy;
+use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
@@ -526,6 +527,76 @@ impl<T: Timestamp> Instance<T> {
             }
         })
     }
+
+    /// Returns the state of the [`Instance`] formatted as JSON.
+    ///
+    /// The returned value is not guaranteed to be stable and may change at any point in time.
+    pub(crate) fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        // Note: We purposefully use the `Debug` formatting for the value of all fields in the
+        // returned object as a tradeoff between usability and stability. `serde_json` will fail
+        // to serialize an object if the keys aren't strings, so `Debug` formatting the values
+        // prevents a future unrelated change from silently breaking this method.
+
+        // Destructure `self` here so we don't forget to consider dumping newly added fields.
+        let Self {
+            build_info: _,
+            initialized,
+            replicas,
+            collections,
+            log_sources: _,
+            peeks,
+            subscribes,
+            copy_tos,
+            history: _,
+            response_tx: _,
+            introspection_tx: _,
+            envd_epoch,
+            replica_epochs,
+            metrics: _,
+        } = self;
+
+        fn field(
+            key: &str,
+            value: impl Serialize,
+        ) -> Result<(String, serde_json::Value), anyhow::Error> {
+            let value = serde_json::to_value(value)?;
+            Ok((key.to_string(), value))
+        }
+
+        let replicas: BTreeMap<_, _> = replicas
+            .iter()
+            .map(|(id, replica)| Ok((id.to_string(), replica.dump()?)))
+            .collect::<Result<_, anyhow::Error>>()?;
+        let collections: BTreeMap<_, _> = collections
+            .iter()
+            .map(|(id, collection)| (id.to_string(), format!("{collection:?}")))
+            .collect();
+        let peeks: BTreeMap<_, _> = peeks
+            .iter()
+            .map(|(uuid, peek)| (uuid.to_string(), format!("{peek:?}")))
+            .collect();
+        let subscribes: BTreeMap<_, _> = subscribes
+            .iter()
+            .map(|(id, subscribe)| (id.to_string(), format!("{subscribe:?}")))
+            .collect();
+        let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
+        let replica_epochs: BTreeMap<_, _> = replica_epochs
+            .iter()
+            .map(|(id, epoch)| (id.to_string(), epoch))
+            .collect();
+
+        let map = serde_json::Map::from_iter([
+            field("initialized", initialized)?,
+            field("replicas", replicas)?,
+            field("collections", collections)?,
+            field("peeks", peeks)?,
+            field("subscribes", subscribes)?,
+            field("copy_tos", copy_tos)?,
+            field("envd_epoch", envd_epoch)?,
+            field("replica_epochs", replica_epochs)?,
+        ]);
+        Ok(serde_json::Value::Object(map))
+    }
 }
 
 impl<T> Instance<T>
@@ -681,7 +752,7 @@ where
             .expect("replica must exist");
 
         let now = Utc::now()
-            .duration_trunc(Duration::seconds(60))
+            .duration_trunc(Duration::try_seconds(60).unwrap())
             .expect("cannot fail");
 
         let mut updates = Vec::new();
@@ -2050,6 +2121,49 @@ impl<T: Debug> ReplicaState<T> {
     /// Remove state for a collection.
     fn remove_collection(&mut self, id: GlobalId) -> Option<ReplicaCollectionState<T>> {
         self.collections.remove(&id)
+    }
+
+    /// Returns the state of the [`ReplicaState`] formatted as JSON.
+    ///
+    /// The returned value is not guaranteed to be stable and may change at any point in time.
+    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        // Note: We purposefully use the `Debug` formatting for the value of all fields in the
+        // returned object as a tradeoff between usability and stability. `serde_json` will fail
+        // to serialize an object if the keys aren't strings, so `Debug` formatting the values
+        // prevents a future unrelated change from silently breaking this method.
+
+        // Destructure `self` here so we don't forget to consider dumping newly added fields.
+        let Self {
+            id,
+            client: _,
+            config: _,
+            metrics: _,
+            introspection_tx: _,
+            collections,
+            failed,
+            last_heartbeat,
+        } = self;
+
+        fn field(
+            key: &str,
+            value: impl Serialize,
+        ) -> Result<(String, serde_json::Value), anyhow::Error> {
+            let value = serde_json::to_value(value)?;
+            Ok((key.to_string(), value))
+        }
+
+        let collections: BTreeMap<_, _> = collections
+            .iter()
+            .map(|(id, collection)| (id.to_string(), format!("{collection:?}")))
+            .collect();
+
+        let map = serde_json::Map::from_iter([
+            field("id", id.to_string())?,
+            field("collections", collections)?,
+            field("failed", failed)?,
+            field("last_heartbeat", format!("{last_heartbeat:?}"))?,
+        ]);
+        Ok(serde_json::Value::Object(map))
     }
 }
 
