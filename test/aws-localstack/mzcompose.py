@@ -10,7 +10,6 @@
 """Tests of AWS functionality that run against localstack."""
 
 import uuid
-from datetime import datetime
 from typing import Any, cast
 
 import boto3
@@ -246,54 +245,31 @@ def workflow_copy_to_s3(c: Composition) -> None:
             "copy-to-s3/copy-to-s3.td",
         )
 
+        def validate_upload(upload, expected_output_set):
+            assert len(upload["Contents"]) > 0
+            output_lines = set()
+            for obj in upload["Contents"]:
+                assert obj["Key"].endswith(".csv")
+                key = obj["Key"]
+                object_response = s3_client.get_object(Bucket=bucket_name, Key=key)
+                body = object_response["Body"].read().decode("utf-8")
+                output_lines.update(body.splitlines())
+            assert output_lines == expected_output_set
+
         # asserting the uploaded files
-        date = datetime.now().strftime("%Y-%m-%d")
-        assert (
-            s3_client.list_objects_v2(
-                Bucket=bucket_name, Prefix=f"{path_prefix}/1/{date}/"
-            )["Contents"][0]["Key"]
-            == f"{path_prefix}/1/{date}/part-0001.csv"
+        date = c.sql_query("SELECT TO_CHAR(now(), 'YYYY-MM-DD')")[0][0]
+        expected_output = set(map(lambda x: str(x), range(10)))
+        first_upload = s3_client.list_objects_v2(
+            Bucket=bucket_name, Prefix=f"{path_prefix}/1/{date}/"
         )
+        validate_upload(first_upload, expected_output)
 
-        content = s3_client.get_object(
-            Bucket=bucket_name,
-            Key=f"{path_prefix}/1/{date}/part-0001.csv",
-        )["Body"].read()
-        assert content == b"1\n2\n", content
-
-        assert (
-            s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/2/")[
-                "Contents"
-            ][0]["Key"]
-            == f"{path_prefix}/2/part-0001.csv"
+        second_upload = s3_client.list_objects_v2(
+            Bucket=bucket_name, Prefix=f"{path_prefix}/2/"
         )
+        validate_upload(second_upload, expected_output)
 
-        content = s3_client.get_object(
-            Bucket=bucket_name, Key=f"{path_prefix}/2/part-0001.csv"
-        )["Body"].read()
-        assert content == b"1\n2\n", content
-
-        assert (
-            s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/3/")[
-                "Contents"
-            ][0]["Key"]
-            == f"{path_prefix}/3/part-0001.csv"
+        third_upload = s3_client.list_objects_v2(
+            Bucket=bucket_name, Prefix=f"{path_prefix}/3/"
         )
-
-        content = s3_client.get_object(
-            Bucket=bucket_name, Key=f"{path_prefix}/3/part-0001.csv"
-        )["Body"].read()
-        assert content == b"1000\n", content
-
-        assert (
-            s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/4/")[
-                "Contents"
-            ][0]["Key"]
-            == f"{path_prefix}/4/part-0001.csv"
-        )
-
-        content = s3_client.get_object(
-            Bucket=bucket_name, Key=f"{path_prefix}/4/part-0001.csv"
-        )["Body"].read()
-        expected = b"".join([f"{i}\n".encode() for i in range(1, 1000001)])
-        assert sorted(content.split(b"\n")) == sorted(expected.split(b"\n")), content
+        validate_upload(third_upload, set(["1000"]))

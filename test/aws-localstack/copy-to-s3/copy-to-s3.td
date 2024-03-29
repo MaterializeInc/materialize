@@ -15,8 +15,7 @@ ALTER SYSTEM SET enable_copy_to_expr = true;
 
 # Prepare table data
 > CREATE TABLE t (a int);
-> INSERT INTO t VALUES (1);
-> INSERT INTO t VALUES (2);
+> INSERT INTO t VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (0);
 
 > CREATE SECRET aws_secret_access_key as '${arg.secret-key}';
 > CREATE CONNECTION aws_conn
@@ -80,7 +79,7 @@ contains:ORDER BY is not supported in SELECT query for COPY statements
 contains:MAX FILE SIZE cannot be less than 16MB
 
 # Creating cluster with multiple replicas, each with multiple workers
-> CREATE CLUSTER c1 REPLICAS (r1 (size '2'), r2 (size '2'));
+> CREATE CLUSTER c1 REPLICAS (r1 (size '2'), r2 (size '1'));
 > SET cluster = c1;
 
 # functions like now() should work in the s3 path
