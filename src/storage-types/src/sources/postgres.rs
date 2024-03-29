@@ -110,7 +110,7 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
     }
 }
 
-impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C> {
+impl<C: ConnectionAccess> AlterCompatible for PostgresSourceConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
