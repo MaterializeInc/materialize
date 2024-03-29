@@ -38,8 +38,8 @@ use crate::session::vars::constraints::{
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{lazy_value, value, LazyValueFn};
 use crate::session::vars::value::{
-    ClientEncoding, ClientSeverity, Failpoints, IntervalStyle, IsolationLevel, TimeZone,
-    TimestampOracleImpl, Value, DEFAULT_DATE_STYLE,
+    ClientEncoding, ClientSeverity, Failpoints, IntervalStyle, IsolationLevel, TimeZone, Value,
+    DEFAULT_DATE_STYLE,
 };
 use crate::session::vars::{FeatureFlag, Var, VarInput, VarParseError};
 use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
@@ -600,13 +600,6 @@ pub static PERSIST_TXN_TABLES: VarDefinition = VarDefinition::new(
     This value is also configurable via a Launch Darkly parameter of the \
     same name, but we keep the flag to make testing easier. If specified, \
     the flag takes precedence over the Launch Darkly param.",
-    true,
-);
-
-pub static TIMESTAMP_ORACLE_IMPL: VarDefinition = VarDefinition::new(
-    "timestamp_oracle",
-    value!(TimestampOracleImpl; TimestampOracleImpl::Postgres),
-    "Backing implementation of TimestampOracle.",
     true,
 );
 

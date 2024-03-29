@@ -499,6 +499,7 @@ async fn upgrade_check(
         .0
         .clone();
 
+    let boot_ts = now().into();
     let (_catalog, _, last_catalog_version) = Catalog::initialize_state(
         StateConfig {
             unsafe_mode: true,
@@ -506,6 +507,7 @@ async fn upgrade_check(
             build_info: &BUILD_INFO,
             environment_id: EnvironmentId::for_tests(),
             now,
+            boot_ts,
             skip_migrations: false,
             cluster_replica_sizes,
             builtin_system_cluster_replica_size: builtin_clusters_replica_size.clone(),

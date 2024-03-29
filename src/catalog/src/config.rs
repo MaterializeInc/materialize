@@ -50,6 +50,8 @@ pub struct StateConfig {
     pub environment_id: EnvironmentId,
     /// Function to generate wall clock now; can be mocked.
     pub now: mz_ore::now::NowFn,
+    /// Linearizable timestamp of when this environment booted.
+    pub boot_ts: mz_repr::Timestamp,
     /// Whether or not to skip catalog migrations.
     pub skip_migrations: bool,
     /// Map of strings to corresponding compute replica sizes.
