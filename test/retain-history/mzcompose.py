@@ -218,6 +218,7 @@ def run_test_with_mv_on_table(c: Composition) -> None:
         )
     )
 
+
 def run_test_with_mv_on_table_with_altered_retention(c: Composition) -> None:
     """
     Verify we can still read the most recent timestamp, then reduce the retain history and verify we can't read anymore.
