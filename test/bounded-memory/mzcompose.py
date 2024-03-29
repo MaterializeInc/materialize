@@ -226,6 +226,38 @@ SCENARIOS = [
             """
         ),
     ),
+    PgCdcScenario(
+        name="pg-cdc-large-tx",
+        pre_restart=PgCdcScenario.PG_SETUP
+        + PgCdcScenario.MZ_SETUP
+        + "$ postgres-execute connection=postgres://postgres:postgres@postgres\n"
+        + "BEGIN;\n"
+        + "\n".join(
+            [
+                dedent(
+                    f"""
+                    INSERT INTO t1 (f3) SELECT '{i}' || REPEAT('a', {PAD_LEN}) FROM generate_series(1, {int(REPEAT / 16)});
+                    """
+                )
+                for i in range(0, ITERATIONS * 20)
+            ]
+        )
+        + "COMMIT;\n"
+        + dedent(
+            f"""
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+            {int(ITERATIONS * 20 * REPEAT / 16)}
+            """
+        ),
+        post_restart=dedent(
+            f"""
+            # We do not do DELETE post-restart, as it will cause OOM for clusterd
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+            {int(ITERATIONS * 20 * REPEAT / 16)}
+            """
+        ),
+        materialized_memory="4.5Gb",
+    ),
     KafkaScenario(
         name="upsert-snapshot",
         pre_restart=KafkaScenario.SCHEMAS
