@@ -293,13 +293,22 @@ impl From<bool> for Boolean {
     }
 }
 
-/// A numerical gauge that is never resets.
+/// A numerical gauge that never regresses.
+///
+/// Defaults to 0, and can be left unnitialized.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
-pub struct Total(u64);
+pub struct Total(Option<u64>);
 
-impl From<u64> for Total {
-    fn from(f: u64) -> Self {
+impl From<Option<u64>> for Total {
+    fn from(f: Option<u64>) -> Self {
         Total(f)
+    }
+}
+
+impl Total {
+    /// Pack this `Total` into a `u64`, defaulting to 0.
+    fn pack(&self) -> u64 {
+        self.0.unwrap_or_default()
     }
 }
 
@@ -309,21 +318,39 @@ impl StorageMetric for Total {
         I: IntoIterator<Item = &'a Self>,
         Self: Sized + 'a,
     {
-        // Sum across workers.
-        Self(values.into_iter().map(|c| c.0).sum())
+        // Sum across workers, if all workers have participated
+        // a non-`None` value.
+        let mut any_none = false;
+
+        let inner = values
+            .into_iter()
+            .filter_map(|i| {
+                any_none |= i.0.is_none();
+                i.0.as_ref()
+            })
+            .sum();
+
+        // If any are none, we can't aggregate.
+        Self((!any_none).then_some(inner))
     }
 
     fn incorporate(&mut self, other: Self, field_name: &'static str) {
-        // A `Total` regressing to is a bug.
-        if other.0 < self.0 {
-            tracing::error!(
-                "total gauge {field_name} erroneously regressed from {} to {}",
-                self.0,
-                other.0
-            );
-            return;
+        match (&mut self.0, other.0) {
+            (_, None) => {}
+            (None, Some(other)) => self.0 = Some(other),
+            (Some(this), Some(other)) => {
+                // A `Total` regressing to is a bug.
+                if other < *this {
+                    tracing::error!(
+                        "total gauge {field_name} erroneously regressed from {} to {}",
+                        this,
+                        other
+                    );
+                    return;
+                }
+                *this = other
+            }
         }
-        self.0 = other.0;
     }
 }
 
@@ -355,54 +382,6 @@ impl<T: StorageMetric> StorageMetric for Gauge<T> {
     }
 }
 
-/// A gauge that has semantics based on the `StorageMetric` implementation of its inner.
-/// Skippable gauges do not need to be given a value when updated, defaulting to maintaining
-/// the default value.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SkippableGauge<T>(Option<T>);
-
-impl<T> SkippableGauge<T> {
-    // This can't be a `From` impl cause of coherence issues :(
-    pub fn gauge<F>(f: Option<F>) -> Self
-    where
-        T: From<F>,
-    {
-        SkippableGauge(f.map(Into::into))
-    }
-}
-
-impl<T: StorageMetric + Default + Clone + std::fmt::Debug> SkippableGauge<T> {
-    fn summarize<'a, I>(values: I) -> Self
-    where
-        I: IntoIterator<Item = &'a Self>,
-        Self: Sized + 'a,
-    {
-        let mut any_none = false;
-
-        let inner = T::summarize(values.into_iter().filter_map(|i| {
-            any_none |= i.0.is_none();
-            i.0.as_ref()
-        }));
-
-        // If any are none, we can't aggregate.
-        Self((!any_none).then_some(inner))
-    }
-
-    fn incorporate(&mut self, other: Self, field_name: &'static str) {
-        match (&mut self.0, other.0) {
-            (_, None) => {}
-            (None, Some(other)) => self.0 = Some(other),
-            (Some(this), Some(other)) => this.incorporate(other, field_name),
-        }
-    }
-}
-
-impl<T: Default + Clone> SkippableGauge<T> {
-    fn pack(&self) -> T {
-        self.0.clone().unwrap_or_default()
-    }
-}
-
 /// A trait that abstracts over user-facing statistics objects, used
 /// by `spawn_statistics_scraper`.
 pub trait PackableStats {
@@ -431,8 +410,8 @@ pub struct SourceStatisticsUpdate {
     pub snapshot_records_staged: Gauge<ResettingNullableTotal>,
 
     pub snapshot_committed: Gauge<Boolean>,
-    pub offset_known: SkippableGauge<Total>,
-    pub offset_committed: SkippableGauge<Total>,
+    pub offset_known: Gauge<Total>,
+    pub offset_committed: Gauge<Total>,
 }
 
 impl SourceStatisticsUpdate {
@@ -466,10 +445,8 @@ impl SourceStatisticsUpdate {
             snapshot_committed: Gauge::summarize(
                 values().into_iter().map(|s| &s.snapshot_committed),
             ),
-            offset_known: SkippableGauge::summarize(values().into_iter().map(|s| &s.offset_known)),
-            offset_committed: SkippableGauge::summarize(
-                values().into_iter().map(|s| &s.offset_committed),
-            ),
+            offset_known: Gauge::summarize(values().into_iter().map(|s| &s.offset_known)),
+            offset_committed: Gauge::summarize(values().into_iter().map(|s| &s.offset_committed)),
         }
     }
 
@@ -537,8 +514,8 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.snapshot_records_staged.0 .0));
         // Gauges
         packer.push(Datum::from(self.snapshot_committed.0 .0));
-        packer.push(Datum::from(self.offset_known.pack().0));
-        packer.push(Datum::from(self.offset_committed.pack().0));
+        packer.push(Datum::from(self.offset_known.0.pack()));
+        packer.push(Datum::from(self.offset_committed.0.pack()));
     }
 
     fn unpack(row: Row) -> (GlobalId, Self) {
@@ -566,8 +543,8 @@ impl PackableStats for SourceStatisticsUpdate {
             ),
 
             snapshot_committed: Gauge::gauge(iter.next().unwrap().unwrap_bool()),
-            offset_known: SkippableGauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
-            offset_committed: SkippableGauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            offset_known: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            offset_committed: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
         };
 
         (s.id, s)
@@ -591,8 +568,8 @@ impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
             snapshot_records_staged: self.snapshot_records_staged.0 .0,
 
             snapshot_committed: self.snapshot_committed.0 .0,
-            offset_known: self.offset_known.0.clone().map(|i| i.0),
-            offset_committed: self.offset_committed.0.clone().map(|i| i.0),
+            offset_known: self.offset_known.0 .0,
+            offset_committed: self.offset_committed.0 .0,
         }
     }
 
@@ -614,8 +591,8 @@ impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
             snapshot_records_staged: Gauge::gauge(proto.snapshot_records_staged),
 
             snapshot_committed: Gauge::gauge(proto.snapshot_committed),
-            offset_known: SkippableGauge::gauge(proto.offset_known),
-            offset_committed: SkippableGauge::gauge(proto.offset_committed),
+            offset_known: Gauge::gauge(proto.offset_known),
+            offset_committed: Gauge::gauge(proto.offset_committed),
         })
     }
 }
@@ -752,8 +729,8 @@ impl WebhookStatistics {
             snapshot_records_known: Gauge::gauge(None),
             snapshot_records_staged: Gauge::gauge(None),
             snapshot_committed: Gauge::gauge(true),
-            offset_known: SkippableGauge::gauge(None::<Total>),
-            offset_committed: SkippableGauge::gauge(None::<Total>),
+            offset_known: Gauge::gauge(None::<u64>),
+            offset_committed: Gauge::gauge(None::<u64>),
         }
     }
 }

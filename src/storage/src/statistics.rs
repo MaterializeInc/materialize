@@ -20,9 +20,7 @@ use mz_ore::metrics::{
     MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::{GlobalId, Timestamp};
-use mz_storage_client::statistics::{
-    Gauge, SinkStatisticsUpdate, SkippableGauge, SourceStatisticsUpdate,
-};
+use mz_storage_client::statistics::{Gauge, SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_types::sources::SourceEnvelope;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
@@ -444,8 +442,8 @@ impl SourceStatisticsRecord {
             snapshot_records_known: Gauge::gauge(snapshot_records_known.unwrap()),
             snapshot_records_staged: Gauge::gauge(snapshot_records_staged.unwrap()),
             snapshot_committed: Gauge::gauge(snapshot_committed.unwrap()),
-            offset_known: SkippableGauge::gauge(offset_known.unwrap()),
-            offset_committed: SkippableGauge::gauge(offset_committed.unwrap()),
+            offset_known: Gauge::gauge(offset_known.unwrap()),
+            offset_committed: Gauge::gauge(offset_committed.unwrap()),
         }
     }
 }
