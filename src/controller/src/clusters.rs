@@ -61,6 +61,15 @@ pub struct ReplicaConfig {
     pub compute: ComputeReplicaConfig,
 }
 
+impl ReplicaConfig {
+    pub fn is_internal(&self) -> bool {
+        match &self.location {
+            ReplicaLocation::Unmanaged(_) => false,
+            ReplicaLocation::Managed(location) => location.internal,
+        }
+    }
+}
+
 /// Configures the resource allocation for a cluster replica.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReplicaAllocation {

@@ -147,13 +147,18 @@ impl Coordinator {
         }
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
-            let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+            let internal = false;
+            let id = self
+                .catalog_mut()
+                .allocate_replica_id(&cluster_id, internal)
+                .await?;
             self.create_managed_cluster_replica_op(
                 cluster_id,
                 id,
                 replica_name,
                 &compute,
                 &size,
+                internal,
                 &mut ops,
                 if availability_zones.is_empty() {
                     None
@@ -179,6 +184,7 @@ impl Coordinator {
         name: String,
         compute: &mz_sql::plan::ComputeReplicaConfig,
         size: &String,
+        internal: bool,
         ops: &mut Vec<Op>,
         azs: Option<&[String]>,
         disk: bool,
@@ -188,7 +194,7 @@ impl Coordinator {
             availability_zone: None,
             billed_as: None,
             disk,
-            internal: false,
+            internal,
             size: size.clone(),
         };
 
@@ -349,7 +355,10 @@ impl Coordinator {
                 },
             };
 
-            let replica_id = self.catalog_mut().allocate_replica_id(&id).await?;
+            let replica_id = self
+                .catalog_mut()
+                .allocate_replica_id(&id, config.is_internal())
+                .await?;
             ops.push(catalog::Op::CreateClusterReplica {
                 cluster_id: id,
                 id: replica_id,
@@ -507,7 +516,10 @@ impl Coordinator {
 
         // Replicas have the same owner as their cluster.
         let owner_id = cluster.owner_id();
-        let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+        let id = self
+            .catalog_mut()
+            .allocate_replica_id(&cluster_id, config.is_internal())
+            .await?;
         let op = catalog::Op::CreateClusterReplica {
             cluster_id,
             id,
@@ -806,13 +818,18 @@ impl Coordinator {
                 }
             }
             for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
-                let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+                let internal = false;
+                let id = self
+                    .catalog_mut()
+                    .allocate_replica_id(&cluster_id, internal)
+                    .await?;
                 self.create_managed_cluster_replica_op(
                     cluster_id,
                     id,
                     name,
                     &compute,
                     new_size,
+                    internal,
                     &mut ops,
                     Some(new_availability_zones.as_ref()),
                     *new_disk,
@@ -838,13 +855,18 @@ impl Coordinator {
             for name in
                 (*replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
             {
-                let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+                let internal = false;
+                let id = self
+                    .catalog_mut()
+                    .allocate_replica_id(&cluster_id, internal)
+                    .await?;
                 self.create_managed_cluster_replica_op(
                     cluster_id,
                     id,
                     name,
                     &compute,
                     new_size,
+                    internal,
                     &mut ops,
                     // AVAILABILITY ZONES hasn't changed, so existing replicas don't need to be
                     // rescheduled.

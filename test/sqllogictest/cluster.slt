@@ -693,7 +693,7 @@ db error: ERROR: cannot modify managed cluster t1
 query TTTT
 SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","replica_id":"u4","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","replica_id":"s4","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.r123 SIZE '2', BILLED AS 'free'
@@ -705,14 +705,18 @@ SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE clust
 ----
 u1  r1  u1  2  s1
 u2  r1  u2  1  u1
-u4  free  u2  2  u1
-u3  billed  u2  2  u1
+s4  free  u2  2  u1
+s3  billed  u2  2  u1
 
 query T
 SELECT id FROM mz_internal.mz_internal_cluster_replicas WHERE id LIKE 'u%'
 ----
-u3
-u4
+
+query T
+SELECT id FROM mz_internal.mz_internal_cluster_replicas WHERE id LIKE 's%'
+----
+s3
+s4
 
 statement error db error: ERROR: cannot modify managed cluster t1
 CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
@@ -754,7 +758,7 @@ COMPLETE 0
 query TTTT
 SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","replica_id":"u8","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","replica_id":"s6","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.internal_r2 SIZE '2', INTERNAL
@@ -776,8 +780,8 @@ query TTTTT
 SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
 ----
 u1  r1  u1  2  s1
-u7  r1  u4  1  u1
-u8  free  u4  2  u1
+u4  r1  u4  1  u1
+s6  free  u4  2  u1
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.r3 SIZE '2', BILLED AS 'free'
@@ -834,8 +838,10 @@ DROP CLUSTER t1
 ----
 COMPLETE 0
 
+# Test that system replicas get system IDs.
+
 simple conn=mz_system,user=mz_system
-ALTER CLUSTER mz_system SET (SIZE = '2')
+ALTER CLUSTER mz_system SET (SIZE = '2');
 ----
 COMPLETE 0
 
@@ -846,6 +852,44 @@ SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_c
 
 query I
 SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'mz_system') AND id LIKE 'u%';
+----
+0
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+
+query I
+SELECT COUNT(*) FROM mz_clusters WHERE name = 'c' AND id LIKE 's%';
+----
+0
+
+query I
+SELECT COUNT(*) FROM mz_clusters WHERE name = 'c' AND id LIKE 'u%';
+----
+1
+
+query I
+SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'c') AND name = 'r1' AND id LIKE 's%';
+----
+0
+
+query I
+SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'c') AND name = 'r1' AND id LIKE 'u%';
+----
+1
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA c.rr (SIZE = '1', INTERNAL);
+----
+COMPLETE 0
+
+query I
+SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'c') AND name = 'rr' AND id LIKE 's%';
+----
+1
+
+query I
+SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'c') AND name = 'rr' AND id LIKE 'u%';
 ----
 0
 
