@@ -63,7 +63,7 @@ use mz_storage_types::controller::PersistTxnTablesImpl;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info, Instrument};
+use tracing::{error, info, info_span, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
@@ -644,6 +644,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let cors_allowed_origin = mz_http_util::build_cors_allowed_origin(&allowed_origins);
 
     // Configure controller.
+    let entered = info_span!("environmentd::configure_controller").entered();
     let (orchestrator, secrets_controller, cloud_resource_controller): (
         Arc<dyn Orchestrator>,
         Arc<dyn SecretsController>,
@@ -781,6 +782,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             (orchestrator, secrets_controller, None)
         }
     };
+    drop(entered);
     let cloud_resource_reader = cloud_resource_controller.as_ref().map(|c| c.reader());
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
