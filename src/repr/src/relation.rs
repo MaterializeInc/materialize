@@ -159,7 +159,6 @@ pub struct RelationType {
     ///
     /// A collection can contain multiple sets of keys, although it is common to
     /// have either zero or one sets of key indices.
-    #[serde(default)]
     pub keys: Vec<Vec<usize>>,
 }
 
