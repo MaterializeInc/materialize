@@ -849,4 +849,17 @@ SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_c
 ----
 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
+statement error system cluster 'mz_system' cannot be modified
+ALTER CLUSTER mz_system SET (MANAGED = false)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
 reset-server
