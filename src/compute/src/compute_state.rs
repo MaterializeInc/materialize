@@ -42,7 +42,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::Diagnostics;
 use mz_persist_txn::txn_cache::TxnsCache;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
+use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
@@ -1184,10 +1184,10 @@ impl IndexPeek {
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
         Tr: TraceReader<Time = Timestamp, Diff = Diff>,
-        for<'a> Tr::Key<'a>: IntoRowByTypes,
-        for<'a> Tr::Val<'a>: IntoRowByTypes,
-        Tr::KeyOwned: Columnation + Data + FromRowByTypes + IntoRowByTypes,
-        Tr::ValOwned: Columnation + Data + IntoRowByTypes,
+        for<'a> Tr::Key<'a>: ToDatumIter,
+        for<'a> Tr::Val<'a>: ToDatumIter,
+        Tr::KeyOwned: Columnation + Data + FromDatumIter + ToDatumIter,
+        Tr::ValOwned: Columnation + Data + ToDatumIter,
     {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();
@@ -1262,9 +1262,9 @@ impl IndexPeek {
                 let arena = RowArena::new();
 
                 let key_item = cursor.key(&storage);
-                let key = key_item.into_datum_iter();
+                let key = key_item.to_datum_iter();
                 let row_item = cursor.val(&storage);
-                let row = row_item.into_datum_iter();
+                let row = row_item.to_datum_iter();
 
                 let mut borrow = datum_vec.borrow();
                 borrow.extend(key);

@@ -7,12 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Provides fixed-length representations for data composed of `Datum`s of fixed-length types.
-//! These representations are aimed at being more efficient in memory usage than `Row` by
-//! relying on statically selected container lengths. Traits are provided that allow these
-//! representations to be made into instances of `Row` or created from `Row`s. The traits are
-//! trivially implemented for `Row` itself, providing a uniform interface to describe `Row`s
-//! or fixed-length containers standing in for them.
+//! Provides abstractions for types that can be converted from and into `Datum` iterators.
+//! `Row` is the most obvious implementor, but other trace types that may use more advanced
+//! representations only need to commit to implementing these traits.
 
 use std::borrow::Borrow;
 use std::iter::{empty, Empty};
@@ -21,38 +18,38 @@ use crate::row::DatumListIter;
 use crate::{Datum, Row};
 
 /// A helper trait to get references to `Row.
-pub trait IntoRowByTypes: Sized {
-    /// An iterator type for use in `into_datum_iter`.
+pub trait ToDatumIter: Sized {
+    /// An iterator type for use in `to_datum_iter`.
     type DatumIter<'a>: IntoIterator<Item = Datum<'a>>
     where
         Self: 'a;
 
     /// Obtains an iterator of datums out of an instance of `Self`, given a schema provided
     /// by `types`.
-    fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a>;
+    fn to_datum_iter<'a>(&'a self) -> Self::DatumIter<'a>;
 }
 
-impl<'b, T: IntoRowByTypes> IntoRowByTypes for &'b T {
+impl<'b, T: ToDatumIter> ToDatumIter for &'b T {
     type DatumIter<'a> = T::DatumIter<'a> where T: 'a, Self: 'a;
-    fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
-        (**self).into_datum_iter()
+    fn to_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
+        (**self).to_datum_iter()
     }
 }
 
 // Blanket identity implementation for Row.
-impl IntoRowByTypes for Row {
+impl ToDatumIter for Row {
     /// Datum iterator for `Row`.
     type DatumIter<'a> = DatumListIter<'a>;
 
     /// Borrows `self` and gets an iterator from it.
     #[inline]
-    fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
+    fn to_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
         self.iter()
     }
 }
 
 /// A helper trait to construct target values from input `Row` instances.
-pub trait FromRowByTypes: Sized + Default {
+pub trait FromDatumIter: Sized + Default {
     /// Obtains an instance of `Self' given an iterator of borrowed datums and a schema
     /// provided by `types`.
     fn from_datum_iter<'a, I, D>(&mut self, datum_iter: I) -> Self
@@ -71,7 +68,7 @@ pub trait FromRowByTypes: Sized + Default {
         D: Borrow<Datum<'a>>;
 }
 
-impl FromRowByTypes for Row {
+impl FromDatumIter for Row {
     /// Packs into `self` the given iterator of datums and returns a clone.
     #[inline]
     fn from_datum_iter<'a, I, D>(&mut self, datum_iter: I) -> Self
@@ -96,18 +93,18 @@ impl FromRowByTypes for Row {
     }
 }
 
-impl IntoRowByTypes for () {
+impl ToDatumIter for () {
     /// Empty iterator for unit.
     type DatumIter<'a> = Empty<Datum<'a>>;
 
     /// Returns an empty iterator.
     #[inline]
-    fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
+    fn to_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
         empty()
     }
 }
 
-impl FromRowByTypes for () {
+impl FromDatumIter for () {
     /// Obtains a unit value from an empty datum iterator.
     #[inline]
     fn from_datum_iter<'a, I, D>(&mut self, datum_iter: I) -> Self
