@@ -110,7 +110,7 @@ When you define a source, Materialize will automatically:
     ```nofmt
              name         |   type    |  size
     ----------------------+-----------+---------
-     mz_source            | postgres  | 3xsmall
+     mz_source            | postgres  | 25cc
      mz_source_progress   | progress  |
      table_1              | subsource |
      table_2              | subsource |

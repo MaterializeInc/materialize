@@ -238,7 +238,7 @@ SHOW SOURCES;
           name          |      type      |  size
 ------------------------+----------------+---------
  accounts               | subsource      |
- auction_house          | load-generator | 3xsmall
+ auction_house          | load-generator | 25cc
  auction_house_progress | progress       |
  auctions               | subsource      |
  bids                   | subsource      |
@@ -284,7 +284,7 @@ SHOW SOURCES;
  customers              | subsource      |
  impressions            | subsource      |
  leads                  | subsource      |
- marketing              | load-generator | 3xsmall
+ marketing              | load-generator | 25cc
  marketing_progress     | progress       |
 ```
 
@@ -353,7 +353,7 @@ SHOW SOURCES;
 ```nofmt
       name     |      type      |  size
 ---------------+----------------+---------
- tpch          | load-generator | 2xsmall
+ tpch          | load-generator | 50cc
  tpch_progress | progress       |
  supplier      | subsource      |
  region        | subsource      |

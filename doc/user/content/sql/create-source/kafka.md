@@ -85,8 +85,10 @@ CREATE SOURCE kafka_upsert
 Note that:
 
 - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
-- This envelope can lead to high memory utilization in the cluster maintaining
-  the source. To reduce memory utilization, consider [enabling spill to disk](#spilling-to-disk).
+- This envelope can lead to high memory and disk utilization in the cluster
+  maintaining the source. We recommend using a standard-sized cluster, rather
+  than a legacy-sized cluster, to automatically spill the workload to disk. See
+  [spilling to disk](#spilling-to-disk) for details.
 
 #### Null keys
 
@@ -130,51 +132,12 @@ Note that:
 ### Spilling to disk
 
 Kafka sources that use `ENVELOPE UPSERT` or `ENVELOPE DEBEZIUM` require storing
-the current value for _each key_ in the source to produce retractions when
-keys are updated. Depending on the size of the key space, this can lead to high
-memory utilization in the cluster maintaining the source.
+the current value for _each key_ in the source to produce retractions when keys
+are updated. When using [standard cluster sizes](/sql/create-cluster/#size),
+Materialize will automatically offload this state to disk, seamlessly handling
+key spaces that are larger than memory.
 
-To avoid sizing up, you can attach disk storage to the cluster maintaining these
-sources. This allows Materialize to process data sets larger than memory by
-automatically offloading state to disk (aka spilling to disk).
-
-#### Enabling disk storage
-
-{{< note >}}
-Enabling spill to disk trades off performance for cost, so you should expect
-slower ingestion and rehydration speeds in clusters with this feature enabled.
-See the [reference documentation](/sql/create-cluster/#disk-enabled-sizes) for
-more details.
-{{< /note >}}
-
-To create a new cluster with spill to disk enabled, use a
-[disk-enabled size](/sql/create-cluster/#disk-enabled-sizes), for example:
-
-```sql
-CREATE CLUSTER cluster_with_disk (
-  SIZE = '100cc',
-  DISK = true
-);
-```
-
-Alternatively, you can change an existing cluster to
-a disk-enabled size using the [`ALTER CLUSTER`](/sql/alter-cluster/) command:
-
-```sql
-ALTER CLUSTER cluster_with_disk SET (SIZE = '100cc');
-```
-
-Once a cluster is configured to spill to disk, any Kafka source being maintained
-in that cluster that uses `ENVELOPE UPSERT` or `ENVELOPE DEBEZIUM` will
-automatically benefit from this feature:
-
-```sql
-CREATE SOURCE kafka_repl
-  IN CLUSTER cluster_with_disk
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  ENVELOPE DEBEZIUM;
-```
+Spilling to disk is not available with [legacy cluster sizes](/sql/create-cluster/#legacy-sizes).
 
 ### Exposing source metadata
 

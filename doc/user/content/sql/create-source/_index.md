@@ -243,11 +243,6 @@ It's a good idea to size up the cluster hosting a source when:
     keys in the upstream external system. Larger sizes can store more unique
     keys.
 
-    In this case, it's also possible to enable _spill to disk_ to accommodate
-    larger state sizes without sizing up. See the
-    [`CREATE CLUSTER`: Disk-enabled sizes](/sql/create-cluster#disk-enabled-sizes)
-    documentation for more details.
-
 Sources share the resource allocation of their cluster with all other objects in
 the cluster. Colocating multiple sources onto the same cluster can be more
 resource efficient when you have many low-traffic sources that occasionally need

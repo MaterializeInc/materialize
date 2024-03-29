@@ -173,7 +173,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 ### `mz_cluster_replica_sizes`
 
 The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
-(e.g. "xlarge") to physical sizes (number of processes, and CPU and memory allocations per process).
+(e.g. `100cc`) to physical sizes (number of processes, and CPU and memory allocations per process).
 
 {{< warning >}}
 The values in this table may change at any time. You should not rely on them for

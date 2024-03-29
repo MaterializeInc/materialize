@@ -42,7 +42,7 @@ to be associated with a cluster:
 - Maintaining [indexes](#indexes) and [materialized views](#materialized-views).
 - Maintaining [sources](#sources) and [sinks](#sinks).
 
-You choose the size of your cluster (`small`, `medium`, `large`, etc.) based on
+You choose the size of your cluster (`25cc`, `50cc`, `100cc`, etc.) based on
 the resource requirements of your workload. Larger clusters have more compute
 resources available and can therefore process data faster and handle larger data
 volumes. You can resize a cluster at any time, even while the cluster is
