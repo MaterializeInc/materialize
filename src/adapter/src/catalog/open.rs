@@ -49,7 +49,6 @@ use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
-use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
@@ -1334,14 +1333,15 @@ impl Catalog {
         // TODO(jkosh44) Technically we could support changing the type of a builtin object outside
         // of `mz_internal` (i.e. from a table to a view). However, these migrations don't
         // currently handle that scenario correctly.
-        assert!(
-            migration_metadata
-                .deleted_system_objects
-                .iter()
-                .all(|deleted_object| deleted_object.schema_name == MZ_INTERNAL_SCHEMA),
-            "only mz_internal objects can be deleted, deleted objects: {:?}",
-            migration_metadata.deleted_system_objects
-        );
+        // TODO(jkosh44) Uncomment this assert after v0.94.X is deployed.
+        // assert!(
+        //     migration_metadata
+        //         .deleted_system_objects
+        //         .iter()
+        //         .all(|deleted_object| deleted_object.schema_name == MZ_INTERNAL_SCHEMA),
+        //     "only mz_internal objects can be deleted, deleted objects: {:?}",
+        //     migration_metadata.deleted_system_objects
+        // );
 
         Ok(migration_metadata)
     }
