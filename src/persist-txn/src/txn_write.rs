@@ -676,4 +676,32 @@ mod tests {
         });
         assert!(commit.await.is_err());
     }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn commit_retry() {
+        let client = PersistClient::new_for_tests().await;
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let mut cache = TxnsCache::expect_open(0, &txns).await;
+        let d0 = txns.expect_register(1).await;
+        let d1 = txns.expect_register(2).await;
+
+        // `txn` commit is interrupted by `other` commit.
+        let mut txn = txns.begin();
+        txn.write(&d0, "0".into(), (), 1).await;
+        let mut other = txns.begin();
+        other.write(&d1, "42".into(), (), 1).await;
+        other.commit_at(&mut txns, 3).await.unwrap();
+        let upper = txn.commit_at(&mut txns, 3).await.unwrap_err();
+        assert_eq!(upper, 4);
+
+        // Add more writes to `txn` and try again.
+        txn.write(&d0, "1".into(), (), 1).await;
+        txn.commit_at(&mut txns, 4).await.unwrap();
+        txns.apply_le(&4).await;
+
+        let expected_d0 = vec!["0".to_owned(), "1".to_owned()];
+        let actual_d0 = cache.expect_snapshot(&client, d0, 4).await;
+        assert_eq!(actual_d0, expected_d0);
+    }
 }
