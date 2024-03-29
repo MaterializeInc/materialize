@@ -297,7 +297,7 @@ def run_test_with_mv_on_table_with_altered_retention(c: Composition) -> None:
             f"""
             # increase the retention period again
             > ALTER MATERIALIZED VIEW retain_history_mv SET (RETAIN HISTORY FOR '30s');
-            
+
             > INSERT INTO retain_history_table VALUES (5, 500);
             """,
         ),
