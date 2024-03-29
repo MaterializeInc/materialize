@@ -4596,6 +4596,11 @@ fn plan_retain_history(
 ) -> Result<CompactionWindow, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
     let cw = match lcw {
+        // 0 is often used by Postgres to mean disabled instead of actually 0. We have existing
+        // tests that use this behavior (these could change though). Furthermore, some things
+        // actually do break when this is set to real zero:
+        // https://github.com/MaterializeInc/materialize/issues/13221.
+        Some(Duration::ZERO) => CompactionWindow::DisableCompaction,
         Some(duration) => duration.try_into()?,
         None => CompactionWindow::Default,
     };
