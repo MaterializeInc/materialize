@@ -35,8 +35,8 @@ use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::task;
 use mz_ore::tracing::TracingHandle;
+use mz_ore::{instrument, task};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
@@ -253,7 +253,7 @@ impl Listeners {
     /// Starts an `environmentd` server.
     ///
     /// Returns a handle to the server once it is fully booted.
-    #[mz_ore::instrument(name = "environmentd::serve", level = "info")]
+    #[instrument(name = "environmentd::serve")]
     pub async fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
         let Listeners {
             sql: (sql_listener, sql_conns),
@@ -542,7 +542,7 @@ impl Listeners {
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
         })
-        .instrument(info_span!(parent: None, "adapter::serve"))
+        .instrument(info_span!("adapter::serve"))
         .await?;
 
         // Install an adapter client in the internal HTTP server.
