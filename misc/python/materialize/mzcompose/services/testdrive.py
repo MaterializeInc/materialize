@@ -48,6 +48,8 @@ class Testdrive(Service):
         no_consistency_checks: bool = False,
         external_cockroach: bool = False,
         external_minio: bool = False,
+        fivetran_destination_url: str = "http://fivetran-destination:6874",
+        fivetran_destination_files_path: str = "/share/tmp",
         mz_service: str = "materialized",
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {}
@@ -129,6 +131,12 @@ class Testdrive(Service):
 
         if no_consistency_checks:
             entrypoint.append("--consistency-checks=disable")
+
+        depends_graph["fivetran-destination"] = {"condition": "service_started"}
+        entrypoint.append(f"--fivetran-destination-url={fivetran_destination_url}")
+        entrypoint.append(
+            f"--fivetran-destination-files-path={fivetran_destination_files_path}"
+        )
 
         if external_minio:
             depends_graph["minio"] = {"condition": "service_healthy"}
