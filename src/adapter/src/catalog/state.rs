@@ -12,19 +12,20 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::bail;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_sql::session::metadata::SessionMetadata;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{info, info_span, warn};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_build_info::DUMMY_BUILD_INFO;
@@ -795,7 +796,7 @@ impl CatalogState {
                     create_sql: view.create_sql,
                     raw_expr,
                     desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
-                    optimized_expr,
+                    optimized_expr: Arc::new(OnceLock::from(optimized_expr)),
                     conn_id: None,
                     resolved_ids,
                 })
@@ -867,11 +868,42 @@ impl CatalogState {
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
     ) -> Result<CatalogItem, AdapterError> {
+        let (item, handle) = self.parse_item_handle(
+            id,
+            create_sql,
+            pcx,
+            is_retained_metrics_object,
+            custom_logical_compaction_window,
+        )?;
+        if let Some(handle) = handle {
+            handle.join().expect("join error")?;
+        }
+        Ok(item)
+    }
+
+    // Like `parse_item`, but returns a possible JoinHandle which is ready once the item is fully
+    // populated. This allows for some work to be done in other threads (view optimization). Before
+    // the handle is joined, a panic will occur if any thread-dependent data is accessed.
+    #[mz_ore::instrument]
+    pub(crate) fn parse_item_handle(
+        &self,
+        id: GlobalId,
+        create_sql: String,
+        pcx: Option<&PlanContext>,
+        is_retained_metrics_object: bool,
+        custom_logical_compaction_window: Option<CompactionWindow>,
+    ) -> Result<
+        (
+            CatalogItem,
+            Option<std::thread::JoinHandle<Result<(), AdapterError>>>,
+        ),
+        AdapterError,
+    > {
         let mut session_catalog = self.for_system_session();
 
         let (plan, resolved_ids) = self.parse_plan(create_sql, pcx, &mut session_catalog)?;
 
-        Ok(match plan {
+        let item = match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: Some(table.create_sql),
                 desc: table.desc,
@@ -931,21 +963,34 @@ impl CatalogState {
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
 
-                // Build an optimizer for this VIEW.
-                let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
-
-                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-                let raw_expr = view.expr;
-                let optimized_expr = optimizer.optimize(raw_expr.clone())?;
-
-                CatalogItem::View(View {
+                let typ = view.expr.typ(&[], &BTreeMap::new());
+                let desc = RelationDesc::new(typ, view.column_names);
+                let lock = Arc::new(OnceLock::new());
+                let item = CatalogItem::View(View {
                     create_sql: view.create_sql,
-                    raw_expr,
-                    desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
-                    optimized_expr,
+                    raw_expr: view.expr.clone(),
+                    desc,
+                    optimized_expr: Arc::clone(&lock),
                     conn_id: None,
                     resolved_ids,
-                })
+                });
+
+                let mut span = info_span!(parent: None, "optimize view");
+                OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
+                let handle = std::thread::spawn(move || {
+                    span.in_scope(|| {
+                        // Build an optimizer for this VIEW.
+                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+
+                        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                        let raw_expr = view.expr;
+                        let optimized_expr = optimizer.optimize(raw_expr)?;
+
+                        lock.set(optimized_expr).expect("must set");
+                        Ok(())
+                    })
+                });
+                return Ok((item, Some(handle)));
             }
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
@@ -1038,7 +1083,8 @@ impl CatalogState {
                 })
                 .into())
             }
-        })
+        };
+        Ok((item, None))
     }
 
     /// Returns all indexes on the given object and cluster known in the

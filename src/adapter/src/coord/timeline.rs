@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_catalog::memory::objects::{CatalogItem, MaterializedView, View};
+use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
@@ -446,7 +446,8 @@ impl Coordinator {
                     CatalogItem::Index(index) => {
                         ids.push(index.on);
                     }
-                    CatalogItem::View(View { optimized_expr, .. }) => {
+                    CatalogItem::View(view) => {
+                        let optimized_expr = view.optimized_expr();
                         // If the definition contains a temporal function, the timeline must
                         // be timestamp dependent.
                         if optimized_expr.contains_temporal() {

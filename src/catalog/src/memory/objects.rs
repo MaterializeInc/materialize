@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
@@ -676,10 +677,23 @@ impl Sink {
 pub struct View {
     pub create_sql: String,
     pub raw_expr: HirRelationExpr,
-    pub optimized_expr: OptimizedMirRelationExpr,
+    /// The optimized_expr. Except during initialization, this must maintain the invariant that it
+    /// is set.
+    #[serde(skip)]
+    pub optimized_expr: Arc<OnceLock<OptimizedMirRelationExpr>>,
     pub desc: RelationDesc,
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
+}
+
+impl View {
+    /// Returns the optimized view expr.
+    ///
+    /// # Panic
+    /// Panics if the OnceLock has not been set.
+    pub fn optimized_expr(&self) -> &OptimizedMirRelationExpr {
+        self.optimized_expr.get().expect("must exist")
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

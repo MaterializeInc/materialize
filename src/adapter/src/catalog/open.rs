@@ -17,7 +17,7 @@ use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use tracing::{info, warn, Instrument};
+use tracing::{info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use mz_catalog::builtin::{
@@ -255,6 +255,9 @@ impl Catalog {
 
             let is_read_only = storage.is_read_only();
             let mut txn = storage.transaction().await?;
+            // Allow for some work to be done off thread. This function will join the handles before
+            // returning.
+            let mut handles = Vec::new();
 
             state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
@@ -487,8 +490,10 @@ impl Catalog {
                             unreachable!("handled later once clusters have been created")
                         }
                         Builtin::View(view) => {
-                            let item = state
-                                .parse_item(
+                            // Views can take a while to optimize in debug mode, so do optimization in
+                            // another thread.
+                            let (item, handle) = state
+                                .parse_item_handle(
                                     id,
                                     view.create_sql(),
                                     None,
@@ -505,6 +510,7 @@ impl Catalog {
                                     view.name, e
                                 )
                             });
+                            handles.extend(handle);
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::View,
                                 MZ_SYSTEM_ROLE_ID,
@@ -780,6 +786,14 @@ impl Catalog {
             )?;
 
             txn.commit().await?;
+
+            info_span!("join optimizer handles").in_scope(|| {
+                for handle in handles {
+                    handle.join().expect("must join")?;
+                }
+                Ok::<_, AdapterError>(())
+            })?;
+
             Ok((
                 state,
                 builtin_migration_metadata,

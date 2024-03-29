@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use maplit::{btreemap, btreeset};
 
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, MaterializedView, Source, View};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, MaterializedView, Source};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 
@@ -216,8 +216,7 @@ impl<'a> DataflowBuilder<'a> {
                         );
                     }
                     CatalogItem::View(view) => {
-                        let expr = view.optimized_expr.clone();
-                        self.import_view_into_dataflow(id, &expr, dataflow)?;
+                        self.import_view_into_dataflow(id, view.optimized_expr(), dataflow)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
                         let monotonic = self.monotonic_view(*id);
@@ -322,53 +321,11 @@ impl<'a> DataflowBuilder<'a> {
         memo: &mut BTreeMap<GlobalId, bool>,
     ) -> Result<bool, RecursionLimitError> {
         self.checked_recur(|_| {
-            match self.catalog.get_entry(&id).item() {
-                CatalogItem::Source(source) => Ok(self.monotonic_source(source)),
-                CatalogItem::View(View { optimized_expr, .. })
-                | CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
-                    let mut view_expr = optimized_expr.clone().into_inner();
-
-                    // Inspect global ids that occur in the Gets in view_expr, and collect the ids
-                    // of monotonic (materialized) views and sources (but not indexes).
-                    let mut monotonic_ids = BTreeSet::new();
-                    let recursion_result: Result<(), RecursionLimitError> = view_expr
-                        .try_visit_post(&mut |e| {
-                            if let MirRelationExpr::Get {
-                                id: Id::Global(got_id),
-                                ..
-                            } = e
-                            {
-                                let got_id = *got_id;
-
-                                // A view might be reached multiple times. If we already computed
-                                // the monotonicity of the gid, then use that. If not, then compute
-                                // it now.
-                                let monotonic = match memo.get(&got_id) {
-                                    Some(monotonic) => *monotonic,
-                                    None => {
-                                        let monotonic = self.monotonic_view_inner(got_id, memo)?;
-                                        memo.insert(got_id, monotonic);
-                                        monotonic
-                                    }
-                                };
-                                if monotonic {
-                                    monotonic_ids.insert(got_id);
-                                }
-                            }
-                            Ok(())
-                        });
-                    if let Err(error) = recursion_result {
-                        // We still might have got some of the IDs, so just log and continue. Now
-                        // the subsequent monotonicity analysis can have false negatives.
-                        warn!("Error inspecting view {id} for monotonicity: {error}");
-                    }
-
-                    // Use `monotonic_ids` as a starting point for propagating monotonicity info.
-                    mz_transform::monotonic::MonotonicFlag::default().apply(
-                        &mut view_expr,
-                        &monotonic_ids,
-                        &mut BTreeSet::new(),
-                    )
+            let view_expr = match self.catalog.get_entry(&id).item() {
+                CatalogItem::Source(source) => return Ok(self.monotonic_source(source)),
+                CatalogItem::View(view) => view.optimized_expr(),
+                CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
+                    optimized_expr
                 }
                 CatalogItem::Secret(_)
                 | CatalogItem::Type(_)
@@ -377,8 +334,52 @@ impl<'a> DataflowBuilder<'a> {
                 | CatalogItem::Log(_)
                 | CatalogItem::Index(_)
                 | CatalogItem::Sink(_)
-                | CatalogItem::Func(_) => Ok(false),
+                | CatalogItem::Func(_) => return Ok(false),
+            };
+
+            let mut view_expr = view_expr.clone().into_inner();
+
+            // Inspect global ids that occur in the Gets in view_expr, and collect the ids
+            // of monotonic (materialized) views and sources (but not indexes).
+            let mut monotonic_ids = BTreeSet::new();
+            let recursion_result: Result<(), RecursionLimitError> =
+                view_expr.try_visit_post(&mut |e| {
+                    if let MirRelationExpr::Get {
+                        id: Id::Global(got_id),
+                        ..
+                    } = e
+                    {
+                        let got_id = *got_id;
+
+                        // A view might be reached multiple times. If we already computed
+                        // the monotonicity of the gid, then use that. If not, then compute
+                        // it now.
+                        let monotonic = match memo.get(&got_id) {
+                            Some(monotonic) => *monotonic,
+                            None => {
+                                let monotonic = self.monotonic_view_inner(got_id, memo)?;
+                                memo.insert(got_id, monotonic);
+                                monotonic
+                            }
+                        };
+                        if monotonic {
+                            monotonic_ids.insert(got_id);
+                        }
+                    }
+                    Ok(())
+                });
+            if let Err(error) = recursion_result {
+                // We still might have got some of the IDs, so just log and continue. Now
+                // the subsequent monotonicity analysis can have false negatives.
+                warn!("Error inspecting view {id} for monotonicity: {error}");
             }
+
+            // Use `monotonic_ids` as a starting point for propagating monotonicity info.
+            mz_transform::monotonic::MonotonicFlag::default().apply(
+                &mut view_expr,
+                &monotonic_ids,
+                &mut BTreeSet::new(),
+            )
         })
     }
 }

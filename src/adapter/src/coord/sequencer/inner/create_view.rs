@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::{Arc, OnceLock};
+
 use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
@@ -199,7 +201,7 @@ impl Coordinator {
                 &self.catalog().for_session(ctx.session()),
             )?,
             ExplainStage::LocalPlan => explain_plan(
-                view.optimized_expr.as_inner().clone(),
+                view.optimized_expr().as_inner().clone(),
                 format,
                 &config,
                 &self.catalog().for_session(ctx.session()),
@@ -377,7 +379,7 @@ impl Coordinator {
                     create_sql: create_sql.clone(),
                     raw_expr,
                     desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
-                    optimized_expr,
+                    optimized_expr: Arc::new(OnceLock::from(optimized_expr)),
                     conn_id: if temporary {
                         Some(session.conn_id().clone())
                     } else {
