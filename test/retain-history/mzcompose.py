@@ -32,11 +32,33 @@ def workflow_default(c: Composition) -> None:
     # TODO: #24479 needs to be fixed
     # run_test_gh_24479(c)
     run_test_with_index(c)
+    run_test_consistency(c)
 
 
 def setup(c: Composition) -> None:
     c.up("materialized")
     c.up("testdrive", persistent=True)
+
+
+# Test that the catalog is consistent for the three types of retain histories (disabled, default,
+# specified).
+def run_test_consistency(c: Composition) -> None:
+    c.testdrive(
+        dedent(
+            """
+            > CREATE TABLE testdrive_consistency_table (i INT);
+
+            > CREATE INDEX testdrive_consistency_table_idx ON testdrive_consistency_table(i);
+
+            > ALTER INDEX testdrive_consistency_table_idx SET (RETAIN HISTORY = FOR '1m')
+
+            > ALTER INDEX testdrive_consistency_table_idx SET (RETAIN HISTORY = FOR '0')
+
+            > ALTER INDEX testdrive_consistency_table_idx RESET (RETAIN HISTORY)
+            """,
+        ),
+        args=["--consistency-checks=statement"],
+    )
 
 
 def run_test_with_mv_on_table(c: Composition) -> None:
@@ -226,7 +248,7 @@ def run_test_with_mv_on_table_with_altered_retention(c: Composition) -> None:
 
     c.testdrive(
         dedent(
-            f"""
+            """
             > DROP MATERIALIZED VIEW IF EXISTS retain_history_mv;
             > DROP TABLE IF EXISTS retain_history_table;
 
@@ -243,7 +265,7 @@ def run_test_with_mv_on_table_with_altered_retention(c: Composition) -> None:
 
     c.testdrive(
         dedent(
-            f"""
+            """
             > INSERT INTO retain_history_table VALUES (3, 300);
             """,
         )
@@ -294,7 +316,7 @@ def run_test_with_mv_on_table_with_altered_retention(c: Composition) -> None:
 
     c.testdrive(
         dedent(
-            f"""
+            """
             # increase the retention period again
             > ALTER MATERIALIZED VIEW retain_history_mv SET (RETAIN HISTORY FOR '30s');
 
