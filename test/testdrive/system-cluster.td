@@ -35,10 +35,10 @@ $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-inter
 ALTER SYSTEM SET enable_rbac_checks TO false
 
 ! DROP CLUSTER mz_system CASCADE
-contains:system cluster 'mz_system' cannot be modified
+contains:must be owner of CLUSTER mz_system
 
 ! DROP CLUSTER mz_introspection CASCADE
-contains:system cluster 'mz_introspection' cannot be modified
+contains:must be owner of CLUSTER mz_introspection
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO true
@@ -56,10 +56,10 @@ ALTER SYSTEM SET enable_rbac_checks TO false
 contains: cannot modify managed cluster mz_system
 
 ! DROP CLUSTER REPLICA mz_system.r1;
-contains:cannot drop replica of managed cluster
+contains:must be owner of CLUSTER REPLICA mz_system.r1
 
 ! ALTER CLUSTER mz_system SET (SIZE='2');
-contains: system cluster 'mz_system' cannot be modified
+contains: must be owner of CLUSTER mz_system
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO true
@@ -81,7 +81,7 @@ mv quickstart
 mv quickstart
 
 #! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
-#contains:system cluster 'mz_system' cannot be modified
+#contains:must be owner of CLUSTER mz_system
 
 > SET CLUSTER TO quickstart
 
