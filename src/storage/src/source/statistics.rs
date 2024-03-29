@@ -56,9 +56,19 @@ pub fn process_statistics<G, FromTime>(
                         source_statistics.set_snapshot_records_staged(records_staged);
                     }
                     ProgressStatisticsUpdate::SteadyState {
-                        offset_known,
+                        mut offset_known,
                         offset_committed,
                     } => {
+                        // There are two reasons `offset_known` could be below
+                        // `offset_committed`:
+                        // - A source implementation only periodically fetches `offset_known`,
+                        // but drives offset_committed based on the data its received. This is
+                        // the case for sources like Kafka.
+                        // - Some irrecoverable restore has regressed `offset_known`. This is
+                        // possible for sources like Postgres, and the these metrics are NOT
+                        // the intended signal for this failure (source status is).
+                        offset_known = std::cmp::max(offset_known, offset_committed);
+
                         source_statistics.set_offset_known(offset_known);
                         source_statistics.set_offset_committed(offset_committed);
                     }
