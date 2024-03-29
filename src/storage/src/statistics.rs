@@ -8,6 +8,19 @@
 // by the Apache License, Version 2.0.
 
 //! Helpers for managing storage statistics.
+//!
+//!
+//! This module collects statistics related to sources and sinks. Statistics, as exposed
+//! to their respective system tables have strong semantics, defined within the
+//! `mz_storage_types::statistics` module. This module collects and aggregates metrics
+//! across workers according to those semantics.
+//!
+//! Note that it _simultaneously_ collect prometheus metrics for the given statistics. Those
+//! metrics _do not have the same strong semantics_, which is _by design_ to ensure we
+//! are able to categorically debug sources and sinks during complex failures (or bugs
+//! with statistics collection itself). Prometheus metrics are
+//! - Never dropped or reset until a source/sink is dropped.
+//! - Entirely independent across workers.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;

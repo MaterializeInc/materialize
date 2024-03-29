@@ -53,6 +53,7 @@ pub(super) fn spawn_statistics_scraper<StatsWrapper, Stats, T>(
     previous_values: Vec<Row>,
     initial_interval: Duration,
     mut interval_updated: Receiver<Duration>,
+    metrics: mz_storage_client::metrics::StorageControllerMetrics,
 ) -> Box<dyn Any + Send + Sync>
 where
     StatsWrapper: AsStats<Stats> + Debug + Send + 'static,
@@ -74,7 +75,8 @@ where
             let mut shared_stats = shared_stats.lock().expect("poisoned");
             for row in previous_values {
                 current_metrics.update(row.clone(), 1);
-                let current = Stats::unpack(row);
+                let current = Stats::unpack(row, &metrics);
+
                 shared_stats
                     .as_mut_stats()
                     .insert(current.0, Some(current.1));
