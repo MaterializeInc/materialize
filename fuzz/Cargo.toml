@@ -1,0 +1,85 @@
+[package]
+name = "mz-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tokio = "1.32.0"
+clap = { version = "3.2.24", features = ["derive"] }
+chrono = { version = "0.4.23", default-features = false, features = ["std"] }
+tempfile = "3.8.1"
+time = "0.3.17"
+walkdir = "2.3.2"
+
+[dependencies.mz-orchestrator-tracing]
+path = "../src/orchestrator-tracing"
+
+[dependencies.mz-environmentd]
+path = "../src/environmentd"
+
+[dependencies.mz-sqllogictest]
+path = "../src/sqllogictest"
+
+[dependencies.mz-tracing]
+path = "../src/tracing"
+
+[dependencies.mz-ore]
+path = "../src/ore"
+
+[dependencies.mz-sql]
+path = "../src/sql"
+
+[dependencies.mz-sql-lexer]
+path = "../src/sql-lexer"
+
+[dependencies.mz-sql-pretty]
+path = "../src/sql-pretty"
+
+[dependencies.mz-repr-test-util]
+path = "../src/repr-test-util"
+
+[dependencies.mz-lowertest]
+path = "../src/lowertest"
+
+[dependencies.mz-repr]
+path = "../src/repr"
+
+[[bin]]
+name = "fuzz_target_1"
+path = "fuzz_targets/fuzz_target_1.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_2"
+path = "fuzz_targets/fuzz_target_2.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_3"
+path = "fuzz_targets/fuzz_target_3.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_4"
+path = "fuzz_targets/fuzz_target_4.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_5"
+path = "fuzz_targets/fuzz_target_5.rs"
+test = false
+doc = false
+bench = false

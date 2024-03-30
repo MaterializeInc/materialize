@@ -73,7 +73,7 @@ tokio-postgres = { version = "0.7.8" }
 [build-dependencies]
 anyhow = "1.0.66"
 md-5 = "0.10.5"
-protobuf-src = "1.1.0"
+protobuf-src = { git = "https://github.com/def-/rust-protobuf-native.git" }
 prost-build = "0.11.9"
 serde = "1.0.152"
 serde_json = "1.0.89"

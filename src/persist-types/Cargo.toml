@@ -33,7 +33,7 @@ proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 
 [build-dependencies]
 prost-build = "0.11.2"
-protobuf-src = "1.1.0"
+protobuf-src = { git = "https://github.com/def-/rust-protobuf-native.git" }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

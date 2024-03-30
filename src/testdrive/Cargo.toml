@@ -56,7 +56,7 @@ mz-tls-util = { path = "../tls-util" }
 postgres_array = { version = "0.11.0" }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", features = ["serde"] }
-protobuf-src = "1.1.0"
+protobuf-src = { git = "https://github.com/def-/rust-protobuf-native.git" }
 rand = "0.8.5"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.7.0"
