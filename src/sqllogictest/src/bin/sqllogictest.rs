@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::cell::RefCell;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Write};
@@ -18,6 +20,7 @@ use chrono::Utc;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
+use mz_sql::session::vars::{Var, VarInput, DISK_CLUSTER_REPLICAS_DEFAULT};
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 use mz_tracing::CloneableEnvFilter;
@@ -123,6 +126,42 @@ async fn main() -> ExitCode {
         .await
         .unwrap();
 
+    // sqllogictest requires that Materialize have some system variables set to some specific value
+    // to pass. If the caller hasn't set this variable, then we set it for them. If the caller has
+    // set this variable, then we assert that it's set to the right value.
+    let required_system_defaults: Vec<_> = [(
+        &DISK_CLUSTER_REPLICAS_DEFAULT,
+        DISK_CLUSTER_REPLICAS_DEFAULT
+            .parse(VarInput::Flat("true"))
+            .expect("known to be valid")
+            .format(),
+    )]
+    .into();
+    let mut system_parameter_defaults: BTreeMap<_, _> = args
+        .system_parameter_default
+        .clone()
+        .into_iter()
+        .map(|kv| (kv.key, kv.value))
+        .collect();
+    for (var, value) in required_system_defaults {
+        match system_parameter_defaults.entry(var.name().to_string()) {
+            Entry::Vacant(entry) => {
+                entry.insert(value);
+            }
+            Entry::Occupied(entry) => {
+                assert_eq!(
+                    value,
+                    var.parse(VarInput::Flat(entry.get()))
+                        .expect("invalid value")
+                        .format(),
+                    "sqllogictest test requires {} to have a value of {}",
+                    var.name(),
+                    value
+                )
+            }
+        }
+    }
+
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
@@ -137,12 +176,7 @@ async fn main() -> ExitCode {
         orchestrator_process_wrapper: args.orchestrator_process_wrapper.clone(),
         tracing: tracing_args.clone(),
         tracing_handle,
-        system_parameter_defaults: args
-            .system_parameter_default
-            .clone()
-            .into_iter()
-            .map(|kv| (kv.key, kv.value))
-            .collect(),
+        system_parameter_defaults,
         persist_dir: match tempfile::tempdir() {
             Ok(t) => t,
             Err(e) => {
