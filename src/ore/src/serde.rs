@@ -15,6 +15,8 @@
 
 //! Serde utilities.
 
+use std::sync::{Arc, OnceLock};
+
 /// Used to serialize fields of Maps whose key type is not a native string. Annotate the field with
 /// `#[serde(serialize_with = mz_ore::serde::map_key_to_string)]`.
 pub fn map_key_to_string<'a, I, K, V, S>(map: I, serializer: S) -> Result<S::Ok, S::Error>
@@ -31,4 +33,14 @@ where
         s.serialize_entry(&key.to_string(), value)?;
     }
     s.end()
+}
+
+/// Used to serialize `Arc<OnceLock<T>>`. Panics if the oncelock is not populated. Annotate the
+/// field with `#[serde(serialize_with = mz_ore::serde::arc_oncelock_must_exist)]`.
+pub fn arc_oncelock_must_exist<S, T>(t: &Arc<OnceLock<T>>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    T: serde::Serialize,
+{
+    t.get().expect("must exist").serialize(serializer)
 }

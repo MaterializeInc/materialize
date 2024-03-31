@@ -795,7 +795,10 @@ impl CatalogState {
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     raw_expr,
-                    desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
+                    desc: Arc::new(OnceLock::from(RelationDesc::new(
+                        optimized_expr.typ(),
+                        view.column_names,
+                    ))),
                     optimized_expr: Arc::new(OnceLock::from(optimized_expr)),
                     conn_id: None,
                     resolved_ids,
@@ -963,14 +966,13 @@ impl CatalogState {
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
 
-                let typ = view.expr.typ(&[], &BTreeMap::new());
-                let desc = RelationDesc::new(typ, view.column_names);
-                let lock = Arc::new(OnceLock::new());
+                let desc_lock = Arc::new(OnceLock::new());
+                let expr_lock = Arc::new(OnceLock::new());
                 let item = CatalogItem::View(View {
                     create_sql: view.create_sql,
                     raw_expr: view.expr.clone(),
-                    desc,
-                    optimized_expr: Arc::clone(&lock),
+                    desc: Arc::clone(&desc_lock),
+                    optimized_expr: Arc::clone(&expr_lock),
                     conn_id: None,
                     resolved_ids,
                 });
@@ -986,7 +988,10 @@ impl CatalogState {
                         let raw_expr = view.expr;
                         let optimized_expr = optimizer.optimize(raw_expr)?;
 
-                        lock.set(optimized_expr).expect("must set");
+                        desc_lock
+                            .set(RelationDesc::new(optimized_expr.typ(), view.column_names))
+                            .expect("must set");
+                        expr_lock.set(optimized_expr).expect("must set");
                         Ok(())
                     })
                 });

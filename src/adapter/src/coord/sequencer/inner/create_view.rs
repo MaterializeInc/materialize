@@ -378,7 +378,10 @@ impl Coordinator {
                 item: CatalogItem::View(View {
                     create_sql: create_sql.clone(),
                     raw_expr,
-                    desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
+                    desc: Arc::new(OnceLock::from(RelationDesc::new(
+                        optimized_expr.typ(),
+                        column_names.clone(),
+                    ))),
                     optimized_expr: Arc::new(OnceLock::from(optimized_expr)),
                     conn_id: if temporary {
                         Some(session.conn_id().clone())

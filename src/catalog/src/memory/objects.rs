@@ -13,6 +13,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
@@ -679,9 +680,10 @@ pub struct View {
     pub raw_expr: HirRelationExpr,
     /// The optimized_expr. Except during initialization, this must maintain the invariant that it
     /// is set.
-    #[serde(skip)]
+    #[serde(serialize_with = "mz_ore::serde::arc_oncelock_must_exist")]
     pub optimized_expr: Arc<OnceLock<OptimizedMirRelationExpr>>,
-    pub desc: RelationDesc,
+    #[serde(serialize_with = "mz_ore::serde::arc_oncelock_must_exist")]
+    pub desc: Arc<OnceLock<RelationDesc>>,
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
 }
@@ -693,6 +695,23 @@ impl View {
     /// Panics if the OnceLock has not been set.
     pub fn optimized_expr(&self) -> &OptimizedMirRelationExpr {
         self.optimized_expr.get().expect("must exist")
+    }
+
+    /// Returns the desc. Blocks this thread until desc is set by some other thread. This is only safe because
+    pub fn desc(&self) -> &RelationDesc {
+        let start = std::time::Instant::now();
+        let mut count = 0;
+        loop {
+            if let Some(desc) = self.desc.get() {
+                if count > 0 {
+                    // TODO: Remove this line.
+                    println!("{count} retries, waited {:?}", start.elapsed());
+                }
+                return desc;
+            }
+            count += 1;
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
@@ -781,7 +800,7 @@ impl CatalogItem {
             CatalogItem::Source(src) => Some(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Some(Cow::Owned(log.variant.desc())),
             CatalogItem::Table(tbl) => Some(Cow::Borrowed(&tbl.desc)),
-            CatalogItem::View(view) => Some(Cow::Borrowed(&view.desc)),
+            CatalogItem::View(view) => Some(Cow::Borrowed(view.desc())),
             CatalogItem::MaterializedView(mview) => Some(Cow::Borrowed(&mview.desc)),
             CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
             CatalogItem::Func(_)
