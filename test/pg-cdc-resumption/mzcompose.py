@@ -19,7 +19,11 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Alpine(),
-    Materialized(),
+    Materialized(                                                                                                                                                                                           
+        additional_system_parameter_defaults={                                                                                                                                                              
+           "log_filter": "mz_storage::source=trace,info"                                                                                                                                            
+        },                                                                                                                                                                                                  
+    ),
     Postgres(),
     Toxiproxy(),
     Testdrive(no_reset=True, default_timeout="300s"),
