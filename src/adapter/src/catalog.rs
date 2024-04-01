@@ -50,7 +50,6 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -2478,10 +2477,10 @@ impl Catalog {
                     let database_name = &database.name;
 
                     let mut updates = Vec::new();
-                    let mut already_updated = HashSet::new();
+                    let mut items_to_update = BTreeMap::new();
 
                     let mut update_item = |id| {
-                        if already_updated.contains(id) {
+                        if items_to_update.contains_key(id) {
                             return Ok(());
                         }
 
@@ -2502,15 +2501,12 @@ impl Catalog {
                                 }))
                             })?;
 
-                        // Update the catalog storage and Builtin Tables.
+                        // Queue updates for Catalog storage and Builtin Tables.
                         if !new_entry.item().is_temporary() {
-                            tx.update_item(*id, new_entry.clone().into())?;
+                            items_to_update.insert(*id, new_entry.clone().into());
                         }
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
                         updates.push((id.clone(), entry.name().clone(), new_entry.item));
-
-                        // Track which IDs we update.
-                        already_updated.insert(id);
 
                         Ok::<_, AdapterError>(())
                     };
@@ -2525,6 +2521,9 @@ impl Catalog {
                             update_item(id)?;
                         }
                     }
+                    // Note: When updating the transaction it's very important that we update the
+                    // items as a whole group, otherwise we exhibit quadratic behavior.
+                    tx.update_items(items_to_update)?;
 
                     // Renaming temporary schemas is not supported.
                     let SchemaSpecifier::Id(schema_id) = *schema.id() else {
