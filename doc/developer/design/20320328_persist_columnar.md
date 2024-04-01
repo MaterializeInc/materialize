@@ -80,7 +80,7 @@ Parquet is columnar format designed for efficient storage based off of the
 [Dremel paper from Google](https://research.google/pubs/dremel-interactive-analysis-of-web-scale-datasets-2/)
 and built as a [collaboration between Twitter and Cloudera for Hadoop](https://blog.twitter.com/engineering/en_us/a/2013/announcing-parquet-10-columnar-storage-for-hadoop).
 It's goal is space-efficient storage of data that allows fetching individual
-columns from a colletion of rows. Crucially it is also self describing and
+columns from a collection of rows. Crucially it is also self describing and
 supports additional arbitrary metadata.
 
 Parquet also has a number of nice features that we won't use immediately but
@@ -148,6 +148,14 @@ serialized representation of `Decimal` as opaque bytes.
 See <https://speleotrove.com/decimal/dnnumb.html> for an explanation as to what
 the fields in the Rust type represent.
 
+> **Note:** Arrow does have [`Decimal`](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#variant.Decimal128)
+types, but we opt not to use them because they can't represent the full range
+of values that can be represented by `Numeric`. Specifically, the `Decimal`
+types are fixed-point and the largest variant, [`Decimal256`], has a maximum
+precision of 76 digits. `Numeric` is floating-point and has a maximum precision
+of 39 digits, which means we would need a fixed-point number capable of storing
+78 digits which Arrow doesn't have.
+
 </td>
 
 <tr>
@@ -156,6 +164,7 @@ the fields in the Rust type represent.
 
 ```rust
 struct Date {
+  // Days since the Posgres Epoch.
   days: i32,
 }
 ```
@@ -168,7 +177,14 @@ struct Date {
 </td>
 <td>
 
-Directly encode the number of days.
+Directly encode the number of days since the UNIX Epoch (1970-01-01).
+
+> **Alternative:** We could encode this as number of days since the Postgres
+Epoch so it would be a direct representation of the Rust type, but I'm leaning
+towards encoding as days since the UNIX epoch for consistency with `Timestamp`
+which does is also relative to the UNIX epoch. The max value supported for
+`Date` in Postgres is the year 5,874,897 AD which can be represented with
+either offset.
 
 </td>
 
@@ -259,8 +275,8 @@ struct DateTime<Tz: TimeZone> {
 
 Just like Timestamp, we'll encode this as the number of microseconds since
 the UNIX epoch. We don't actually need to store any timezone information,
-instead we convert to the session timezone when loaded. This is how both
-Postgres works.
+instead we convert to the session timezone when loaded. This is how Postgres
+works.
 
 </td>
 
@@ -351,7 +367,9 @@ complexity makes it out-of-scope for the initial implementation.
 use a different serialization format like [BSON](https://bsonspec.org/). This
 approach is nice because it gets us a path to entirely eliminating `ProtoDatum`
 (🔥) but I am slightly leaning away from this given Protobuf is already used so
-heavily in our codebase.
+heavily in our codebase. If we do use a different serialization format we'll
+need to be careful about how we encode numeric data, currently our JSON `Datum`
+uses `ProtoNumeric` which has very high precision.
 
 I am leaning away from this approach because we already use protobuf internally
 so it's well understood, and there are a few tricks we can use to improve
@@ -390,21 +408,18 @@ Encode the bytes from the `Uuid` directly into a fixed size buffer.
 
 ```rust
 // DatumList<'a>.
-[T; N]
+Vec<T>
 ```
 
 </td>
 <td>
 
-`FixedSizeList<T>[N]`
+`VariableSizeList<T>`
 
 </td>
 <td>
 
-A column of type array requires all of its elements to be the same size.
-
-> **Alternative:** We could use Arrow's Variable-size list, but it's less
-memory efficient
+A list of values.
 
 </td>
 
@@ -425,7 +440,7 @@ Vec<T>
 </td>
 <td>
 
-Unlike `Array`s, `List`s are allowed to be ragged.
+A list of values.
 
 </td>
 
@@ -647,10 +662,12 @@ but we are free to create our own.
 As part of our mapping from `Datum` to Arrow column we could include an
 extension type in the column's metadata, specifically:
 ```
-'ARROW:extension:name': 'materialize.<version>.<datum_name>'
+'ARROW:extension:name': 'materialize.persist.<version>.<datum_name>'
 ```
 To start `<version>` will just be `1`, but could be used in the future to
-evolve how we represent `Datum`s in Arrow.
+evolve how we represent `Datum`s in Arrow. And we include the 'persist'
+namespacing to make sure we don't collide with any other Materialize Arrow
+formats, e.g. for `COPY TO ...`.
 
 > **Note:** The [guidance](https://arrow.apache.org/docs/format/Columnar.html#extension-types)
 provided by the Arrow Project is to name extension types with a prefix to
@@ -807,16 +824,22 @@ time, and we can pause on work if something else arrises.
 
 An approximate ordering of work would be:
 
-1. Implement the `Datum` to Arrow encodings. They can be implemented
-   independent of one another, and would allow us to begin collecting stats for
-   filter pushdown for the new type.
+1. Implement a "V0" Arrow encoding for non-primitive types that is the encoded
+   `ProtoDatum` representation and collects no stats. This unblocks writing
+   structured columnar data, and asynchronously we can nail down the right
+   Arrow encoding formats.
 2. Begin writing structured columnar data to S3, in the migration format.
    Allows us to begin a "shadow migration" and validate the new format.
-3. Serve reads from the new structured columnar data. This allows us to avoid
-   decoding `ProtoDatum` in the read path, which currently is relatively
-   expensive. Crucially this is possible without supporting consolidation via
-   Arrow because we don't yet consolidate on read.
-4. Support consolidating with Arrow data, including consolidating `Codec` with
+3. Serve reads from the new structured columnar data. For `Datum`s that have
+   had non-V0 Arrow encodings implemented, this allows us to avoid decoding
+   `ProtoDatum` in the read path, which currently is relatively expensive.
+   Crucially this is possible without supporting consolidation via Arrow
+   because we don't yet consolidate on read.
+4. Implement the `Datum` to Arrow encodings and migrate from the "V0" encoding
+   introduced in step 1. They can be implemented independent of one another,
+   and would allow us to begin collecting stats for filter pushdown for the new
+   type and further optimize our reads.
+5. Support consolidating with Arrow data, including consolidating `Codec` with
    Arrow. Allows us to stop writing `Codec` for new batches, saving on S3
    costs.
 
