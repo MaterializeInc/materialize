@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
-use mz_dyncfg::{Config, ConfigSet, ConfigType};
+use mz_dyncfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
@@ -209,8 +209,9 @@ impl PersistConfig {
     }
 
     pub(crate) fn set_config<T: ConfigType>(&self, cfg: &Config<T>, val: T) {
-        let shared = cfg.shared(self);
-        T::set(&shared, val)
+        let mut updates = ConfigUpdates::default();
+        updates.add(cfg, val);
+        updates.apply(self)
     }
 
     /// The minimum number of updates that justify writing out a batch in `persist_sink`'s

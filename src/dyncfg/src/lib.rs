@@ -56,6 +56,8 @@
 //!   and doesn't want to instantiate a catalog impl.
 
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -119,19 +121,6 @@ impl<T: ConfigType> Config<T> {
         &self.default
     }
 
-    /// Adds this config to the given set.
-    ///
-    /// Names are required to be unique within a set, but each set is entirely
-    /// independent. The same `Config` may be registered to multiple
-    /// [ConfigSet]s and thus have independent values (e.g. imagine a units test
-    /// executing concurrently in the same process).
-    ///
-    /// Panics if a config with the same name has previously been registered to
-    /// this set.
-    pub fn register(&self, set: &mut ConfigSet) -> T {
-        T::get(T::shared(self, set).expect("config should be registered to set"))
-    }
-
     /// Returns the latest value of this config within the given set.
     ///
     /// Panics if this config was not previously registered to the set.
@@ -142,50 +131,38 @@ impl<T: ConfigType> Config<T> {
     /// the more important "noun" and also that rustfmt would maybe work better
     /// on this ordering.
     pub fn get(&self, set: &ConfigSet) -> T {
-        T::get(T::shared(self, set).expect("config should be registered to set"))
+        T::from_val(self.shared(set).load())
+    }
+
+    /// Returns a handle to the value of this config in the given set.
+    ///
+    /// This allows users to amortize the cost of the name lookup.
+    pub fn handle(&self, set: &ConfigSet) -> ConfigValHandle<T> {
+        ConfigValHandle {
+            val: self.shared(set).clone(),
+            _type: PhantomData,
+        }
     }
 
     /// Returns the shared value of this config in the given set.
-    ///
-    /// This allows users to amortize the name lookup with
-    /// `Self::get_from_shared`.
-    pub fn shared(&self, set: &ConfigSet) -> Arc<T::Shared> {
-        Arc::clone(T::shared(self, set).expect("config should be registered to set"))
-    }
-
-    /// [Self::get] except from a previously looked up shared value returned by
-    /// [Self::shared].
-    pub fn get_from_shared(&self, shared: &T::Shared) -> T {
-        T::get(shared)
+    fn shared<'a>(&self, set: &'a ConfigSet) -> &'a ConfigValAtomic {
+        &set.configs
+            .get(self.name)
+            .expect("config should be registered to set")
+            .val
     }
 }
 
 /// A type usable as a [Config].
-pub trait ConfigType: Sized {
+pub trait ConfigType: Into<ConfigVal> + Clone + Sized {
     /// A const-compatible type suitable for use as the default value of configs
     /// of this type.
     type Default: Into<Self> + Clone;
-    /// A value of this type, sharable between config value updaters (like
-    /// LaunchDarkly) and config value retrievers.
-    type Shared;
 
-    /// Extracts the sharable value for a config of this type from a set.
+    /// Converts a type-erased enum value to this type.
     ///
-    /// External users likely want [Config::shared] instead.
-    fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>>;
-
-    /// Converts this type to its type-erased enum equivalent.
-    fn to_val(val: &Self) -> ConfigVal;
-
-    /// Retrieves the current config value of this type from a value of its
-    /// corresponding sharable type.
-    ///
-    /// External users likely want [Config::get] or [Config::get_from_shared]
-    /// instead.
-    fn get(x: &Self::Shared) -> Self;
-
-    /// Updates the sharable value for a config of this type to the given value.
-    fn set(x: &Self::Shared, val: Self);
+    /// Panics if the enum's variant does not match this type.
+    fn from_val(val: ConfigVal) -> Self;
 }
 
 /// An set of [Config]s with values independent of other [ConfigSet]s (even if
@@ -198,14 +175,21 @@ pub struct ConfigSet {
 impl ConfigSet {
     /// Adds the given config to this set.
     ///
-    /// An alias for [Config::register], but taking and returning `Self` to
-    /// allow for easy chaining.
+    /// Names are required to be unique within a set, but each set is entirely
+    /// independent. The same `Config` may be registered to multiple
+    /// [`ConfigSet`]s and thus have independent values (e.g. imagine a unit
+    /// test executing concurrently in the same process).
+    ///
+    /// Panics if a config with the same name has been previously registered
+    /// to this set.
     pub fn add<T: ConfigType>(mut self, config: &Config<T>) -> Self {
+        let default = Into::<T>::into(config.default.clone());
+        let default = Into::<ConfigVal>::into(default);
         let config = ConfigEntry {
             name: config.name,
             desc: config.desc,
-            default: T::to_val(&Into::<T>::into(config.default.clone())),
-            val: T::to_val(&Into::<T>::into(config.default.clone())),
+            default: default.clone(),
+            val: ConfigValAtomic::from(default),
         };
         if let Some(prev) = self.configs.insert(config.name.to_owned(), config) {
             panic!("{} registered twice", prev.name);
@@ -225,7 +209,7 @@ pub struct ConfigEntry {
     name: &'static str,
     desc: &'static str,
     default: ConfigVal,
-    val: ConfigVal,
+    val: ConfigValAtomic,
 }
 
 impl ConfigEntry {
@@ -246,45 +230,140 @@ impl ConfigEntry {
         &self.default
     }
 
-    /// The sharable value of this config in the set.
-    pub fn val(&self) -> &ConfigVal {
-        &self.val
+    /// The value of this config in the set.
+    pub fn val(&self) -> ConfigVal {
+        self.val.load()
     }
 }
 
-/// A type-erased [ConfigType::Shared] for when set of different types are
-/// stored in a collection.
+/// A handle to a configuration value in a [`ConfigSet`].
+///
+/// Allows users to amortize the lookup of a name within a set.
+///
+/// Handles can be cheaply cloned.
+#[derive(Debug, Clone)]
+pub struct ConfigValHandle<T> {
+    val: ConfigValAtomic,
+    _type: PhantomData<T>,
+}
+
+impl<T: ConfigType> ConfigValHandle<T> {
+    /// Returns the latest value of this config within the set associated with
+    /// the handle.
+    pub fn get(&self) -> T {
+        T::from_val(self.val.load())
+    }
+}
+
+/// A type-erased configuration value for when set of different types are stored
+/// in a collection.
+#[derive(Clone, Debug)]
+pub enum ConfigVal {
+    /// A `bool` value.
+    Bool(bool),
+    /// A `u32` value.
+    U32(u32),
+    /// A `usize` value.
+    Usize(usize),
+    /// An `Option<usize>` value.
+    OptUsize(Option<usize>),
+    /// A `String` value.
+    String(String),
+    /// A `Duration` value.
+    Duration(Duration),
+}
+
+/// An atomic version of [`ConfigVal`] to allow configuration values to be
+/// shared between configuration writers and readers.
 ///
 /// TODO(cfg): Consider moving these Arcs to be a single one around the map in
 /// `ConfigSet` instead. That would mean less pointer-chasing in the common
 /// case, but would remove the possibility of amortizing the name lookup via
-/// [Config::get_from_shared].
+/// [Config::handle].
 #[derive(Clone, Debug)]
-pub enum ConfigVal {
-    /// A `bool` shared value.
+enum ConfigValAtomic {
     Bool(Arc<AtomicBool>),
-    /// A `u32` shared value.
     U32(Arc<AtomicU32>),
-    /// A `usize` shared value.
     Usize(Arc<AtomicUsize>),
-    /// An `Option<usize>` shared value.
     OptUsize(Arc<RwLock<Option<usize>>>),
-    /// A `String` shared value.
     String(Arc<RwLock<String>>),
-    /// A 'Duration' shared value.
     Duration(Arc<RwLock<Duration>>),
 }
 
+impl From<ConfigVal> for ConfigValAtomic {
+    fn from(val: ConfigVal) -> ConfigValAtomic {
+        match val {
+            ConfigVal::Bool(x) => ConfigValAtomic::Bool(Arc::new(AtomicBool::new(x))),
+            ConfigVal::U32(x) => ConfigValAtomic::U32(Arc::new(AtomicU32::new(x))),
+            ConfigVal::Usize(x) => ConfigValAtomic::Usize(Arc::new(AtomicUsize::new(x))),
+            ConfigVal::OptUsize(x) => ConfigValAtomic::OptUsize(Arc::new(RwLock::new(x))),
+            ConfigVal::String(x) => ConfigValAtomic::String(Arc::new(RwLock::new(x))),
+            ConfigVal::Duration(x) => ConfigValAtomic::Duration(Arc::new(RwLock::new(x))),
+        }
+    }
+}
+
+impl ConfigValAtomic {
+    fn load(&self) -> ConfigVal {
+        match self {
+            ConfigValAtomic::Bool(x) => ConfigVal::Bool(x.load(SeqCst)),
+            ConfigValAtomic::U32(x) => ConfigVal::U32(x.load(SeqCst)),
+            ConfigValAtomic::Usize(x) => ConfigVal::Usize(x.load(SeqCst)),
+            ConfigValAtomic::OptUsize(x) => ConfigVal::OptUsize(*x.read().expect("lock poisoned")),
+            ConfigValAtomic::String(x) => {
+                ConfigVal::String(x.read().expect("lock poisoned").clone())
+            }
+            ConfigValAtomic::Duration(x) => ConfigVal::Duration(*x.read().expect("lock poisoned")),
+        }
+    }
+
+    fn store(&self, val: ConfigVal) {
+        match (self, val) {
+            (ConfigValAtomic::Bool(x), ConfigVal::Bool(val)) => x.store(val, SeqCst),
+            (ConfigValAtomic::U32(x), ConfigVal::U32(val)) => x.store(val, SeqCst),
+            (ConfigValAtomic::Usize(x), ConfigVal::Usize(val)) => x.store(val, SeqCst),
+            (ConfigValAtomic::OptUsize(x), ConfigVal::OptUsize(val)) => {
+                *x.write().expect("lock poisoned") = val
+            }
+            (ConfigValAtomic::String(x), ConfigVal::String(val)) => {
+                *x.write().expect("lock poisoned") = val
+            }
+            (ConfigValAtomic::Duration(x), ConfigVal::Duration(val)) => {
+                *x.write().expect("lock poisoned") = val
+            }
+            (ConfigValAtomic::Bool(_), val)
+            | (ConfigValAtomic::U32(_), val)
+            | (ConfigValAtomic::Usize(_), val)
+            | (ConfigValAtomic::OptUsize(_), val)
+            | (ConfigValAtomic::String(_), val)
+            | (ConfigValAtomic::Duration(_), val) => {
+                panic!("attempted to store {val:?} value in {self:?} parameter")
+            }
+        }
+    }
+}
+
 impl ConfigUpdates {
-    /// Adds the current value of the given config to this set of updates.
+    /// Adds an update for the given config and value.
     ///
     /// If a value of the same config has previously been added to these
     /// updates, replaces it.
-    pub fn add(&mut self, config: &ConfigEntry) {
+    pub fn add<T: ConfigType>(&mut self, config: &Config<T>, val: T) {
+        self.add_dynamic(config.name, val.into());
+    }
+
+    /// Adds an update for the given configuration name and value.
+    ///
+    /// It is the callers responsibility to ensure the value is of the
+    /// appropriate type for the configuration.
+    ///
+    /// If a value of the same config has previously been added to these
+    /// updates, replaces it.
+    pub fn add_dynamic(&mut self, name: &'static str, val: ConfigVal) {
         self.updates.insert(
-            config.name.to_owned(),
+            name.to_owned(),
             ProtoConfigVal {
-                val: config.val.into_proto(),
+                val: val.into_proto(),
             },
         );
     }
@@ -304,10 +383,6 @@ impl ConfigUpdates {
     /// Ditto for config type mismatches. However, this is unexpected usage at
     /// present and so is logged to Sentry.
     pub fn apply(&self, set: &ConfigSet) {
-        fn copy<T: ConfigType>(src: &T::Shared, dst: &T::Shared) {
-            T::set(dst, T::get(src))
-        }
-
         for (name, ProtoConfigVal { val }) in self.updates.iter() {
             let Some(config) = set.configs.get(name) else {
                 error!("config update {} {:?} not known set: {:?}", name, val, set);
@@ -320,165 +395,118 @@ impl ConfigUpdates {
                     continue;
                 }
             };
-            // TODO(cfg): Restructure this match so that it's harder to miss
-            // when adding a new `ConfigType`.
-            match (&val, &config.val) {
-                (ConfigVal::Bool(src), ConfigVal::Bool(dst)) => copy::<bool>(src, dst),
-                (ConfigVal::U32(src), ConfigVal::U32(dst)) => copy::<u32>(src, dst),
-                (ConfigVal::Usize(src), ConfigVal::Usize(dst)) => copy::<usize>(src, dst),
-                (ConfigVal::OptUsize(src), ConfigVal::OptUsize(dst)) => {
-                    copy::<Option<usize>>(src, dst)
-                }
-                (ConfigVal::String(src), ConfigVal::String(dst)) => copy::<String>(src, dst),
-                (ConfigVal::Duration(src), ConfigVal::Duration(dst)) => copy::<Duration>(src, dst),
-                (src, dst) => error!(
-                    "config update {} type mismatch: {:?} vs {:?}",
-                    name, src, dst
-                ),
-            }
+            config.val.store(val);
         }
     }
 }
 
 mod impls {
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::SeqCst};
-    use std::sync::{Arc, RwLock};
     use std::time::Duration;
 
     use mz_ore::cast::CastFrom;
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
-    use crate::{proto_config_val, Config, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64};
+    use crate::{proto_config_val, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64};
 
     impl ConfigType for bool {
         type Default = bool;
-        type Shared = AtomicBool;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::Bool(x) => Some(x),
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::Bool(x) => x,
                 x => panic!("expected bool value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::Bool(Arc::new((*val).into()))
-        }
-        fn set(x: &Self::Shared, val: Self) {
-            x.store(val, SeqCst);
-        }
-        fn get(x: &Self::Shared) -> Self {
-            x.load(SeqCst)
+    }
+
+    impl From<bool> for ConfigVal {
+        fn from(val: bool) -> ConfigVal {
+            ConfigVal::Bool(val)
         }
     }
 
     impl ConfigType for u32 {
         type Default = u32;
-        type Shared = AtomicU32;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::U32(x) => Some(x),
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::U32(x) => x,
                 x => panic!("expected u32 value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::U32(Arc::new((*val).into()))
-        }
-        fn set(x: &Self::Shared, val: Self) {
-            x.store(val, SeqCst);
-        }
-        fn get(x: &Self::Shared) -> Self {
-            x.load(SeqCst)
+    }
+
+    impl From<u32> for ConfigVal {
+        fn from(val: u32) -> ConfigVal {
+            ConfigVal::U32(val)
         }
     }
 
     impl ConfigType for usize {
         type Default = usize;
-        type Shared = AtomicUsize;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::Usize(x) => Some(x),
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::Usize(x) => x,
                 x => panic!("expected usize value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::Usize(Arc::new((*val).into()))
-        }
-        fn set(x: &Self::Shared, val: Self) {
-            x.store(val, SeqCst);
-        }
-        fn get(x: &Self::Shared) -> Self {
-            x.load(SeqCst)
+    }
+
+    impl From<usize> for ConfigVal {
+        fn from(val: usize) -> ConfigVal {
+            ConfigVal::Usize(val)
         }
     }
 
     impl ConfigType for Option<usize> {
         type Default = Option<usize>;
-        type Shared = RwLock<Option<usize>>;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::OptUsize(x) => Some(x),
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::OptUsize(x) => x,
                 x => panic!("expected usize value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::OptUsize(Arc::new(RwLock::new(*val)))
-        }
-        fn set(x: &Self::Shared, val: Self) {
-            *x.write().expect("lock poisoned") = val;
-        }
-        fn get(x: &Self::Shared) -> Self {
-            x.read().expect("lock poisoned").clone()
+    }
+
+    impl From<Option<usize>> for ConfigVal {
+        fn from(val: Option<usize>) -> ConfigVal {
+            ConfigVal::OptUsize(val)
         }
     }
 
     impl ConfigType for String {
         type Default = &'static str;
-        type Shared = RwLock<String>;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::String(x) => Some(x),
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::String(x) => x,
                 x => panic!("expected String value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::String(Arc::new(RwLock::new(val.clone())))
-        }
-        fn set(x: &Self::Shared, val: Self) {
-            *x.write().expect("lock poisoned") = val;
-        }
-        fn get(x: &Self::Shared) -> Self {
-            x.read().expect("lock poisoned").clone()
+    }
+
+    impl From<String> for ConfigVal {
+        fn from(val: String) -> ConfigVal {
+            ConfigVal::String(val)
         }
     }
 
     impl ConfigType for Duration {
         type Default = Duration;
-        type Shared = RwLock<Duration>;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::Duration(x) => Some(x),
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::Duration(x) => x,
                 x => panic!("expected Duration value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::Duration(Arc::new(RwLock::new(val.clone())))
-        }
-        fn set(x: &Self::Shared, val: Self) {
-            *x.write().expect("lock poisoned") = val;
-        }
-        fn get(x: &Self::Shared) -> Self {
-            x.read().expect("lock poisoned").clone()
+    }
+
+    impl From<Duration> for ConfigVal {
+        fn from(val: Duration) -> ConfigVal {
+            ConfigVal::Duration(val)
         }
     }
 
@@ -486,34 +514,28 @@ mod impls {
         fn into_proto(&self) -> Option<proto_config_val::Val> {
             use crate::proto_config_val::Val;
             let val = match self {
-                ConfigVal::Bool(x) => Val::Bool(bool::get(x)),
-                ConfigVal::U32(x) => Val::U32(u32::get(x)),
-                ConfigVal::Usize(x) => Val::Usize(u64::cast_from(usize::get(x))),
+                ConfigVal::Bool(x) => Val::Bool(*x),
+                ConfigVal::U32(x) => Val::U32(*x),
+                ConfigVal::Usize(x) => Val::Usize(u64::cast_from(*x)),
                 ConfigVal::OptUsize(x) => Val::OptUsize(ProtoOptionU64 {
-                    val: <Option<usize>>::get(x).map(u64::cast_from),
+                    val: x.map(u64::cast_from),
                 }),
-                ConfigVal::String(x) => Val::String(String::get(x)),
-                ConfigVal::Duration(x) => Val::Duration(Duration::get(x).into_proto()),
+                ConfigVal::String(x) => Val::String(x.into_proto()),
+                ConfigVal::Duration(x) => Val::Duration(x.into_proto()),
             };
             Some(val)
         }
 
         fn from_proto(proto: Option<proto_config_val::Val>) -> Result<Self, TryFromProtoError> {
             let val = match proto {
-                Some(proto_config_val::Val::Bool(x)) => ConfigVal::Bool(Arc::new(x.into())),
-                Some(proto_config_val::Val::U32(x)) => ConfigVal::U32(Arc::new(x.into())),
-                Some(proto_config_val::Val::Usize(x)) => {
-                    ConfigVal::Usize(Arc::new(usize::cast_from(x).into()))
-                }
+                Some(proto_config_val::Val::Bool(x)) => ConfigVal::Bool(x),
+                Some(proto_config_val::Val::U32(x)) => ConfigVal::U32(x),
+                Some(proto_config_val::Val::Usize(x)) => ConfigVal::Usize(usize::cast_from(x)),
                 Some(proto_config_val::Val::OptUsize(ProtoOptionU64 { val })) => {
-                    ConfigVal::OptUsize(Arc::new(RwLock::new(val.map(usize::cast_from))))
+                    ConfigVal::OptUsize(val.map(usize::cast_from))
                 }
-                Some(proto_config_val::Val::String(x)) => {
-                    ConfigVal::String(Arc::new(x.to_owned().into()))
-                }
-                Some(proto_config_val::Val::Duration(x)) => {
-                    ConfigVal::Duration(Arc::new(RwLock::new(x.to_owned().into_rust()?)))
-                }
+                Some(proto_config_val::Val::String(x)) => ConfigVal::String(x),
+                Some(proto_config_val::Val::Duration(x)) => ConfigVal::Duration(x.into_rust()?),
                 None => {
                     return Err(TryFromProtoError::unknown_enum_variant(
                         "ProtoConfigVal::Val",
@@ -558,14 +580,14 @@ mod tests {
         assert_eq!(STRING.get(&configs), "a");
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(3));
 
-        bool::set(bool::shared(&BOOL, &configs).unwrap(), false);
-        usize::set(usize::shared(&USIZE, &configs).unwrap(), 2);
-        <Option<usize>>::set(<Option<usize>>::shared(&OPT_USIZE, &configs).unwrap(), None);
-        String::set(String::shared(&STRING, &configs).unwrap(), "b".to_owned());
-        Duration::set(
-            Duration::shared(&DURATION, &configs).unwrap(),
-            Duration::from_nanos(4),
-        );
+        let mut updates = ConfigUpdates::default();
+        updates.add(&BOOL, false);
+        updates.add(&USIZE, 2);
+        updates.add(&OPT_USIZE, None);
+        updates.add(&STRING, "b".to_owned());
+        updates.add(&DURATION, Duration::from_nanos(4));
+        updates.apply(&configs);
+
         assert_eq!(BOOL.get(&configs), false);
         assert_eq!(USIZE.get(&configs), 2);
         assert_eq!(OPT_USIZE.get(&configs), None);
@@ -577,21 +599,25 @@ mod tests {
     fn config_set() {
         let c0 = ConfigSet::default().add(&USIZE);
         assert_eq!(USIZE.get(&c0), 1);
-        usize::set(usize::shared(&USIZE, &c0).unwrap(), 2);
+        let mut updates = ConfigUpdates::default();
+        updates.add(&USIZE, 2);
+        updates.apply(&c0);
         assert_eq!(USIZE.get(&c0), 2);
 
         // Each ConfigSet is independent, even if they contain the same set of
         // configs.
         let c1 = ConfigSet::default().add(&USIZE);
         assert_eq!(USIZE.get(&c1), 1);
-        usize::set(usize::shared(&USIZE, &c1).unwrap(), 3);
+        let mut updates = ConfigUpdates::default();
+        updates.add(&USIZE, 3);
+        updates.apply(&c1);
         assert_eq!(USIZE.get(&c1), 3);
         assert_eq!(USIZE.get(&c0), 2);
 
         // We can copy values from one to the other, though (envd -> clusterd).
         let mut updates = ConfigUpdates::default();
         for e in c0.entries() {
-            updates.add(e);
+            updates.add_dynamic(e.name, e.val());
         }
         assert_eq!(USIZE.get(&c1), 3);
         updates.apply(&c1);
@@ -609,16 +635,18 @@ mod tests {
             let c = ConfigSet::default().add(&USIZE).add(&STRING);
             let mut x = ConfigUpdates::default();
             for e in c.entries() {
-                x.add(e);
+                x.add_dynamic(e.name(), e.val());
             }
             x
         };
         let u2 = {
             let c = ConfigSet::default().add(&USIZE).add(&DURATION);
-            usize::set(usize::shared(&USIZE, &c).unwrap(), 2);
+            let mut updates = ConfigUpdates::default();
+            updates.add(&USIZE, 2);
+            updates.apply(&c);
             let mut x = ConfigUpdates::default();
             for e in c.entries() {
-                x.add(e);
+                x.add_dynamic(e.name(), e.val());
             }
             x
         };
