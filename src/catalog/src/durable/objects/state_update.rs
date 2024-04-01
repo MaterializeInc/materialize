@@ -9,17 +9,19 @@
 
 use std::fmt::Debug;
 
-use crate::durable::debug::CollectionType;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::Diff;
 use mz_storage_types::sources::SourceData;
 use proptest_derive::Arbitrary;
 
+use crate::durable::debug::CollectionType;
 use crate::durable::objects::serialization::proto;
+use crate::durable::objects::DurableType;
 use crate::durable::persist::Timestamp;
 use crate::durable::transaction::TransactionBatch;
-use crate::durable::Epoch;
+use crate::durable::{Database, DurableCatalogError, Epoch};
+use crate::memory;
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKindRaw`].
 pub trait IntoStateUpdateKindRaw:
@@ -199,6 +201,18 @@ impl TryFrom<StateUpdate<StateUpdateKindRaw>> for StateUpdate<StateUpdateKind> {
             ts: update.ts,
             diff: update.diff,
         })
+    }
+}
+
+impl TryFrom<StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
+    type Error = DurableCatalogError;
+
+    fn try_from(
+        StateUpdate { kind, ts: _, diff }: StateUpdate<StateUpdateKind>,
+    ) -> Result<Self, Self::Error> {
+        let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
+        let update = kind.map(|kind| memory::objects::StateUpdate { kind, diff });
+        Ok(update)
     }
 }
 
@@ -647,6 +661,39 @@ impl StateUpdateKindRaw {
     ) -> Result<D, serde_json::error::Error> {
         let serde_value = self.0.as_ref().to_serde_json();
         serde_json::from_value::<D>(serde_value)
+    }
+}
+
+impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
+    type Error = DurableCatalogError;
+
+    fn try_from(kind: StateUpdateKind) -> Result<Self, Self::Error> {
+        Ok(match kind {
+            StateUpdateKind::Database(key, value) => {
+                let key = key.into_rust()?;
+                let value = value.into_rust()?;
+                let database = Database::from_key_value(key, value);
+                Some(memory::objects::StateUpdateKind::Database(database))
+            }
+            // TODO(jkosh44) Add conversions for valid variants.
+            StateUpdateKind::AuditLog(_, _)
+            | StateUpdateKind::Cluster(_, _)
+            | StateUpdateKind::ClusterReplica(_, _)
+            | StateUpdateKind::Comment(_, _)
+            | StateUpdateKind::Config(_, _)
+            | StateUpdateKind::DefaultPrivilege(_, _)
+            | StateUpdateKind::Epoch(_)
+            | StateUpdateKind::IdAllocator(_, _)
+            | StateUpdateKind::IntrospectionSourceIndex(_, _)
+            | StateUpdateKind::Item(_, _)
+            | StateUpdateKind::Role(_, _)
+            | StateUpdateKind::Schema(_, _)
+            | StateUpdateKind::Setting(_, _)
+            | StateUpdateKind::StorageUsage(_, _)
+            | StateUpdateKind::SystemConfiguration(_, _)
+            | StateUpdateKind::SystemObjectMapping(_, _)
+            | StateUpdateKind::SystemPrivilege(_, _) => None,
+        })
     }
 }
 
