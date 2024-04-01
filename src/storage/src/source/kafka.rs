@@ -22,6 +22,7 @@ use futures::StreamExt;
 use maplit::btreemap;
 use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
 use mz_ore::error::ErrorExt;
+use mz_ore::future::InTask;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
@@ -283,6 +284,7 @@ impl SourceRender for KafkaSourceConnection {
                         // consumer.
                         "client.id" => client_id.clone(),
                     },
+                    InTask::Yes,
                 )
                 .await;
 

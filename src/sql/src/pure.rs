@@ -21,6 +21,7 @@ use itertools::Itertools;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::error::ErrorExt;
+use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::replication::WalLevel;
@@ -400,6 +401,7 @@ async fn purify_create_sink(
                     storage_configuration,
                     MzClientContext::default(),
                     &BTreeMap::new(),
+                    InTask::No,
                 )
                 .await
                 .map_err(|e| {
@@ -451,7 +453,7 @@ async fn purify_create_sink(
                 };
 
                 let client = connection
-                    .connect(storage_configuration)
+                    .connect(storage_configuration, InTask::No)
                     .await
                     .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
@@ -570,6 +572,7 @@ async fn purify_create_source(
                     storage_configuration,
                     MzClientContext::default(),
                     &BTreeMap::new(),
+                    InTask::No,
                 )
                 .await
                 .map_err(|e| {
@@ -675,8 +678,9 @@ async fn purify_create_source(
             // verify that we can connect upstream and snapshot publication metadata
             let config = connection
                 .config(
-                    &*storage_configuration.connection_context.secrets_reader,
+                    &storage_configuration.connection_context.secrets_reader,
                     storage_configuration,
+                    InTask::No,
                 )
                 .await?;
 
@@ -903,8 +907,9 @@ async fn purify_create_source(
 
             let config = connection
                 .config(
-                    &*storage_configuration.connection_context.secrets_reader,
+                    &storage_configuration.connection_context.secrets_reader,
                     storage_configuration,
+                    InTask::No,
                 )
                 .await?;
 
@@ -1372,8 +1377,9 @@ async fn purify_alter_source(
 
     let config = pg_connection
         .config(
-            &*storage_configuration.connection_context.secrets_reader,
+            &storage_configuration.connection_context.secrets_reader,
             storage_configuration,
+            InTask::No,
         )
         .await?;
 
@@ -1652,7 +1658,7 @@ async fn purify_csr_connection_proto(
             };
 
             let ccsr_client = ccsr_connection
-                .connect(storage_configuration)
+                .connect(storage_configuration, InTask::No)
                 .await
                 .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
@@ -1703,7 +1709,7 @@ async fn purify_csr_connection_avro(
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };
         let ccsr_client = csr_connection
-            .connect(storage_configuration)
+            .connect(storage_configuration, InTask::No)
             .await
             .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
