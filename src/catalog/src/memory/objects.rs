@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! The current types used by the Catalog.
+//! The current types used by the in-memory Catalog. Many of the objects in this module are
+//! extremely similar to the objects found in [`crate::durable::objects`] but in a format that is
+//! easier consumed by higher layers.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,11 +18,6 @@ use std::ops::{Deref, DerefMut};
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use once_cell::sync::Lazy;
-use serde::ser::SerializeSeq;
-use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
-
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
@@ -32,7 +29,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
@@ -58,11 +55,15 @@ use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnecti
 use mz_storage_types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
+use once_cell::sync::Lazy;
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
 
 use crate::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Database {
     pub name: String,
     pub id: DatabaseId,
@@ -86,7 +87,7 @@ impl From<Database> for durable::Database {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
@@ -2113,4 +2114,18 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn cluster_id(&self) -> Option<ClusterId> {
         self.item().cluster_id()
     }
+}
+
+/// A single update to the catalog state.
+#[derive(Debug)]
+pub struct StateUpdate {
+    pub kind: StateUpdateKind,
+    pub diff: Diff,
+}
+
+/// The contents of a single state update.
+#[derive(Debug)]
+pub enum StateUpdateKind {
+    Database(durable::objects::Database),
+    // TODO(jkosh44) Add all other object variants.
 }
