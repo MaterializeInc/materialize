@@ -109,9 +109,9 @@ async fn test_persist_debug() {
     .await;
 }
 
-async fn test_debug<'a, T: OpenableDurableCatalogState>(
-    mut openable_state1: impl OpenableDurableCatalogState,
-    openable_state_generator: impl Fn() -> BoxFuture<'a, T>,
+async fn test_debug<'a>(
+    mut openable_state1: Box<dyn OpenableDurableCatalogState>,
+    openable_state_generator: impl Fn() -> BoxFuture<'a, Box<dyn OpenableDurableCatalogState>>,
 ) {
     // Check initial empty trace.
     let err = openable_state1.trace_unconsolidated().await.unwrap_err();
@@ -128,7 +128,7 @@ async fn test_debug<'a, T: OpenableDurableCatalogState>(
     );
 
     // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-    let _ = Box::new(openable_state1)
+    let _ = openable_state1
         .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
@@ -152,7 +152,7 @@ async fn test_debug<'a, T: OpenableDurableCatalogState>(
         insta::assert_debug_snapshot!("opened_trace".to_string(), test_trace);
     }
 
-    let mut debug_state = Box::new(openable_state2).open_debug().await.unwrap();
+    let mut debug_state = openable_state2.open_debug().await.unwrap();
 
     let mut openable_state_reader = openable_state_generator().await;
     assert_eq!(

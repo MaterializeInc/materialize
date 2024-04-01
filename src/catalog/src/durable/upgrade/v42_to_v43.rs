@@ -11,7 +11,7 @@ use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v42 as v42, objects_v43 as v43};
 
 /// No-op migration for removing storage objects.
-pub fn upgrade(
+pub(crate) fn upgrade(
     _snapshot: Vec<v42::StateUpdateKind>,
 ) -> Vec<MigrationAction<v42::StateUpdateKind, v43::StateUpdateKind>> {
     Vec::new()

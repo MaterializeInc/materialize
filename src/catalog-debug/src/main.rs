@@ -179,15 +179,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let persist_client = persist_clients.open(persist_location).await?;
     let organization_id = args.organization_id;
     let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
-    let openable_state: Box<dyn OpenableDurableCatalogState> = Box::new(
-        persist_backed_catalog_state(
-            persist_client,
-            organization_id,
-            BUILD_INFO.semver_version(),
-            metrics,
-        )
-        .await?,
-    );
+    let openable_state = persist_backed_catalog_state(
+        persist_client,
+        organization_id,
+        BUILD_INFO.semver_version(),
+        metrics,
+    )
+    .await?;
 
     match args.action {
         Action::Dump {

@@ -279,8 +279,10 @@ pub async fn persist_backed_catalog_state(
     organization_id: Uuid,
     version: semver::Version,
     metrics: Arc<Metrics>,
-) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
-    UnopenedPersistCatalogState::new(persist_client, organization_id, version, metrics).await
+) -> Result<Box<dyn OpenableDurableCatalogState>, DurableCatalogError> {
+    let state =
+        UnopenedPersistCatalogState::new(persist_client, organization_id, version, metrics).await?;
+    Ok(Box::new(state))
 }
 
 /// Creates an openable durable catalog state implemented using persist that is meant to be used in
@@ -288,7 +290,7 @@ pub async fn persist_backed_catalog_state(
 pub async fn test_persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
-) -> UnopenedPersistCatalogState {
+) -> Box<dyn OpenableDurableCatalogState> {
     test_persist_backed_catalog_state_with_version(
         persist_client,
         organization_id,
@@ -304,7 +306,7 @@ pub async fn test_persist_backed_catalog_state_with_version(
     persist_client: PersistClient,
     organization_id: Uuid,
     version: semver::Version,
-) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
+) -> Result<Box<dyn OpenableDurableCatalogState>, DurableCatalogError> {
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     persist_backed_catalog_state(persist_client, organization_id, version, metrics).await
 }
