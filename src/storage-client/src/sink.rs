@@ -109,7 +109,7 @@ async fn discover_topic_configs<C: ClientContext>(
     })?;
 
     if config.entries.is_empty() {
-        bail!("read empty custer configuration; do we have DescribeConfigs permissions?")
+        bail!("read empty cluster configuration; do we have DescribeConfigs permissions?")
     }
 
     for entry in config.entries {
