@@ -30,7 +30,7 @@ use mz_environmentd::test_util::{
 };
 use mz_ore::assert_contains;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
@@ -485,14 +485,7 @@ async fn test_empty_subscribe_error() {
 
 #[mz_ore::test]
 fn test_subscribe_basic() {
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
-    let now = {
-        let nowfn = Arc::clone(&nowfn);
-        NowFn::from(move || (nowfn.lock().unwrap())())
-    };
     let server = test_util::TestHarness::default()
-        .with_now(now)
         .unsafe_mode()
         .start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
@@ -500,16 +493,10 @@ fn test_subscribe_basic() {
 
     server.enable_feature_flags(&["enable_index_options", "enable_logical_compaction_window"]);
 
+    // Create a table with disabled compaction.
     client_writes
-        .batch_execute("CREATE TABLE t (data text)")
+        .batch_execute("CREATE TABLE t (data text) WITH (RETAIN HISTORY FOR 0)")
         .unwrap();
-    client_writes
-        .batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t WITH (RETAIN HISTORY FOR 0)")
-        .unwrap();
-    // Now that the index (and its since) are initialized to 0, we can resume using
-    // system time. Do a read to bump the oracle's state so it will read from the
-    // system clock during inserts below.
-    *nowfn.lock().unwrap() = SYSTEM_TIME.clone();
     client_writes.batch_execute("SELECT * FROM t").unwrap();
     client_reads
         .batch_execute(
@@ -586,9 +573,7 @@ fn test_subscribe_basic() {
     for (ts, _) in &events {
         client_reads
             .batch_execute(&*format!(
-                "COMMIT; BEGIN;
-            DECLARE c CURSOR FOR SUBSCRIBE t AS OF {begin} UP TO {}",
-                ts
+                "COMMIT; BEGIN; DECLARE c CURSOR FOR SUBSCRIBE t AS OF {begin} UP TO {ts}"
             ))
             .unwrap();
         for (expected_ts, expected_data) in events.iter() {
@@ -612,7 +597,7 @@ fn test_subscribe_basic() {
     // view derived from the index. This previously selected an invalid
     // `AS OF` timestamp (#5391).
     client_writes
-        .batch_execute("ALTER INDEX t_primary_idx SET (RETAIN HISTORY = FOR '1ms')")
+        .batch_execute("ALTER TABLE t SET (RETAIN HISTORY = FOR '1ms')")
         .unwrap();
     client_writes
         .batch_execute("CREATE VIEW v AS SELECT * FROM t")

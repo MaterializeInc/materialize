@@ -91,13 +91,7 @@ query error db error: ERROR: ALTER SINK SET CLUSTER not yet supported, see https
 ALTER SINK v SET CLUSTER quickstart
 
 statement ok
-CREATE TABLE t (a INT)
-
-statement ok
-CREATE INDEX i ON t(a)
-
-statement ok
-CREATE SOURCE s FROM LOAD GENERATOR COUNTER
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '5m')
 
 query T
 SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv)
@@ -119,6 +113,17 @@ query T
 SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv)
 ----
 CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "quickstart" WITH (REFRESH = ON COMMIT) AS SELECT 1
+
+statement ok
+CREATE TABLE t (a INT) WITH (RETAIN HISTORY FOR 0)
+
+query T
+SELECT create_sql FROM (SHOW CREATE TABLE t)
+----
+CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4") WITH (RETAIN HISTORY = FOR 0)
+
+statement ok
+CREATE INDEX i ON t(a)
 
 statement ok
 ALTER TABLE t SET (RETAIN HISTORY FOR '1m')

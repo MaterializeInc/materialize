@@ -4590,21 +4590,30 @@ fn plan_retain_history_option(
     }
 }
 
+// Convert a specified RETAIN HISTORY option into a compaction window. `None` corresponds to
+// `DisableCompaction`. A zero duration will error. This is because the `OptionalDuration` type
+// already converts the zero duration into `None`. This function must not be called in the `RESET
+// (RETAIN HISTORY)` path, which should be handled by the outer `Option<OptionalDuration>` being
+// `None`.
 fn plan_retain_history(
     scx: &StatementContext,
     lcw: Option<Duration>,
 ) -> Result<CompactionWindow, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-    let cw = match lcw {
-        // 0 is often used by Postgres to mean disabled instead of actually 0. We have existing
-        // tests that use this behavior (these could change though). Furthermore, some things
-        // actually do break when this is set to real zero:
+    match lcw {
+        // A zero duration has already been converted to `None` by `OptionalDuration` (and means
+        // disable compaction), and should never occur here. Furthermore, some things actually do
+        // break when this is set to real zero:
         // https://github.com/MaterializeInc/materialize/issues/13221.
-        Some(Duration::ZERO) => CompactionWindow::DisableCompaction,
-        Some(duration) => duration.try_into()?,
-        None => CompactionWindow::Default,
-    };
-    Ok(cw)
+        Some(Duration::ZERO) => Err(PlanError::InvalidOptionValue {
+            option_name: "RETAIN HISTORY".to_string(),
+            err: Box::new(PlanError::Unstructured(
+                "internal error: unexpectedly zero".to_string(),
+            )),
+        }),
+        Some(duration) => Ok(duration.try_into()?),
+        None => Ok(CompactionWindow::DisableCompaction),
+    }
 }
 
 generate_extracted_config!(IndexOption, (RetainHistory, OptionalDuration));
