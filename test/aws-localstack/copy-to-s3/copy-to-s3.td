@@ -91,8 +91,16 @@ contains:MAX FILE SIZE cannot be less than 16MB
   );
 
 > SELECT a FROM t
+0
 1
 2
+3
+4
+5
+6
+7
+8
+9
 
 > COPY (SELECT a FROM t) TO 's3://${arg.s3-prefix}/2/'
   WITH (
