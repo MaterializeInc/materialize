@@ -2521,6 +2521,8 @@ impl Catalog {
                             update_item(id)?;
                         }
                     }
+                    // Note: When updating the transaction it's very important that we update the
+                    // items as a whole group, otherwise we exhibit quadratic behavior.
                     tx.update_items(items_to_update)?;
 
                     // Renaming temporary schemas is not supported.
