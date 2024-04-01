@@ -218,7 +218,7 @@ The level of support for these tools will improve as we extend the coverage of `
 
 | Service       | Support level                    | Notes                                                                              |             |
 | ------------- | -------------------------------- | ---------------------------------------------------------------------------------- | ----------- |
-| Fivetran      | {{< supportLevel researching >}} | Not supported yet {{% gh 5188 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
+| Fivetran      | {{< supportLevel beta >}} | See the [Fivetran guide](/integrations/fivetran/) for a step-by-step breakdown of the integration |             |
 | Stitch        | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 | Meltano       | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 | Airbyte       | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
