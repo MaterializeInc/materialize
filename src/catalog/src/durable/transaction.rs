@@ -1431,29 +1431,6 @@ impl<'a> Transaction<'a> {
             .map(|value| value.value.clone())
     }
 
-    // TODO(jkosh44) Can be removed after v0.92.X
-    pub fn clean_up_stash_catalog(&mut self) -> Result<(), CatalogError> {
-        self.configs.set(
-            ConfigKey {
-                key: "tombstone".to_string(),
-            },
-            None,
-        )?;
-        self.configs.set(
-            ConfigKey {
-                key: "catalog_kind".to_string(),
-            },
-            None,
-        )?;
-        self.system_configurations.set(
-            ServerConfigurationKey {
-                name: "catalog_kind".to_string(),
-            },
-            None,
-        )?;
-        Ok(())
-    }
-
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
         let txn_batch = TransactionBatch {
             databases: self.databases.pending(),
