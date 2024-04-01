@@ -33,7 +33,6 @@ describe("JSON Widget", () => {
         event.preventDefault();
       }
     });
-    // Ensure that the script is executed and the DOM fully loaded
     return new Promise((resolve) => {
       window.document.addEventListener("DOMContentLoaded", resolve);
     });
@@ -81,7 +80,6 @@ describe("JSON Widget", () => {
 
     await new Promise((r) => setTimeout(r, 300));
 
-    // Update this based on expected behavior, e.g., sqlOutput should be empty
     expect(sqlOutput.textContent).toBe("");
   });
 

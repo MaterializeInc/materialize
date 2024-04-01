@@ -256,7 +256,12 @@ document.querySelectorAll("input[name='type_view']").forEach(element => {
     element.addEventListener("change", render);
 });
 
-// Debouncing can be implemented if necessary, using setTimeout and clearTimeout.
-document.getElementById("json_sample").addEventListener("input", render);
+let debounceTimer;
+document.getElementById("json_sample").addEventListener("input", function(event) {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+        render();
+    }, 100);
+});
 
 </script>
