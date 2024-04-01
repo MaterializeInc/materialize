@@ -172,6 +172,8 @@ pub enum EventDetails {
     UpdateItemV1(UpdateItemV1),
     RenameSchemaV1(RenameSchemaV1),
     AlterRetainHistoryV1(AlterRetainHistoryV1),
+    ToNewIdV1(ToNewIdV1),
+    FromPreviousIdV1(FromPreviousIdV1),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -374,6 +376,18 @@ pub struct UpdateItemV1 {
     pub name: FullNameV1,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct ToNewIdV1 {
+    pub id: String,
+    pub new_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct FromPreviousIdV1 {
+    pub id: String,
+    pub previous_id: String,
+}
+
 impl EventDetails {
     pub fn as_json(&self) -> serde_json::Value {
         match self {
@@ -411,6 +425,8 @@ impl EventDetails {
             EventDetails::AlterRetainHistoryV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
+            EventDetails::ToNewIdV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::FromPreviousIdV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }
