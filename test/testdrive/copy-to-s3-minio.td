@@ -110,14 +110,13 @@ contains:MAX FILE SIZE cannot be less than 16MB
     FORMAT = 'csv'
   );
 
-# TODO: #25857 (detect non-empty s3 path)
-# ! COPY (SELECT a FROM t) TO 's3://copytos3'
-#   WITH (
-#     AWS CONNECTION = aws_conn,
-#     MAX FILE SIZE = "100MB",
-#     FORMAT = 'csv'
-#   );
-
+! COPY (SELECT a FROM t) TO 's3://copytos3'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'csv'
+  );
+contains:S3 bucket path is not empty
 
 > COPY (SELECT * FROM generate_series(1, 1000000)) TO 's3://copytos3/test/4'
   WITH (
