@@ -2501,7 +2501,7 @@ impl Catalog {
                                 }))
                             })?;
 
-                        // Update the catalog storage and Builtin Tables.
+                        // Queue updates for Catalog storage and Builtin Tables.
                         if !new_entry.item().is_temporary() {
                             items_to_update.insert(*id, new_entry.clone().into());
                         }
