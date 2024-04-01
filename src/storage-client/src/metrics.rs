@@ -13,7 +13,10 @@ use std::sync::Arc;
 
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::metric;
-use mz_ore::metrics::{DeleteOnDropHistogram, HistogramVecExt, MetricsRegistry};
+use mz_ore::metrics::{
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropHistogram, HistogramVecExt, IntCounterVec,
+    MetricsRegistry,
+};
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_service::codec::StatsCollector;
 use mz_storage_types::instances::StorageInstanceId;
@@ -26,6 +29,7 @@ pub struct StorageControllerMetrics {
     messages_sent_bytes: prometheus::HistogramVec,
     messages_received_bytes: prometheus::HistogramVec,
     startup_prepared_statements_kept: prometheus::IntGauge,
+    regressed_offset_known: IntCounterVec,
 }
 
 impl StorageControllerMetrics {
@@ -49,7 +53,20 @@ impl StorageControllerMetrics {
                 name: "mz_storage_startup_prepared_statements_kept",
                 help: "number of prepared statements kept on startup",
             )),
+            regressed_offset_known: metrics_registry.register(metric!(
+                name: "mz_storage_regressed_offset_known",
+                help: "number of regressed offset_known stats for this id",
+                var_labels: ["id"],
+            )),
         }
+    }
+
+    pub fn regressed_offset_known(
+        &self,
+        id: mz_repr::GlobalId,
+    ) -> DeleteOnDropCounter<'static, prometheus::core::AtomicU64, Vec<String>> {
+        self.regressed_offset_known
+            .get_delete_on_drop_counter(vec![id.to_string()])
     }
 
     pub fn for_instance(&self, id: StorageInstanceId) -> RehydratingStorageClientMetrics {
