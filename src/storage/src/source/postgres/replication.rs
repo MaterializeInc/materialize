@@ -226,6 +226,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let Some(resume_lsn) = resume_upper.into_option() else {
                 return Ok(());
             };
+            let resume_lsn = MzOffset::from(resume_lsn.offset.saturating_sub(1));
             data_cap_set.downgrade([&resume_lsn]);
             upper_cap_set.downgrade([&resume_lsn]);
             trace!(%id, "timely-{worker_id} replication \
@@ -548,7 +549,7 @@ async fn raw_stream<'a>(
                 },
                 future::Either::Right((upper, _)) => match upper.and_then(|u| u.into_option()) {
                     Some(lsn) => {
-                        last_committed_upper = std::cmp::max(last_committed_upper, lsn);
+                        last_committed_upper = std::cmp::max(last_committed_upper, lsn - 1);
                         true
                     }
                     None => false,
