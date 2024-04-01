@@ -7,20 +7,33 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This module defines the `UpsertStateBackend` trait and various implementations.
-//! This trait is the way the `upsert` operator interacts with various state backings.
+//! # State-management for UPSERT.
 //!
-//! Because its a complex trait with a somewhat leaky abstraction, it warrants a high-level
-//! description, explaining the complexity. The trait has 3 methods:
+//! This module and provide structures for use within an UPSERT
+//! operator implementation.
 //!
-//! ## `multi_get`
+//! UPSERT is a effectively a process which transforms a `Stream<(Key, Option<Data>)>`
+//! into a differential collection, by indexing the data based on the key.
+//!
+//! _This module does not implement this transformation, instead exposing APIs designed
+//! for use within an UPSERT operator. There is one exception to this: `merge_snapshot_chunk`
+//! implements an efficient upsert-like transformation to re-index a collection using the
+//! _output collection_ of an upsert transformation. More on this below.
+//!
+//! ## `UpsertState`
+//!
+//! Its primary export is `UpsertState`, which wraps an `UpsertStateBackend` and provides 3 APIs:
+//!
+//! ### `multi_get`
 //! `multi_get` returns the current value for a (unique) set of keys. To keep implementations
 //! efficient, the set of keys is an iterator, and results are written back into another parallel
 //! iterator. In addition to returning the current values, implementations must also return the
 //! _size_ of those values _as they are stored within the implementation_. Implementations are
 //! required to chunk large iterators if they need to operate over smaller batches.
 //!
-//! ## `multi_put`
+//! `multi_get` is implemented directly with `UpsertStateBackend::multi_get`.
+//!
+//! ### `multi_put`
 //! Update or delete values for a set of keys. To keep implementations efficient, the set
 //! of updates is an iterator. Implementations are also required to return the difference
 //! in values and total size after processing the updates. To simplify this (and because
@@ -29,25 +42,33 @@
 //! Implementations are required to chunk large iterators if they need to operate over smaller
 //! batches.
 //!
-//! ## `merge_snapshot_chunk`
-//! The most complicated method, this method requires implementations to consolidate a _chunk_ of
-//! updates into their state. This method effectively asks implementations to implement the logic in
-//! <https://docs.rs/differential-dataflow/latest/differential_dataflow/consolidation/fn.consolidate.html>,
-//! but under the assumption that the set of updates is a valid upsert `Collection`. Note that this
-//! allows implementations to do this a memory-efficient (or even, _memory-bounded) way. Because
-//! this is non-trivial, this module provides `StateValue`, which implements some of the core logic
-//! required to do this. `StateValue::merge_update` has more information about this.
+//! `multi_put` is implemented directly with `UpsertStateBackend::multi_put`.
 //!
-//! `merge_snapshot_chunk` has to return stats about the number of values and size of the state,
-//! just like `multi_put`.
+//! ### `merge_snapshot_chunk`
 //!
-//! Another curiosity is that implementation can assume that `merge_snapshot_chunk` is called with
-//! a set of updates with a number of keys not greater than `UpsertStateBackend::SNAPSHOT_BATCH_SIZE`. This
-//! is different than `multi_put` and `multi_get` purely because it simplifies the way that the `upsert`
-//! operator handles snapshots.
+//! `merge_snapshot_chunk` re-indexes an UPSERT collection based on its _output collection_ (as
+//! opposed to its _input `Stream`_. Please see the docs on `merge_snapshot_chunk` and `StateValue`
+//! for more information.
+//!
+//! `merge_snapshot_chunk` is implemented with both `UpsertStateBackend::multi_put` and
+//! `UpsertStateBackend::multi_get`
+//!
+//! ## Order Keys
+//!
+//! In practice, the input stream for UPSERT collections includes an _order key_. This is used to
+//! sort data with the same key occurring in the same timestamp. This module provides support
+//! for serializing and deserializing order keys with their associated data. Being able to ingest
+//! data on non-frontier boundaries requires this support.
+//!
+//! A consequence of this is that tombstones with an order key can be stored within the state.
+//! There is currently no support for cleaning these tombstones up, as they are considered rare and
+//! small enough.
+//!
+//! Because `merge_snapshot_chunk` handles data that consolidates correctly, it does not handle
+//! order keys.
 //!
 //!
-//! # A note on state size
+//! ## A note on state size
 //!
 //! The `UpsertStateBackend` trait requires implementations report _relatively accurate_ information about
 //! how the state size changes over time. Note that it does NOT ask the implementations to give
@@ -88,12 +109,11 @@ pub fn upsert_bincode_opts() -> BincodeOpts {
     bincode::DefaultOptions::new()
 }
 
-/// The result type for individual gets.
-// The value and size are stored in individual options,
-// so that during upsert processing, we can track the
-// _original size of a value we get_ separate from
-// the updated value we want to write back to the `UpsertStateBackend`
-// implementation.
+/// The result type for `multi_get`.
+/// The value and size are stored in individual `Option`s so callees
+/// can reuse this value as they overwrite this value, keeping
+/// track of the previous metadata. Additionally, values
+/// may be `None` for tombstones.
 #[derive(Debug, Default, Clone)]
 pub struct UpsertValueAndSize<O> {
     /// The value, if there was one.
@@ -103,40 +123,45 @@ pub struct UpsertValueAndSize<O> {
     pub metadata: Option<ValueMetadata<u64>>,
 }
 
-/// Metadata about an existing value in the upsert state backend. Passed
-/// back into `multi_put`.
+/// Metadata about an existing value in the upsert state backend, as returned
+/// by `multi_get`.
 #[derive(Copy, Clone, Debug)]
 pub struct ValueMetadata<S> {
+    /// The size of the value.
     pub size: S,
+    /// If the value is a tombstone.
     pub is_tombstone: bool,
 }
 
+/// A value to put in with `multi_put`.
 #[derive(Clone, Debug)]
 pub struct PutValue<V> {
+    /// The new value, or a `None` to indicate a delete.
     pub value: Option<V>,
+    /// The value of the previous value for this key, if known.
+    /// Passed into efficiently calculate statistics.
     pub previous_value_metadata: Option<ValueMetadata<i64>>,
 }
 
-/// In any `UpsertStateBackend` implementation, we need to support 2 modes:
+/// `UpsertState` has 2 modes:
 /// - Normal operation
 /// - Consolidation of snapshots (during rehydration).
 ///
-/// This struct (and `Snapshotting`) is effectively a helper to simplify the logic that
-/// individual `UpsertStateBackend` implementations need to do to manage these 2 modes.
+/// This struct and its substructs are helpers to simplify the logic that
+/// individual `UpsertState` implementations need to do to manage these 2 modes.
 ///
-/// Normal operation is easy, we just store an ordinary `UpsertValue`, and allow the implementer
+/// Normal operation is simple, we just store an ordinary `UpsertValue`, and allow the implementer
 /// to store it any way they want. During consolidation of snapshots, the logic is more complex.
 /// See the docs on `StateValue::merge_update` for more information.
 ///
-/// This struct is not part of the `UpsertStateBackend` public API, but implementing that API without
-/// using it is considered hard-mode.
-///
 ///
 /// Note also that this type is designed to support _partial updates_. All values are
-/// associated with an _ordered_ `O` that can be used to determine if a value existing in the
+/// associated with an _order key_ `O` that can be used to determine if a value existing in the
 /// `UpsertStateBackend` occurred before or after a value being considered for insertion.
-/// `O` is typically required to be `: Default`, with the default value sorting below all others.
-/// All snapshotted values use this default as their order key.
+///
+/// `O` typically required to be `: Default`, with the default value sorting below all others.
+/// Values consolidated during snapshotting consolidate correctly (as they are actual
+/// differential updates with diffs), so order keys are not required.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub enum StateValue<O> {
     Snapshotting(Snapshotting),
@@ -172,15 +197,18 @@ impl fmt::Display for Snapshotting {
 }
 
 impl<O> StateValue<O> {
+    /// A normal value occurring at some order key.
     pub fn value(value: UpsertValue, order: O) -> Self {
         Self::Value(Value::Value(value, order))
     }
 
     #[allow(unused)]
+    /// A tombstoned value occurring at some order key.
     pub fn tombstone(order: O) -> Self {
         Self::Value(Value::Tombstone(order))
     }
 
+    /// Whether the value is a tombstone.
     pub fn is_tombstone(&self) -> bool {
         match self {
             Self::Value(Value::Tombstone(_)) => true,
@@ -461,6 +489,8 @@ impl PutStats {
     ///
     /// The size parameter is separate as its value is backend-dependent. Its optional
     /// as some backends increase the total size after an entire batch is processed.
+    ///
+    /// This method is provided for implementors of `UpsertStateBackend::multi_put`.
     pub fn adjust<O>(
         &mut self,
         new_value: Option<&StateValue<O>>,
@@ -548,14 +578,15 @@ pub struct GetStats {
 }
 
 /// A trait that defines the fundamental primitives required by a state-backing of
-/// the `upsert` operator.
+/// `UpsertState`.
 ///
 /// Implementors of this trait are blind maps that associate keys and values. They need
 /// not understand the semantics of `StateValue`, tombstones, or anything else related
 /// to a correct `upsert` implementation. The singular exception to this is that they
 /// **must** produce accurate `PutStats` and `GetStats`. The reasoning for this is two-fold:
-/// - efficiency:
+/// - efficiency: this avoids additional buffer allocation.
 /// - value sizes: only the backend implementation understands the size of values as recorded
+///
 /// This **must** is not a correctness requirement (we won't panic when emitting statistics), but
 /// rather a requirement to ensure the upsert operator is introspectable.
 #[async_trait::async_trait(?Send)]
@@ -657,14 +688,16 @@ where
     S: UpsertStateBackend<O>,
     O: Default + Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
 {
-    /// Merge and consolidate the following updates into the state, during snapshotting.
+    /// Merge and consolidate the following differential updates into the state, during snapshotting.
+    /// Updates provided to this method can be assumed to consolidate into a single value
+    /// per-key, after all chunks have been processed.
     ///
-    /// After an entire snapshot has been `merged`, all values must be in the correct state
+    /// Therefore, after an entire snapshot has been `merged`, all values must be in the correct state
     /// (as determined by `StateValue::ensure_decoded`), and `merge_snapshot_chunk` must NOT
     /// be called again.
     ///
     /// The `completed` boolean communicates whether or not this is the final chunk of updates
-    /// to be merged.
+    /// to be merged, to assert correct usage.
     // Note that this does not allow `UpsertStateBackend` backends to optimize this functionality,
     // (for example, using RocksDB's native merge functionality), which would be more
     // performant. This is because:

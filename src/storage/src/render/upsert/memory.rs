@@ -7,9 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Allow usage of `std::collections::HashMap`.
-//! We need to iterate through all the values in the map, so we can't use `mz_ore` wrapper.
-//! Also, we don't need any ordering for the values fetched, so using std HashMap.
+//! An `UpsertStateBackend` that stores values in memory.
+
+// Allow usage of `std::collections::HashMap`.
+// We need to iterate through all the values in the map, so we can't use `mz_ore` wrapper.
+// Also, we don't need any ordering for the values fetched, so using std HashMap.
 #![allow(clippy::disallowed_types)]
 
 use std::collections::hash_map::Drain;

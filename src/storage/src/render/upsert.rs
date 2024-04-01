@@ -566,7 +566,10 @@ where
     let shutdown_button = builder.build(move |caps| async move {
         let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
 
-        let mut state = UpsertState::new(
+        // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
+        // (as required for `merge_snapshot_chunk`), with slightly more efficient serialization
+        // than a default `Partitioned`.
+        let mut state = UpsertState::<_, Option<FromTime>>::new(
             state().await,
             upsert_shared_metrics,
             &upsert_metrics,

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! An `UpsertStateBackend` that stores values in RocksDB.
+
 use mz_rocksdb::RocksDBInstance;
 use serde::{de::DeserializeOwned, Serialize};
 

@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! An `UpsertStateBackend` that starts in memory and spills to RocksDB
+//! when the total size passes some threshold.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -99,6 +102,8 @@ where
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
     {
+        // Note that we never revert back to memory if the size shrinks below the threshold.
+        // That case is considered rare and not worth the complexity.
         match &mut self.backend_type {
             BackendType::InMemory(map) => {
                 let mut put_stats = map.multi_put(puts).await?;
