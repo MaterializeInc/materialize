@@ -220,7 +220,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 subsource_resume_uppers
                     .values()
                     .flat_map(|f| f.elements())
-                    .cloned()
+                    .cloned(),
             );
 
             let Some(resume_lsn) = resume_upper.into_option() else {
@@ -549,7 +549,8 @@ async fn raw_stream<'a>(
                 },
                 future::Either::Right((upper, _)) => match upper.and_then(|u| u.into_option()) {
                     Some(lsn) => {
-                        last_committed_upper = std::cmp::max(last_committed_upper, lsn - 1);
+                        last_committed_upper =
+                            std::cmp::max(last_committed_upper, MzOffset::from(lsn.offset - 1));
                         true
                     }
                     None => false,
