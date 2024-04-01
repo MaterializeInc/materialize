@@ -13,12 +13,12 @@ your MySQL database.
    command to create the new cluster:
 
     ```sql
-    CREATE CLUSTER ingest_mysql (SIZE = 'small');
+    CREATE CLUSTER ingest_mysql (SIZE = '200cc');
 
     SET CLUSTER = ingest_mysql;
     ```
 
-    A cluster of [size](/sql/create-cluster/#size) `small` should be enough to
+    A cluster of [size](/sql/create-cluster/#size) `200cc` should be enough to
     process the initial snapshot of the tables in your MySQL database. For very
     large snapshots, consider using a larger size to speed up processing. Once
     the snapshot is finished, you can readjust the size of the cluster to fit

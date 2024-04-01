@@ -1,12 +1,12 @@
 ---
 title: "ALTER SOURCE"
-description: "`ALTER SOURCE` changes certain characteristics of a source, such as its size."
+description: "`ALTER SOURCE` changes certain characteristics of a source."
 menu:
   main:
     parent: 'commands'
 ---
 
-`ALTER SOURCE` changes certain characteristics of a source, such as its size.
+`ALTER SOURCE` changes certain characteristics of a source.
 
 ## Syntax
 
@@ -33,7 +33,6 @@ Field   | Use
 _name_  | The identifier of the source you want to alter.
 **ADD SUBSOURCE** ... | PostgreSQL sources only: Add the identified tables from the upstream database (`table_name`) to the named source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options).
 **DROP SUBSOURCE** ... | PostgreSQL sources only: Drop the identified subsources from the source. Specifying **CASCADE** also drops all objects that depend on the subsource. **RESTRICT** (default) will not drop the subsource if it has any dependencies.
-_value_ | The new value for the source [size](/sql/create-source/#sizing-a-source). Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`.
 
 ### **ADD SUBSOURCE** `with_options`
 

@@ -1,0 +1,4 @@
+{{$when := .Get 0}}
+{{if ge now (time.AsTime $when)}}
+{{ .Inner | $.Page.RenderString }}
+{{end}}

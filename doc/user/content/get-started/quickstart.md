@@ -62,7 +62,7 @@ with.
             name            |      type      | size
     ------------------------+----------------+------
      accounts               | subsource      | null
-     auction_house          | load-generator | 3xsmall
+     auction_house          | load-generator | 25cc
      auction_house_progress | progress       | null
      auctions               | subsource      | null
      bids                   | subsource      | null
