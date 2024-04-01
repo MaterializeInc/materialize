@@ -668,13 +668,23 @@ message AuditLogEventV1 {
     optional string new_history = 3;
   }
 
+  message ToNewIdV1 {
+    string id = 1;
+    string new_id = 2;
+  }
+
+  message FromPreviousIdV1 {
+    string id = 1;
+    string previous_id = 2;
+  }
+
   uint64 id = 1;
   EventType event_type = 2;
   ObjectType object_type = 3;
   StringWrapper user = 4;
   EpochMillis occurred_at = 5;
 
-  // next-id: 29
+  // next-id: 33
   oneof details {
     CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
     DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
@@ -700,6 +710,8 @@ message AuditLogEventV1 {
     UpdateItemV1 update_item_v1 = 26;
     CreateSourceSinkV3 create_source_sink_v3 = 29;
     AlterRetainHistoryV1 alter_retain_history_v1 = 30;
+    ToNewIdV1 to_new_id_v1 = 31;
+    FromPreviousIdV1 from_previous_id_v1 = 32;
   }
 }
 
