@@ -2938,7 +2938,7 @@ pub fn serve(
         let mut initial_timestamps =
             get_initial_oracle_timestamps(&pg_timestamp_oracle_config).await?;
 
-        // Insert an entry for the `EpochMilliseconds` timeline if one doesn't,
+        // Insert an entry for the `EpochMilliseconds` timeline if one doesn't exist,
         // which will ensure that the timeline is initialized since it's required
         // by the system.
         initial_timestamps
