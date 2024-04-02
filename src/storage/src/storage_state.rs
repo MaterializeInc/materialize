@@ -1210,7 +1210,9 @@ impl StorageState {
 
                 // We serialize the dyncfg updates in StorageParameters, but configure
                 // persist separately.
-                params.dyncfg_updates.apply(self.persist_clients.cfg());
+                self.persist_clients
+                    .cfg()
+                    .apply_from(&params.dyncfg_updates);
 
                 params.tracing.apply(self.tracing_handle.as_ref());
 
