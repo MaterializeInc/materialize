@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
 
+from materialize.buildkite import accepted_by_shard
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -652,6 +653,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         if scenario.disabled:
             print(f"+++ Scenario {scenario.name} is disabled, skipping.")
+            continue
+        if not accepted_by_shard(scenario.name):
             continue
         else:
             print(f"+++ Running scenario {scenario.name} ...")
