@@ -732,16 +732,16 @@ def run_memory_search(
     materialized_memory, clusterd_memory = find_minimal_memory(
         c,
         scenario,
-        materialized_memory=materialized_memory,
-        clusterd_memory=clusterd_memory,
+        initial_materialized_memory=materialized_memory,
+        initial_clusterd_memory=clusterd_memory,
         reduce_materialized_memory_by_gb=memory_search_step_in_gb,
         reduce_clusterd_memory_by_gb=0,
     )
     materialized_memory, clusterd_memory = find_minimal_memory(
         c,
         scenario,
-        materialized_memory=materialized_memory,
-        clusterd_memory=clusterd_memory,
+        initial_materialized_memory=materialized_memory,
+        initial_clusterd_memory=clusterd_memory,
         reduce_materialized_memory_by_gb=0,
         reduce_clusterd_memory_by_gb=memory_search_step_in_gb,
     )
@@ -759,12 +759,17 @@ def run_memory_search(
 def find_minimal_memory(
     c: Composition,
     scenario: Scenario,
-    materialized_memory: str,
-    clusterd_memory: str,
+    initial_materialized_memory: str,
+    initial_clusterd_memory: str,
     reduce_materialized_memory_by_gb: float,
     reduce_clusterd_memory_by_gb: float,
 ) -> tuple[str, str]:
     assert reduce_materialized_memory_by_gb > 0 or reduce_clusterd_memory_by_gb > 0
+
+    materialized_memory = initial_materialized_memory
+    clusterd_memory = initial_clusterd_memory
+    materialized_memory_steps = [materialized_memory]
+    clusterd_memory_steps = [clusterd_memory]
 
     while True:
         new_materialized_memory = _reduce_memory(
@@ -792,9 +797,58 @@ def find_minimal_memory(
             print(f"Scenario {scenario_desc} succeeded.")
             materialized_memory = new_materialized_memory
             clusterd_memory = new_clusterd_memory
+            materialized_memory_steps.append(new_materialized_memory)
+            clusterd_memory_steps.append(new_clusterd_memory)
         else:
             print(f"Scenario {scenario_desc} failed.")
             break
+
+    if (
+        materialized_memory != initial_materialized_memory
+        or clusterd_memory != initial_clusterd_memory
+    ):
+        print(f"Validating again the memory configuration for {scenario.name}")
+        materialized_memory, clusterd_memory = _validate_new_memory_configuration(
+            c,
+            scenario,
+            materialized_memory,
+            clusterd_memory,
+            materialized_memory_steps,
+            clusterd_memory_steps,
+        )
+
+    return materialized_memory, clusterd_memory
+
+
+def _validate_new_memory_configuration(
+    c: Composition,
+    scenario: Scenario,
+    materialized_memory: str,
+    clusterd_memory: str,
+    materialized_memory_steps: list[str],
+    clusterd_memory_steps: list[str],
+) -> tuple[str, str]:
+    success = try_run_scenario(
+        c,
+        scenario,
+        materialized_memory=materialized_memory,
+        clusterd_memory=clusterd_memory,
+    )
+
+    scenario_desc = f"{scenario.name} with materialized_memory={materialized_memory} and clusterd_memory={clusterd_memory}"
+
+    if success:
+        print(f"Successfully validated {scenario_desc}")
+    else:
+        print(f"Validation of {scenario_desc} failed")
+
+        assert len(materialized_memory_steps) > 1 and len(clusterd_memory_steps) > 1
+        materialized_memory = materialized_memory_steps[-2]
+        clusterd_memory = clusterd_memory_steps[-2]
+
+        print(
+            f"Going back one step to materialized_memory={materialized_memory} and clusterd_memory={clusterd_memory}"
+        )
 
     return materialized_memory, clusterd_memory
 
