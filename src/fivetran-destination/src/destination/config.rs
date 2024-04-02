@@ -124,6 +124,7 @@ async fn test_permissions(config: BTreeMap<String, String>) -> Result<(), OpErro
 pub async fn connect(
     mut config: BTreeMap<String, String>,
 ) -> Result<(String, tokio_postgres::Client), OpError> {
+    tracing::info!(?config, "Connecting to Materialize");
     let host = config
         .remove("host")
         .ok_or(OpErrorKind::FieldMissing("host"))?;
@@ -136,7 +137,10 @@ pub async fn connect(
     let dbname = config
         .remove("dbname")
         .ok_or(OpErrorKind::FieldMissing("dbname"))?;
-    let cluster = config.remove("cluster");
+    let cluster = config
+        .remove("cluster")
+        // Fivetran provides an empty string for optional parameters.
+        .and_then(|val| if val.is_empty() { None } else { Some(val) });
 
     // Compile in the CA certificate bundle downloaded by the build script, and
     // configure the TLS connector to reference that compiled-in CA bundle,
