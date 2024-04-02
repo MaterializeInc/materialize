@@ -52,6 +52,7 @@ MZ_VERSION_0_78_0 = MzVersion.parse_mz("v0.78.0")
 MZ_VERSION_0_81_0 = MzVersion.parse_mz("v0.81.0")
 MZ_VERSION_0_88_0 = MzVersion.parse_mz("v0.88.0")
 MZ_VERSION_0_93_0 = MzVersion.parse_mz("v0.93.0")
+MZ_VERSION_0_95_0 = MzVersion.parse_mz("v0.95.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -160,6 +161,19 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             )
         ):
             return YesIgnore("Newline handling in regex fixed in PR 26191")
+
+        if (
+            self.lower_version < MZ_VERSION_0_95_0 <= self.higher_version
+            and expression.matches(
+                partial(
+                    matches_fun_by_any_name,
+                    function_names_in_lower_case={"min", "max"},
+                ),
+                True,
+            )
+            and self._is_any_date_time_expression(expression)
+        ):
+            return YesIgnore("Type of min(time) / max(time) fixed in PR 26335")
 
         return super().shall_ignore_expression(expression, row_selection)
 
