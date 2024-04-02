@@ -18,7 +18,10 @@ fn main() {
         .btree_map(["."])
         .message_attribute(".", ATTR)
         .enum_attribute(".", ATTR)
-        .compile_well_known_types();
+        .compile_well_known_types()
+        // Disable comments because the Google well known types have comments
+        // that get mistreated as doc tests.
+        .disable_comments(["."]);
 
     const ATTR: &str = "#[derive(::serde::Serialize, ::serde::Deserialize)]";
 
