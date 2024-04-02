@@ -234,13 +234,16 @@ impl crate::coord::Coordinator {
         for (time, id_bundle) in id_bundles {
             for (compute_instance, compute_ids) in id_bundle.compute_ids {
                 for id in compute_ids {
-                    let mut read_capability: ReadCapability<Timestamp> = compaction_window.into();
+                    let read_capability = self.ensure_compute_capability(
+                        &compute_instance,
+                        &id,
+                        Some(compaction_window.clone()),
+                    );
                     if let Some(time) = &time {
                         read_capability
                             .holds
                             .update_iter(time.iter().map(|t| (*t, 1)));
                     }
-                    self.compute_read_capabilities.insert(id, read_capability);
                     compute_policy_updates
                         .entry(compute_instance)
                         .or_default()
@@ -249,13 +252,13 @@ impl crate::coord::Coordinator {
             }
 
             for id in id_bundle.storage_ids {
-                let mut read_capability: ReadCapability<Timestamp> = compaction_window.into();
+                let read_capability =
+                    self.ensure_storage_capability(&id, Some(compaction_window.clone()));
                 if let Some(time) = &time {
                     read_capability
                         .holds
                         .update_iter(time.iter().map(|t| (*t, 1)));
                 }
-                self.storage_read_capabilities.insert(id, read_capability);
                 storage_policy_updates.push((id, self.storage_read_capabilities[&id].policy()));
             }
         }
@@ -270,6 +273,90 @@ impl crate::coord::Coordinator {
         self.controller
             .storage
             .set_read_policy(storage_policy_updates);
+    }
+
+    // If there is not capability for the given object, initialize one at the
+    // earliest possible since. Return the capability.
+    //
+    // When a `compaction_window` is given, this is installed as the policy of
+    // the collection, regardless if a capability existed before or not.
+    fn ensure_compute_capability(
+        &mut self,
+        instance_id: &ComputeInstanceId,
+        id: &GlobalId,
+        compaction_window: Option<CompactionWindow>,
+    ) -> &mut ReadCapability<mz_repr::Timestamp> {
+        let entry = self
+            .compute_read_capabilities
+            .entry(*id)
+            .and_modify(|capability| {
+                // If we explicitly got a compaction window, override any existing
+                // one.
+                if let Some(compaction_window) = compaction_window {
+                    capability.base_policy = compaction_window.into();
+                }
+            })
+            .or_insert_with(|| {
+                let policy: ReadPolicy<Timestamp> = match compaction_window {
+                    Some(compaction_window) => compaction_window.into(),
+                    None => {
+                        // We didn't get an initial policy, so set the current
+                        // since as a static policy.
+                        let compute = self.controller.active_compute();
+                        let collection = compute
+                            .collection(*instance_id, *id)
+                            .expect("collection does not exist");
+                        let read_frontier = collection.read_capability().clone();
+                        ReadPolicy::ValidFrom(read_frontier)
+                    }
+                };
+
+                ReadCapability::from(policy)
+            });
+
+        entry
+    }
+
+    // If there is not capability for the given object, initialize one at the
+    // earliest possible since. Return the capability.
+    //
+    // When a `compaction_window` is given, this is installed as the policy of
+    // the collection, regardless if a capability existed before or not.
+    fn ensure_storage_capability(
+        &mut self,
+        id: &GlobalId,
+        compaction_window: Option<CompactionWindow>,
+    ) -> &mut ReadCapability<mz_repr::Timestamp> {
+        let entry = self
+            .storage_read_capabilities
+            .entry(*id)
+            .and_modify(|capability| {
+                // If we explicitly got a compaction window, override any existing
+                // one.
+                if let Some(compaction_window) = compaction_window {
+                    capability.base_policy = compaction_window.into();
+                }
+            })
+            .or_insert_with(|| {
+                let policy: ReadPolicy<Timestamp> = match compaction_window {
+                    Some(compaction_window) => compaction_window.into(),
+                    None => {
+                        // We didn't get an initial policy, so set the current
+                        // since as a static policy.
+                        let collection = self
+                            .controller
+                            .storage
+                            .collection(*id)
+                            .expect("collection does not exist");
+                        let read_frontier = collection.implied_capability.clone();
+                        ReadPolicy::ValidFrom(read_frontier)
+                    }
+                };
+
+                ReadCapability::from(policy)
+            });
+
+        entry
     }
 
     pub(crate) fn update_storage_base_read_policies(
@@ -421,10 +508,7 @@ impl crate::coord::Coordinator {
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
         for (time, id) in read_holds.storage_ids() {
-            let read_needs = self
-                .storage_read_capabilities
-                .get_mut(id)
-                .expect("id does not exist");
+            let read_needs = self.ensure_storage_capability(id, None);
             read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
             policy_changes.push((*id, read_needs.policy()));
         }
@@ -432,15 +516,12 @@ impl crate::coord::Coordinator {
         // Update COMPUTE read policies
         for (compute_instance, compute_ids) in read_holds.compute_ids() {
             let mut policy_changes = Vec::new();
-            let mut compute = self.controller.active_compute();
             for (time, id) in compute_ids {
-                let read_needs = self
-                    .compute_read_capabilities
-                    .get_mut(id)
-                    .expect("id does not exist");
+                let read_needs = self.ensure_compute_capability(compute_instance, id, None);
                 read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
+            let mut compute = self.controller.active_compute();
             compute
                 .set_read_policy(*compute_instance, policy_changes)
                 .unwrap_or_terminate("cannot fail to set read policy");
