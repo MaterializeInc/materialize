@@ -51,10 +51,11 @@ column named `b`.
 
 * Batches within Persist are self-describing.
 * Unblock work for the following projects:
-  * Evolving the schema of a Persist shard (e.g. adding columns to tables)
-  * User defined sort order of data, i.e. `PARTITION BY`
+  * Evolving the schema of a Persist shard (e.g. adding columns to tables).
+  * User defined sort order of data, i.e. `PARTITION BY`.
   * Only fetch the columns from a shard that are needed, i.e. projection
-    pushdown
+    pushdown.
+  * Make `persist_source` faster [#25901](https://github.com/MaterializeInc/materialize/issues/25901).
 
 ## Out of Scope
 
@@ -202,17 +203,18 @@ struct NaiveTime {
 </td>
 <td>
 
-`PrimitiveArray<u64>`
+`FixedSizeBinary[8]`
 
 </td>
 <td>
 
-Represented as the number of nanoseconds since midnight.
+Represented as the `secs` field and `frac` field encoded in that order as
+big-endian.
 
-> **Alternative:** Instead of representing this as the number of nanoseconds
-since midnight we could stich together the two `u32`s from `NaiveTime`. This
-would maybe save some CPU cycles during encoding and decoding, but probably not
-enough to matter, and it locks us into a somewhat less flexible format.
+> **Alternative:** We could represent this as number of nanoseconds since
+midnight which is a bit more general but is a more costly at runtime for
+encoding. Ideally Persist encoding is a fast as possible so I'm leaning towards
+the more direct-from-Rust approach.
 
 > Note: We only need 47 bits to represent this total range, leaving 19 bits
 unused. In the future if we support the `TIMETZ` type we could probably also
@@ -796,7 +798,9 @@ time.
    Parts.
 
 Neither option is great, but I am leanning towards [1] since it puts the
-pressure/complexity on S3 and the network more than Persist internals.
+pressure/complexity on S3 and the network more than Persist internals. To make
+sure this solution is stable we can add Prometheus metrics tracking the size of
+blobs we read from S3 and monitor them during rollout to staging and canaries.
 
 ### Consolidation and Compaction
 
@@ -861,8 +865,9 @@ An approximate ordering of work would be:
    `ProtoDatum` representation and collects no stats. This unblocks writing
    structured columnar data, and asynchronously we can nail down the right
    Arrow encoding formats.
-2. Begin writing structured columnar data to S3, in the migration format.
-   Allows us to begin a "shadow migration" and validate the new format.
+2. Begin writing structured columnar data to S3 for staging and prod canaries,
+   in the migration format. Allows us to begin a "shadow migration" and
+   validate the new format.
 3. Serve reads from the new structured columnar data. For `Datum`s that have
    had non-V0 Arrow encodings implemented, this allows us to avoid decoding
    `ProtoDatum` in the read path, which currently is relatively expensive.
