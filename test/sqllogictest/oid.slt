@@ -326,6 +326,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 2119  max
 2120  max
 2122  max
+2123  max
 2126  max
 2127  max
 2128  max
@@ -336,6 +337,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 2135  min
 2136  min
 2138  min
+2139  min
 2142  min
 2143  min
 2144  min

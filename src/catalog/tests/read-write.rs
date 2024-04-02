@@ -39,16 +39,16 @@ async fn test_persist_confirm_leadership() {
 }
 
 async fn test_confirm_leadership(
-    openable_state1: impl OpenableDurableCatalogState,
-    openable_state2: impl OpenableDurableCatalogState,
+    openable_state1: Box<dyn OpenableDurableCatalogState>,
+    openable_state2: Box<dyn OpenableDurableCatalogState>,
 ) {
-    let mut state1 = Box::new(openable_state1)
+    let mut state1 = openable_state1
         .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
     assert!(state1.confirm_leadership().await.is_ok());
 
-    let mut state2 = Box::new(openable_state2)
+    let mut state2 = openable_state2
         .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
@@ -83,7 +83,7 @@ async fn test_persist_get_and_prune_storage_usage() {
     test_get_and_prune_storage_usage(openable_state).await;
 }
 
-async fn test_get_and_prune_storage_usage(openable_state: impl OpenableDurableCatalogState) {
+async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurableCatalogState>) {
     let old_event = VersionedStorageUsage::V1(StorageUsageV1 {
         id: 1,
         shard_id: Some("recent".to_string()),
@@ -98,7 +98,7 @@ async fn test_get_and_prune_storage_usage(openable_state: impl OpenableDurableCa
     });
     let boot_ts = mz_repr::Timestamp::new(23);
 
-    let mut state = Box::new(openable_state)
+    let mut state = openable_state
         .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
@@ -136,9 +136,9 @@ async fn test_persist_allocate_id() {
     test_allocate_id(openable_state).await;
 }
 
-async fn test_allocate_id(openable_state: impl OpenableDurableCatalogState) {
+async fn test_allocate_id(openable_state: Box<dyn OpenableDurableCatalogState>) {
     let id_type = USER_ITEM_ALLOC_KEY;
-    let mut state = Box::new(openable_state)
+    let mut state = openable_state
         .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
@@ -174,7 +174,7 @@ async fn test_persist_audit_logs() {
     test_audit_logs(openable_state).await;
 }
 
-async fn test_audit_logs(openable_state: impl OpenableDurableCatalogState) {
+async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
     let audit_logs = [
         VersionedEvent::V1(EventV1 {
             id: 100,
@@ -206,7 +206,7 @@ async fn test_audit_logs(openable_state: impl OpenableDurableCatalogState) {
         }),
     ];
 
-    let mut state = Box::new(openable_state)
+    let mut state = openable_state
         .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
@@ -233,7 +233,7 @@ async fn test_persist_items() {
     test_items(openable_state).await;
 }
 
-async fn test_items(openable_state: impl OpenableDurableCatalogState) {
+async fn test_items(openable_state: Box<dyn OpenableDurableCatalogState>) {
     let items = [
         Item {
             id: GlobalId::User(100),
@@ -255,7 +255,7 @@ async fn test_items(openable_state: impl OpenableDurableCatalogState) {
         },
     ];
 
-    let mut state = Box::new(openable_state)
+    let mut state = openable_state
         .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();

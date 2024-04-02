@@ -26,16 +26,39 @@ def workflow_default(c: Composition) -> None:
     """Test the retain history feature."""
     setup(c)
     run_test_with_mv_on_table(c)
+    run_test_with_mv_on_table_with_altered_retention(c)
     run_test_with_mv_on_counter_source(c)
     run_test_with_counter_source(c)
     # TODO: #24479 needs to be fixed
     # run_test_gh_24479(c)
     run_test_with_index(c)
+    run_test_consistency(c)
 
 
 def setup(c: Composition) -> None:
     c.up("materialized")
     c.up("testdrive", persistent=True)
+
+
+# Test that the catalog is consistent for the three types of retain histories (disabled, default,
+# specified).
+def run_test_consistency(c: Composition) -> None:
+    c.testdrive(
+        dedent(
+            """
+            > CREATE TABLE testdrive_consistency_table (i INT);
+
+            > CREATE INDEX testdrive_consistency_table_idx ON testdrive_consistency_table(i);
+
+            > ALTER INDEX testdrive_consistency_table_idx SET (RETAIN HISTORY = FOR '1m')
+
+            > ALTER INDEX testdrive_consistency_table_idx SET (RETAIN HISTORY = FOR 0)
+
+            > ALTER INDEX testdrive_consistency_table_idx RESET (RETAIN HISTORY)
+            """,
+        ),
+        args=["--consistency-checks=statement"],
+    )
 
 
 def run_test_with_mv_on_table(c: Composition) -> None:
@@ -62,9 +85,6 @@ def run_test_with_mv_on_table(c: Composition) -> None:
 
             > SELECT count(*) FROM retain_history_mv1;
             2
-
-            ! ALTER MATERIALIZED VIEW retain_history_mv1 SET RETAIN HISTORY FOR '1s';
-            ALTER RETAIN HISTORY not yet supported
             """,
         )
     )
@@ -218,6 +238,113 @@ def run_test_with_mv_on_table(c: Composition) -> None:
             timeout
             """,
         )
+    )
+
+
+def run_test_with_mv_on_table_with_altered_retention(c: Composition) -> None:
+    """
+    Verify we can still read the most recent timestamp, then reduce the retain history and verify we can't read anymore.
+    """
+
+    c.testdrive(
+        dedent(
+            """
+            > DROP MATERIALIZED VIEW IF EXISTS retain_history_mv;
+            > DROP TABLE IF EXISTS retain_history_table;
+
+            > CREATE TABLE retain_history_table (key INT, value INT);
+            > INSERT INTO retain_history_table VALUES (1, 100), (2, 200);
+
+            > CREATE MATERIALIZED VIEW retain_history_mv WITH (RETAIN HISTORY FOR '30s') AS
+                    SELECT * FROM retain_history_table;
+            """,
+        )
+    )
+
+    mz_time1 = fetch_now_from_mz(c)
+
+    c.testdrive(
+        dedent(
+            """
+            > INSERT INTO retain_history_table VALUES (3, 300);
+            """,
+        )
+    )
+
+    mz_time2 = fetch_now_from_mz(c)
+
+    c.testdrive(
+        dedent(
+            f"""
+            > SELECT count(*) FROM retain_history_mv AS OF '{mz_time1}'::TIMESTAMP; -- mz_time1
+            2
+
+            > SELECT count(*) FROM retain_history_mv AS OF '{mz_time2}'::TIMESTAMP; -- mz_time2
+            3
+
+            > INSERT INTO retain_history_table VALUES (4, 400);
+
+            # reduce retention period
+            > ALTER MATERIALIZED VIEW retain_history_mv SET (RETAIN HISTORY FOR '2s');
+            """,
+        ),
+    )
+
+    mz_time3 = fetch_now_from_mz(c)
+
+    # wait for the retention period to expire
+    time.sleep(2 + 1)
+
+    c.testdrive(
+        dedent(
+            f"""
+            ! SELECT count(*) FROM retain_history_mv AS OF '{mz_time2}'::TIMESTAMP; -- mz_time2
+            contains: is not valid for all inputs
+
+            ! SELECT count(*) FROM retain_history_mv AS OF '{mz_time3}'::TIMESTAMP; -- mz_time3
+            contains: is not valid for all inputs
+
+            > SELECT count(*) FROM retain_history_mv;
+            4
+            """,
+        ),
+        # use a timeout that is significantly lower than the original retention period
+        args=["--default-timeout=1s"],
+    )
+
+    mz_time4 = fetch_now_from_mz(c)
+
+    c.testdrive(
+        dedent(
+            """
+            # increase the retention period again
+            > ALTER MATERIALIZED VIEW retain_history_mv SET (RETAIN HISTORY FOR '30s');
+
+            > INSERT INTO retain_history_table VALUES (5, 500);
+            """,
+        ),
+    )
+
+    mz_time5 = fetch_now_from_mz(c)
+
+    # let the duration of the old retention period pass
+    time.sleep(2 + 1)
+
+    c.testdrive(
+        dedent(
+            f"""
+            # do not expect to regain old states
+            ! SELECT count(*) FROM retain_history_mv AS OF '{mz_time3}'::TIMESTAMP; -- mz_time3
+            contains: is not valid for all inputs
+
+            # expect the new retention period to apply
+            > SELECT count(*) FROM retain_history_mv AS OF '{mz_time4}'::TIMESTAMP; -- mz_time4
+            4
+
+            > SELECT count(*) FROM retain_history_mv AS OF '{mz_time5}'::TIMESTAMP; -- mz_time5
+            5
+            """,
+        ),
     )
 
 

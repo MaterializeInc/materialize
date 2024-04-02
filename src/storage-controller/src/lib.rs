@@ -774,6 +774,7 @@ where
                                 prev,
                                 self.config.parameters.statistics_interval,
                                 self.statistics_interval_sender.subscribe(),
+                                self.metrics.clone(),
                             );
                             let web_token = statistics::spawn_webhook_statistics_scraper(
                                 Arc::clone(&self.source_statistics),
@@ -798,6 +799,7 @@ where
                                     prev,
                                     self.config.parameters.statistics_interval,
                                     self.statistics_interval_sender.subscribe(),
+                                    self.metrics.clone(),
                                 );
 
                             // Make sure this is dropped when the controller is
@@ -1728,7 +1730,9 @@ where
                             .entry(stat.id)
                             .and_modify(|current| match current {
                                 Some(ref mut current) => current.incorporate(stat),
-                                None => *current = Some(stat),
+                                None => {
+                                    *current = Some(stat.with_metrics(&self.metrics));
+                                }
                             });
                     }
                 }
@@ -2178,7 +2182,7 @@ where
             //   timestamp given to us by the coordinator).
             // - That all txn writes through `init_ts` have been applied
             //   (materialized physically in the data shards).
-            let empty_txn = txns.begin();
+            let mut empty_txn = txns.begin();
             let apply = empty_txn
                 .commit_at(&mut txns, init_ts.clone())
                 .await

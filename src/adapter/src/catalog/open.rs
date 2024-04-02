@@ -34,8 +34,8 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
-    Role, Schema, Source, Table, Type,
+    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, DefaultPrivileges, Func, Log, Role,
+    Schema, Source, Table, Type,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -260,29 +260,8 @@ impl Catalog {
 
             state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
-            let databases = txn.get_databases();
-            for mz_catalog::durable::Database {
-                id,
-                oid,
-                name,
-                owner_id,
-                privileges,
-            } in databases
-            {
-                state.database_by_id.insert(
-                    id.clone(),
-                    Database {
-                        name: name.clone(),
-                        id,
-                        oid,
-                        schemas_by_id: BTreeMap::new(),
-                        schemas_by_name: BTreeMap::new(),
-                        owner_id,
-                        privileges: PrivilegeMap::from_mz_acl_items(privileges),
-                    },
-                );
-                state.database_by_name.insert(name.clone(), id.clone());
-            }
+            let updates = txn.get_updates().collect();
+            state.apply_updates(updates);
 
             let schemas = txn.get_schemas();
             for mz_catalog::durable::Schema {
@@ -742,7 +721,7 @@ impl Catalog {
                 .unwrap_or_else(|| "new".to_string());
 
             if !config.skip_migrations {
-                migrate::migrate(&state, &mut txn, config.now, &state.config.connection_context)
+                migrate::migrate(&state, &mut txn, config.now, config.boot_ts, &state.config.connection_context)
                     .await
                     .map_err(|e| {
                         Error::new(ErrorKind::FailedMigration {
@@ -794,11 +773,6 @@ impl Catalog {
 
     /// Opens or creates a catalog that stores data at `path`.
     ///
-    /// The passed in `boot_ts_not_linearizable` is _not_ linearizable, we do
-    /// not persist this timestamp before using it. Think hard about this fact
-    /// if you ever feel the need to use this for something that needs to be
-    /// linearizable.
-    ///
     /// Returns the catalog, metadata about builtin objects that have changed
     /// schemas since last restart, a list of updates to builtin tables that
     /// describe the initial state of the catalog, and the version of the
@@ -810,7 +784,7 @@ impl Catalog {
     #[instrument(name = "catalog::open")]
     pub fn open(
         config: Config<'_>,
-        boot_ts_not_linearizable: mz_repr::Timestamp,
+        boot_ts: mz_repr::Timestamp,
     ) -> BoxFuture<
         'static,
         Result<
@@ -976,7 +950,7 @@ impl Catalog {
                 .await
                 .get_and_prune_storage_usage(
                     config.storage_usage_retention_period,
-                    boot_ts_not_linearizable,
+                    boot_ts,
                     wait_for_consolidation,
                 )
                 .await?;
@@ -1333,6 +1307,12 @@ impl Catalog {
             .map(|system_item| system_item.description)
             .collect();
 
+        // If you are 100% positive that it is safe to delete a system object outside the
+        // `mz_internal` schema, then add it to this set. Make sure that no prod environments are
+        // using this object and that the upgrade checker does not show any issues.
+        //
+        // Objects can be removed from this set after one release.
+        let delete_exceptions: HashSet<SystemObjectDescription> = [].into();
         // TODO(jkosh44) Technically we could support changing the type of a builtin object outside
         // of `mz_internal` (i.e. from a table to a view). However, these migrations don't
         // currently handle that scenario correctly.
@@ -1340,7 +1320,10 @@ impl Catalog {
             migration_metadata
                 .deleted_system_objects
                 .iter()
-                .all(|deleted_object| deleted_object.schema_name == MZ_INTERNAL_SCHEMA),
+                .all(
+                    |deleted_object| deleted_object.schema_name == MZ_INTERNAL_SCHEMA
+                        || delete_exceptions.contains(deleted_object)
+                ),
             "only mz_internal objects can be deleted, deleted objects: {:?}",
             migration_metadata.deleted_system_objects
         );

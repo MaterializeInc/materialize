@@ -124,7 +124,7 @@ pub(crate) enum Mode {
 
 /// Enum representing a potentially fenced epoch.
 #[derive(Debug)]
-pub enum FenceableEpoch {
+pub(crate) enum FenceableEpoch {
     /// The current epoch, if one exists, has not been fenced.
     Unfenced(Option<Epoch>),
     /// The current epoch has been fenced.
@@ -185,7 +185,7 @@ impl FenceableEpoch {
     }
 }
 
-pub trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
+pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
     /// Process and apply `update`.
     ///
     /// Returns `Some` if `update` should be cached in memory and `None` otherwise.
@@ -199,7 +199,7 @@ pub trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
 
 /// A handle for interacting with the persist catalog shard.
 #[derive(Debug)]
-pub struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
+pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
@@ -622,7 +622,7 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
 }
 
 #[derive(Debug)]
-pub struct UnopenedCatalogStateInner {
+pub(crate) struct UnopenedCatalogStateInner {
     /// The organization ID of the environment.
     organization_id: Uuid,
     /// A cache of the config collection of the catalog.
@@ -684,7 +684,8 @@ impl ApplyUpdate<StateUpdateKindRaw> for UnopenedCatalogStateInner {
 ///
 /// Production users should call [`Self::expire`] before dropping a [`UnopenedPersistCatalogState`]
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
-pub type UnopenedPersistCatalogState = PersistHandle<StateUpdateKindRaw, UnopenedCatalogStateInner>;
+pub(crate) type UnopenedPersistCatalogState =
+    PersistHandle<StateUpdateKindRaw, UnopenedCatalogStateInner>;
 
 impl UnopenedPersistCatalogState {
     /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with
@@ -1119,7 +1120,7 @@ impl<T: Ord> LargeCollectionStartupCache<T> {
 }
 
 #[derive(Debug)]
-pub struct CatalogStateInner {
+struct CatalogStateInner {
     /// The [`Mode`] that this catalog was opened in.
     mode: Mode,
     /// A cache of audit logs that is only populated during startup.
@@ -1175,7 +1176,7 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
 }
 
 /// A durable store of the catalog state using Persist as an implementation.
-pub type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
+type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 
 #[async_trait]
 impl ReadOnlyDurableCatalogState for PersistCatalogState {

@@ -6089,6 +6089,7 @@ name = "mz-storage-types"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aws-config",
  "aws-credential-types",
  "aws-sdk-sts",
@@ -6215,7 +6216,9 @@ dependencies = [
  "once_cell",
  "postgres_array",
  "prost",
+ "prost-build",
  "prost-reflect",
+ "prost-types",
  "protobuf-src",
  "rand",
  "rdkafka",
@@ -6232,6 +6235,8 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tokio-util",
+ "tonic",
+ "tonic-build",
  "tracing",
  "tracing-subscriber",
  "url",

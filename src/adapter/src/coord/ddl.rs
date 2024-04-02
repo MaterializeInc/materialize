@@ -28,6 +28,7 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::error::ErrorExt;
+use mz_ore::future::InTask;
 use mz_ore::instrument;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
@@ -229,6 +230,7 @@ impl Coordinator {
                                             .config(
                                                 self.secrets_reader(),
                                                 self.controller.storage.config(),
+                                                InTask::No,
                                             )
                                             .await
                                             .map_err(|e| {
@@ -1225,6 +1227,7 @@ impl Coordinator {
                     | CatalogItem::Func(_) => {}
                 },
                 Op::AlterRole { .. }
+                | Op::AlterRetainHistory { .. }
                 | Op::AlterSetCluster { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }

@@ -14,7 +14,7 @@ use std::iter::Sum;
 use std::ops::Deref;
 use std::{fmt, iter};
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
@@ -1226,6 +1226,7 @@ pub enum AggregateFunc {
     MaxTimestamp,
     MaxTimestampTz,
     MaxInterval,
+    MaxTime,
     MinNumeric,
     MinInt16,
     MinInt32,
@@ -1242,6 +1243,7 @@ pub enum AggregateFunc {
     MinTimestamp,
     MinTimestampTz,
     MinInterval,
+    MinTime,
     SumInt16,
     SumInt32,
     SumInt64,
@@ -1357,6 +1359,7 @@ impl Arbitrary for AggregateFunc {
             Just(AggregateFunc::MaxDate).boxed(),
             Just(AggregateFunc::MaxTimestampTz).boxed(),
             Just(AggregateFunc::MaxInterval).boxed(),
+            Just(AggregateFunc::MaxTime).boxed(),
             Just(AggregateFunc::MinNumeric).boxed(),
             Just(AggregateFunc::MinInt16).boxed(),
             Just(AggregateFunc::MinInt32).boxed(),
@@ -1373,6 +1376,7 @@ impl Arbitrary for AggregateFunc {
             Just(AggregateFunc::MinTimestamp).boxed(),
             Just(AggregateFunc::MinTimestampTz).boxed(),
             Just(AggregateFunc::MinInterval).boxed(),
+            Just(AggregateFunc::MinTime).boxed(),
             Just(AggregateFunc::SumInt16).boxed(),
             Just(AggregateFunc::SumInt32).boxed(),
             Just(AggregateFunc::SumInt64).boxed(),
@@ -1485,6 +1489,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                 AggregateFunc::MaxTimestampTz => Kind::MaxTimestampTz(()),
                 AggregateFunc::MinNumeric => Kind::MinNumeric(()),
                 AggregateFunc::MaxInterval => Kind::MaxInterval(()),
+                AggregateFunc::MaxTime => Kind::MaxTime(()),
                 AggregateFunc::MinInt16 => Kind::MinInt16(()),
                 AggregateFunc::MinInt32 => Kind::MinInt32(()),
                 AggregateFunc::MinInt64 => Kind::MinInt64(()),
@@ -1500,6 +1505,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                 AggregateFunc::MinTimestamp => Kind::MinTimestamp(()),
                 AggregateFunc::MinTimestampTz => Kind::MinTimestampTz(()),
                 AggregateFunc::MinInterval => Kind::MinInterval(()),
+                AggregateFunc::MinTime => Kind::MinTime(()),
                 AggregateFunc::SumInt16 => Kind::SumInt16(()),
                 AggregateFunc::SumInt32 => Kind::SumInt32(()),
                 AggregateFunc::SumInt64 => Kind::SumInt64(()),
@@ -1593,6 +1599,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
             Kind::MaxTimestamp(()) => AggregateFunc::MaxTimestamp,
             Kind::MaxTimestampTz(()) => AggregateFunc::MaxTimestampTz,
             Kind::MaxInterval(()) => AggregateFunc::MaxInterval,
+            Kind::MaxTime(()) => AggregateFunc::MaxTime,
             Kind::MinNumeric(()) => AggregateFunc::MinNumeric,
             Kind::MinInt16(()) => AggregateFunc::MinInt16,
             Kind::MinInt32(()) => AggregateFunc::MinInt32,
@@ -1609,6 +1616,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
             Kind::MinTimestamp(()) => AggregateFunc::MinTimestamp,
             Kind::MinTimestampTz(()) => AggregateFunc::MinTimestampTz,
             Kind::MinInterval(()) => AggregateFunc::MinInterval,
+            Kind::MinTime(()) => AggregateFunc::MinTime,
             Kind::SumInt16(()) => AggregateFunc::SumInt16,
             Kind::SumInt32(()) => AggregateFunc::SumInt32,
             Kind::SumInt64(()) => AggregateFunc::SumInt64,
@@ -1728,6 +1736,7 @@ impl AggregateFunc {
                 max_datum::<'a, I, CheckedTimestamp<DateTime<Utc>>>(datums)
             }
             AggregateFunc::MaxInterval => max_datum::<'a, I, Interval>(datums),
+            AggregateFunc::MaxTime => max_datum::<'a, I, NaiveTime>(datums),
             AggregateFunc::MinNumeric => {
                 min_datum::<'a, I, OrderedDecimal<numeric::Numeric>>(datums)
             }
@@ -1750,6 +1759,7 @@ impl AggregateFunc {
                 min_datum::<'a, I, CheckedTimestamp<DateTime<Utc>>>(datums)
             }
             AggregateFunc::MinInterval => min_datum::<'a, I, Interval>(datums),
+            AggregateFunc::MinTime => min_datum::<'a, I, NaiveTime>(datums),
             AggregateFunc::SumInt16 => sum_datum::<'a, I, i16, i64>(datums),
             AggregateFunc::SumInt32 => sum_datum::<'a, I, i32, i64>(datums),
             AggregateFunc::SumInt64 => sum_datum::<'a, I, i64, i128>(datums),
@@ -2304,6 +2314,7 @@ where
             AggregateFunc::MaxTimestamp => f.write_str("max"),
             AggregateFunc::MaxTimestampTz => f.write_str("max"),
             AggregateFunc::MaxInterval => f.write_str("max"),
+            AggregateFunc::MaxTime => f.write_str("max"),
             AggregateFunc::MinNumeric => f.write_str("min"),
             AggregateFunc::MinInt16 => f.write_str("min"),
             AggregateFunc::MinInt32 => f.write_str("min"),
@@ -2320,6 +2331,7 @@ where
             AggregateFunc::MinTimestamp => f.write_str("min"),
             AggregateFunc::MinTimestampTz => f.write_str("min"),
             AggregateFunc::MinInterval => f.write_str("min"),
+            AggregateFunc::MinTime => f.write_str("min"),
             AggregateFunc::SumInt16 => f.write_str("sum"),
             AggregateFunc::SumInt32 => f.write_str("sum"),
             AggregateFunc::SumInt64 => f.write_str("sum"),

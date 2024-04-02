@@ -173,18 +173,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#25937 (base64 decode with new line and tab)")
 
-        if db_function.function_name_in_lower_case in [
-            "min",
-            "max",
-        ] and expression.matches(
-            partial(
-                involves_data_type_category,
-                data_type_category=DataTypeCategory.DATE_TIME,
-            ),
-            True,
-        ):
-            return YesIgnore("#25959 (wrong type returned)")
-
         return NoIgnore()
 
     def _matches_problematic_operation_invocation(

@@ -15,7 +15,6 @@ use std::rc::Rc;
 use differential_dataflow::{Collection, Hashable};
 use mz_compute_client::protocol::response::CopyToResponse;
 use mz_compute_types::sinks::{ComputeSinkDesc, CopyToS3OneshotSinkConnection};
-use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -60,22 +59,30 @@ where
             }
         };
 
-        // Move all the data to a single worker and consolidate
-        // TODO(#7256): split the data among worker to some number of buckets (either static or configurable
-        // by the user) to split the load across the cluster.
-        let scope = sinked_collection.scope();
-        let active_worker = usize::cast_from(sink_id.hashed()) % scope.peers();
-        let exchange = Exchange::new(move |_| u64::cast_from(active_worker));
-        let error_exchange = Exchange::new(move |_| u64::cast_from(active_worker));
+        // Splitting the data across a known number of batches to distribute load across the cluster.
+        // Each worker will be handling data belonging to 0 or more batches. We are doing this so that
+        // we can write files to s3 deterministically across different replicas of different sizes
+        // using the batch ID. Each worker will split a batch's data into 1 or more
+        // files based on the user provided `MAX_FILE_SIZE`.
+        let batch_count = self.output_batch_count;
+
+        // TODO(#25835): Note, even though we do get deterministic output currently
+        // after the exchange below, it's not explicitly supported and we should change it.
         let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
-            &sinked_collection.map(|row| (row, ())),
-            exchange,
+            &sinked_collection.map(move |row| {
+                let batch = row.hashed() % batch_count;
+                ((row, batch), ())
+            }),
+            Exchange::new(move |(((_, batch), _), _, _)| *batch),
             "Consolidated COPY TO S3 input",
         );
 
         let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
-            &err_collection.map(|row| (row, ())),
-            error_exchange,
+            &err_collection.map(move |row| {
+                let batch = row.hashed() % batch_count;
+                ((row, batch), ())
+            }),
+            Exchange::new(move |(((_, batch), _), _, _)| *batch),
             "Consolidated COPY TO S3 error",
         );
 
@@ -87,7 +94,6 @@ where
             connection_context,
             self.aws_connection.clone(),
             self.connection_id,
-            active_worker,
             one_time_callback,
         );
 

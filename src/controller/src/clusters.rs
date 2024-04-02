@@ -197,6 +197,16 @@ impl ReplicaLocation {
             ReplicaLocation::Unmanaged(_) => false,
         }
     }
+
+    pub fn workers(&self) -> usize {
+        let workers_per_process = match self {
+            ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
+                allocation.workers
+            }
+            ReplicaLocation::Unmanaged(UnmanagedReplicaLocation { workers, .. }) => *workers,
+        };
+        workers_per_process * self.num_processes()
+    }
 }
 
 /// The "role" of a cluster, which is currently used to determine the

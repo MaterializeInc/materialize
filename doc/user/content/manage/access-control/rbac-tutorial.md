@@ -88,7 +88,7 @@ privileges the role needs.
 avoid impacting other environments:
 
    ```sql
-   CREATE CLUSTER dev_cluster (SIZE = '3xsmall');
+   CREATE CLUSTER dev_cluster (SIZE = '25cc');
    ```
 
 1. Change into the example cluster:

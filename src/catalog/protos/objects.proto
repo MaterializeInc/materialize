@@ -641,6 +641,12 @@ message AuditLogEventV1 {
     FullNameV1 name = 2;
   }
 
+    message AlterRetainHistoryV1 {
+        string id = 1;
+        optional string old_history = 2;
+        optional string new_history = 3;
+    }
+
   uint64 id = 1;
   EventType event_type = 2;
   ObjectType object_type = 3;
@@ -672,6 +678,7 @@ message AuditLogEventV1 {
     RenameSchemaV1 rename_schema_v1 = 27;
     UpdateItemV1 update_item_v1 = 26;
     CreateSourceSinkV3 create_source_sink_v3 = 29;
+        AlterRetainHistoryV1 alter_retain_history_v1 = 30;
   }
 }
 

@@ -26,7 +26,8 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ScalarType, Timestamp};
 use mz_sql::ast::{
-    ConstantVisitor, CopyRelation, CopyStatement, Raw, Statement, SubscribeStatement,
+    AlterSourceAction, ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw,
+    Statement, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -633,11 +634,8 @@ impl Coordinator {
         // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
         // occurs.
         let (stmt, resolved_ids) = match stmt {
-            // `CREATE SOURCE` statements must be purified off the main
-            // coordinator thread of control.
-            stmt @ (Statement::CreateSource(_)
-            | Statement::AlterSource(_)
-            | Statement::CreateSink(_)) => {
+            // Various statements must be purified off the main coordinator thread of control.
+            stmt if Self::must_spawn_purification(&stmt) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
                 let catalog = self.owned_catalog();
@@ -790,6 +788,38 @@ impl Coordinator {
             Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
             Err(e) => ctx.retire(Err(e)),
         }
+    }
+
+    /// Whether the statement must be purified off of the Coordinator thread.
+    fn must_spawn_purification(stmt: &Statement<Aug>) -> bool {
+        // `CREATE` and `ALTER` `SOURCE` and `SINK` statements must be purified off the main
+        // coordinator thread.
+        if !matches!(
+            stmt,
+            Statement::CreateSource(_) | Statement::AlterSource(_) | Statement::CreateSink(_)
+        ) {
+            return false;
+        }
+
+        // However `ALTER SOURCE RETAIN HISTORY` should be excluded from off-thread purification.
+        if let Statement::AlterSource(stmt) = stmt {
+            let names: Vec<CreateSourceOptionName> = match &stmt.action {
+                AlterSourceAction::SetOptions(options) => {
+                    options.iter().map(|o| o.name.clone()).collect()
+                }
+                AlterSourceAction::ResetOptions(names) => names.clone(),
+                _ => vec![],
+            };
+            if !names.is_empty()
+                && names
+                    .iter()
+                    .all(|n| matches!(n, CreateSourceOptionName::RetainHistory))
+            {
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Chooses a timestamp for `mz_now()`, if `mz_now()` occurs in the `with_options` of the materialized view.

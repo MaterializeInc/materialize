@@ -53,6 +53,7 @@ use crate::durable::{
     DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
     SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
+use crate::memory::objects::{StateUpdate, StateUpdateKind};
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
 #[derive(Derivative)]
@@ -1357,14 +1358,6 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
-    pub fn get_databases(&self) -> impl Iterator<Item = Database> {
-        self.databases
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
     pub fn get_schemas(&self) -> impl Iterator<Item = Schema> {
         self.schemas
             .items()
@@ -1441,27 +1434,14 @@ impl<'a> Transaction<'a> {
             .map(|value| value.value.clone())
     }
 
-    // TODO(jkosh44) Can be removed after v0.92.X
-    pub fn clean_up_stash_catalog(&mut self) -> Result<(), CatalogError> {
-        self.configs.set(
-            ConfigKey {
-                key: "tombstone".to_string(),
-            },
-            None,
-        )?;
-        self.configs.set(
-            ConfigKey {
-                key: "catalog_kind".to_string(),
-            },
-            None,
-        )?;
-        self.system_configurations.set(
-            ServerConfigurationKey {
-                name: "catalog_kind".to_string(),
-            },
-            None,
-        )?;
-        Ok(())
+    pub fn get_updates(&self) -> impl Iterator<Item = StateUpdate> {
+        self.databases
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .map(StateUpdateKind::Database)
+            .map(|kind| StateUpdate { kind, diff: 1 })
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {

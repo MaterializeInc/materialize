@@ -13,6 +13,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
+use mz_ore::future::{InTask, OreFutureExt};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::ContextCreationErrorExt;
 use mz_storage_types::sinks::KafkaSinkConnection;
@@ -109,7 +110,7 @@ async fn discover_topic_configs<C: ClientContext>(
     })?;
 
     if config.entries.is_empty() {
-        bail!("read empty custer configuration; do we have DescribeConfigs permissions?")
+        bail!("read empty cluster configuration; do we have DescribeConfigs permissions?")
     }
 
     for entry in config.entries {
@@ -207,6 +208,8 @@ pub async fn ensure_kafka_topic(
             storage_configuration,
             MzClientContext::default(),
             &BTreeMap::new(),
+            // Only called from `mz_storage`.
+            InTask::Yes,
         )
         .await
         .add_context("creating admin client failed")?;
@@ -275,9 +278,9 @@ pub async fn ensure_kafka_topic(
 /// TODO(benesch): do we need to delete the Kafka topic if publishing the
 /// schema fails?
 pub async fn publish_kafka_schemas(
-    ccsr: &mz_ccsr::Client,
-    topic: &str,
-    key_schema: Option<&str>,
+    ccsr: mz_ccsr::Client,
+    topic: String,
+    key_schema: Option<String>,
     key_schema_type: Option<mz_ccsr::SchemaType>,
     value_schema: &str,
     value_schema_type: mz_ccsr::SchemaType,
@@ -296,9 +299,13 @@ pub async fn publish_kafka_schemas(
         let key_schema_type =
             key_schema_type.ok_or_else(|| anyhow!("expected schema type for key schema"))?;
         Some(
-            ccsr.publish_schema(&format!("{}-key", topic), key_schema, key_schema_type, &[])
-                .await
-                .context("unable to publish key schema to registry in kafka sink")?,
+            async move {
+                ccsr.publish_schema(&format!("{}-key", topic), &key_schema, key_schema_type, &[])
+                    .await
+            }
+            .run_in_task(|| "publish_kafka_schemas".to_string())
+            .await
+            .context("unable to publish key schema to registry in kafka sink")?,
         )
     } else {
         None

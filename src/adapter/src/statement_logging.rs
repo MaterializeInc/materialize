@@ -183,7 +183,6 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
 
             ExecuteResponse::AlteredDefaultPrivileges
             | ExecuteResponse::AlteredObject(_)
-            | ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredRole
             | ExecuteResponse::AlteredSystemConfiguration
             | ExecuteResponse::ClosedCursor

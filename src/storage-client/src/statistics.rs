@@ -293,13 +293,47 @@ impl From<bool> for Boolean {
     }
 }
 
-/// A numerical gauge that is never resets.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
-pub struct Total(u64);
+/// A numerical gauge that never regresses.
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Total {
+    /// Defaults to 0. Can be skipped on updates from clusterd.
+    total: Option<u64>,
+    /// If provided, it is bumped on regressions, as opposed to `error!`
+    /// logs.
+    #[serde(skip)]
+    regressions: Option<
+        mz_ore::metrics::DeleteOnDropCounter<'static, prometheus::core::AtomicU64, Vec<String>>,
+    >,
+}
 
-impl From<u64> for Total {
-    fn from(f: u64) -> Self {
-        Total(f)
+impl From<Option<u64>> for Total {
+    fn from(f: Option<u64>) -> Self {
+        Total {
+            total: f,
+            regressions: None,
+        }
+    }
+}
+
+impl Clone for Total {
+    fn clone(&self) -> Self {
+        Self {
+            total: self.total,
+            regressions: None,
+        }
+    }
+}
+
+impl PartialEq for Total {
+    fn eq(&self, other: &Self) -> bool {
+        self.total == other.total
+    }
+}
+
+impl Total {
+    /// Pack this `Total` into a `u64`, defaulting to 0.
+    fn pack(&self) -> u64 {
+        self.total.unwrap_or_default()
     }
 }
 
@@ -309,21 +343,46 @@ impl StorageMetric for Total {
         I: IntoIterator<Item = &'a Self>,
         Self: Sized + 'a,
     {
-        // Sum across workers.
-        Self(values.into_iter().map(|c| c.0).sum())
+        // Sum across workers, if all workers have participated
+        // a non-`None` value.
+        let mut any_none = false;
+
+        let inner = values
+            .into_iter()
+            .filter_map(|i| {
+                any_none |= i.total.is_none();
+                i.total.as_ref()
+            })
+            .sum();
+
+        // If any are none, we can't aggregate.
+        // self.regressions is only meaningful in incorporation.
+        Self {
+            total: (!any_none).then_some(inner),
+            regressions: None,
+        }
     }
 
     fn incorporate(&mut self, other: Self, field_name: &'static str) {
-        // A `Total` regressing to is a bug.
-        if other.0 < self.0 {
-            tracing::error!(
-                "total gauge {field_name} erroneously regressed from {} to {}",
-                self.0,
-                other.0
-            );
-            return;
+        match (&mut self.total, other.total) {
+            (_, None) => {}
+            (None, Some(other)) => self.total = Some(other),
+            (Some(this), Some(other)) => {
+                if other < *this {
+                    if let Some(metric) = &self.regressions {
+                        metric.inc()
+                    } else {
+                        tracing::error!(
+                            "total gauge {field_name} erroneously regressed from {} to {}",
+                            this,
+                            other
+                        );
+                    }
+                    return;
+                }
+                *this = other
+            }
         }
-        self.0 = other.0;
     }
 }
 
@@ -355,61 +414,13 @@ impl<T: StorageMetric> StorageMetric for Gauge<T> {
     }
 }
 
-/// A gauge that has semantics based on the `StorageMetric` implementation of its inner.
-/// Skippable gauges do not need to be given a value when updated, defaulting to maintaining
-/// the default value.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SkippableGauge<T>(Option<T>);
-
-impl<T> SkippableGauge<T> {
-    // This can't be a `From` impl cause of coherence issues :(
-    pub fn gauge<F>(f: Option<F>) -> Self
-    where
-        T: From<F>,
-    {
-        SkippableGauge(f.map(Into::into))
-    }
-}
-
-impl<T: StorageMetric + Default + Clone + std::fmt::Debug> SkippableGauge<T> {
-    fn summarize<'a, I>(values: I) -> Self
-    where
-        I: IntoIterator<Item = &'a Self>,
-        Self: Sized + 'a,
-    {
-        let mut any_none = false;
-
-        let inner = T::summarize(values.into_iter().filter_map(|i| {
-            any_none |= i.0.is_none();
-            i.0.as_ref()
-        }));
-
-        // If any are none, we can't aggregate.
-        Self((!any_none).then_some(inner))
-    }
-
-    fn incorporate(&mut self, other: Self, field_name: &'static str) {
-        match (&mut self.0, other.0) {
-            (_, None) => {}
-            (None, Some(other)) => self.0 = Some(other),
-            (Some(this), Some(other)) => this.incorporate(other, field_name),
-        }
-    }
-}
-
-impl<T: Default + Clone> SkippableGauge<T> {
-    fn pack(&self) -> T {
-        self.0.clone().unwrap_or_default()
-    }
-}
-
 /// A trait that abstracts over user-facing statistics objects, used
 /// by `spawn_statistics_scraper`.
 pub trait PackableStats {
     /// Pack `self` into the `Row`.
     fn pack(&self, packer: mz_repr::RowPacker<'_>);
     /// Unpack a `Row` back into a `Self`.
-    fn unpack(row: Row) -> (GlobalId, Self);
+    fn unpack(row: Row, metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self);
 }
 
 /// An update as reported from a storage instance. The semantics
@@ -431,8 +442,26 @@ pub struct SourceStatisticsUpdate {
     pub snapshot_records_staged: Gauge<ResettingNullableTotal>,
 
     pub snapshot_committed: Gauge<Boolean>,
-    pub offset_known: SkippableGauge<Total>,
-    pub offset_committed: SkippableGauge<Total>,
+    // `offset_known` is enriched with a counter in `unpack` and `with_metrics` that is
+    // bumped whenever it regresses. This is distinct from `offset_committed`, which
+    // `error!` logs.
+    //
+    // `offset_committed` is entirely in our control: it is calculated from source frontiers
+    // that are guaranteed to never go backwards. Therefore, it regresses is a bug in how we
+    // calculate it.
+    //
+    // `offset_known` is calculated based on information the upstream service of the source gives
+    // us. This is meaningfully less reliable, and can cause regressions in the value. Some known
+    // cases that cause this are:
+    // - A Kafka topic being deleted and recreated.
+    // - A Postgres source being restored to a backup.
+    //
+    // We attempt to communicate both of these to the user using the source status system tables.
+    // While emitting a regressed `offset_known` can be at least partially avoided in the source
+    // implementation, we avoid noisy sentry alerts by instead bumping a counter that can be used
+    // if a scenario requires more investigation.
+    pub offset_known: Gauge<Total>,
+    pub offset_committed: Gauge<Total>,
 }
 
 impl SourceStatisticsUpdate {
@@ -466,10 +495,8 @@ impl SourceStatisticsUpdate {
             snapshot_committed: Gauge::summarize(
                 values().into_iter().map(|s| &s.snapshot_committed),
             ),
-            offset_known: SkippableGauge::summarize(values().into_iter().map(|s| &s.offset_known)),
-            offset_committed: SkippableGauge::summarize(
-                values().into_iter().map(|s| &s.offset_committed),
-            ),
+            offset_known: Gauge::summarize(values().into_iter().map(|s| &s.offset_known)),
+            offset_committed: Gauge::summarize(values().into_iter().map(|s| &s.offset_committed)),
         }
     }
 
@@ -512,6 +539,12 @@ impl SourceStatisticsUpdate {
         offset_known.incorporate(other.offset_known, "offset_known");
         offset_committed.incorporate(other.offset_committed, "offset_committed");
     }
+
+    /// Enrich statistics that use prometheus metrics.
+    pub fn with_metrics(mut self, metrics: &crate::metrics::StorageControllerMetrics) -> Self {
+        self.offset_known.0.regressions = Some(metrics.regressed_offset_known(self.id));
+        self
+    }
 }
 
 impl PackableStats for SourceStatisticsUpdate {
@@ -537,13 +570,13 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.snapshot_records_staged.0 .0));
         // Gauges
         packer.push(Datum::from(self.snapshot_committed.0 .0));
-        packer.push(Datum::from(self.offset_known.pack().0));
-        packer.push(Datum::from(self.offset_committed.pack().0));
+        packer.push(Datum::from(self.offset_known.0.pack()));
+        packer.push(Datum::from(self.offset_committed.0.pack()));
     }
 
-    fn unpack(row: Row) -> (GlobalId, Self) {
+    fn unpack(row: Row, metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
         let mut iter = row.iter();
-        let s = Self {
+        let mut s = Self {
             id: iter.next().unwrap().unwrap_str().parse().unwrap(),
 
             messages_received: iter.next().unwrap().unwrap_uint64().into(),
@@ -566,10 +599,11 @@ impl PackableStats for SourceStatisticsUpdate {
             ),
 
             snapshot_committed: Gauge::gauge(iter.next().unwrap().unwrap_bool()),
-            offset_known: SkippableGauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
-            offset_committed: SkippableGauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            offset_known: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            offset_committed: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
         };
 
+        s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
         (s.id, s)
     }
 }
@@ -591,8 +625,8 @@ impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
             snapshot_records_staged: self.snapshot_records_staged.0 .0,
 
             snapshot_committed: self.snapshot_committed.0 .0,
-            offset_known: self.offset_known.0.clone().map(|i| i.0),
-            offset_committed: self.offset_committed.0.clone().map(|i| i.0),
+            offset_known: self.offset_known.0.total,
+            offset_committed: self.offset_committed.0.total,
         }
     }
 
@@ -614,8 +648,8 @@ impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
             snapshot_records_staged: Gauge::gauge(proto.snapshot_records_staged),
 
             snapshot_committed: Gauge::gauge(proto.snapshot_committed),
-            offset_known: SkippableGauge::gauge(proto.offset_known),
-            offset_committed: SkippableGauge::gauge(proto.offset_committed),
+            offset_known: Gauge::gauge(proto.offset_known),
+            offset_committed: Gauge::gauge(proto.offset_committed),
         })
     }
 }
@@ -685,7 +719,7 @@ impl PackableStats for SinkStatisticsUpdate {
         packer.push(Datum::from(self.bytes_committed.0));
     }
 
-    fn unpack(row: Row) -> (GlobalId, Self) {
+    fn unpack(row: Row, _metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
         let mut iter = row.iter();
         let s = Self {
             // Id
@@ -752,8 +786,8 @@ impl WebhookStatistics {
             snapshot_records_known: Gauge::gauge(None),
             snapshot_records_staged: Gauge::gauge(None),
             snapshot_committed: Gauge::gauge(true),
-            offset_known: SkippableGauge::gauge(None::<Total>),
-            offset_committed: SkippableGauge::gauge(None::<Total>),
+            offset_known: Gauge::gauge(None::<u64>),
+            offset_committed: Gauge::gauge(None::<u64>),
         }
     }
 }

@@ -142,6 +142,7 @@ use anyhow::bail;
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
 use mz_expr::MirScalarExpr;
+use mz_ore::future::InTask;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, PostgresError};
@@ -266,8 +267,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let connection_config = connection
                 .connection
                 .config(
-                    &*config.config.connection_context.secrets_reader,
+                    &config.config.connection_context.secrets_reader,
                     &config.config,
+                    InTask::Yes,
                 )
                 .await?;
             let task_name = format!("timely-{worker_id} PG snapshotter");

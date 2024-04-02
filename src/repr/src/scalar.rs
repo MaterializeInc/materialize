@@ -550,6 +550,31 @@ impl TryFrom<Datum<'_>> for Option<Interval> {
     }
 }
 
+impl TryFrom<Datum<'_>> for NaiveTime {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Time(t) => Ok(t),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<NaiveTime> {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Time(t) => Ok(Some(t)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {

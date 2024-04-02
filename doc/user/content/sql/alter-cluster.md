@@ -29,10 +29,10 @@ ALTER CLUSTER c1 SET (REPLICATION FACTOR 2);
 
 ### Size
 
-Alter cluster to size `xsmall`:
+Alter cluster to size `100cc`:
 
 ```sql
-ALTER CLUSTER c1 SET (SIZE 'xsmall');
+ALTER CLUSTER c1 SET (SIZE '100cc');
 ```
 
 ## Converting unmanaged to managed clusters
