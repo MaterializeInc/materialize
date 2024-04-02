@@ -24,6 +24,8 @@ class Minio(Service):
         image: str = "minio/minio:RELEASE.2023-07-07T07-13-57Z",
         setup_materialize: bool = False,
         additional_directories: list[str] = [],
+        ports: list[int | str] = [9000, 9001],
+        allow_host_ports: bool = False,
     ) -> None:
         # We can pre-create buckets in minio by creating subdirectories in
         # /data. A bit gross to do this via a shell command, but it's net
@@ -39,7 +41,8 @@ class Minio(Service):
                 "entrypoint": ["sh", "-c"],
                 "command": [command],
                 "image": image,
-                "ports": [9000, 9001],
+                "ports": ports,
+                "allow_host_ports": allow_host_ports,
                 "environment": ["MINIO_STORAGE_CLASS_STANDARD=EC:0"],
                 "healthcheck": {
                     "test": [
