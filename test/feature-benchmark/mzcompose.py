@@ -389,16 +389,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
     )
 
-    # Build the list of scenarios to run
-    root_scenario = globals()[args.root_scenario]
+    specified_root_scenario = globals()[args.root_scenario]
 
-    if root_scenario.__subclasses__():
+    if specified_root_scenario.__subclasses__():
         selected_scenarios = sorted(
-            [s for s in all_subclasses(root_scenario) if not s.__subclasses__()],
+            # collect all leafs of the specified root scenario
+            [
+                s
+                for s in all_subclasses(specified_root_scenario)
+                if not s.__subclasses__()
+            ],
             key=repr,
         )
     else:
-        selected_scenarios = [root_scenario]
+        # specified root scenario is a leaf
+        selected_scenarios = [specified_root_scenario]
 
     dependencies = ["postgres", "mysql"]
 
