@@ -29,13 +29,21 @@ use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::S3UploadInfo;
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{Broadcast, ConnectLoop, Feedback};
+use mz_timely_util::builder_async::{
+    AsyncInputHandle, AsyncOutputHandle, Disconnected, Event as AsyncEvent,
+    OperatorBuilder as AsyncOperatorBuilder,
+};
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::operators::{Broadcast, Capability, ConnectLoop, Feedback};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::{debug, info};
+
+/// The key used to write a sentinel file to the S3 bucket path to indicate that
+/// the upload is in progress but is not yet complete.
+const INCOMPLETE_SENTINEL_KEY: &str = "INCOMPLETE";
 
 /// Copy the rows from the input collection to s3.
 /// `onetime_callback` is used to send the final count of rows uploaded to s3,
@@ -58,43 +66,38 @@ pub fn copy_to<G, F>(
 {
     let mut scope = input_collection.scope();
     let worker_id = scope.index();
-    let is_leader = usize::cast_from((sink_id, "leader").hashed()) % scope.peers() == worker_id;
+    let num_workers = scope.peers();
+    let snapshot_leader_id = usize::cast_from((sink_id, "leader").hashed()) % num_workers;
+    let is_leader = worker_id == snapshot_leader_id;
 
     let mut builder = AsyncOperatorBuilder::new("CopyToS3".to_string(), scope.clone());
 
-    let mut input_handle = builder.new_disconnected_input(&input_collection.inner, Pipeline);
-    let mut error_handle = builder.new_disconnected_input(&err_collection.inner, Pipeline);
+    let input_handle = builder.new_disconnected_input(&input_collection.inner, Pipeline);
+    let error_handle = builder.new_disconnected_input(&err_collection.inner, Pipeline);
 
     // Signal mechanism from leader to all workers to start the upload after it has verified
     // the integrity of the S3 bucket path.
     // A `()` datum along this edge indicates success. A `[]` frontier indicates failure. Note that
     // this is disconnected and has a `0` summary, as its unrelated to the frontier of the output.
-    let (mut start_handle, start_stream) = builder.new_output();
+    let (start_handle, start_stream) = builder.new_output();
     let (start_feedback_handle, start_feedback_stream) = scope.feedback(Default::default());
-    let mut start_input = builder.new_disconnected_input(&start_feedback_stream, Pipeline);
+    let start_input = builder.new_disconnected_input(&start_feedback_stream, Pipeline);
     start_stream.broadcast().connect_loop(start_feedback_handle);
 
-    builder.build(move |caps| async move {
-        let [start_signal_cap] = caps.try_into().unwrap();
+    // Signal mechanism from workers to leader to indicate they have completed their uploads,
+    // so that the leader can perform any cleanup necessary.
+    let (mut completed_handle, completed_stream) = builder.new_output();
+    let (completed_feedback_handle, completed_feedback_stream) = scope.feedback(Default::default());
+    let mut completed_input = builder.new_disconnected_input(
+        &completed_feedback_stream,
+        Exchange::new(move |_| u64::cast_from(snapshot_leader_id)),
+    );
+    completed_stream
+        .broadcast()
+        .connect_loop(completed_feedback_handle);
 
-        while let Some(event) = error_handle.next().await {
-            match event {
-                AsyncEvent::Data(_ts, data) => {
-                    for (((error, _), _), ts, _) in data {
-                        if !up_to.less_equal(&ts) {
-                            onetime_callback(Err(error.to_string()));
-                            return;
-                        }
-                    }
-                }
-                AsyncEvent::Progress(frontier) => {
-                    if PartialOrder::less_equal(&up_to, &frontier) {
-                        // No error, break from loop and proceed
-                        break;
-                    }
-                }
-            }
-        }
+    builder.build(move |caps| async move {
+        let [start_signal_cap, completed_signal_cap] = caps.try_into().unwrap();
 
         let sdk_config = match aws_connection
             .load_sdk_config(&connection_context, connection_id, InTask::Yes)
@@ -107,115 +110,234 @@ pub fn copy_to<G, F>(
             }
         };
 
+        // Run the logic to read from the input and error streams, and write to S3.
+        let mut res = handle_inputs_and_upload(
+            &sink_id,
+            &sdk_config,
+            &connection_details,
+            is_leader,
+            worker_id,
+            start_signal_cap,
+            start_handle,
+            start_input,
+            input_handle,
+            error_handle,
+            up_to,
+        )
+        .await
+        .map_err(|e| e.to_string());
+
+        // Perform cleanup tasks and send the final result to the onetime_callback. If the worker
+        // is the leader, we wait for all workers to complete their uploads and then remove
+        // the INCOMPLETE sentinel file (if it exists).
+        match res {
+            // If this worker successfully completed the upload, send a message to the leader
+            Ok(_) => completed_handle.give(&completed_signal_cap, ()).await,
+            Err(ref err) => info!(%sink_id, %worker_id, "failed to complete upload: {}", err),
+        }
+        drop(completed_signal_cap);
+
+        if is_leader {
+            let mut worker_received_count = 0;
+            info!(%sink_id, %worker_id, "waiting to receive completed events from workers");
+            loop {
+                match completed_input.next().await {
+                    Some(AsyncEvent::Data(_ts, _data)) => {
+                        worker_received_count += 1;
+                        if worker_received_count == num_workers {
+                            // Remove the INCOMPLETE sentinel file to indicate that the upload is complete.
+                            // TODO: Should the leader also write a manifest of all the files uploaded?
+                            let client = mz_aws_util::s3::new_client(&sdk_config);
+
+                            let (bucket, path_prefix) = CopyToS3Uploader::extract_s3_bucket_path(
+                                &connection_details.prefix,
+                            );
+
+                            info!(%sink_id, %worker_id, "removing INCOMPLETE sentinel file");
+                            match mz_aws_util::s3::delete_object(
+                                &client,
+                                &bucket,
+                                &format!("{path_prefix}/{INCOMPLETE_SENTINEL_KEY}"),
+                            )
+                            .await
+                            {
+                                Ok(res) => break,
+                                Err(e) => {
+                                    info!(%sink_id, %worker_id, "error removing sentinel file: {}", e);
+                                    res = Err(e.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Some(AsyncEvent::Progress(_)) => {}
+                    // At least one worker failed to complete the upload since the stream
+                    // ended before all workers sent a completion signal, so leave
+                    // the INCOMPLETE sentinel file in place.
+                    None => {
+                        info!(%sink_id, %worker_id, "workers exited without successfully uploading");
+                        break
+                    },
+                }
+            }
+        }
+        onetime_callback(res);
+    });
+}
+
+/// The main operator logic that reads from the input and error streams, and writes to S3.
+/// This is split into a separate method to simplify error-handling.
+async fn handle_inputs_and_upload(
+    sink_id: &GlobalId,
+    sdk_config: &SdkConfig,
+    connection_details: &S3UploadInfo,
+    is_leader: bool,
+    worker_id: usize,
+    start_signal_cap: Capability<Timestamp>,
+    mut start_handle: AsyncOutputHandle<Timestamp, Vec<()>, TeeCore<Timestamp, Vec<()>>>,
+    mut start_input: AsyncInputHandle<Timestamp, Vec<()>, Disconnected>,
+    mut input_handle: AsyncInputHandle<
+        Timestamp,
+        Vec<(((Row, u64), ()), Timestamp, i64)>,
+        Disconnected,
+    >,
+    mut error_handle: AsyncInputHandle<
+        Timestamp,
+        Vec<(((DataflowError, u64), ()), Timestamp, i64)>,
+        Disconnected,
+    >,
+    up_to: Antichain<Timestamp>,
+) -> Result<u64, anyhow::Error> {
+    while let Some(event) = error_handle.next().await {
+        match event {
+            AsyncEvent::Data(_ts, data) => {
+                for (((error, _), _), ts, _) in data {
+                    if !up_to.less_equal(&ts) {
+                        Err(error)?;
+                    }
+                }
+            }
+            AsyncEvent::Progress(frontier) => {
+                if PartialOrder::less_equal(&up_to, &frontier) {
+                    // No error, break from loop and proceed
+                    break;
+                }
+            }
+        }
+    }
+
+    if is_leader {
         // Check that the S3 bucket path is empty before beginning the upload.
         // We check the S3 bucket path from a single worker to avoid a race
         // between checking the path vs workers uploading objects to the path.
         // We also race against other replicas running the same sink, so we allow
         // for objects to exist in the path if they were created by this sink
         // (identified by the sink_id prefix).
-        if is_leader {
-            info!(%worker_id, "leader worker verifying S3 bucket path is empty");
-            let (bucket, path_prefix) =
-                CopyToS3Uploader::extract_s3_bucket_path(&connection_details.prefix);
-            let client = mz_aws_util::s3::new_client(&sdk_config);
-            match mz_aws_util::s3::list_bucket_path(&client, &bucket, &path_prefix).await {
-                Ok(Some(files)) => {
-                    let sink_id_prefix = format!("batch-{}-", sink_id);
-                    let files = files
-                        .iter()
-                        .filter(|file| !file.starts_with(&sink_id_prefix))
-                        .collect::<Vec<_>>();
-                    if !files.is_empty() {
-                        onetime_callback(Err(format!(
-                            "S3 bucket path is not empty, contains: {:?}",
-                            files
-                        )));
-                        return;
-                    }
-                }
-                Err(e) => {
-                    onetime_callback(Err(e.to_string()));
+        info!(%sink_id, %worker_id, "verifying S3 bucket path is empty");
+
+        let (bucket, path_prefix) =
+            CopyToS3Uploader::extract_s3_bucket_path(&connection_details.prefix);
+
+        let client = mz_aws_util::s3::new_client(sdk_config);
+        match mz_aws_util::s3::list_bucket_path(&client, &bucket, &path_prefix).await {
+            Ok(Some(files)) => {
+                let sink_id_prefix = format!("batch-{}-", sink_id);
+                let files = files
+                    .iter()
+                    .filter(|file| !file.starts_with(&sink_id_prefix))
+                    .collect::<Vec<_>>();
+                if !files.is_empty() {
+                    onetime_callback(Err(format!(
+                        "S3 bucket path is not empty, contains: {:?}",
+                        files
+                    )));
                     return;
                 }
-                _ => {}
             }
-            // Send the signal to all workers to start the upload.
-            start_handle.give(&start_signal_cap, ()).await;
-            drop(start_signal_cap);
-        } else {
-            info!(%worker_id, "non-leader worker waiting for start signal from leader");
-            // Workers wait for the signal from the leader to start the upload.
-            drop(start_signal_cap);
-            loop {
-                match start_input.next().await {
-                    Some(AsyncEvent::Data(_ts, _data)) => {
-                        // received the signal from the leader, break from loop and proceed
-                        break;
-                    }
-                    Some(AsyncEvent::Progress(_)) => continue,
-                    None => {
-                        onetime_callback(Err(
-                            "Failed to receive start signal from leader".to_string()
-                        ));
-                        return;
-                    }
-                }
+            Err(e) => {
+                onetime_callback(Err(e.to_string()));
+                return;
             }
+            _ => {}
         }
 
-        // Map of an uploader per batch.
-        let mut s3_uploaders: BTreeMap<u64, CopyToS3Uploader> = BTreeMap::new();
-        let mut row_count = 0;
-        while let Some(event) = input_handle.next().await {
-            match event {
-                AsyncEvent::Data(_ts, data) => {
-                    for (((row, batch), ()), ts, diff) in data {
-                        if !up_to.less_equal(&ts) {
-                            if diff < 0 {
-                                onetime_callback(Err(format!(
-                                    "Invalid data in source errors, saw retractions ({}) for row that does not exist", diff * -1,
-                                )));
-                                return;
-                            }
-                            row_count += u64::try_from(diff).unwrap();
-                            let uploader = s3_uploaders
-                                .entry(batch)
-                                .or_insert_with(|| {
-                                    debug!("worker_id: {} will be handling batch: {}", worker_id, batch);
-                                    let file_name_prefix = format!("batch-{}-{:04}", &sink_id, batch);
-                                    CopyToS3Uploader::new(sdk_config.clone(), connection_details.clone(), file_name_prefix)
-                                });
-                            for _ in 0..diff {
-                                match uploader.append_row(&row).await {
-                                    Ok(()) => {}
-                                    Err(e) => {
-                                        onetime_callback(Err(e.to_string()));
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                    }
+        // Write an INCOMPLETE sentinel file to the S3 bucket path to indicate that
+        // the upload is in progress and is not yet complete.
+        info!(%sink_id, %worker_id, "uploading INCOMPLETE sentinel file");
+        mz_aws_util::s3::upload_object(
+            &client,
+            &bucket,
+            &format!("{path_prefix}/{INCOMPLETE_SENTINEL_KEY}"),
+            vec![],
+        )
+        .await?;
+
+        // Send the signal to all workers to start the upload.
+        start_handle.give(&start_signal_cap, ()).await;
+        drop(start_signal_cap);
+    } else {
+        info!(%sink_id, %worker_id, "waiting for start signal from leader");
+        // Workers wait for the signal from the leader to start the upload.
+        drop(start_signal_cap);
+        loop {
+            match start_input.next().await {
+                Some(AsyncEvent::Data(_ts, _data)) => {
+                    // received the signal from the leader, break from loop and proceed
+                    break;
                 }
-                AsyncEvent::Progress(frontier) => {
-                    if PartialOrder::less_equal(&up_to, &frontier) {
-                        for uploader in s3_uploaders.values_mut() {
-                            match uploader.flush().await {
-                                Ok(()) => {}
-                                Err(e) => {
-                                    onetime_callback(Err(e.to_string()));
-                                    return;
-                                }
-                            }
-                        }
-                        // We are done, send the final count.
-                        onetime_callback(Ok(row_count));
-                        return;
-                    }
+                Some(AsyncEvent::Progress(_)) => continue,
+                None => {
+                    Err(anyhow::anyhow!(
+                        "Failed to receive start signal from leader"
+                    ))?;
                 }
             }
         }
-    });
+    }
+
+    // Map of an uploader per batch.
+    let mut s3_uploaders: BTreeMap<u64, CopyToS3Uploader> = BTreeMap::new();
+    let mut row_count = 0;
+    while let Some(event) = input_handle.next().await {
+        match event {
+            AsyncEvent::Data(_ts, data) => {
+                for (((row, batch), ()), ts, diff) in data {
+                    if !up_to.less_equal(&ts) {
+                        if diff < 0 {
+                            Err(anyhow::anyhow!(
+                                "Invalid data in source errors, saw retractions ({}) for \
+                                row that does not exist",
+                                diff * -1,
+                            ))?;
+                        }
+                        row_count += u64::try_from(diff).unwrap();
+                        let uploader = s3_uploaders.entry(batch).or_insert_with(|| {
+                            debug!(%sink_id, %worker_id, "handling batch: {}", batch);
+                            let file_name_prefix = format!("batch-{}-{:04}", &sink_id, batch);
+                            CopyToS3Uploader::new(
+                                sdk_config.clone(),
+                                connection_details.clone(),
+                                file_name_prefix,
+                            )
+                        });
+                        for _ in 0..diff {
+                            uploader.append_row(&row).await?;
+                        }
+                    }
+                }
+            }
+            AsyncEvent::Progress(frontier) => {
+                if PartialOrder::less_equal(&up_to, &frontier) {
+                    for uploader in s3_uploaders.values_mut() {
+                        uploader.flush().await?;
+                    }
+                    // We are done, send the final count.
+                    return Ok(row_count);
+                }
+            }
+        }
+    }
+    Ok(row_count)
 }
 
 /// Required state to upload batches to S3
