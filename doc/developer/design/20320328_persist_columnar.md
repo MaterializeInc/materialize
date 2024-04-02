@@ -312,8 +312,7 @@ SIMD perspective either.
 > **Alternative:** We could represent `Interval`s in a `StructArray` but we
 don't expose the internal details of `Interval` so this wouldn't aid in
 filtering or pushdown. The only benefit of structuring an interval would be for
-space reduction in dictionary encoding, but this is offset by the overhead of
-the struct itself.
+space reduction if we enable dictionary encoding.
 
 </td>
 
@@ -407,19 +406,49 @@ Encode the bytes from the `Uuid` directly into a fixed size buffer.
 <td>
 
 ```rust
-// DatumList<'a>.
-Vec<T>
+struct Array {
+  elements: DatumList,
+  dims: ArrayDimensions,
+}
 ```
 
 </td>
 <td>
 
-`VariableSizeList<T>`
+```
+ArrayDimensions: StructArray<{
+  lower_bound: i64,
+  length: u64,
+}>
+
+Array: StructArray<{
+  elements: VariableListArray<T>,
+  dimensions: VariableListArray<ArrayDimensions>,
+}>
+```
 
 </td>
 <td>
 
-A list of values.
+Store all arrays (including multidimensional) linearly in Row-major order, with
+their metadata structured.
+
+Arrays are a bit tricky, their shape must be rectangular but all of the values
+in a column don't need to have the same shape, and users can specify a logical
+lower bound other than 1. For example, the following is valid:
+
+```sql
+CREATE TABLE t1 (a int[]);
+INSERT INTO t1 VALUES (ARRAY[1]), (ARRAY[ARRAY[2], ARRAY[3]]);
+```
+
+Even though column `a` is defined as a single dimension `int[]`, it's valid to
+insert a multi-dimensional array. This is because arrays in Postgres are all a
+single type, in other words, `int[]` and `int[][][]` are the same type.
+
+> **Alternative:** We could binary encode the `ArrayDimensions` data but the
+Arrow types aren't too complex, so it's not clear that this would definitely be
+a better solution.
 
 </td>
 
@@ -441,6 +470,10 @@ Vec<T>
 <td>
 
 A list of values.
+
+> **Note:** Unlike `Array`, all the values in a column of `List`s must have the
+same number of dimensions. Also internally [Arrow represents nested lists](https://arrow.apache.org/docs/format/Columnar.html#list-layout)
+in a Row-major format.
 
 </td>
 
