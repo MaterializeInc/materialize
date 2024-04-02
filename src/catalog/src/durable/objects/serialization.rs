@@ -2184,12 +2184,6 @@ impl RustType<proto::storage_usage_key::Usage> for VersionedStorageUsage {
     }
 }
 
-impl proto::Duration {
-    pub const fn from_secs(secs: u64) -> proto::Duration {
-        proto::Duration { secs, nanos: 0 }
-    }
-}
-
 impl From<String> for proto::StringWrapper {
     fn from(value: String) -> Self {
         proto::StringWrapper { inner: value }

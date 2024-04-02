@@ -77,7 +77,7 @@ const DEFAULT_ALLOCATOR_ID: u64 = 1;
 
 /// Initializes the Catalog with some default objects.
 #[mz_ore::instrument]
-pub async fn initialize(
+pub(crate) async fn initialize(
     tx: &mut Transaction<'_>,
     options: &BootstrapArgs,
     initial_ts: EpochMillis,

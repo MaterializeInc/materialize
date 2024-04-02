@@ -35,9 +35,7 @@ use mz_catalog::builtin::{
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
 use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
-use mz_catalog::durable::{
-    test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, Transaction,
-};
+use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, Transaction};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
@@ -519,10 +517,9 @@ impl Catalog {
         now: NowFn,
         environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(
+        let openable_storage =
             mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
-                .await,
-        );
+                .await;
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None, None)
             .await?;
@@ -541,13 +538,11 @@ impl Catalog {
         environment_id: EnvironmentId,
         system_parameter_defaults: BTreeMap<String, String>,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(
-            mz_catalog::durable::test_persist_backed_catalog_state(
-                persist_client,
-                environment_id.organization_id(),
-            )
-            .await,
-        );
+        let openable_storage = mz_catalog::durable::test_persist_backed_catalog_state(
+            persist_client,
+            environment_id.organization_id(),
+        )
+        .await;
         let storage = openable_storage
             .open_read_only(&test_bootstrap_args())
             .await?;

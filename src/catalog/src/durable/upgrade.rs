@@ -72,7 +72,7 @@ macro_rules! objects {
     ( $( $x:ident ),* ) => {
         paste! {
             $(
-                pub mod [<objects_ $x>] {
+                pub(crate) mod [<objects_ $x>] {
                     include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
 
                     use crate::durable::objects::state_update::StateUpdateKindRaw;

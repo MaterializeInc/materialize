@@ -28,7 +28,7 @@ use mz_adapter::load_remote_system_parameters;
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_catalog::durable::{BootstrapArgs, CatalogError, OpenableDurableCatalogState};
+use mz_catalog::durable::{BootstrapArgs, CatalogError};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
@@ -313,15 +313,13 @@ impl Listeners {
             .persist_clients
             .open(config.controller.persist_location.clone())
             .await?;
-        let mut openable_adapter_storage: Box<dyn OpenableDurableCatalogState> = Box::new(
-            mz_catalog::durable::persist_backed_catalog_state(
-                persist_client.clone(),
-                config.environment_id.organization_id(),
-                BUILD_INFO.semver_version(),
-                Arc::clone(&config.catalog_config.metrics),
-            )
-            .await?,
-        );
+        let mut openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+            persist_client.clone(),
+            config.environment_id.organization_id(),
+            BUILD_INFO.semver_version(),
+            Arc::clone(&config.catalog_config.metrics),
+        )
+        .await?;
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
@@ -381,15 +379,14 @@ impl Listeners {
                         // implementation. Still it's easy to protect against this and worth it in
                         // case things change in the future.
                         tracing::warn!("Unable to perform upgrade test because the target implementation is uninitialized");
-                        openable_adapter_storage = Box::new(
+                        openable_adapter_storage =
                             mz_catalog::durable::persist_backed_catalog_state(
                                 persist_client,
                                 config.environment_id.organization_id(),
                                 BUILD_INFO.semver_version(),
                                 Arc::clone(&config.catalog_config.metrics),
                             )
-                            .await?,
-                        );
+                            .await?;
                         break 'leader_promotion;
                     }
                     Err(e) => {
@@ -412,15 +409,13 @@ impl Listeners {
                     ));
                 }
 
-                openable_adapter_storage = Box::new(
-                    mz_catalog::durable::persist_backed_catalog_state(
-                        persist_client,
-                        config.environment_id.organization_id(),
-                        BUILD_INFO.semver_version(),
-                        Arc::clone(&config.catalog_config.metrics),
-                    )
-                    .await?,
-                );
+                openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+                    persist_client,
+                    config.environment_id.organization_id(),
+                    BUILD_INFO.semver_version(),
+                    Arc::clone(&config.catalog_config.metrics),
+                )
+                .await?;
             } else if catalog_generation == Some(deploy_generation) {
                 tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
             } else {

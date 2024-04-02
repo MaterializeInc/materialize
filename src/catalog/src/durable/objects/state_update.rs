@@ -24,7 +24,7 @@ use crate::durable::{Database, DurableCatalogError, Epoch};
 use crate::memory;
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKindRaw`].
-pub trait IntoStateUpdateKindRaw:
+pub(crate) trait IntoStateUpdateKindRaw:
     Into<StateUpdateKindRaw> + PartialEq + Eq + PartialOrd + Ord + Debug + Clone
 {
     type Error: Debug;
@@ -52,7 +52,7 @@ where
 }
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKind`].
-pub trait TryIntoStateUpdateKind: IntoStateUpdateKindRaw {
+pub(crate) trait TryIntoStateUpdateKind: IntoStateUpdateKindRaw {
     type Error: Debug;
 
     fn try_into(self) -> Result<StateUpdateKind, <Self as TryIntoStateUpdateKind>::Error>;
@@ -70,7 +70,7 @@ where
 
 /// A single update to the catalog state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdate<T: IntoStateUpdateKindRaw = StateUpdateKind> {
+pub(crate) struct StateUpdate<T: IntoStateUpdateKindRaw = StateUpdateKind> {
     /// They kind and contents of the state update.
     pub(crate) kind: T,
     /// The timestamp at which the update occurred.
@@ -609,7 +609,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
 
 /// Version of [`StateUpdateKind`] to allow reading/writing raw json from/to persist.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdateKindRaw(Jsonb);
+pub(crate) struct StateUpdateKindRaw(Jsonb);
 
 impl From<StateUpdateKind> for StateUpdateKindRaw {
     fn from(value: StateUpdateKind) -> Self {
@@ -645,18 +645,18 @@ impl From<SourceData> for StateUpdateKindRaw {
 }
 
 impl StateUpdateKindRaw {
-    pub fn from_serde<S: serde::Serialize>(s: &S) -> Self {
+    pub(crate) fn from_serde<S: serde::Serialize>(s: &S) -> Self {
         let serde_value = serde_json::to_value(s).expect("valid json");
         let row =
             Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
         StateUpdateKindRaw(row)
     }
 
-    pub fn to_serde<D: serde::de::DeserializeOwned>(&self) -> D {
+    pub(crate) fn to_serde<D: serde::de::DeserializeOwned>(&self) -> D {
         self.try_to_serde().expect("jsonb should roundtrip")
     }
 
-    pub fn try_to_serde<D: serde::de::DeserializeOwned>(
+    pub(crate) fn try_to_serde<D: serde::de::DeserializeOwned>(
         &self,
     ) -> Result<D, serde_json::error::Error> {
         let serde_value = self.0.as_ref().to_serde_json();
