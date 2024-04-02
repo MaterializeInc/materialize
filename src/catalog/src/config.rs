@@ -21,7 +21,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput};
+use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
 use crate::durable::DurableCatalogState;
@@ -64,7 +64,7 @@ pub struct StateConfig {
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// A optional map of system parameters pulled from a remote frontend.
     /// A `None` value indicates that the initial sync was skipped.
-    pub remote_system_parameters: Option<BTreeMap<String, OwnedVarInput>>,
+    pub remote_system_parameters: Option<BTreeMap<String, String>>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
     /// IP Addresses which will be used for egress.

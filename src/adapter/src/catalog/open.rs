@@ -62,7 +62,7 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{OwnedVarInput, SystemVars, VarError, VarInput};
+use mz_sql::session::vars::{SystemVars, VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::Expr;
@@ -256,19 +256,44 @@ impl Catalog {
             let is_read_only = storage.is_read_only();
             let mut txn = storage.transaction().await?;
 
-            migrate::durable_migrate(&mut txn, config.boot_ts)?;
+            // Migrate/update durable data before we start loading the in-memory catalog.
+            {
+                migrate::durable_migrate(&mut txn, config.boot_ts)?;
+                // Overwrite and persist selected parameter values in `remote_system_parameters` that
+                // was pulled from a remote frontend (if present).
+                if let Some(remote_system_parameters) = config.remote_system_parameters {
+                    for (name, value) in remote_system_parameters {
+                        txn.upsert_system_config(&name, value)?;
+                    }
+                    txn.set_system_config_synced_once()?;
+                }
+            }
 
-            state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
+            // Seed the in-memory catalog with values that don't come from the durable catalog.
+            {
+                // Set defaults from configuration passed in the provided `system_parameter_defaults`
+                // map.
+                for (name, value) in config.system_parameter_defaults {
+                    match state.set_system_configuration_default(&name, VarInput::Flat(&value)) {
+                        Ok(_) => (),
+                        Err(Error {
+                                kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
+                            }) => {
+                            warn!(%name, "cannot load unknown system parameter from catalog storage to set default parameter");
+                        }
+                        Err(e) => return Err(e.into()),
+                    };
+                }
+                state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
+            }
 
             let updates = txn.get_updates().collect();
             state.apply_updates_for_bootstrap(updates);
 
-            Catalog::load_system_configuration(
-                &mut state,
-                &mut txn,
-                &config.system_parameter_defaults,
-                config.remote_system_parameters.as_ref(),
-            )?;
+            // This mirrors the `persist_txn_tables` "system var" into the catalog
+            // storage "config" collection so that we can toggle the flag with
+            // Launch Darkly, but use it in boot before Launch Darkly is available.
+            txn.set_persist_txn_tables(state.system_config().persist_txn_tables())?;
 
             // Add any new builtin Clusters, Cluster Replicas, or Roles that may be newly defined.
             if !is_read_only {
@@ -679,14 +704,6 @@ impl Catalog {
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
             }
 
-            // Re-load the system configuration in case it changed after the migrations.
-            Catalog::load_system_configuration(
-                &mut state,
-                &mut txn,
-                &config.system_parameter_defaults,
-                config.remote_system_parameters.as_ref(),
-            )?;
-
             let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
 
             let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
@@ -916,63 +933,6 @@ impl Catalog {
         }
         .instrument(tracing::info_span!("catalog::open"))
         .boxed()
-    }
-
-    /// Loads the system configuration from the various locations in which its
-    /// values and value overrides can reside.
-    ///
-    /// This method should _always_ be called during catalog creation _before_
-    /// any other operations that depend on system configuration values.
-    ///
-    /// Configuration is loaded in the following order:
-    ///
-    /// 1. Load parameters from the configuration persisted in the catalog
-    ///    storage backend.
-    /// 2. Set defaults from configuration passed in the provided
-    ///    `system_parameter_defaults` map.
-    /// 3. Overwrite and persist selected parameter values in
-    ///    `remote_system_parameters` that was pulled from a remote frontend
-    ///    (if present).
-    ///
-    /// # Errors
-    #[mz_ore::instrument]
-    fn load_system_configuration(
-        state: &mut CatalogState,
-        txn: &mut Transaction<'_>,
-        system_parameter_defaults: &BTreeMap<String, String>,
-        remote_system_parameters: Option<&BTreeMap<String, OwnedVarInput>>,
-    ) -> Result<(), AdapterError> {
-        let system_config = txn.get_system_configurations();
-
-        for (name, value) in system_parameter_defaults {
-            match state.set_system_configuration_default(name, VarInput::Flat(value)) {
-                Ok(_) => (),
-                Err(Error {
-                    kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
-                }) => {
-                    warn!(%name, "cannot load unknown system parameter from catalog storage to set default parameter");
-                }
-                Err(e) => return Err(e.into()),
-            };
-        }
-        for mz_catalog::durable::SystemConfiguration { name, value } in system_config {
-            match state.insert_system_configuration(&name, VarInput::Flat(&value)) {
-                Ok(_) => (),
-                Err(Error {
-                    kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
-                }) => {
-                    warn!(%name, "cannot load unknown system parameter from catalog storage to set configured parameter");
-                }
-                Err(e) => return Err(e.into()),
-            };
-        }
-        if let Some(remote_system_parameters) = remote_system_parameters {
-            for (name, value) in remote_system_parameters {
-                Catalog::update_system_configuration(state, txn, name, value.borrow())?;
-            }
-            txn.set_system_config_synced_once()?;
-        }
-        Ok(())
     }
 
     /// Loads built-in system types into the catalog.

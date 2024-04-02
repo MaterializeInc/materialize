@@ -119,7 +119,7 @@ use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{self, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
-use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput, SystemVars};
+use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
@@ -863,7 +863,7 @@ pub struct Config {
     pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
-    pub remote_system_parameters: Option<BTreeMap<String, OwnedVarInput>>,
+    pub remote_system_parameters: Option<BTreeMap<String, String>>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub connection_context: ConnectionContext,
@@ -3198,7 +3198,7 @@ pub async fn load_remote_system_parameters(
     storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     system_parameter_sync_timeout: Duration,
-) -> Result<Option<BTreeMap<String, OwnedVarInput>>, AdapterError> {
+) -> Result<Option<BTreeMap<String, String>>, AdapterError> {
     if let Some(system_parameter_sync_config) = system_parameter_sync_config {
         tracing::info!("parameter sync on boot: start sync");
 
@@ -3252,7 +3252,7 @@ pub async fn load_remote_system_parameters(
                     let name = param.name;
                     let value = param.value;
                     tracing::info!(name, value, initial = true, "sync parameter");
-                    (name, OwnedVarInput::Flat(value))
+                    (name, value)
                 })
                 .collect();
             tracing::info!("parameter sync on boot: end sync");

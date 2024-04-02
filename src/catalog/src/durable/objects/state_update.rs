@@ -694,6 +694,12 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let schema = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Schema(schema))
             }
+            StateUpdateKind::SystemConfiguration(key, value) => {
+                let system_configuration = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SystemConfiguration(
+                    system_configuration,
+                ))
+            }
             StateUpdateKind::SystemPrivilege(key, value) => {
                 let system_privilege = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SystemPrivilege(
@@ -713,7 +719,6 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             | StateUpdateKind::Role(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::StorageUsage(_, _)
-            | StateUpdateKind::SystemConfiguration(_, _)
             | StateUpdateKind::SystemObjectMapping(_, _) => None,
         })
     }
