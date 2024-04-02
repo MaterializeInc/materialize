@@ -20,7 +20,7 @@ use crate::durable::objects::serialization::proto;
 use crate::durable::objects::DurableType;
 use crate::durable::persist::Timestamp;
 use crate::durable::transaction::TransactionBatch;
-use crate::durable::{Database, DurableCatalogError, Epoch};
+use crate::durable::{DurableCatalogError, Epoch};
 use crate::memory;
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKindRaw`].
@@ -668,12 +668,37 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
     type Error = DurableCatalogError;
 
     fn try_from(kind: StateUpdateKind) -> Result<Self, Self::Error> {
+        fn into_durable<PK, PV, K, V, T>(key: PK, value: PV) -> Result<T, DurableCatalogError>
+        where
+            PK: ProtoType<K>,
+            PV: ProtoType<V>,
+            T: DurableType<K, V>,
+        {
+            let key = key.into_rust()?;
+            let value = value.into_rust()?;
+            Ok(T::from_key_value(key, value))
+        }
+
         Ok(match kind {
             StateUpdateKind::Database(key, value) => {
-                let key = key.into_rust()?;
-                let value = value.into_rust()?;
-                let database = Database::from_key_value(key, value);
+                let database = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Database(database))
+            }
+            StateUpdateKind::DefaultPrivilege(key, value) => {
+                let default_privilege = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::DefaultPrivilege(
+                    default_privilege,
+                ))
+            }
+            StateUpdateKind::Schema(key, value) => {
+                let schema = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Schema(schema))
+            }
+            StateUpdateKind::SystemPrivilege(key, value) => {
+                let system_privilege = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SystemPrivilege(
+                    system_privilege,
+                ))
             }
             // TODO(jkosh44) Add conversions for valid variants.
             StateUpdateKind::AuditLog(_, _)
@@ -681,18 +706,15 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             | StateUpdateKind::ClusterReplica(_, _)
             | StateUpdateKind::Comment(_, _)
             | StateUpdateKind::Config(_, _)
-            | StateUpdateKind::DefaultPrivilege(_, _)
             | StateUpdateKind::Epoch(_)
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::IntrospectionSourceIndex(_, _)
             | StateUpdateKind::Item(_, _)
             | StateUpdateKind::Role(_, _)
-            | StateUpdateKind::Schema(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::StorageUsage(_, _)
             | StateUpdateKind::SystemConfiguration(_, _)
-            | StateUpdateKind::SystemObjectMapping(_, _)
-            | StateUpdateKind::SystemPrivilege(_, _) => None,
+            | StateUpdateKind::SystemObjectMapping(_, _) => None,
         })
     }
 }

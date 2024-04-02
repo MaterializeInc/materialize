@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::anyhow;
 use derivative::Derivative;
 use itertools::Itertools;
-
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
@@ -1358,32 +1357,8 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
-    pub fn get_schemas(&self) -> impl Iterator<Item = Schema> {
-        self.schemas
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
     pub fn get_roles(&self) -> impl Iterator<Item = Role> {
         self.roles
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
-    pub fn get_default_privileges(&self) -> impl Iterator<Item = DefaultPrivilege> {
-        self.default_privileges
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
-    pub fn get_system_privileges(&self) -> impl Iterator<Item = MzAclItem> {
-        self.system_privileges
             .items()
             .clone()
             .into_iter()
@@ -1435,13 +1410,40 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_updates(&self) -> impl Iterator<Item = StateUpdate> {
-        self.databases
+        std::iter::empty()
+            .chain(Self::get_collection_updates(
+                &self.databases,
+                StateUpdateKind::Database,
+            ))
+            .chain(Self::get_collection_updates(
+                &self.schemas,
+                StateUpdateKind::Schema,
+            ))
+            .chain(Self::get_collection_updates(
+                &self.default_privileges,
+                StateUpdateKind::DefaultPrivilege,
+            ))
+            .chain(Self::get_collection_updates(
+                &self.system_privileges,
+                StateUpdateKind::SystemPrivilege,
+            ))
+            .map(|kind| StateUpdate { kind, diff: 1 })
+    }
+
+    fn get_collection_updates<K, V, T>(
+        table_txn: &TableTransaction<K, V>,
+        kind_fn: impl FnMut(T) -> StateUpdateKind,
+    ) -> impl Iterator<Item = StateUpdateKind>
+    where
+        K: Ord + Eq + Clone,
+        V: Ord + Clone,
+        T: DurableType<K, V>,
+    {
+        table_txn
             .items()
-            .clone()
             .into_iter()
             .map(|(k, v)| DurableType::from_key_value(k, v))
-            .map(StateUpdateKind::Database)
-            .map(|kind| StateUpdate { kind, diff: 1 })
+            .map(kind_fn)
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {

@@ -26,7 +26,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
-use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, RelationDesc};
@@ -2241,12 +2241,18 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 #[derive(Debug)]
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
+    // TODO(jkosh44) Add timestamps.
     pub diff: Diff,
 }
 
 /// The contents of a single state update.
+///
+/// Variants are listed in dependency order.
 #[derive(Debug)]
 pub enum StateUpdateKind {
     Database(durable::objects::Database),
+    Schema(durable::objects::Schema),
+    DefaultPrivilege(durable::objects::DefaultPrivilege),
+    SystemPrivilege(MzAclItem),
     // TODO(jkosh44) Add all other object variants.
 }
