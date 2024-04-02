@@ -40,6 +40,8 @@ use tracing::{debug, info};
 /// Copy the rows from the input collection to s3.
 /// `onetime_callback` is used to send the final count of rows uploaded to s3,
 /// or an error message if the operator failed.
+/// `sink_id` is used to identify the sink for logging purposes and as a
+/// unique prefix for files created by the sink.
 pub fn copy_to<G, F>(
     input_collection: Collection<G, ((Row, u64), ()), Diff>,
     err_collection: Collection<G, ((DataflowError, u64), ()), Diff>,
@@ -64,15 +66,16 @@ pub fn copy_to<G, F>(
     let mut error_handle = builder.new_disconnected_input(&err_collection.inner, Pipeline);
 
     // Signal mechanism from leader to all workers to start the upload after it has verified
-    // the integrity of the S3 bucket path. We check the S3 bucket path from a single worker
-    // to avoid a race between checking the path vs workers uploading objects to the path.
+    // the integrity of the S3 bucket path.
+    // A `()` datum along this edge indicates success. A `[]` frontier indicates failure. Note that
+    // this is disconnected and has a `0` summary, as its unrelated to the frontier of the output.
     let (mut start_handle, start_stream) = builder.new_output();
     let (start_feedback_handle, start_feedback_stream) = scope.feedback(Default::default());
     let mut start_input = builder.new_disconnected_input(&start_feedback_stream, Pipeline);
     start_stream.broadcast().connect_loop(start_feedback_handle);
 
     builder.build(move |caps| async move {
-        let [start_signal_cap_set] = caps.try_into().unwrap();
+        let [start_signal_cap] = caps.try_into().unwrap();
 
         while let Some(event) = error_handle.next().await {
             match event {
@@ -105,18 +108,30 @@ pub fn copy_to<G, F>(
         };
 
         // Check that the S3 bucket path is empty before beginning the upload.
+        // We check the S3 bucket path from a single worker to avoid a race
+        // between checking the path vs workers uploading objects to the path.
+        // We also race against other replicas running the same sink, so we allow
+        // for objects to exist in the path if they were created by this sink
+        // (identified by the sink_id prefix).
         if is_leader {
             info!(%worker_id, "leader worker verifying S3 bucket path is empty");
             let (bucket, path_prefix) =
                 CopyToS3Uploader::extract_s3_bucket_path(&connection_details.prefix);
             let client = mz_aws_util::s3::new_client(&sdk_config);
             match mz_aws_util::s3::list_bucket_path(&client, &bucket, &path_prefix).await {
-                Ok(Some(files)) if !files.is_empty() => {
-                    onetime_callback(Err(format!(
-                        "S3 bucket path is not empty, contains: {:?}",
-                        files
-                    )));
-                    return;
+                Ok(Some(files)) => {
+                    let sink_id_prefix = format!("batch-{}-", sink_id);
+                    let files = files
+                        .iter()
+                        .filter(|file| !file.starts_with(&sink_id_prefix))
+                        .collect::<Vec<_>>();
+                    if !files.is_empty() {
+                        onetime_callback(Err(format!(
+                            "S3 bucket path is not empty, contains: {:?}",
+                            files
+                        )));
+                        return;
+                    }
                 }
                 Err(e) => {
                     onetime_callback(Err(e.to_string()));
@@ -125,12 +140,12 @@ pub fn copy_to<G, F>(
                 _ => {}
             }
             // Send the signal to all workers to start the upload.
-            start_handle.give(&start_signal_cap_set, ()).await;
-            drop(start_signal_cap_set);
+            start_handle.give(&start_signal_cap, ()).await;
+            drop(start_signal_cap);
         } else {
             info!(%worker_id, "non-leader worker waiting for start signal from leader");
             // Workers wait for the signal from the leader to start the upload.
-            drop(start_signal_cap_set);
+            drop(start_signal_cap);
             loop {
                 match start_input.next().await {
                     Some(AsyncEvent::Data(_ts, _data)) => {
@@ -167,7 +182,7 @@ pub fn copy_to<G, F>(
                                 .entry(batch)
                                 .or_insert_with(|| {
                                     debug!("worker_id: {} will be handling batch: {}", worker_id, batch);
-                                    let file_name_prefix = format!("batch-{:04}", batch);
+                                    let file_name_prefix = format!("batch-{}-{:04}", &sink_id, batch);
                                     CopyToS3Uploader::new(sdk_config.clone(), connection_details.clone(), file_name_prefix)
                                 });
                             for _ in 0..diff {
