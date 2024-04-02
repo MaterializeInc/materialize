@@ -109,8 +109,6 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::AlterClusterSwap(_)
         | Plan::AlterClusterReplicaRename(_)
         | Plan::AlterCluster(_)
-        | Plan::AlterIndexSetOptions(_)
-        | Plan::AlterIndexResetOptions(_)
         | Plan::AlterConnection(_)
         | Plan::AlterSource(_)
         | Plan::PurifiedAlterSource { .. }

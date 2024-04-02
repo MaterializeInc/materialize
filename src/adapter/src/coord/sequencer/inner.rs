@@ -34,7 +34,6 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, Timestamp};
-use mz_sql::ast::IndexOptionName;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
@@ -52,8 +51,8 @@ use mz_catalog::memory::objects::{
 use mz_ore::instrument;
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee,
-    ExplaineeStatement, IndexOption, MutationKind, Params, Plan, PlannedAlterRoleOption,
-    PlannedRoleVariable, QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
+    ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
+    QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
@@ -2616,10 +2615,39 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_retain_history(
         &mut self,
-        _session: &mut Session,
-        _plan: plan::AlterRetainHistoryPlan,
+        session: &mut Session,
+        plan: plan::AlterRetainHistoryPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        unreachable!("should be unsupported during planning");
+        let ops = vec![catalog::Op::AlterRetainHistory {
+            id: plan.id,
+            value: plan.value,
+            window: plan.window,
+        }];
+        self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+            let cluster = match coord.catalog().get_entry(&plan.id).item() {
+                CatalogItem::Table(_)
+                | CatalogItem::Source(_)
+                | CatalogItem::MaterializedView(_) => None,
+                CatalogItem::Index(index) => Some(index.cluster_id),
+                CatalogItem::Log(_)
+                | CatalogItem::View(_)
+                | CatalogItem::Sink(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Connection(_) => unreachable!(),
+            };
+            match cluster {
+                Some(cluster) => {
+                    coord.update_compute_base_read_policy(cluster, plan.id, plan.window.into())
+                }
+                None => {
+                    coord.update_storage_base_read_policies(vec![(plan.id, plan.window.into())])
+                }
+            }
+        })
+        .await?;
+        Ok(ExecuteResponse::AlteredObject(plan.object_type))
     }
 
     #[instrument]
@@ -2684,52 +2712,6 @@ impl Coordinator {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
             Err(err) => Err(err),
         }
-    }
-
-    pub(super) fn sequence_alter_index_set_options(
-        &mut self,
-        plan: plan::AlterIndexSetOptionsPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        for o in plan.options {
-            match o {
-                IndexOption::RetainHistory(window) => {
-                    self.set_index_compaction_window(plan.id, window)?;
-                }
-            }
-        }
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
-    }
-
-    #[instrument]
-    pub(super) fn sequence_alter_index_reset_options(
-        &mut self,
-        plan: plan::AlterIndexResetOptionsPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        for o in plan.options {
-            match o {
-                IndexOptionName::RetainHistory => {
-                    self.set_index_compaction_window(plan.id, CompactionWindow::Default)?;
-                }
-            }
-        }
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
-    }
-
-    #[instrument]
-    pub(super) fn set_index_compaction_window(
-        &mut self,
-        id: GlobalId,
-        window: CompactionWindow,
-    ) -> Result<(), AdapterError> {
-        // The index is on a specific cluster.
-        let cluster = self
-            .catalog()
-            .get_entry(&id)
-            .index()
-            .expect("setting options on index")
-            .cluster_id;
-        self.update_compute_base_read_policy(cluster, id, window.into());
-        Ok(())
     }
 
     #[instrument]

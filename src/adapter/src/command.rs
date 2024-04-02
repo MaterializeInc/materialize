@@ -259,8 +259,6 @@ pub enum ExecuteResponse {
     AlteredDefaultPrivileges,
     /// The requested object was altered.
     AlteredObject(ObjectType),
-    /// The index was altered.
-    AlteredIndexLogicalCompaction,
     /// The role was altered.
     AlteredRole,
     /// The system configuration was altered.
@@ -444,9 +442,6 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::AlteredDefaultPrivileges)
             }
             ExecuteResponseKind::AlteredObject => Err(()),
-            ExecuteResponseKind::AlteredIndexLogicalCompaction => {
-                Ok(ExecuteResponse::AlteredIndexLogicalCompaction)
-            }
             ExecuteResponseKind::AlteredRole => Ok(ExecuteResponse::AlteredRole),
             ExecuteResponseKind::AlteredSystemConfiguration => {
                 Ok(ExecuteResponse::AlteredSystemConfiguration)
@@ -511,7 +506,6 @@ impl ExecuteResponse {
         match self {
             AlteredDefaultPrivileges => Some("ALTER DEFAULT PRIVILEGES".into()),
             AlteredObject(o) => Some(format!("ALTER {}", o)),
-            AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
             AlteredRole => Some("ALTER ROLE".into()),
             AlteredSystemConfiguration => Some("ALTER SYSTEM".into()),
             ClosedCursor => Some("CLOSE CURSOR".into()),
@@ -598,9 +592,6 @@ impl ExecuteResponse {
             | PurifiedAlterSource => &[AlteredObject],
             AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
             AlterSetCluster => &[AlteredObject],
-            AlterIndexSetOptions | AlterIndexResetOptions => {
-                &[AlteredObject, AlteredIndexLogicalCompaction]
-            }
             AlterRole => &[AlteredRole],
             AlterSystemSet | AlterSystemReset | AlterSystemResetAll => {
                 &[AlteredSystemConfiguration]
