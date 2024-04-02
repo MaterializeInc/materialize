@@ -3131,7 +3131,7 @@ impl Catalog {
     fn parse_item(
         &self,
         id: GlobalId,
-        create_sql: String,
+        create_sql: &str,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,

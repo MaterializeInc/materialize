@@ -171,7 +171,7 @@ impl CatalogItemRebuilder {
             } => state
                 .parse_item(
                     id,
-                    sql.clone(),
+                    &sql,
                     None,
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
@@ -489,7 +489,7 @@ impl Catalog {
                             let item = state
                                 .parse_item(
                                     id,
-                                    view.create_sql(),
+                                    &view.create_sql(),
                                     None,
                                     false,
                                     None,
@@ -679,7 +679,7 @@ impl Catalog {
                         let mut item = state
                             .parse_item(
                                 id,
-                                index.create_sql(),
+                                &index.create_sql(),
                                 None,
                                 index.is_retained_metrics_object,
                                 if index.is_retained_metrics_object { Some(state.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
@@ -1460,7 +1460,6 @@ impl Catalog {
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
         while let Some(item) = items.pop_front() {
-            let d_c = item.create_sql.clone();
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
             // the only goal is to produce a nicer error message; we'll bail out
@@ -1468,7 +1467,7 @@ impl Catalog {
             static LOGGING_ERROR: Lazy<Regex> =
                 Lazy::new(|| Regex::new("mz_catalog.[^']*").expect("valid regex"));
 
-            let catalog_item = match state.deserialize_item(item.id, d_c) {
+            let catalog_item = match state.deserialize_item(item.id, &item.create_sql) {
                 Ok(item) => item,
                 Err(AdapterError::Catalog(Error {
                     kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(name)),
