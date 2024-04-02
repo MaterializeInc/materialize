@@ -14,9 +14,6 @@ use mz_audit_log::{
     CreateClusterReplicaV1, DropClusterReplicaV1, EventDetails, EventType, ObjectType,
     VersionedEvent,
 };
-use semver::Version;
-use tracing::info;
-
 use mz_catalog::durable::{ReplicaLocation, Transaction};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -24,6 +21,8 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
+use semver::Version;
+use tracing::info;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{Catalog, CatalogState, ConnCatalog};
