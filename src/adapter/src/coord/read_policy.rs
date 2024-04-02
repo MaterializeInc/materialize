@@ -40,7 +40,7 @@ use crate::session::Session;
 use crate::util::ResultExt;
 
 /// Relevant information for acquiring or releasing a bundle of read holds.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Debug, Serialize)]
 pub(crate) struct ReadHolds<T> {
     holds: HashMap<Antichain<T>, CollectionIdBundle>,
 }
