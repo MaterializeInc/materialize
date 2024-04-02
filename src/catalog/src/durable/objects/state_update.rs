@@ -684,9 +684,21 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let database = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Database(database))
             }
+            StateUpdateKind::DefaultPrivilege(key, value) => {
+                let default_privilege = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::DefaultPrivilege(
+                    default_privilege,
+                ))
+            }
             StateUpdateKind::Schema(key, value) => {
                 let schema = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Schema(schema))
+            }
+            StateUpdateKind::SystemPrivilege(key, value) => {
+                let system_privilege = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SystemPrivilege(
+                    system_privilege,
+                ))
             }
             // TODO(jkosh44) Add conversions for valid variants.
             StateUpdateKind::AuditLog(_, _)
@@ -694,7 +706,6 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             | StateUpdateKind::ClusterReplica(_, _)
             | StateUpdateKind::Comment(_, _)
             | StateUpdateKind::Config(_, _)
-            | StateUpdateKind::DefaultPrivilege(_, _)
             | StateUpdateKind::Epoch(_)
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::IntrospectionSourceIndex(_, _)
@@ -703,8 +714,7 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::StorageUsage(_, _)
             | StateUpdateKind::SystemConfiguration(_, _)
-            | StateUpdateKind::SystemObjectMapping(_, _)
-            | StateUpdateKind::SystemPrivilege(_, _) => None,
+            | StateUpdateKind::SystemObjectMapping(_, _) => None,
         })
     }
 }
