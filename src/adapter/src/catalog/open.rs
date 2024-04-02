@@ -172,7 +172,7 @@ impl CatalogItemRebuilder {
             } => state
                 .parse_item(
                     id,
-                    sql.clone(),
+                    &sql,
                     None,
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
@@ -255,6 +255,8 @@ impl Catalog {
 
             let is_read_only = storage.is_read_only();
             let mut txn = storage.transaction().await?;
+
+            migrate::durable_migrate(&mut txn, config.boot_ts)?;
 
             state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
@@ -414,7 +416,7 @@ impl Catalog {
                             let item = state
                                 .parse_item(
                                     id,
-                                    view.create_sql(),
+                                    &view.create_sql(),
                                     None,
                                     false,
                                     None,
@@ -604,7 +606,7 @@ impl Catalog {
                         let mut item = state
                             .parse_item(
                                 id,
-                                index.create_sql(),
+                                &index.create_sql(),
                                 None,
                                 index.is_retained_metrics_object,
                                 if index.is_retained_metrics_object { Some(state.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
@@ -664,7 +666,7 @@ impl Catalog {
                 .unwrap_or_else(|| "new".to_string());
 
             if !config.skip_migrations {
-                migrate::migrate(&state, &mut txn, config.now, &state.config.connection_context)
+                migrate::migrate(&state, &mut txn, config.now, config.boot_ts, &state.config.connection_context)
                     .await
                     .map_err(|e| {
                         Error::new(ErrorKind::FailedMigration {
@@ -716,11 +718,6 @@ impl Catalog {
 
     /// Opens or creates a catalog that stores data at `path`.
     ///
-    /// The passed in `boot_ts_not_linearizable` is _not_ linearizable, we do
-    /// not persist this timestamp before using it. Think hard about this fact
-    /// if you ever feel the need to use this for something that needs to be
-    /// linearizable.
-    ///
     /// Returns the catalog, metadata about builtin objects that have changed
     /// schemas since last restart, a list of updates to builtin tables that
     /// describe the initial state of the catalog, and the version of the
@@ -732,7 +729,7 @@ impl Catalog {
     #[instrument(name = "catalog::open")]
     pub fn open(
         config: Config<'_>,
-        boot_ts_not_linearizable: mz_repr::Timestamp,
+        boot_ts: mz_repr::Timestamp,
     ) -> BoxFuture<
         'static,
         Result<
@@ -898,7 +895,7 @@ impl Catalog {
                 .await
                 .get_and_prune_storage_usage(
                     config.storage_usage_retention_period,
-                    boot_ts_not_linearizable,
+                    boot_ts,
                     wait_for_consolidation,
                 )
                 .await?;
@@ -1393,7 +1390,6 @@ impl Catalog {
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
         while let Some(item) = items.pop_front() {
-            let d_c = item.create_sql.clone();
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
             // the only goal is to produce a nicer error message; we'll bail out
@@ -1401,7 +1397,7 @@ impl Catalog {
             static LOGGING_ERROR: Lazy<Regex> =
                 Lazy::new(|| Regex::new("mz_catalog.[^']*").expect("valid regex"));
 
-            let catalog_item = match state.deserialize_item(item.id, d_c) {
+            let catalog_item = match state.deserialize_item(item.id, &item.create_sql) {
                 Ok(item) => item,
                 Err(AdapterError::Catalog(Error {
                     kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(name)),

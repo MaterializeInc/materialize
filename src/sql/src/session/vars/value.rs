@@ -1053,60 +1053,6 @@ impl Value for IntervalStyle {
     }
 }
 
-/// List of valid TimestampOracle implementations
-///
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TimestampOracleImpl {
-    /// Timestamp oracle backed by Postgres/CRDB.
-    Postgres,
-}
-
-impl TimestampOracleImpl {
-    fn as_str(&self) -> &'static str {
-        match self {
-            TimestampOracleImpl::Postgres => "postgres",
-        }
-    }
-
-    fn valid_values() -> Vec<&'static str> {
-        vec![Self::Postgres.as_str()]
-    }
-}
-
-impl Value for TimestampOracleImpl {
-    fn type_name() -> Cow<'static, str>
-    where
-        Self: Sized,
-    {
-        "string".into()
-    }
-
-    fn parse(input: VarInput<'_>) -> Result<Self, VarParseError>
-    where
-        Self: Sized,
-    {
-        let s = extract_single_value(input)?;
-        let s = UncasedStr::new(s);
-
-        if s == TimestampOracleImpl::Postgres.as_str() {
-            Ok(TimestampOracleImpl::Postgres)
-        } else {
-            Err(VarParseError::ConstrainedParameter {
-                invalid_values: input.to_vec(),
-                valid_values: Some(TimestampOracleImpl::valid_values()),
-            })
-        }
-    }
-
-    fn box_clone(&self) -> Box<dyn Value> {
-        Box::new(self.clone())
-    }
-
-    fn format(&self) -> String {
-        self.as_str().into()
-    }
-}
-
 impl Value for PersistTxnTablesImpl {
     fn type_name() -> Cow<'static, str>
     where

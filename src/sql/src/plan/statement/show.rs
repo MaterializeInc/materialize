@@ -117,7 +117,7 @@ fn plan_show_create(
     if item.item_type() != expect_type {
         sql_bail!("{name} is not a {expect_type}");
     }
-    let create_sql = humanize_sql(scx.catalog, item.create_sql())?;
+    let create_sql = humanize_sql_for_show_create(scx.catalog, item.create_sql())?;
     Ok(ShowCreatePlan {
         id: item.id(),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -890,8 +890,14 @@ impl<'a> ShowColumnsSelect<'a> {
     }
 }
 
-/// Convert a SQL statement into a form suitable for human consumption.
-fn humanize_sql(catalog: &dyn SessionCatalog, sql: &str) -> Result<String, PlanError> {
+/// Convert a SQL statement into a form that could be used as input, as well as
+/// is more amenable to human consumption.
+fn humanize_sql_for_show_create(
+    catalog: &dyn SessionCatalog,
+    sql: &str,
+) -> Result<String, PlanError> {
+    use mz_sql_parser::ast::{CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName};
+
     let parsed = parse::parse(sql)?.into_element().ast;
     let (mut resolved, _) = names::resolve(catalog, parsed)?;
 
@@ -899,9 +905,23 @@ fn humanize_sql(catalog: &dyn SessionCatalog, sql: &str) -> Result<String, PlanE
     let mut simplifier = NameSimplifier { catalog };
     simplifier.visit_statement_mut(&mut resolved);
 
-    // Strip internal `AS OF` syntax.
     match &mut resolved {
+        // Strip internal `AS OF` syntax.
         Statement::CreateMaterializedView(stmt) => stmt.as_of = None,
+        // Strip the internal `DETAILS` values, which serve no purpose being
+        // shown to users and cannot be roundtripped (i.e. they are derived
+        // during purification and cannot be re-input into `CREATE SOURCE`
+        // statements).
+        Statement::CreateSource(stmt) => match &mut stmt.connection {
+            CreateSourceConnection::Postgres { options, .. } => {
+                options.retain(|o| o.name != PgConfigOptionName::Details)
+            }
+            CreateSourceConnection::MySql { options, .. } => {
+                options.retain(|o| o.name != MySqlConfigOptionName::Details)
+            }
+            CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. } => {
+            }
+        },
         _ => (),
     }
 

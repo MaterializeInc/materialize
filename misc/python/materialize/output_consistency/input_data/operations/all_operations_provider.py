@@ -24,6 +24,9 @@ from materialize.output_consistency.input_data.operations.crypto_operations_prov
 from materialize.output_consistency.input_data.operations.date_time_operations_provider import (
     DATE_TIME_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.equality_operations_provider import (
+    EQUALITY_OPERATION_TYPES,
+)
 from materialize.output_consistency.input_data.operations.generic_operations_provider import (
     GENERIC_OPERATION_TYPES,
 )
@@ -44,6 +47,7 @@ from materialize.output_consistency.operation.operation import DbOperationOrFunc
 ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
     itertools.chain(
         GENERIC_OPERATION_TYPES,
+        EQUALITY_OPERATION_TYPES,
         AGGREGATE_OPERATION_TYPES,
         BOOLEAN_OPERATION_TYPES,
         NUMERIC_OPERATION_TYPES,

@@ -150,6 +150,9 @@ def accepted_by_shard(
     if parallelism_count is None:
         parallelism_count = get_parallelism_count()
 
+    if parallelism_count == 1:
+        return True
+
     hash_value = int.from_bytes(
         hashlib.md5(identifier.encode("utf-8")).digest(), byteorder="big"
     )

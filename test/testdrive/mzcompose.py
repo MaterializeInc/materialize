@@ -11,6 +11,7 @@ from pathlib import Path
 
 from materialize import ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
@@ -26,6 +27,7 @@ SERVICES = [
     Redpanda(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Materialized(external_minio=True),
+    FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_minio=True),
 ]
 
@@ -70,7 +72,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     (args, passthrough_args) = parser.parse_known_args()
 
-    dependencies = ["minio", "materialized"]
+    dependencies = ["fivetran-destination", "minio", "materialized"]
     if args.redpanda:
         dependencies += ["redpanda"]
     else:
@@ -84,6 +86,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default_timeout=args.default_timeout,
         volumes_extra=["mzdata:/mzdata"],
         external_minio=True,
+        fivetran_destination=True,
+        fivetran_destination_files_path="/share/tmp",
     )
 
     materialized = Materialized(

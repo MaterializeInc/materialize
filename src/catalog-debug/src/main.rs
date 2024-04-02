@@ -179,15 +179,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let persist_client = persist_clients.open(persist_location).await?;
     let organization_id = args.organization_id;
     let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
-    let openable_state: Box<dyn OpenableDurableCatalogState> = Box::new(
-        persist_backed_catalog_state(
-            persist_client,
-            organization_id,
-            BUILD_INFO.semver_version(),
-            metrics,
-        )
-        .await?,
-    );
+    let openable_state = persist_backed_catalog_state(
+        persist_client,
+        organization_id,
+        BUILD_INFO.semver_version(),
+        metrics,
+    )
+    .await?;
 
     match args.action {
         Action::Dump {
@@ -499,6 +497,7 @@ async fn upgrade_check(
         .0
         .clone();
 
+    let boot_ts = now().into();
     let (_catalog, _, last_catalog_version) = Catalog::initialize_state(
         StateConfig {
             unsafe_mode: true,
@@ -506,6 +505,7 @@ async fn upgrade_check(
             build_info: &BUILD_INFO,
             environment_id: EnvironmentId::for_tests(),
             now,
+            boot_ts,
             skip_migrations: false,
             cluster_replica_sizes,
             builtin_system_cluster_replica_size: builtin_clusters_replica_size.clone(),

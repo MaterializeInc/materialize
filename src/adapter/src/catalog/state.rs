@@ -808,7 +808,7 @@ impl CatalogState {
     pub(crate) fn deserialize_plan(
         &self,
         id: GlobalId,
-        create_sql: String,
+        create_sql: &str,
         force_if_exists_skip: bool,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         // TODO - The `None` needs to be changed if we ever allow custom
@@ -824,7 +824,7 @@ impl CatalogState {
     #[mz_ore::instrument]
     pub(crate) fn parse_plan(
         &self,
-        create_sql: String,
+        create_sql: &str,
         pcx: Option<&PlanContext>,
         catalog: &mut ConnCatalog,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
@@ -840,7 +840,7 @@ impl CatalogState {
         //    overridden.
         catalog.system_vars_mut().enable_for_item_parsing();
 
-        let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
+        let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
         let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
 
@@ -850,7 +850,7 @@ impl CatalogState {
     pub(crate) fn deserialize_item(
         &self,
         id: GlobalId,
-        create_sql: String,
+        create_sql: &str,
     ) -> Result<CatalogItem, AdapterError> {
         // TODO - The `None` needs to be changed if we ever allow custom
         // logical compaction windows in user-defined objects.
@@ -863,7 +863,7 @@ impl CatalogState {
     pub(crate) fn parse_item(
         &self,
         id: GlobalId,
-        create_sql: String,
+        create_sql: &str,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -2199,8 +2199,7 @@ impl CatalogState {
             Some(ts) => ts.into(),
             _ => oracle_write_ts.into(),
         };
-        let id =
-            tx.get_and_increment_id(mz_catalog::durable::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+        let id = tx.allocate_audit_log_id()?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
         audit_events.push(event.clone());

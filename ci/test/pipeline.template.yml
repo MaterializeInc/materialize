@@ -169,6 +169,10 @@ steps:
         coverage: skip
         sanitizer: skip
 
+  - group: Docs tests
+    key: docs-tests
+    label: Docs tests
+    steps:
       - id: lint-docs
         label: Lint docs
         command: bin/ci-builder run stable ci/test/lint-docs.sh
@@ -193,6 +197,19 @@ steps:
         agents:
           # hugo: command not found
           queue: linux-x86_64-small
+        coverage: skip
+        sanitizer: skip
+
+      - id: docs-widgets-test
+        label: Run Docs JS Widgets Tests
+        command: bin/ci-builder run stable ci/test/docs-widgets/docs-widgets.sh
+        inputs:
+          - ci/test/docs-widgets/**
+          - doc/user
+        depends_on: []
+        timeout_in_minutes: 15
+        agents:
+          queue: linux-aarch64-small
         coverage: skip
         sanitizer: skip
 

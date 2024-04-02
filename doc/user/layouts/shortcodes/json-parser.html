@@ -55,11 +55,11 @@ function isDate(value) {
 
 /* JSON Parsing and SQL conversion */
 
-const errorSpan = $("#error_span");
-const errorText = $("#error_text");
+const errorSpan = document.getElementById("error_span");
+const errorText = document.getElementById("error_text");
 
-const jsonInput = $("#json_sample");
-const sqlOutput = $("#output");
+const jsonInput = document.getElementById("json_sample");
+const sqlOutput = document.getElementById("output");
 
 /// Flattens a JSON objects into a list of fields, and their chain of parents.
 function handleJson(source, sample, columnName) {
@@ -72,7 +72,7 @@ function handleJson(source, sample, columnName) {
 
     // Format the JSON for the user.
     const prettyJson = JSON.stringify(jsonObject, null, 2);
-    jsonInput.val(prettyJson);
+    jsonInput.value = prettyJson;
 
     expandObject(jsonObject, [columnName], selectItems);
 
@@ -203,42 +203,42 @@ function determineCast(value) {
 }
 
 function errorClear() {
-    errorSpan.attr('class', 'error error-hidden');
+    errorSpan.className = 'error error-hidden';
 }
 
 function errorSet(e) {
-    errorText.text(e.message);
-    errorSpan.attr('class', 'error error-visible');
+    errorText.textContent = e.message;
+    errorSpan.className = 'error error-visible';
 }
 
 function sqlSet(sql) {
-    sqlOutput.text(sql.trim());
+    sqlOutput.textContent = sql.trim();
 }
 
 function sqlClear() {
-    sqlOutput.text("");
+    sqlOutput.textContent = "";
 }
+
 
 function render() {
     errorClear();
     sqlClear();
 
-    const viewName = $("#view_name").val();
-    const sourceName = $("#source_name").val();
-    const columnName = $("#column_name").val();
-    const objectType = $("input[name='type_view']:checked").val();
+    const viewName = document.getElementById("view_name").value;
+    const sourceName = document.getElementById("source_name").value;
+    const columnName = document.getElementById("column_name").value;
+    const objectType = document.querySelector("input[name='type_view']:checked").value;
 
-    const jsonSample = jsonInput.val();
+    const jsonSample = jsonInput.value;
 
     try {
         const items = handleJson(sourceName, jsonSample, columnName);
         const sql = formSql(items, viewName, sourceName, objectType, columnName);
         sqlSet(sql);
-
         errorClear();
     } catch (e) {
         if (jsonSample) {
-            console.log(e);
+            console.error(e);
             errorSet(e);
         } else {
             errorClear();
@@ -248,13 +248,20 @@ function render() {
 
 render();
 
-// Debounce at a quicker rate since these generally cannot generate errors.
-$("#view_name").keyup(_.debounce(render, 200));
-$("#source_name").keyup(_.debounce(render, 200));
-$("#column_name").keyup(_.debounce(render, 200));
-$("input[name='type_view']").change(render);
+// Event listeners for input and change events
+document.getElementById("view_name").addEventListener("input", render);
+document.getElementById("source_name").addEventListener("input", render);
+document.getElementById("column_name").addEventListener("input", render);
+document.querySelectorAll("input[name='type_view']").forEach(element => {
+    element.addEventListener("change", render);
+});
 
-// Debounce relatively slowly on the JSON sample since it can generate parsing errors.
-$("#json_sample").keyup(_.debounce(render, 600));
+let debounceTimer;
+document.getElementById("json_sample").addEventListener("input", function(event) {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+        render();
+    }, 600);
+});
 
 </script>

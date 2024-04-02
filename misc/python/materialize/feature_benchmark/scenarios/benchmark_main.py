@@ -1835,3 +1835,64 @@ Used Indexes:
 
 def remove_arity_information_from_explain(sql: str) -> str:
     return re.sub(r" // { arity: \d+ }", "", sql)
+
+
+class SwapSchema(Scenario):
+    SCALE = 2
+    FIXED_SCALE = True
+
+    def init(self) -> list[Action]:
+        blue_views_on_table = "\n".join(
+            f"> CREATE VIEW blue.v{i} AS SELECT * FROM blue.t1;"
+            for i in range(0, self.n())
+        )
+
+        green_views_on_table = "\n".join(
+            f"> CREATE VIEW green.v{i} AS SELECT * FROM green.t1;"
+            for i in range(0, self.n())
+        )
+
+        noise_views_on_blue_view = "\n".join(
+            f"> CREATE VIEW noise.v{i} AS SELECT * FROM blue.v0;"
+            for i in range(0, self.n())
+        )
+
+        noise_views_on_noise_view = "\n".join(
+            f"> CREATE VIEW noise.extra_v{i} AS SELECT * FROM noise.v0;"
+            for i in range(0, self.n())
+        )
+
+        return [
+            TdAction(
+                f"""
+> CREATE SCHEMA blue;
+> CREATE SCHEMA green;
+> CREATE SCHEMA noise;
+
+> CREATE TABLE blue.t1 (a int, b text);
+> CREATE TABLE green.t1 (a int, b text);
+
+{blue_views_on_table}
+{green_views_on_table}
+{noise_views_on_blue_view}
+{noise_views_on_noise_view}
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            dedent(
+                """
+                > SELECT 1;
+                  /* A */
+                1
+
+                > ALTER SCHEMA blue SWAP WITH green;
+
+                > SELECT 1;
+                  /* B */
+                1
+                """
+            )
+        )

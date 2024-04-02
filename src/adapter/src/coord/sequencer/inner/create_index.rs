@@ -147,7 +147,7 @@ impl Coordinator {
         };
 
         let state = self.catalog().state();
-        let plan_result = state.deserialize_plan(id, item.create_sql.clone(), true);
+        let plan_result = state.deserialize_plan(id, &item.create_sql, true);
         let (plan, resolved_ids) = return_if_err!(plan_result, ctx);
 
         let plan::Plan::CreateIndex(plan) = plan else {
@@ -479,12 +479,11 @@ impl Coordinator {
                     coord.ship_dataflow(df_desc, cluster_id).await;
                 }
 
-                coord
-                    .set_index_compaction_window(
-                        exported_index_id,
-                        compaction_window.unwrap_or_default(),
-                    )
-                    .expect("index enabled");
+                coord.update_compute_base_read_policy(
+                    cluster_id,
+                    exported_index_id,
+                    compaction_window.unwrap_or_default().into(),
+                );
             })
             .await;
 
