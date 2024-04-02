@@ -1,0 +1,11 @@
+{
+  "name": "docs-widgets-tests",
+  "description": "Tests for the docs-widgets",
+  "scripts": {
+    "test": "vitest"
+  },
+  "dependencies": {
+    "jsdom": "^24.0.0",
+    "vitest": "^1.4.0"
+  }
+}
