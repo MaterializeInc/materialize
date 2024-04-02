@@ -119,7 +119,7 @@ use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{self, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
-use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
+use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
@@ -1377,11 +1377,6 @@ pub struct Coordinator {
 
     /// Limit for how many conncurrent webhook requests we allow.
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
-
-    /// Implementation of
-    /// [`TimestampOracle`](mz_timestamp_oracle::TimestampOracle) to
-    /// use.
-    timestamp_oracle_impl: vars::TimestampOracleImpl,
 
     /// Optional config for the Postgres-backed timestamp oracle. This is
     /// _required_ when `postgres` is configured using the `timestamp_oracle`
@@ -2943,39 +2938,33 @@ pub fn serve(
         let mut initial_timestamps =
             get_initial_oracle_timestamps(&pg_timestamp_oracle_config).await?;
 
-        // A candidate for the boot_ts. Catalog::open will further advance this,
-        // based on the "now" timestamp, if/when needed.
-        let previous_ts = initial_timestamps
-            .get(&Timeline::EpochMilliseconds)
-            .cloned()
-            .unwrap_or_else(mz_repr::Timestamp::minimum);
-
+        // Insert an entry for the `EpochMilliseconds` timeline if one doesn't exist,
+        // which will ensure that the timeline is initialized since it's required
+        // by the system.
+        initial_timestamps
+            .entry(Timeline::EpochMilliseconds)
+            .or_insert_with(mz_repr::Timestamp::minimum);
+        let mut timestamp_oracles = BTreeMap::new();
+        for (timeline, initial_timestamp) in initial_timestamps {
+            Coordinator::ensure_timeline_state_with_initial_time(
+                &timeline,
+                initial_timestamp,
+                now.clone(),
+                pg_timestamp_oracle_config.clone(),
+                &mut timestamp_oracles,
+            )
+            .await;
+        }
         // Choose a time at which to boot. This is used, for example, to prune
-        // old storage usage data. Crucially, it is _not_ linearizable, we do
-        // not persist this timestamp before using it. Think hard about this
-        // fact if you ever feel the need to use this for something that needs
-        // to be linearizable.
+        // old storage usage data or migrate audit log entries.
         //
         // This time is usually the current system time, but with protection
         // against backwards time jumps, even across restarts.
-        let boot_ts_not_linearizable = {
-            let now_ts: Timestamp = now().into();
-            let boot_ts = std::cmp::max(now_ts, previous_ts);
-            info!(%previous_ts, %now_ts, %boot_ts, "determining boot_ts");
-
-            boot_ts
-        };
-
-        // We need to patch up the EpochMilliseconds timestamp, which will in
-        // turn make sure that we initialize timestamp oracles at the `boot_ts`,
-        // which in turn will make sure that the next `boot_ts` is beyond the
-        // current boot_ts.
-        initial_timestamps
-            .entry(Timeline::EpochMilliseconds)
-            .and_modify(|ts| {
-                *ts = std::cmp::max(*ts, boot_ts_not_linearizable);
-            })
-            .or_insert(boot_ts_not_linearizable);
+        let epoch_millis_oracle = &timestamp_oracles
+            .get(&Timeline::EpochMilliseconds)
+            .expect("inserted above")
+            .oracle;
+        let boot_ts = epoch_millis_oracle.write_ts().await.timestamp;
 
         info!("coordinator init: opening catalog");
         let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
@@ -2990,6 +2979,7 @@ pub fn serve(
                         build_info,
                         environment_id: environment_id.clone(),
                         now: now.clone(),
+                        boot_ts: boot_ts.clone(),
                         skip_migrations: false,
                         cluster_replica_sizes,
                         builtin_system_cluster_replica_size,
@@ -3005,9 +2995,10 @@ pub fn serve(
                         http_host_name,
                     },
                 },
-                boot_ts_not_linearizable,
+                boot_ts,
             )
             .await?;
+        epoch_millis_oracle.apply_write(boot_ts).await;
         let session_id = catalog.config().session_id;
         let start_instant = catalog.config().start_instant;
 
@@ -3023,11 +3014,6 @@ pub fn serve(
         let segment_client_clone = segment_client.clone();
         let coord_now = now.clone();
         let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
-
-        // We get the timestamp oracle impl once on startup, to ensure that it
-        // doesn't change in between when the system var changes: all oracles must
-        // use the same impl!
-        let timestamp_oracle_impl = catalog.system_config().timestamp_oracle_impl();
 
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
             // Apply settings from system vars as early as possible because some
@@ -3047,18 +3033,6 @@ pub fn serve(
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
                 let catalog = Arc::new(catalog);
-
-                let mut timestamp_oracles = BTreeMap::new();
-                for (timeline, initial_timestamp) in initial_timestamps {
-                    handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
-                        &timeline,
-                        initial_timestamp,
-                        coord_now.clone(),
-                        timestamp_oracle_impl,
-                        pg_timestamp_oracle_config.clone(),
-                        &mut timestamp_oracles,
-                    ));
-                }
 
                 let controller = handle.block_on(
                     mz_controller::Controller::new(
@@ -3104,7 +3078,6 @@ pub fn serve(
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
-                    timestamp_oracle_impl,
                     pg_timestamp_oracle_config,
                 };
                 let bootstrap = handle.block_on(async {

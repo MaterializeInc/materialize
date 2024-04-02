@@ -719,7 +719,7 @@ impl Catalog {
                 .unwrap_or_else(|| "new".to_string());
 
             if !config.skip_migrations {
-                migrate::migrate(&state, &mut txn, config.now, &state.config.connection_context)
+                migrate::migrate(&state, &mut txn, config.now, config.boot_ts, &state.config.connection_context)
                     .await
                     .map_err(|e| {
                         Error::new(ErrorKind::FailedMigration {
@@ -771,11 +771,6 @@ impl Catalog {
 
     /// Opens or creates a catalog that stores data at `path`.
     ///
-    /// The passed in `boot_ts_not_linearizable` is _not_ linearizable, we do
-    /// not persist this timestamp before using it. Think hard about this fact
-    /// if you ever feel the need to use this for something that needs to be
-    /// linearizable.
-    ///
     /// Returns the catalog, metadata about builtin objects that have changed
     /// schemas since last restart, a list of updates to builtin tables that
     /// describe the initial state of the catalog, and the version of the
@@ -787,7 +782,7 @@ impl Catalog {
     #[instrument(name = "catalog::open")]
     pub fn open(
         config: Config<'_>,
-        boot_ts_not_linearizable: mz_repr::Timestamp,
+        boot_ts: mz_repr::Timestamp,
     ) -> BoxFuture<
         'static,
         Result<
@@ -953,7 +948,7 @@ impl Catalog {
                 .await
                 .get_and_prune_storage_usage(
                     config.storage_usage_retention_period,
-                    boot_ts_not_linearizable,
+                    boot_ts,
                     wait_for_consolidation,
                 )
                 .await?;

@@ -16,7 +16,7 @@ use tracing::info;
 use mz_catalog::durable::Transaction;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
@@ -79,6 +79,7 @@ pub(crate) async fn migrate(
     state: &CatalogState,
     tx: &mut Transaction<'_>,
     _now: NowFn,
+    _boot_ts: Timestamp,
     _connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let catalog_version = tx.get_catalog_content_version();

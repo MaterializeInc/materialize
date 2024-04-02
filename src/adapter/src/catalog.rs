@@ -579,6 +579,7 @@ impl Catalog {
                     build_info: &DUMMY_BUILD_INFO,
                     environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
                     now,
+                    boot_ts: previous_ts,
                     skip_migrations: true,
                     cluster_replica_sizes: Default::default(),
                     builtin_system_cluster_replica_size: "1".into(),

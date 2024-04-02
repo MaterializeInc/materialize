@@ -1192,7 +1192,6 @@ impl SystemVars {
             &PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE,
             &WEBHOOK_CONCURRENT_REQUEST_LIMIT,
             &ENABLE_DEPENDENCY_READ_HOLD_ASSERTS,
-            &TIMESTAMP_ORACLE_IMPL,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL,
@@ -2050,11 +2049,6 @@ impl SystemVars {
     /// Returns the `webhook_concurrent_request_limit` configuration parameter.
     pub fn webhook_concurrent_request_limit(&self) -> usize {
         *self.expect_value(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
-    }
-
-    /// Returns the `timestamp_oracle` configuration parameter.
-    pub fn timestamp_oracle_impl(&self) -> TimestampOracleImpl {
-        *self.expect_value(&TIMESTAMP_ORACLE_IMPL)
     }
 
     /// Returns the `pg_timestamp_oracle_connection_pool_max_size` configuration parameter.
