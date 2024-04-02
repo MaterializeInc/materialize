@@ -223,12 +223,19 @@ pub(crate) fn attempt_left_join_magic(
                 .distinct();
 
             // We skip the distinct because the eventual `threshold` protects us.
-            let right_vals = get_right.clone().project(
-                equations
-                    .iter()
-                    .map(|(_, r)| r - oa - ba)
-                    .collect::<Vec<_>>(),
-            );
+            let right_vals = get_right
+                .clone()
+                .filter(
+                    equations
+                        .iter()
+                        .map(|(_, r)| MirScalarExpr::column(r - oa - ba).call_is_null().not()),
+                )
+                .project(
+                    equations
+                        .iter()
+                        .map(|(_, r)| r - oa - ba)
+                        .collect::<Vec<_>>(),
+                );
 
             // Now we need to permute them into place, and leave `Datum::Null` values behind.
             // We should also add an all `Null` row, so that any null values match with nulls.
@@ -255,12 +262,17 @@ pub(crate) fn attempt_left_join_magic(
             // so that after the join is done we can overwrite all values for `right` with null values.
             // This is a quirk of how outer joins work: the matched columns are left as null.
 
+            let aug_value = MirRelationExpr::union(
+                bindings[index + 1].1.clone().filter(
+                    equations
+                        .iter()
+                        .map(|(_, r)| MirScalarExpr::column(r - oa - ba).call_is_null().not()),
+                ),
+                additions,
+            );
+
             // Record the binding we'll need to make for `aug_id`.
-            augmented.push((
-                aug_id,
-                aug_right,
-                bindings[index + 1].1.clone().union(additions),
-            ));
+            augmented.push((aug_id, aug_right, aug_value));
 
             // Update `body` to reflect the product, filtered by `on`.
             body = product.filter(recompose_equations(equations));
