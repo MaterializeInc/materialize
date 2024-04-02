@@ -1166,7 +1166,7 @@ impl Catalog {
                 Op::TransactionDryRun => {
                     unreachable!("TransactionDryRun can only be used a final element of ops")
                 }
-                Op::AlterRetainHistory { id, value } => {
+                Op::AlterRetainHistory { id, value, window } => {
                     let entry = state.get_entry(&id);
                     if id.is_system() {
                         let name = entry.name();
@@ -1180,7 +1180,7 @@ impl Catalog {
                     let mut new_entry = entry.clone();
                     let previous = new_entry
                         .item
-                        .update_retain_history(value.clone())
+                        .update_retain_history(value.clone(), window)
                         .map_err(|_| {
                             AdapterError::Catalog(Error::new(ErrorKind::Internal(
                             "planner should have rejected invalid alter retain history item type"
@@ -3479,6 +3479,7 @@ pub enum Op {
     AlterRetainHistory {
         id: GlobalId,
         value: Option<Value>,
+        window: CompactionWindow,
     },
     AlterSetCluster {
         id: GlobalId,

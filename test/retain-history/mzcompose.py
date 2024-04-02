@@ -52,7 +52,7 @@ def run_test_consistency(c: Composition) -> None:
 
             > ALTER INDEX testdrive_consistency_table_idx SET (RETAIN HISTORY = FOR '1m')
 
-            > ALTER INDEX testdrive_consistency_table_idx SET (RETAIN HISTORY = FOR '0')
+            > ALTER INDEX testdrive_consistency_table_idx SET (RETAIN HISTORY = FOR 0)
 
             > ALTER INDEX testdrive_consistency_table_idx RESET (RETAIN HISTORY)
             """,

@@ -1040,7 +1040,8 @@ impl CatalogItem {
     /// an error if this item does not support retain history.
     pub fn update_retain_history(
         &mut self,
-        new_history: Option<Value>,
+        value: Option<Value>,
+        window: CompactionWindow,
     ) -> Result<Option<WithOptionValue<Raw>>, ()> {
         let update = |ast: &mut Statement<Raw>| {
             // Each statement type has unique option types. This macro handles them commonly.
@@ -1052,10 +1053,10 @@ impl CatalogItem {
                         .iter()
                         // In case there are ever multiple, look for the last one.
                         .rposition(|o| o.name == mz_sql_parser::ast::$name::RetainHistory);
-                    if let Some(new_history) = new_history {
+                    if let Some(value) = value {
                         let next = mz_sql_parser::ast::$opt {
                             name: mz_sql_parser::ast::$name::RetainHistory,
-                            value: Some(WithOptionValue::RetainHistoryFor(new_history)),
+                            value: Some(WithOptionValue::RetainHistoryFor(value)),
                         };
                         if let Some(idx) = pos {
                             let previous = $stmt.with_options[idx].clone();
@@ -1094,7 +1095,12 @@ impl CatalogItem {
             Ok(previous)
         };
 
-        self.update_sql(update)
+        let res = self.update_sql(update)?;
+        let cw = self
+            .custom_logical_compaction_window_mut()
+            .expect("item must have compaction window");
+        *cw = Some(window);
+        Ok(res)
     }
 
     /// Updates the create_sql field of this item. Returns an error if this is a builtin item,
@@ -1188,6 +1194,27 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => None,
         }
+    }
+
+    /// Mutable access to the custom compaction window, or None if this type does not support custom
+    /// compaction windows.
+    pub fn custom_logical_compaction_window_mut(
+        &mut self,
+    ) -> Option<&mut Option<CompactionWindow>> {
+        let cw = match self {
+            CatalogItem::Table(table) => &mut table.custom_logical_compaction_window,
+            CatalogItem::Source(source) => &mut source.custom_logical_compaction_window,
+            CatalogItem::Index(index) => &mut index.custom_logical_compaction_window,
+            CatalogItem::MaterializedView(mview) => &mut mview.custom_logical_compaction_window,
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => return None,
+        };
+        Some(cw)
     }
 
     /// The initial compaction window, for objects that have one; that is,

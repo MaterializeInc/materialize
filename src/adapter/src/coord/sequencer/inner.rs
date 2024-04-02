@@ -2621,6 +2621,7 @@ impl Coordinator {
         let ops = vec![catalog::Op::AlterRetainHistory {
             id: plan.id,
             value: plan.value,
+            window: plan.window,
         }];
         self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
             let cluster = match coord.catalog().get_entry(&plan.id).item() {
