@@ -39,6 +39,9 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
     PostExecutionInconsistencyIgnoreFilterBase,
     PreExecutionInconsistencyIgnoreFilterBase,
 )
+from materialize.output_consistency.input_data.operations.equality_operations_provider import (
+    TAG_EQUALITY_ORDERING,
+)
 from materialize.output_consistency.input_data.operations.generic_operations_provider import (
     TAG_CASTING,
 )
@@ -47,6 +50,9 @@ from materialize.output_consistency.input_data.operations.jsonb_operations_provi
 )
 from materialize.output_consistency.input_data.operations.text_operations_provider import (
     TAG_REGEX,
+)
+from materialize.output_consistency.input_data.return_specs.jsonb_return_spec import (
+    JsonbReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
@@ -141,7 +147,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         if db_function.function_name_in_lower_case in {"min", "max"}:
             return_type_spec = expression.args[0].resolve_return_type_spec()
             if isinstance(return_type_spec, TextReturnTypeSpec):
-                return YesIgnore("#22002: min/max on text different")
+                return YesIgnore("#22002: ordering on text different (min/max)")
 
         if db_function.function_name_in_lower_case == "replace":
             # replace is not working properly with empty text; however, it is not possible to reliably determine if an
@@ -207,6 +213,15 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             )
 
         if (
+            db_operation.pattern in {"$ < $", "$ > $"}
+            and expression.args[0].resolve_return_type_category()
+            == DataTypeCategory.NUMERIC
+            and expression.args[1].resolve_return_type_category()
+            == DataTypeCategory.NUMERIC
+        ):
+            return YesIgnore("#26323: imprecise comparison between REAL and DECIMAL")
+
+        if (
             db_operation.pattern in {"$ || $"}
             and db_operation.params[0].get_declared_type_category()
             == DataTypeCategory.JSONB
@@ -232,6 +247,13 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 return YesIgnore(
                     "#24678: different specification of default DECIMAL type"
                 )
+
+        if db_operation.is_tagged(TAG_EQUALITY_ORDERING):
+            return_type_spec = expression.args[0].resolve_return_type_spec()
+            if isinstance(return_type_spec, TextReturnTypeSpec):
+                return YesIgnore("#22002: ordering on text different (<, <=, ...)")
+            if isinstance(return_type_spec, JsonbReturnTypeSpec):
+                return YesIgnore("#26309: ordering on JSON different")
 
         return NoIgnore()
 
