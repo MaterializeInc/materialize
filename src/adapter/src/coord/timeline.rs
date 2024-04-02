@@ -195,7 +195,10 @@ impl Coordinator {
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
     ) -> &'a mut TimelineState<Timestamp> {
         if !global_timelines.contains_key(timeline) {
-            info!("opening a new TimestampOracle for timeline {:?}", timeline,);
+            info!(
+                "opening a new CRDB/postgres TimestampOracle for timeline {:?}",
+                timeline,
+            );
 
             let now_fn = if timeline == &Timeline::EpochMilliseconds {
                 now

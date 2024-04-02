@@ -2960,13 +2960,11 @@ pub fn serve(
         //
         // This time is usually the current system time, but with protection
         // against backwards time jumps, even across restarts.
-        let boot_ts = timestamp_oracles
+        let epoch_millis_oracle = &timestamp_oracles
             .get(&Timeline::EpochMilliseconds)
             .expect("inserted above")
-            .oracle
-            .write_ts()
-            .await
-            .timestamp;
+            .oracle;
+        let boot_ts = epoch_millis_oracle.write_ts().await.timestamp;
 
         info!("coordinator init: opening catalog");
         let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
@@ -3000,6 +2998,7 @@ pub fn serve(
                 boot_ts,
             )
             .await?;
+        epoch_millis_oracle.apply_write(boot_ts).await;
         let session_id = catalog.config().session_id;
         let start_instant = catalog.config().start_instant;
 
