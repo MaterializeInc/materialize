@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! The current types used by the Catalog.
+//! The current types used by the in-memory Catalog. Many of the objects in this module are
+//! extremely similar to the objects found in [`crate::durable::objects`] but in a format that is
+//! easier consumed by higher layers.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,11 +18,6 @@ use std::ops::{Deref, DerefMut};
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use once_cell::sync::Lazy;
-use serde::ser::SerializeSeq;
-use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
-
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
@@ -32,9 +29,9 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::Expr;
+use mz_sql::ast::{Expr, Raw, Statement, Value, WithOptionValue};
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogTypeDetails,
@@ -58,11 +55,16 @@ use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnecti
 use mz_storage_types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
+use once_cell::sync::Lazy;
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
+use tracing::debug;
 
 use crate::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Database {
     pub name: String,
     pub id: DatabaseId,
@@ -86,7 +88,7 @@ impl From<Database> for durable::Database {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
@@ -1034,6 +1036,105 @@ impl CatalogItem {
         }
     }
 
+    /// Updates the retain history for an item. Returns the previous retain history value. Returns
+    /// an error if this item does not support retain history.
+    pub fn update_retain_history(
+        &mut self,
+        value: Option<Value>,
+        window: CompactionWindow,
+    ) -> Result<Option<WithOptionValue<Raw>>, ()> {
+        let update = |ast: &mut Statement<Raw>| {
+            // Each statement type has unique option types. This macro handles them commonly.
+            macro_rules! update_retain_history {
+                ( $stmt:ident, $opt:ident, $name:ident ) => {{
+                    // Replace or add the option.
+                    let pos = $stmt
+                        .with_options
+                        .iter()
+                        // In case there are ever multiple, look for the last one.
+                        .rposition(|o| o.name == mz_sql_parser::ast::$name::RetainHistory);
+                    if let Some(value) = value {
+                        let next = mz_sql_parser::ast::$opt {
+                            name: mz_sql_parser::ast::$name::RetainHistory,
+                            value: Some(WithOptionValue::RetainHistoryFor(value)),
+                        };
+                        if let Some(idx) = pos {
+                            let previous = $stmt.with_options[idx].clone();
+                            $stmt.with_options[idx] = next;
+                            previous.value
+                        } else {
+                            $stmt.with_options.push(next);
+                            None
+                        }
+                    } else {
+                        if let Some(idx) = pos {
+                            $stmt.with_options.swap_remove(idx).value
+                        } else {
+                            None
+                        }
+                    }
+                }};
+            }
+            let previous = match ast {
+                Statement::CreateTable(ref mut stmt) => {
+                    update_retain_history!(stmt, TableOption, TableOptionName)
+                }
+                Statement::CreateIndex(ref mut stmt) => {
+                    update_retain_history!(stmt, IndexOption, IndexOptionName)
+                }
+                Statement::CreateSource(ref mut stmt) => {
+                    update_retain_history!(stmt, CreateSourceOption, CreateSourceOptionName)
+                }
+                Statement::CreateMaterializedView(ref mut stmt) => {
+                    update_retain_history!(stmt, MaterializedViewOption, MaterializedViewOptionName)
+                }
+                _ => {
+                    return Err(());
+                }
+            };
+            Ok(previous)
+        };
+
+        let res = self.update_sql(update)?;
+        let cw = self
+            .custom_logical_compaction_window_mut()
+            .expect("item must have compaction window");
+        *cw = Some(window);
+        Ok(res)
+    }
+
+    /// Updates the create_sql field of this item. Returns an error if this is a builtin item,
+    /// otherwise returns f's result.
+    pub fn update_sql<F, T>(&mut self, f: F) -> Result<T, ()>
+    where
+        F: FnOnce(&mut Statement<Raw>) -> Result<T, ()>,
+    {
+        let create_sql = match self {
+            CatalogItem::Table(Table { create_sql, .. })
+            | CatalogItem::Type(Type { create_sql, .. })
+            | CatalogItem::Source(Source { create_sql, .. }) => create_sql.as_mut(),
+            CatalogItem::Sink(Sink { create_sql, .. })
+            | CatalogItem::View(View { create_sql, .. })
+            | CatalogItem::MaterializedView(MaterializedView { create_sql, .. })
+            | CatalogItem::Index(Index { create_sql, .. })
+            | CatalogItem::Secret(Secret { create_sql, .. })
+            | CatalogItem::Connection(Connection { create_sql, .. }) => Some(create_sql),
+            CatalogItem::Func(_) | CatalogItem::Log(_) => None,
+        };
+        let Some(create_sql) = create_sql else {
+            return Err(());
+        };
+        let mut ast = mz_sql_parser::parser::parse_statements(create_sql)
+            .expect("non-system items must be parseable")
+            .into_element()
+            .ast;
+        debug!("rewrite: {}", ast.to_ast_string_redacted());
+        let t = f(&mut ast)?;
+        *create_sql = ast.to_ast_string_stable();
+        debug!("rewrote: {}", ast.to_ast_string_redacted());
+        Ok(t)
+    }
+
     /// If the object is considered a "compute object"
     /// (i.e., it is managed by the compute controller),
     /// this function returns its cluster ID. Otherwise, it returns nothing.
@@ -1093,6 +1194,27 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => None,
         }
+    }
+
+    /// Mutable access to the custom compaction window, or None if this type does not support custom
+    /// compaction windows.
+    pub fn custom_logical_compaction_window_mut(
+        &mut self,
+    ) -> Option<&mut Option<CompactionWindow>> {
+        let cw = match self {
+            CatalogItem::Table(table) => &mut table.custom_logical_compaction_window,
+            CatalogItem::Source(source) => &mut source.custom_logical_compaction_window,
+            CatalogItem::Index(index) => &mut index.custom_logical_compaction_window,
+            CatalogItem::MaterializedView(mview) => &mut mview.custom_logical_compaction_window,
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => return None,
+        };
+        Some(cw)
     }
 
     /// The initial compaction window, for objects that have one; that is,
@@ -2113,4 +2235,18 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn cluster_id(&self) -> Option<ClusterId> {
         self.item().cluster_id()
     }
+}
+
+/// A single update to the catalog state.
+#[derive(Debug)]
+pub struct StateUpdate {
+    pub kind: StateUpdateKind,
+    pub diff: Diff,
+}
+
+/// The contents of a single state update.
+#[derive(Debug)]
+pub enum StateUpdateKind {
+    Database(durable::objects::Database),
+    // TODO(jkosh44) Add all other object variants.
 }

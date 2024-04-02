@@ -774,6 +774,7 @@ where
                                 prev,
                                 self.config.parameters.statistics_interval,
                                 self.statistics_interval_sender.subscribe(),
+                                self.metrics.clone(),
                             );
                             let web_token = statistics::spawn_webhook_statistics_scraper(
                                 Arc::clone(&self.source_statistics),
@@ -798,6 +799,7 @@ where
                                     prev,
                                     self.config.parameters.statistics_interval,
                                     self.statistics_interval_sender.subscribe(),
+                                    self.metrics.clone(),
                                 );
 
                             // Make sure this is dropped when the controller is
@@ -1728,7 +1730,9 @@ where
                             .entry(stat.id)
                             .and_modify(|current| match current {
                                 Some(ref mut current) => current.incorporate(stat),
-                                None => *current = Some(stat),
+                                None => {
+                                    *current = Some(stat.with_metrics(&self.metrics));
+                                }
                             });
                     }
                 }

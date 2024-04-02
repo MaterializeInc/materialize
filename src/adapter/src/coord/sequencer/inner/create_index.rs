@@ -479,12 +479,11 @@ impl Coordinator {
                     coord.ship_dataflow(df_desc, cluster_id).await;
                 }
 
-                coord
-                    .set_index_compaction_window(
-                        exported_index_id,
-                        compaction_window.unwrap_or_default(),
-                    )
-                    .expect("index enabled");
+                coord.update_compute_base_read_policy(
+                    cluster_id,
+                    exported_index_id,
+                    compaction_window.unwrap_or_default().into(),
+                );
             })
             .await;
 

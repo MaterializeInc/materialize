@@ -403,14 +403,6 @@ impl Coordinator {
                         .await;
                     ctx.retire(result);
                 }
-                Plan::AlterIndexSetOptions(plan) => {
-                    let result = self.sequence_alter_index_set_options(plan);
-                    ctx.retire(result);
-                }
-                Plan::AlterIndexResetOptions(plan) => {
-                    let result = self.sequence_alter_index_reset_options(plan);
-                    ctx.retire(result);
-                }
                 Plan::AlterRole(plan) => {
                     let result = self.sequence_alter_role(ctx.session_mut(), plan).await;
                     ctx.retire(result);

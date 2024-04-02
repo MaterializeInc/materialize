@@ -8,11 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use crate::durable::upgrade::MigrationAction;
-use crate::durable::upgrade::{objects_v42 as v42, objects_v43 as v43};
+use crate::durable::upgrade::{objects_v50 as v50, objects_v51 as v51};
 
 /// No-op migration for removing storage objects.
-pub(crate) fn upgrade(
-    _snapshot: Vec<v42::StateUpdateKind>,
-) -> Vec<MigrationAction<v42::StateUpdateKind, v43::StateUpdateKind>> {
+pub fn upgrade(
+    _snapshot: Vec<v50::StateUpdateKind>,
+) -> Vec<MigrationAction<v50::StateUpdateKind, v51::StateUpdateKind>> {
     Vec::new()
 }

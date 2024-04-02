@@ -7,6 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! The current types used to represent catalog data stored on disk. These objects generally fall
+//! into two categories.
+//!
+//! The key-value objects are a one-to-one mapping of the protobuf objects used to save catalog
+//! data durably. They can be converted to and from protobuf via the [`mz_proto::RustType`] trait.
+//! These objects should not be exposed anywhere outside the [`crate::durable`] module.
+//!
+//! The other type of objects combine the information from keys and values into a single struct,
+//! but are still a direct representation of the data stored on disk. They can be converted to and
+//! from the key-value objects via the [`DurableType`] trait. These objects are used to pass
+//! information to other modules in this crate and other catalog related code.
+//!
+//! All non-catalog code should interact with the objects in [`crate::memory::objects`] and never
+//! directly interact with the objects in this module.
+//!
+//! As an example, [`DatabaseKey`] and [`DatabaseValue`] are key-value objects, while [`Database`]
+//! is the non-key-value counterpart.
+
 pub mod serialization;
 pub(crate) mod state_update;
 

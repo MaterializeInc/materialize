@@ -13,10 +13,7 @@ use mz_persist_client::PersistLocation;
 use uuid::Uuid;
 
 use crate::durable::persist::{fetch_catalog_upgrade_shard_version, shard_id, UPGRADE_SEED};
-use crate::durable::{
-    test_bootstrap_args, test_persist_backed_catalog_state_with_version,
-    OpenableDurableCatalogState,
-};
+use crate::durable::{test_bootstrap_args, test_persist_backed_catalog_state_with_version};
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
@@ -45,7 +42,7 @@ async fn test_upgrade_shard() {
     )
     .await
     .expect("failed to create persist catalog");
-    let _persist_state = Box::new(persist_openable_state)
+    let _persist_state = persist_openable_state
         .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
         .await
         .expect("failed to open persist catalog");
@@ -68,7 +65,7 @@ async fn test_upgrade_shard() {
     )
     .await
     .expect("failed to create persist catalog");
-    let _persist_state = Box::new(persist_openable_state)
+    let _persist_state = persist_openable_state
         .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None, None)
         .await
         .expect("failed to open savepoint persist catalog");
@@ -86,7 +83,7 @@ async fn test_upgrade_shard() {
     )
     .await
     .expect("failed to create persist catalog");
-    let _persist_state = Box::new(persist_openable_state)
+    let _persist_state = persist_openable_state
         .open_read_only(&test_bootstrap_args())
         .await
         .expect("failed to open readonly persist catalog");

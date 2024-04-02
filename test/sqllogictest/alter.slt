@@ -91,35 +91,92 @@ query error db error: ERROR: ALTER SINK SET CLUSTER not yet supported, see https
 ALTER SINK v SET CLUSTER quickstart
 
 statement ok
-CREATE TABLE t (a INT)
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '5m')
+
+query T
+SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv)
+----
+CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "quickstart" WITH (REFRESH = ON COMMIT) AS SELECT 1
+
+statement ok
+ALTER MATERIALIZED VIEW mv SET (RETAIN HISTORY FOR '1m')
+
+query T
+SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv)
+----
+CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "quickstart" WITH (REFRESH = ON COMMIT, RETAIN HISTORY = FOR '1m') AS SELECT 1
+
+statement ok
+ALTER MATERIALIZED VIEW mv RESET (RETAIN HISTORY)
+
+query T
+SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv)
+----
+CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "quickstart" WITH (REFRESH = ON COMMIT) AS SELECT 1
+
+statement ok
+CREATE TABLE t (a INT) WITH (RETAIN HISTORY FOR 0)
+
+query T
+SELECT create_sql FROM (SHOW CREATE TABLE t)
+----
+CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4") WITH (RETAIN HISTORY = FOR 0)
 
 statement ok
 CREATE INDEX i ON t(a)
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR COUNTER
-
-statement error db error: ERROR: ALTER RETAIN HISTORY not yet supported
-ALTER MATERIALIZED VIEW mv SET (RETAIN HISTORY FOR '1m')
-
-statement error db error: ERROR: ALTER RETAIN HISTORY not yet supported
-ALTER MATERIALIZED VIEW mv RESET (RETAIN HISTORY)
-
-statement error db error: ERROR: ALTER RETAIN HISTORY not yet supported
 ALTER TABLE t SET (RETAIN HISTORY FOR '1m')
 
-statement error db error: ERROR: ALTER RETAIN HISTORY not yet supported
+query T
+SELECT create_sql FROM (SHOW CREATE TABLE t)
+----
+CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4") WITH (RETAIN HISTORY = FOR '1m')
+
+statement ok
 ALTER TABLE t RESET (RETAIN HISTORY)
 
-# TODO: Change all SOURCE RETAIN HISTORY tests to not use load generators.
-statement error db error: ERROR: s is a load\-generator source, which does not support ALTER SOURCE\.
+query T
+SELECT create_sql FROM (SHOW CREATE TABLE t)
+----
+CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4")
+
+statement ok
 ALTER SOURCE s SET (RETAIN HISTORY FOR '1m')
 
-statement error db error: ERROR: s is a load\-generator source, which does not support ALTER SOURCE\.
+query T
+SELECT create_sql FROM (SHOW CREATE SOURCE s)
+----
+CREATE SOURCE "materialize"."public"."s" IN CLUSTER "quickstart" FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS "materialize"."public"."s_progress" WITH (RETAIN HISTORY = FOR '1m')
+
+statement ok
 ALTER SOURCE s RESET (RETAIN HISTORY)
+
+query T
+SELECT create_sql FROM (SHOW CREATE SOURCE s)
+----
+CREATE SOURCE "materialize"."public"."s" IN CLUSTER "quickstart" FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS "materialize"."public"."s_progress"
 
 statement ok
 ALTER INDEX i SET (RETAIN HISTORY FOR '1m')
 
+query T
+SELECT create_sql FROM (SHOW CREATE INDEX i)
+----
+CREATE INDEX "i" IN CLUSTER "quickstart" ON "materialize"."public"."t" ("a") WITH (RETAIN HISTORY = FOR '1m')
+
+statement ok
+ALTER INDEX i SET (RETAIN HISTORY = FOR 0)
+
+query T
+SELECT create_sql FROM (SHOW CREATE INDEX i)
+----
+CREATE INDEX "i" IN CLUSTER "quickstart" ON "materialize"."public"."t" ("a") WITH (RETAIN HISTORY = FOR 0)
+
 statement ok
 ALTER INDEX i RESET (RETAIN HISTORY)
+
+query T
+SELECT create_sql FROM (SHOW CREATE INDEX i)
+----
+CREATE INDEX "i" IN CLUSTER "quickstart" ON "materialize"."public"."t" ("a")

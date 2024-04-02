@@ -19,6 +19,7 @@ use std::sync::Arc;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_sql::ast::Value;
 use mz_sql::session::metadata::SessionMetadata;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
@@ -34,9 +35,7 @@ use mz_catalog::builtin::{
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
 use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
-use mz_catalog::durable::{
-    test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, Transaction,
-};
+use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, Transaction};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
@@ -50,7 +49,6 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -518,10 +516,9 @@ impl Catalog {
         now: NowFn,
         environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(
+        let openable_storage =
             mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
-                .await,
-        );
+                .await;
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None, None)
             .await?;
@@ -540,13 +537,11 @@ impl Catalog {
         environment_id: EnvironmentId,
         system_parameter_defaults: BTreeMap<String, String>,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(
-            mz_catalog::durable::test_persist_backed_catalog_state(
-                persist_client,
-                environment_id.organization_id(),
-            )
-            .await,
-        );
+        let openable_storage = mz_catalog::durable::test_persist_backed_catalog_state(
+            persist_client,
+            environment_id.organization_id(),
+        )
+        .await;
         let storage = openable_storage
             .open_read_only(&test_bootstrap_args())
             .await?;
@@ -1164,6 +1159,59 @@ impl Catalog {
             match op {
                 Op::TransactionDryRun => {
                     unreachable!("TransactionDryRun can only be used a final element of ops")
+                }
+                Op::AlterRetainHistory { id, value, window } => {
+                    let entry = state.get_entry(&id);
+                    if id.is_system() {
+                        let name = entry.name();
+                        let full_name =
+                            state.resolve_full_name(name, session.map(|session| session.conn_id()));
+                        return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                            full_name.to_string(),
+                        ))));
+                    }
+
+                    let mut new_entry = entry.clone();
+                    let previous = new_entry
+                        .item
+                        .update_retain_history(value.clone(), window)
+                        .map_err(|_| {
+                            AdapterError::Catalog(Error::new(ErrorKind::Internal(
+                            "planner should have rejected invalid alter retain history item type"
+                                .to_string(),
+                        )))
+                        })?;
+
+                    builtin_table_updates.extend(state.pack_item_update(id, -1));
+
+                    if Self::should_audit_log_item(new_entry.item()) {
+                        let details = EventDetails::AlterRetainHistoryV1(
+                            mz_audit_log::AlterRetainHistoryV1 {
+                                id: id.to_string(),
+                                old_history: previous.map(|previous| previous.to_string()),
+                                new_history: value.map(|v| v.to_string()),
+                            },
+                        );
+                        state.add_to_audit_log(
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Alter,
+                            catalog_type_to_audit_object_type(new_entry.item().typ()),
+                            details,
+                        )?;
+                    }
+
+                    Self::update_item(
+                        state,
+                        builtin_table_updates,
+                        id,
+                        new_entry.name.clone(),
+                        new_entry.item().clone(),
+                    )?;
+                    tx.update_item(id, new_entry.into())?;
                 }
                 Op::AlterRole {
                     id,
@@ -2467,10 +2515,10 @@ impl Catalog {
                     let database_name = &database.name;
 
                     let mut updates = Vec::new();
-                    let mut already_updated = HashSet::new();
+                    let mut items_to_update = BTreeMap::new();
 
                     let mut update_item = |id| {
-                        if already_updated.contains(id) {
+                        if items_to_update.contains_key(id) {
                             return Ok(());
                         }
 
@@ -2491,15 +2539,12 @@ impl Catalog {
                                 }))
                             })?;
 
-                        // Update the catalog storage and Builtin Tables.
+                        // Queue updates for Catalog storage and Builtin Tables.
                         if !new_entry.item().is_temporary() {
-                            tx.update_item(*id, new_entry.clone().into())?;
+                            items_to_update.insert(*id, new_entry.clone().into());
                         }
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
                         updates.push((id.clone(), entry.name().clone(), new_entry.item));
-
-                        // Track which IDs we update.
-                        already_updated.insert(id);
 
                         Ok::<_, AdapterError>(())
                     };
@@ -2514,6 +2559,9 @@ impl Catalog {
                             update_item(id)?;
                         }
                     }
+                    // Note: When updating the transaction it's very important that we update the
+                    // items as a whole group, otherwise we exhibit quadratic behavior.
+                    tx.update_items(items_to_update)?;
 
                     // Renaming temporary schemas is not supported.
                     let SchemaSpecifier::Id(schema_id) = *schema.id() else {
@@ -3412,6 +3460,11 @@ impl From<UpdatePrivilegeVariant> for EventType {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    AlterRetainHistory {
+        id: GlobalId,
+        value: Option<Value>,
+        window: CompactionWindow,
+    },
     AlterRole {
         id: RoleId,
         name: String,

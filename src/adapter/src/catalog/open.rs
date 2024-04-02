@@ -34,8 +34,8 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
-    Role, Schema, Source, Table, Type,
+    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, DefaultPrivileges, Func, Log, Role,
+    Schema, Source, Table, Type,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -258,29 +258,8 @@ impl Catalog {
 
             state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
-            let databases = txn.get_databases();
-            for mz_catalog::durable::Database {
-                id,
-                oid,
-                name,
-                owner_id,
-                privileges,
-            } in databases
-            {
-                state.database_by_id.insert(
-                    id.clone(),
-                    Database {
-                        name: name.clone(),
-                        id,
-                        oid,
-                        schemas_by_id: BTreeMap::new(),
-                        schemas_by_name: BTreeMap::new(),
-                        owner_id,
-                        privileges: PrivilegeMap::from_mz_acl_items(privileges),
-                    },
-                );
-                state.database_by_name.insert(name.clone(), id.clone());
-            }
+            let updates = txn.get_updates().collect();
+            state.apply_updates(updates);
 
             let schemas = txn.get_schemas();
             for mz_catalog::durable::Schema {

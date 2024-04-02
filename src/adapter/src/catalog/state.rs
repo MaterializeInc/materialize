@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt::Debug;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -37,7 +38,7 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
     CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
-    Role, Schema, Secret, Sink, Source, Table, Type, View,
+    Role, Schema, Secret, Sink, Source, StateUpdate, StateUpdateKind, Table, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -49,8 +50,8 @@ use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
-use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
+use mz_ore::{instrument, soft_assert_eq_or_log, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
@@ -58,7 +59,7 @@ use mz_repr::namespaces::{
     PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
@@ -2231,6 +2232,63 @@ impl CatalogState {
                 SystemObjectType::Object(self.get_object_type(object_id))
             }
             SystemObjectId::System => SystemObjectType::System,
+        }
+    }
+
+    /// Update in-memory catalog state.
+    #[instrument]
+    pub(crate) fn apply_updates(&mut self, updates: Vec<StateUpdate>) {
+        fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: V, diff: Diff)
+        where
+            K: Ord + Debug,
+            V: PartialEq + Eq + Debug,
+        {
+            if diff == 1 {
+                let prev = map.insert(key, value);
+                soft_assert_eq_or_log!(
+                    prev,
+                    None,
+                    "values must be explicitly retracted before inserting a new value"
+                );
+            } else if diff == -1 {
+                let prev = map.remove(&key);
+                soft_assert_eq_or_log!(
+                    prev,
+                    Some(value),
+                    "retraction does not match existing value"
+                );
+            }
+        }
+
+        for StateUpdate { kind, diff } in updates {
+            assert!(
+                diff == 1 || diff == -1,
+                "invalid update in catalog updates: ({kind:?}, {diff:?})"
+            );
+            match kind {
+                StateUpdateKind::Database(database) => {
+                    apply(
+                        &mut self.database_by_id,
+                        database.id.clone(),
+                        Database {
+                            name: database.name.clone(),
+                            id: database.id.clone(),
+                            oid: database.oid,
+                            schemas_by_id: BTreeMap::new(),
+                            schemas_by_name: BTreeMap::new(),
+                            owner_id: database.owner_id,
+                            privileges: PrivilegeMap::from_mz_acl_items(database.privileges),
+                        },
+                        diff,
+                    );
+                    apply(
+                        &mut self.database_by_name,
+                        database.name,
+                        database.id.clone(),
+                        diff,
+                    );
+                }
+            }
         }
     }
 }
