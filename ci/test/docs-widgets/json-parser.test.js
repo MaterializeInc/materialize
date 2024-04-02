@@ -45,7 +45,7 @@ describe("JSON Widget", () => {
     jsonInput.value = '{"name": "test", "value": 123}';
     jsonInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toContain("SELECT");
     expect(sqlOutput.textContent).toContain("name");
@@ -60,13 +60,13 @@ describe("JSON Widget", () => {
     const jsonInput = window.document.getElementById("json_sample");
     jsonInput.value = '{"name": "test", "value": 123}';
     jsonInput.dispatchEvent(new window.Event("input"));
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     // Change the view name
     viewNameInput.value = "new_view";
     viewNameInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toContain("CREATE VIEW new_view");
   });
@@ -78,7 +78,7 @@ describe("JSON Widget", () => {
     jsonInput.value = "";
     jsonInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toBe("");
   });
@@ -92,7 +92,7 @@ describe("JSON Widget", () => {
     jsonInput.value = complexJson;
     jsonInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toContain("user_name");
     expect(sqlOutput.textContent).toContain("user_age");
@@ -106,7 +106,7 @@ describe("JSON Widget", () => {
     jsonInput.value = '{"special": "\\"Hello, \\n world!\\""}';
     jsonInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toContain("special");
   });
@@ -118,7 +118,7 @@ describe("JSON Widget", () => {
     jsonInput.value = '{"boolean": true, "nullValue": null, "number": 123}';
     jsonInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toContain("boolean");
     expect(sqlOutput.textContent).toContain("nullValue");
@@ -135,7 +135,7 @@ describe("JSON Widget", () => {
     viewTypeRadio.checked = true;
     viewTypeRadio.dispatchEvent(new window.Event("change"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toContain("CREATE VIEW");
 
@@ -143,7 +143,7 @@ describe("JSON Widget", () => {
     materializedViewTypeRadio.checked = true;
     materializedViewTypeRadio.dispatchEvent(new window.Event("change"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toContain("CREATE MATERIALIZED VIEW");
   });
@@ -168,7 +168,7 @@ describe("JSON Widget", () => {
     jsonInput.value = complexJson;
     jsonInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     // Check if the SQL contains the correct casting
     const expectedSql = [
@@ -194,7 +194,7 @@ describe("JSON Widget", () => {
     jsonInput.value = '{"number": 42}';
     jsonInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toContain(
       "(json_column->>'number')::numeric AS number"
@@ -209,7 +209,7 @@ describe("JSON Widget", () => {
     jsonInput.value = '{"isValid": true}';
     jsonInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toContain(
       "(json_column->>'isValid')::bool AS isValid"
@@ -224,7 +224,7 @@ describe("JSON Widget", () => {
     jsonInput.value = '{"date": "2023-02-01T17:00:00.000Z"}';
     jsonInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     expect(sqlOutput.textContent).toContain(
       "try_parse_monotonic_iso8601_timestamp(json_column->>'date') AS date"
@@ -239,7 +239,7 @@ describe("JSON Widget", () => {
     jsonInput.value = '{"nullable": null}';
     jsonInput.dispatchEvent(new window.Event("input"));
 
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 650));
 
     // Update this based on how your script handles null values
     expect(sqlOutput.textContent).toContain("nullable");
