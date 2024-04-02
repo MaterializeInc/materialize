@@ -10,16 +10,19 @@
 use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
-use semver::Version;
-use tracing::info;
-
-use mz_catalog::durable::Transaction;
+use mz_audit_log::{
+    CreateClusterReplicaV1, DropClusterReplicaV1, EventDetails, EventType, ObjectType,
+    VersionedEvent,
+};
+use mz_catalog::durable::{ReplicaLocation, Transaction};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
+use semver::Version;
+use tracing::info;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{Catalog, CatalogState, ConnCatalog};
@@ -218,5 +221,100 @@ fn ast_rewrite_create_source_loadgen_options_0_92_0(
 
     Rewriter.visit_statement_mut(stmt);
 
+    Ok(())
+}
+
+// Durable migrations
+
+/// Migrations that run only on the durable catalog before any data is loaded into memory.
+pub(crate) fn durable_migrate(
+    tx: &mut Transaction,
+    boot_ts: Timestamp,
+) -> Result<(), anyhow::Error> {
+    let boot_ts = boot_ts.into();
+    catalog_fix_system_cluster_replica_ids_v_0_95_0(tx, boot_ts)?;
+    Ok(())
+}
+
+// Add new migrations below their appropriate heading, and precede them with a
+// short summary of the migration's purpose and optional additional commentary
+// about safety or approach.
+//
+// The convention is to name the migration function using snake case:
+// > <category>_<description>_<version>
+//
+// Please include the adapter team on any code reviews that add or edit
+// migrations.
+
+fn catalog_fix_system_cluster_replica_ids_v_0_95_0(
+    tx: &mut Transaction,
+    boot_ts: EpochMillis,
+) -> Result<(), anyhow::Error> {
+    let updated_replicas: Vec<_> = tx
+        .get_cluster_replicas()
+        .filter(|replica| replica.cluster_id.is_system() && replica.replica_id.is_user())
+        .map(|replica| (replica.replica_id, replica))
+        .collect();
+    for (replica_id, mut updated_replica) in updated_replicas {
+        let sys_id = tx.allocate_system_replica_id()?;
+        updated_replica.replica_id = sys_id;
+        tx.remove_cluster_replica(replica_id)?;
+        tx.insert_cluster_replica(
+            updated_replica.cluster_id,
+            updated_replica.replica_id,
+            &updated_replica.name,
+            updated_replica.config.clone(),
+            updated_replica.owner_id,
+        )?;
+
+        // Update audit log.
+        if let ReplicaLocation::Managed {
+            size,
+            disk,
+            billed_as,
+            internal,
+            ..
+        } = &updated_replica.config.location
+        {
+            let cluster = tx
+                .get_clusters()
+                .filter(|cluster| cluster.id == updated_replica.cluster_id)
+                .next()
+                .expect("missing cluster");
+            let drop_audit_id = tx.allocate_audit_log_id()?;
+            let remove_event = VersionedEvent::new(
+                drop_audit_id,
+                EventType::Drop,
+                ObjectType::ClusterReplica,
+                EventDetails::DropClusterReplicaV1(DropClusterReplicaV1 {
+                    cluster_id: updated_replica.cluster_id.to_string(),
+                    cluster_name: cluster.name.clone(),
+                    replica_id: Some(replica_id.to_string()),
+                    replica_name: updated_replica.name.clone(),
+                }),
+                None,
+                boot_ts,
+            );
+            let create_audit_id = tx.allocate_audit_log_id()?;
+            let create_event = VersionedEvent::new(
+                create_audit_id,
+                EventType::Create,
+                ObjectType::ClusterReplica,
+                EventDetails::CreateClusterReplicaV1(CreateClusterReplicaV1 {
+                    cluster_id: updated_replica.cluster_id.to_string(),
+                    cluster_name: cluster.name.clone(),
+                    replica_id: Some(updated_replica.replica_id.to_string()),
+                    replica_name: updated_replica.name,
+                    logical_size: size.clone(),
+                    disk: *disk,
+                    billed_as: billed_as.clone(),
+                    internal: *internal,
+                }),
+                None,
+                boot_ts,
+            );
+            tx.insert_audit_log_events([remove_event, create_event]);
+        }
+    }
     Ok(())
 }

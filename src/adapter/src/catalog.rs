@@ -649,13 +649,13 @@ impl Catalog {
             .err_into()
     }
 
-    pub async fn allocate_user_replica_id(&self) -> Result<ReplicaId, Error> {
-        self.storage()
-            .await
-            .allocate_user_replica_id()
-            .await
-            .maybe_terminate("allocating user replica ids")
-            .err_into()
+    pub async fn allocate_replica_id(&self, cluster_id: &ClusterId) -> Result<ReplicaId, Error> {
+        let mut storage = self.storage().await;
+        let id = match cluster_id {
+            ClusterId::User(_) => storage.allocate_user_replica_id().await,
+            ClusterId::System(_) => storage.allocate_system_replica_id().await,
+        };
+        id.maybe_terminate("allocating replica ids").err_into()
     }
 
     /// Get the next system replica id without allocating it.

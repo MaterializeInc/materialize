@@ -147,7 +147,7 @@ impl Coordinator {
         }
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
-            let id = self.catalog_mut().allocate_user_replica_id().await?;
+            let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
             self.create_managed_cluster_replica_op(
                 cluster_id,
                 id,
@@ -349,9 +349,10 @@ impl Coordinator {
                 },
             };
 
+            let replica_id = self.catalog_mut().allocate_replica_id(&id).await?;
             ops.push(catalog::Op::CreateClusterReplica {
                 cluster_id: id,
-                id: self.catalog_mut().allocate_user_replica_id().await?,
+                id: replica_id,
                 name: replica_name.clone(),
                 config,
                 owner_id: *session.current_role_id(),
@@ -506,7 +507,7 @@ impl Coordinator {
 
         // Replicas have the same owner as their cluster.
         let owner_id = cluster.owner_id();
-        let id = self.catalog_mut().allocate_user_replica_id().await?;
+        let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
         let op = catalog::Op::CreateClusterReplica {
             cluster_id,
             id,
@@ -805,7 +806,7 @@ impl Coordinator {
                 }
             }
             for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
-                let id = self.catalog_mut().allocate_user_replica_id().await?;
+                let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
                 self.create_managed_cluster_replica_op(
                     cluster_id,
                     id,
@@ -837,7 +838,7 @@ impl Coordinator {
             for name in
                 (*replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
             {
-                let id = self.catalog_mut().allocate_user_replica_id().await?;
+                let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
                 self.create_managed_cluster_replica_op(
                     cluster_id,
                     id,
