@@ -113,7 +113,7 @@ impl Schema {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Role {
     pub name: String,
     pub id: RoleId,
@@ -2267,10 +2267,12 @@ pub struct StateUpdate {
 /// Variants are listed in dependency order.
 #[derive(Debug)]
 pub enum StateUpdateKind {
+    Role(durable::objects::Role),
     Database(durable::objects::Database),
     Schema(durable::objects::Schema),
     DefaultPrivilege(durable::objects::DefaultPrivilege),
     SystemPrivilege(MzAclItem),
     SystemConfiguration(durable::objects::SystemConfiguration),
+    Comment(durable::objects::Comment),
     // TODO(jkosh44) Add all other object variants.
 }

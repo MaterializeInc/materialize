@@ -759,6 +759,10 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
         }
 
         Ok(match kind {
+            StateUpdateKind::Comment(key, value) => {
+                let comment = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Comment(comment))
+            }
             StateUpdateKind::Database(key, value) => {
                 let database = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Database(database))
@@ -768,6 +772,10 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 Some(memory::objects::StateUpdateKind::DefaultPrivilege(
                     default_privilege,
                 ))
+            }
+            StateUpdateKind::Role(key, value) => {
+                let role = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Role(role))
             }
             StateUpdateKind::Schema(key, value) => {
                 let schema = into_durable(key, value)?;
@@ -789,13 +797,11 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             StateUpdateKind::AuditLog(_, _)
             | StateUpdateKind::Cluster(_, _)
             | StateUpdateKind::ClusterReplica(_, _)
-            | StateUpdateKind::Comment(_, _)
             | StateUpdateKind::Config(_, _)
             | StateUpdateKind::Epoch(_)
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::IntrospectionSourceIndex(_, _)
             | StateUpdateKind::Item(_, _)
-            | StateUpdateKind::Role(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::StorageUsage(_, _)
             | StateUpdateKind::SystemObjectMapping(_, _)

@@ -1437,6 +1437,7 @@ impl<'a> Transaction<'a> {
         }
 
         std::iter::empty()
+            .chain(get_collection_updates(&self.roles, StateUpdateKind::Role))
             .chain(get_collection_updates(
                 &self.databases,
                 StateUpdateKind::Database,
@@ -1456,6 +1457,10 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_updates(
                 &self.system_configurations,
                 StateUpdateKind::SystemConfiguration,
+            ))
+            .chain(get_collection_updates(
+                &self.comments,
+                StateUpdateKind::Comment,
             ))
             .map(|kind| StateUpdate { kind, diff: 1 })
     }
