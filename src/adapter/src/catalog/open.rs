@@ -35,7 +35,7 @@ use mz_catalog::durable::{
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, DefaultPrivileges, Func, Log, Role,
-    Schema, Source, Table, Type,
+    Source, Table, Type,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -58,8 +58,8 @@ use mz_sql::catalog::{
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
-    ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
-    SchemaId, SchemaSpecifier,
+    ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
+    SchemaSpecifier,
 };
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{OwnedVarInput, SystemVars, VarError, VarInput};
@@ -259,62 +259,7 @@ impl Catalog {
             state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
             let updates = txn.get_updates().collect();
-            state.apply_updates(updates);
-
-            let schemas = txn.get_schemas();
-            for mz_catalog::durable::Schema {
-                id,
-                oid,
-                name,
-                database_id,
-                owner_id,
-                privileges,
-            } in schemas
-            {
-                let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
-                    Some(database_id) => {
-                        let db = state
-                            .database_by_id
-                            .get_mut(database_id)
-                            .expect("catalog out of sync");
-                        (
-                            &mut db.schemas_by_id,
-                            &mut db.schemas_by_name,
-                            ResolvedDatabaseSpecifier::Id(*database_id),
-                        )
-                    }
-                    None => (
-                        &mut state.ambient_schemas_by_id,
-                        &mut state.ambient_schemas_by_name,
-                        ResolvedDatabaseSpecifier::Ambient,
-                    ),
-                };
-                schemas_by_id.insert(
-                    id.clone(),
-                    Schema {
-                        name: QualifiedSchemaName {
-                            database: database_spec,
-                            schema: name.clone(),
-                        },
-                        id: SchemaSpecifier::Id(id.clone()),
-                        oid,
-                        items: BTreeMap::new(),
-                        functions: BTreeMap::new(),
-                        types: BTreeMap::new(),
-                        owner_id,
-                        privileges: PrivilegeMap::from_mz_acl_items(privileges),
-                    },
-                );
-                schemas_by_name.insert(name.clone(), id);
-            }
-
-            let default_privileges = txn.get_default_privileges();
-            for mz_catalog::durable::DefaultPrivilege { object, acl_item } in default_privileges {
-                state.default_privileges.grant(object, acl_item);
-            }
-
-            let system_privileges = txn.get_system_privileges();
-            state.system_privileges.grant_all(system_privileges);
+            state.apply_updates_for_bootstrap(updates);
 
             Catalog::load_system_configuration(
                 &mut state,
