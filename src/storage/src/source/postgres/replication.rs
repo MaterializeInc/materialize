@@ -312,13 +312,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let mut stream = pin!(stream.peekable());
 
             let mut errored = HashSet::new();
-            let mut container = Vec::new();
-            let max_capacity = timely::container::buffer::default_capacity::<(
-                (u32, Result<Vec<Option<Bytes>>, DefiniteError>),
-                MzOffset,
-                Diff,
-            )>();
-
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
@@ -344,6 +337,18 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 "timely-{worker_id} extracting transaction \
                                     at {commit_lsn}"
                             );
+                            assert!(
+                                new_upper <= commit_lsn,
+                                "new_upper={new_upper} tx_lsn={commit_lsn}",
+                            );
+                            new_upper = commit_lsn + 1;
+                            // We are about to ingest a transaction which has the possiblity to be
+                            // very big and we certainly don't want to hold the data in memory. For
+                            // this reason we eagerly downgrade the upper capability in order for
+                            // the reclocking machinery to mint a binding that includes
+                            // this transaction and therefore be able to pass the data of the
+                            // transaction through as we stream it.
+                            upper_cap_set.downgrade([&new_upper]);
                             while let Some((oid, event, diff)) = tx.try_next().await? {
                                 if !table_info.contains_key(&oid) {
                                     continue;
@@ -357,21 +362,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                         data_output.give(data_cap, update).await;
                                     }
                                 }
-                                assert!(
-                                    new_upper <= commit_lsn,
-                                    "new_upper={} tx_lsn={}",
-                                    new_upper,
-                                    commit_lsn
-                                );
-                                container.push((data, commit_lsn, diff));
-                            }
-                            new_upper = commit_lsn + 1;
-                            if container.len() > max_capacity {
                                 data_output
-                                    .give_container(&data_cap_set[0], &mut container)
+                                    .give(&data_cap_set[0], (data, commit_lsn, diff))
                                     .await;
-                                upper_cap_set.downgrade([&new_upper]);
-                                data_cap_set.downgrade([&new_upper]);
                             }
                         }
                         _ => return Err(TransientError::BareTransactionEvent),
@@ -391,9 +384,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
                 if will_yield {
-                    data_output
-                        .give_container(&data_cap_set[0], &mut container)
-                        .await;
                     upper_cap_set.downgrade([&new_upper]);
                     data_cap_set.downgrade([&new_upper]);
                     rewinds.retain(|_, (_, req)| data_cap_set[0].time() <= &req.snapshot_lsn);

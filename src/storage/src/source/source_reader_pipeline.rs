@@ -896,9 +896,9 @@ where
             if as_of.iter().all(|t| !upper.less_equal(t)) {
                 let committed_upper = frontiers[1].frontier();
                 if as_of.iter().all(|t| !committed_upper.less_equal(t)) {
-                    // Compute the frontier of the binding that is *less than* the committed upper.
-                    let idx =
-                        ready_times.partition_point(|(_, t, _)| !committed_upper.less_than(t));
+                   // Compute the frontier of the binding that is *less than* the committed upper.
+                   let idx =
+                       ready_times.partition_point(|(_, t, _)| !committed_upper.less_than(t));
                     let updates = ready_times
                         .drain(0..idx)
                         .map(|(from_time, _, diff)| (from_time, diff));
