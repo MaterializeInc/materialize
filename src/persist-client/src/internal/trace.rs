@@ -124,19 +124,44 @@ pub struct ThinSpineBatch<T> {
     pub(crate) parts: Vec<SpineId>,
 }
 
+/// This is a "flattened" representation of a Trace. Goals:
+/// - small updates to the trace should result in small differences in the `FlatTrace`;
+/// - two `FlatTrace`s should be efficient to diff;
+/// - converting to and from a `Trace` should be relatively straightforward.
+///
+/// These goals are all somewhat in tension, and the space of possible representations is pretty
+/// large. See individual fields for comments on some of the tradeoffs.
 #[derive(Clone, Debug)]
 pub struct FlatTrace<T> {
     pub(crate) since: Antichain<T>,
+    /// Hollow batches without an associated ID. If this flattened trace contains spine batches,
+    /// we can figure out which legacy batch belongs in which spine batch by comparing the `desc`s.
+    /// Previously, we serialized a trace as just this list of batches. Keeping this data around
+    /// helps ensure backwards compatibility. In the near future, we may still keep some batches
+    /// here to help minimize the size of diffs -- rewriting all the hollow batches in a shard
+    /// can be prohibitively expensive. Eventually, we'd like to remove this in favour of the
+    /// collection below.
     pub(crate) legacy_batches: BTreeMap<Arc<HollowBatch<T>>, ()>,
+    /// Hollow batches _with_ an associated ID. Spine batches can reference these hollow batches
+    /// by id directly.
     pub(crate) hollow_batches: BTreeMap<SpineId, Arc<HollowBatch<T>>>,
+    /// Spine batches stored by ID. We reference hollow batches by ID, instead of inlining them,
+    /// to make differential updates smaller when two batches merge together. We also store the
+    /// level on the batch, instead of mapping from level to a list of batches... the level of a
+    /// spine batch doesn't change over time, but the list of batches at a particular level does.
     pub(crate) spine_batches: BTreeMap<SpineId, ThinSpineBatch<T>>,
+    /// In-progress merges. We store this by spine id instead of level to prepare for some possible
+    /// generalizations to spine (merging N of M batches at a level). This is also a natural place
+    /// to store incremental merge progress in the future.
     pub(crate) fueling_merges: BTreeMap<SpineId, FuelingMerge<T>>,
 }
+
 impl<T: Timestamp + Lattice> Trace<T> {
     pub(crate) fn flatten(&self) -> FlatTrace<T> {
         let since = self.spine.since.clone();
         let mut legacy_batches = BTreeMap::new();
-        // NB: for backwards-compatability reasons, we don't write these out yet!
+        // Since we store all batches in the legacy-batch collection for the moment,
+        // this doesn't need to be mutable.
         let hollow_batches = BTreeMap::new();
         let mut spine_batches = BTreeMap::new();
         let mut fueling_merges = BTreeMap::new();
@@ -219,6 +244,9 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
         // We need to look up legacy batches somehow, but we don't have a spine id for them.
         // Instead, we rely on the fact that the spine must store them in antichain order.
+        // Our timestamp type may not be totally ordered, so we need to implement our own comparator
+        // here. Persist's invariants ensure that all the frontiers we're comparing are comparable,
+        // though.
         let compare_chains = |left: &Antichain<T>, right: &Antichain<T>| {
             if PartialOrder::less_than(left, right) {
                 Ordering::Less
