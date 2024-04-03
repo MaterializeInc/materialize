@@ -7,12 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! An `UpsertStateBackend` that starts in memory and spills to RocksDB
+//! when the total size passes some threshold.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use mz_ore::metrics::DeleteOnDropGauge;
 use mz_rocksdb::RocksDBConfig;
 use prometheus::core::AtomicU64;
+use serde::{de::DeserializeOwned, Serialize};
 
 use super::upsert_bincode_opts;
 use crate::render::upsert::memory::InMemoryHashMap;
@@ -22,9 +26,9 @@ use crate::render::upsert::types::{
 };
 use crate::render::upsert::UpsertKey;
 
-pub enum BackendType {
-    InMemory(InMemoryHashMap),
-    RocksDb(RocksDB),
+pub enum BackendType<O> {
+    InMemory(InMemoryHashMap<O>),
+    RocksDb(RocksDB<O>),
 }
 /// Params required to create rocksdb instance
 pub(crate) struct RocksDBParams {
@@ -36,14 +40,17 @@ pub(crate) struct RocksDBParams {
     pub(crate) instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
 }
 
-pub struct AutoSpillBackend {
-    backend_type: BackendType,
+pub struct AutoSpillBackend<O> {
+    backend_type: BackendType<O>,
     rockdsdb_params: RocksDBParams,
     auto_spill_threshold_bytes: usize,
     rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
 }
 
-impl AutoSpillBackend {
+impl<O> AutoSpillBackend<O>
+where
+    O: Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
+{
     pub(crate) fn new(
         rockdsdb_params: RocksDBParams,
         auto_spill_threshold_bytes: usize,
@@ -59,7 +66,7 @@ impl AutoSpillBackend {
         }
     }
 
-    async fn init_rocksdb(rocksdb_params: &RocksDBParams) -> RocksDB {
+    async fn init_rocksdb(rocksdb_params: &RocksDBParams) -> RocksDB<O> {
         let RocksDBParams {
             instance_path,
             legacy_instance_path,
@@ -87,11 +94,16 @@ impl AutoSpillBackend {
 }
 
 #[async_trait::async_trait(?Send)]
-impl UpsertStateBackend for AutoSpillBackend {
+impl<O> UpsertStateBackend<O> for AutoSpillBackend<O>
+where
+    O: Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
+{
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
     {
+        // Note that we never revert back to memory if the size shrinks below the threshold.
+        // That case is considered rare and not worth the complexity.
         match &mut self.backend_type {
             BackendType::InMemory(map) => {
                 let mut put_stats = map.multi_put(puts).await?;
@@ -109,7 +121,7 @@ impl UpsertStateBackend for AutoSpillBackend {
                             k,
                             PutValue {
                                 value: Some(v),
-                                previous_persisted_size: None,
+                                previous_value_metadata: None,
                             },
                         )
                     });
@@ -136,7 +148,8 @@ impl UpsertStateBackend for AutoSpillBackend {
     ) -> Result<GetStats, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut UpsertValueAndSize>,
+        R: IntoIterator<Item = &'r mut UpsertValueAndSize<O>>,
+        O: 'r,
     {
         match &mut self.backend_type {
             BackendType::InMemory(in_memory_hash_map) => {
