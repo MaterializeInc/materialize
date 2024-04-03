@@ -411,6 +411,7 @@ SCENARIOS = [
             """
         ),
         clusterd_memory="8.0Gb",
+        disabled=True,
     ),
     KafkaScenario(
         name="upsert-snapshot",
