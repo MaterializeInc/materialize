@@ -29,7 +29,6 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
@@ -41,7 +40,7 @@ use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
-use tracing::error;
+use tracing::{error, Span};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -97,7 +96,7 @@ impl Handle {
 #[derive(Debug, Clone)]
 pub struct Client {
     build_info: &'static BuildInfo,
-    inner_cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
+    inner_cmd_tx: mpsc::UnboundedSender<(Span, Command)>,
     id_alloc: IdAllocator<IdAllocatorInnerBitSet>,
     now: NowFn,
     metrics: Metrics,
@@ -108,7 +107,7 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         build_info: &'static BuildInfo,
-        cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
+        cmd_tx: mpsc::UnboundedSender<(Span, Command)>,
         metrics: Metrics,
         now: NowFn,
         environment_id: EnvironmentId,
@@ -411,10 +410,10 @@ Issue a SQL query to get started. Need help?
         response
     }
 
-    #[instrument(level = "debug")]
+    #[instrument(level = "info")]
     fn send(&self, cmd: Command) {
         self.inner_cmd_tx
-            .send((OpenTelemetryContext::obtain(), cmd))
+            .send((Span::current(), cmd))
             .expect("coordinator unexpectedly gone");
     }
 }

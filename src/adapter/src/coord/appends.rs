@@ -187,8 +187,7 @@ impl Coordinator {
                 async move {
                     tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
                     // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                    let result =
-                        internal_cmd_tx.send(Message::GroupCommitInitiate(Span::current(), permit));
+                    let result = internal_cmd_tx.send_traced(Message::GroupCommitInitiate(permit));
                     if let Err(e) = result {
                         warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                     }
