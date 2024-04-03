@@ -421,6 +421,17 @@ impl Coordinator {
                 let mut read_policies: BTreeMap<Option<CompactionWindow>, Vec<GlobalId>> =
                     BTreeMap::new();
 
+                // To improve the performance of creating a source and many
+                // subsources, we create all of the collections at once. If we
+                // created each collection independently, we would reschedule
+                // the primary source's execution for each subsources, causing
+                // unncessary thrashing.
+                //
+                // Note that creating all of the collections at once should
+                // never be semantic bearing; we should always be able to break
+                // this apart into creating the collections sequentially.
+                let mut collections = Vec::with_capacity(sources.len());
+
                 for (source_id, mut source) in sources {
                     let source_status_collection_id =
                         Some(coord.catalog().resolve_builtin_storage_collection(
@@ -490,32 +501,30 @@ impl Coordinator {
                         }
                     };
 
-                    let storage_metadata = coord.catalog.state().storage_metadata();
-
-                    coord
-                        .controller
-                        .storage
-                        .create_collections(
-                            storage_metadata,
-                            None,
-                            vec![(
-                                source_id,
-                                CollectionDescription::<Timestamp> {
-                                    desc: source.desc.clone(),
-                                    data_source,
-                                    since: None,
-                                    status_collection_id,
-                                },
-                            )],
-                        )
-                        .await
-                        .unwrap_or_terminate("cannot fail to create collections");
+                    collections.push((
+                        source_id,
+                        CollectionDescription::<Timestamp> {
+                            desc: source.desc.clone(),
+                            data_source,
+                            since: None,
+                            status_collection_id,
+                        },
+                    ));
 
                     read_policies
                         .entry(source.custom_logical_compaction_window.clone())
                         .or_default()
                         .push(source_id);
                 }
+
+                let storage_metadata = coord.catalog.state().storage_metadata();
+
+                coord
+                    .controller
+                    .storage
+                    .create_collections(storage_metadata, None, collections)
+                    .await
+                    .unwrap_or_terminate("cannot fail to create collections");
 
                 // It is _very_ important that we only initialize read policies
                 // after we have created all the sources/collections. Some of
