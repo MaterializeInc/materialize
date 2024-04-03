@@ -144,12 +144,16 @@ def main(
     count_matches = 0
 
     for build in builds_data:
+        max_entries_to_print = max(0, max_results - count_matches)
+        if max_entries_to_print == 0:
+            break
+
         matches_in_build = search_build(
             build,
             search_value,
             use_regex=use_regex,
             fetch_mode=fetch_annotations_mode,
-            max_entries_to_print=max(0, max_results - count_matches),
+            max_entries_to_print=max_entries_to_print,
         )
         count_matches = count_matches + matches_in_build
 
