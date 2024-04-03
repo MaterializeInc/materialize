@@ -9,6 +9,7 @@
 
 use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_ore::soft_assert_eq_or_log;
 
 use crate::plan::expr::{HirRelationExpr, HirScalarExpr};
 use crate::plan::PlanError;
@@ -175,6 +176,7 @@ pub(crate) fn attempt_left_join_magic(
             // Only columns not from the outer scope introduce bindings.
             if left >= oa {
                 if let Some(bound) = bound_input {
+                    // If left references come from different inputs, bail out.
                     if bound_to[left] != bound {
                         tracing::debug!(case = 6, index, "attempt_left_join_magic");
                         return Ok(None);
@@ -203,9 +205,13 @@ pub(crate) fn attempt_left_join_magic(
             }
             left_typ.keys.clear();
             // `get_right` is already bound.
-            let left_vals = get_left
-                .clone()
-                .union(MirRelationExpr::Constant {
+
+            // Augment left_vals an all `Null` row, so that any null values
+            // match with nulls, and compute the distinct join keys in the
+            // resulting union.
+            let left_vals = MirRelationExpr::union(
+                get_left.clone(),
+                MirRelationExpr::Constant {
                     rows: Ok(vec![(
                         mz_repr::Row::pack(
                             std::iter::repeat(mz_repr::Datum::Null).take(get_left.arity()),
@@ -213,74 +219,110 @@ pub(crate) fn attempt_left_join_magic(
                         1,
                     )]),
                     typ: left_typ,
-                })
+                },
+            )
+            .project(
+                equations
+                    .iter()
+                    .map(|(l, _)| if l < &oa { *l } else { l - offset })
+                    .collect::<Vec<_>>(),
+            )
+            .distinct();
+
+            // Compute the non-Null join keys on the right side. We skip the
+            // distinct because the eventual `threshold` between `left_vals` and
+            // `right_vals` protects us.
+            let right_vals = get_right
+                .clone()
+                // The #c1 IS NOT NULL AND ... AND #cn IS NOT NULL filter
+                // ensures that we won't remove the all `Null` row in the
+                // eventual `threshold` call.
+                .filter(
+                    equations
+                        .iter()
+                        .map(|(_, r)| MirScalarExpr::column(r - oa - ba).call_is_null().not()),
+                )
                 .project(
                     equations
                         .iter()
-                        .map(|(l, _)| if l < &oa { *l } else { l - offset })
+                        .map(|(_, r)| r - oa - ba)
                         .collect::<Vec<_>>(),
-                )
-                .distinct();
-
-            // We skip the distinct because the eventual `threshold` protects us.
-            let right_vals = get_right.clone().project(
-                equations
-                    .iter()
-                    .map(|(_, r)| r - oa - ba)
-                    .collect::<Vec<_>>(),
-            );
+                );
 
             // Now we need to permute them into place, and leave `Datum::Null` values behind.
-            // We should also add an all `Null` row, so that any null values match with nulls.
-
-            // By default, we'll place post-pended nulls in each location.
-            // We will overwrite this with instructions to find augmenting values.
-            let mut projection = (equations.len()..equations.len() + rt.len()).collect::<Vec<_>>();
-            for (index, (_, right)) in equations.iter().enumerate() {
-                projection[*right - oa - ba] = index;
-            }
-
-            let additions = right_vals
-                .negate()
-                .union(left_vals)
+            let additions = MirRelationExpr::union(right_vals.negate(), left_vals)
                 .threshold()
                 .map(
+                    // Append nulls for all get_right columns, including the
+                    // extra column at the end that is used to differentiate between
+                    // augmented and original columns in the aug_value.
                     rt.iter()
                         .map(|t| MirScalarExpr::literal_null(t.scalar_type.clone()))
                         .collect::<Vec<_>>(),
                 )
-                .project(projection);
+                .project({
+                    // By default, we'll place post-pended nulls in each location.
+                    // We will overwrite this with instructions to find augmenting values.
+                    let mut projection =
+                        (equations.len()..equations.len() + rt.len()).collect::<Vec<_>>();
+                    for (index, (_, right)) in equations.iter().enumerate() {
+                        projection[*right - oa - ba] = index;
+                    }
+                    projection
+                });
 
             // This is where we should add a boolean column to indicate that the row is augmented,
             // so that after the join is done we can overwrite all values for `right` with null values.
             // This is a quirk of how outer joins work: the matched columns are left as null.
 
+            // TODO(aalexandrov): if we never see an error from this we can
+            // 1. Use `get_right` instead of `bindings[index + 1].1.clone()`.
+            // 2. Simplify bindings to use tuples instead of triples.
+            soft_assert_eq_or_log!(&bindings[index + 1].1, &get_right);
+
+            let aug_value = MirRelationExpr::union(
+                bindings[index + 1]
+                    .1
+                    .clone()
+                    // The #c1 IS NOT NULL AND ... AND #cn IS NOT NULL filter
+                    // ensures that the `Null` keys appearing on the left side
+                    // can only match the all `Null` row from additions in the
+                    // eventual `product.filter(...)` call.
+                    .filter(
+                        equations
+                            .iter()
+                            .map(|(_, r)| MirScalarExpr::column(r - oa - ba).call_is_null().not()),
+                    ),
+                additions,
+            );
+
             // Record the binding we'll need to make for `aug_id`.
-            augmented.push((
-                aug_id,
-                aug_right,
-                bindings[index + 1].1.clone().union(additions),
-            ));
+            augmented.push((aug_id, aug_right, aug_value));
 
             // Update `body` to reflect the product, filtered by `on`.
             body = product.filter(recompose_equations(equations));
 
-            // Update `body` so that each new column consults its final column, and if null sets all columns to null.
-            let scalars = (oa + ba..oa + ba + ra)
-                .map(|col| MirScalarExpr::If {
-                    cond: Box::new(MirScalarExpr::Column(oa + ba + ra).call_is_null()),
-                    then: Box::new(MirScalarExpr::literal_null(
-                        rt[col - (oa + ba)].scalar_type.clone(),
-                    )),
-                    els: Box::new(MirScalarExpr::Column(col)),
-                })
-                .collect::<Vec<_>>();
-
-            body = body.map(scalars).project(
-                (0..oa + ba)
-                    .chain(oa + ba + ra + 1..oa + ba + ra + 1 + ra)
-                    .collect(),
-            );
+            body = body
+                // Update `body` so that each new column consults its final
+                // column, and if null sets all right columns to null.
+                .map(
+                    (oa + ba..oa + ba + ra)
+                        .map(|col| MirScalarExpr::If {
+                            cond: Box::new(MirScalarExpr::Column(oa + ba + ra).call_is_null()),
+                            then: Box::new(MirScalarExpr::literal_null(
+                                rt[col - (oa + ba)].scalar_type.clone(),
+                            )),
+                            els: Box::new(MirScalarExpr::Column(col)),
+                        })
+                        .collect(),
+                )
+                // Replace the original |ra + 1| columns with the |ra| columns
+                // produced by the above map(...) call.
+                .project(
+                    (0..oa + ba)
+                        .chain(oa + ba + ra + 1..oa + ba + ra + 1 + ra)
+                        .collect(),
+                );
 
             ba += ra;
 
