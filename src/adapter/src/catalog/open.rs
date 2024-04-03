@@ -257,7 +257,7 @@ impl Catalog {
             {
                 migrate::durable_migrate(&mut txn, config.boot_ts)?;
                 // Overwrite and persist selected parameter values in `remote_system_parameters` that
-                // was pulled from a remote frontend (if present).
+                // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
                 if let Some(remote_system_parameters) = config.remote_system_parameters {
                     for (name, value) in remote_system_parameters {
                         txn.upsert_system_config(&name, value)?;
