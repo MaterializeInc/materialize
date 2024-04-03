@@ -481,6 +481,7 @@ impl CopyFormatParams<'static> {
         match self {
             &CopyFormatParams::Text(_) => "txt",
             &CopyFormatParams::Csv(_) => "csv",
+            &CopyFormatParams::Binary => "bin",
         }
     }
 }

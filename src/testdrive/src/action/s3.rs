@@ -7,10 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::str;
+use std::thread;
+use std::time::Duration;
+
+use anyhow::bail;
+use regex::Regex;
+
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
-use anyhow::bail;
-use std::str;
 
 pub async fn run_verify_data(
     mut cmd: BuiltinCommand,
@@ -37,6 +42,10 @@ pub async fn run_verify_data(
 
     let mut rows = vec![];
     for obj in files.contents.unwrap().iter() {
+        if obj.key().map_or(false, |key| key.contains("INCOMPLETE")) {
+            bail!("found incomplete sentinel file in path: {obj:?}")
+        }
+
         let file = client
             .get_object()
             .bucket(&bucket)
@@ -60,4 +69,46 @@ pub async fn run_verify_data(
     }
 
     Ok(ControlFlow::Continue)
+}
+
+pub async fn run_verify_keys(
+    mut cmd: BuiltinCommand,
+    state: &State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let bucket: String = cmd.args.parse("bucket")?;
+    let prefix_path: String = cmd.args.parse("prefix-path")?;
+    let key_pattern: Regex = cmd.args.parse("key-pattern")?;
+    let num_attempts = cmd.args.opt_parse("num-attempts")?.unwrap_or(30);
+    cmd.args.done()?;
+
+    println!("Verifying {key_pattern} in S3 bucket {bucket} path {prefix_path}...");
+
+    let client = mz_aws_util::s3::new_client(&state.aws_config);
+
+    let mut attempts = 0;
+    while attempts <= num_attempts {
+        attempts += 1;
+        let files = client
+            .list_objects_v2()
+            .bucket(&bucket)
+            .prefix(&format!("{}/", prefix_path))
+            .send()
+            .await?;
+        match files.contents {
+            Some(files) => {
+                let files: Vec<_> = files
+                    .iter()
+                    .filter(|obj| key_pattern.is_match(obj.key().unwrap()))
+                    .map(|obj| obj.key().unwrap())
+                    .collect();
+                if !files.is_empty() {
+                    println!("Found matching files: {files:?}");
+                    return Ok(ControlFlow::Continue);
+                }
+            }
+            _ => thread::sleep(Duration::from_secs(1)),
+        }
+    }
+
+    bail!("Did not find matching files in bucket {bucket} prefix {prefix_path}");
 }

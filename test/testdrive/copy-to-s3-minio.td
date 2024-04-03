@@ -138,3 +138,12 @@ $ s3-verify-data bucket=copytos3 key=test/2
 
 $ s3-verify-data bucket=copytos3 key=test/3
 "{1,2}",f,Infinity,"{""s"":""abc""}",1,32767,2147483647,9223372036854775807,12345678901234567890123.4567890123456789,2010-10-10,10:10:10,2010-10-10 10:10:10,00:00:00,aaaa,\x5c7841414141,това е,\xd182d0b5d0bad181d182
+
+
+# Copy a large amount of data in the background and check to see that the INCOMPLETE
+# sentinel object is written during the copy
+
+$ postgres-execute background=true connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
+COPY (SELECT * FROM generate_series(1, 5000000)) TO 's3://copytos3/test/5' WITH (AWS CONNECTION = aws_conn, MAX FILE SIZE = "100MB", FORMAT = 'csv');
+
+$ s3-verify-keys bucket=copytos3 prefix-path=test/5 key-pattern=INCOMPLETE

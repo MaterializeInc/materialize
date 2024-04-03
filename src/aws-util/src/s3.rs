@@ -67,6 +67,7 @@ pub async fn upload_object<T: Into<ByteStream>>(
     Ok(())
 }
 
+/// Delete an object by key from an S3 bucket.
 pub async fn delete_object(
     client: &Client,
     bucket: &str,

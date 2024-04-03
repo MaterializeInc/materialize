@@ -82,6 +82,8 @@ pub fn copy_to<G, F>(
 
     // Signal mechanism from workers to leader to indicate they have completed their uploads,
     // so that the leader can perform any cleanup necessary.
+    // A `()` datum along this edge indicates success. A `[]` frontier indicates failure. Note that
+    // this is disconnected and has a `0` summary, as its unrelated to the frontier of the output.
     let (mut completed_handle, completed_stream) = builder.new_output();
     let (completed_feedback_handle, completed_feedback_stream) = scope.feedback(Default::default());
     let mut completed_input = builder.new_disconnected_input(
@@ -222,7 +224,7 @@ async fn handle_inputs_and_upload(
         }
     }
 
-    let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
+    let s3_key_manager = S3KeyManager::new(sink_id, &connection_details.uri);
 
     if is_leader {
         // Check that the S3 bucket path is empty before beginning the upload.
@@ -237,7 +239,7 @@ async fn handle_inputs_and_upload(
         match mz_aws_util::s3::list_bucket_path(
             &client,
             &s3_key_manager.bucket,
-            &s3_key_manager.path_prefix(),
+            s3_key_manager.path_prefix(),
         )
         .await
         {
@@ -312,7 +314,7 @@ async fn handle_inputs_and_upload(
                             CopyToS3Uploader::new(
                                 sdk_config.clone(),
                                 connection_details.clone(),
-                                &sink_id,
+                                sink_id,
                                 batch,
                             )
                         });
@@ -336,6 +338,11 @@ async fn handle_inputs_and_upload(
     Ok(row_count)
 }
 
+/// Helper to manage object keys created by this sink based on the S3 URI provided
+/// by the user and the GlobalId that identifies this copy-to-s3 sink.
+/// Since there may be multiple compute replicas running their own copy of this sink
+/// we need to ensure the S3 keys are consistent such that we can detect when objects
+/// were created by an instance of this sink or not.
 struct S3KeyManager {
     pub bucket: String,
     object_key_prefix: String,
@@ -374,10 +381,13 @@ impl S3KeyManager {
         object_key.starts_with(&self.object_key_prefix)
     }
 
-    /// The key prefix provided by the user. NOTE this doesn't contain the additional
-    /// prefix we include on all keys written by the sink `mz-{sink_id}-`
+    /// The key prefix based on the URI provided by the user. NOTE this doesn't
+    /// contain the additional prefix we include on all keys written by the sink
+    /// e.g. `mz-{sink_id}-batch-...`
+    /// This is useful when listing objects in the bucket with this prefix to
+    /// determine if its clear to upload.
     fn path_prefix(&self) -> &str {
-        &self.object_key_prefix.rsplit_once('/').expect("exists").0
+        self.object_key_prefix.rsplit_once('/').expect("exists").0
     }
 }
 
@@ -387,7 +397,7 @@ struct CopyToS3Uploader {
     desc: RelationDesc,
     /// Params to format the data.
     format: CopyFormatParams<'static>,
-    /// The index of the current file.
+    /// The index of the current file within the batch.
     file_index: usize,
     /// Provides the appropriate bucket and object keys to use for uploads
     key_manager: S3KeyManager,
