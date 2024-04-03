@@ -4532,7 +4532,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-subscriber",
- "workspace-hack",
 ]
 
 [[package]]

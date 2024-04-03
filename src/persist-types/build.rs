@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
-
 fn main() {
-    env::set_var("PROTOC", protobuf_src::protoc());
+    #[cfg(feature = "protobuf-src")]
+    std::env::set_var("PROTOC", protobuf_src::protoc());
 
     prost_build::Config::new()
         .type_attribute(".", "#[derive(serde::Serialize)]")
