@@ -255,9 +255,6 @@ where
             return;
         }
 
-        // Wait for the start signal before doing any work.
-        let () = start_signal.await;
-
         // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
         // up a background tokio task to heartbeat it. It is possible that we might get a
         // particularly adversarial scheduling where the CRDB query to register the id is sent and
@@ -287,6 +284,13 @@ where
         .await
         .expect("reader creation shouldn't panic")
         .expect("could not open persist shard");
+
+        // Wait for the start signal only after having obtained a read handle and therefore a read
+        // hold on the source shard. The compute controller is currently not able to correctly
+        // maintain read holds for inputs to REFRESH MVs, so it needs a little help.
+        //
+        // TODO(#16275): move this await before the reader initialization
+        let () = start_signal.await;
 
         let cfg = read.cfg.clone();
         let metrics = Arc::clone(&read.metrics);
