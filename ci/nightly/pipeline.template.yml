@@ -304,7 +304,7 @@ steps:
       - id: bounded-memory
         label: "Bounded Memory"
         depends_on: build-aarch64
-        timeout_in_minutes: 3600
+        timeout_in_minutes: 90
         parallelism: 2
         agents:
           queue: linux-aarch64
