@@ -77,6 +77,7 @@ async fn datadriven() {
                                 .clone();
                             catalog
                                 .transact(
+                                    None,
                                     mz_repr::Timestamp::MIN,
                                     None,
                                     vec![Op::CreateItem {

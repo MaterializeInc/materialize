@@ -142,7 +142,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::ActiveComputeSink;
-use crate::catalog::{BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog};
+use crate::catalog::{BuiltinTableUpdate, Catalog};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
@@ -1391,7 +1391,6 @@ impl Coordinator {
     #[instrument(name = "coord::bootstrap")]
     pub(crate) async fn bootstrap(
         &mut self,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         info!("coordinator init: beginning bootstrap");
@@ -1439,19 +1438,6 @@ impl Coordinator {
         self.controller
             .create_replicas(replicas_to_start, enable_worker_core_affinity)
             .await?;
-
-        debug!("coordinator init: migrating builtin objects");
-        // Migrate builtin objects.
-        self.controller
-            .storage
-            .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids);
-
-        self.controller
-            .storage
-            .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids);
-        self.controller
-            .storage
-            .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
         debug!("coordinator init: initializing storage collections");
         self.bootstrap_storage_collections().await;
@@ -1853,15 +1839,10 @@ impl Coordinator {
 
         // Destructure Self so we can do some concurrent work.
         let Self {
-            controller,
             secrets_controller,
             catalog,
             ..
         } = self;
-
-        // Signal to the storage controller that it is now free to reconcile its
-        // state with what it has learned from the adapter.
-        let storage_reconcile_fut = controller.storage.reconcile_state();
 
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
@@ -1891,13 +1872,9 @@ impl Coordinator {
         };
 
         // Run all of our final steps concurrently.
-        futures::future::join_all([
-            storage_reconcile_fut,
-            builtin_updates_fut,
-            Box::pin(secrets_cleanup_fut),
-        ])
-        .instrument(info_span!("coord::bootstrap::final"))
-        .await;
+        futures::future::join_all([builtin_updates_fut, Box::pin(secrets_cleanup_fut)])
+            .instrument(info_span!("coord::bootstrap::final"))
+            .await;
 
         info!("coordinator init: bootstrap complete");
         Ok(())
@@ -1990,17 +1967,13 @@ impl Coordinator {
             })
             .collect();
 
-        self.controller
-            .storage
-            .migrate_collections(collections.clone())
-            .await
-            .unwrap_or_terminate("cannot fail to migrate collections");
-
         let register_ts = self.get_local_write_ts().await.timestamp;
 
+        let storage_metadata = self.catalog.state().storage_metadata();
+
         self.controller
             .storage
-            .create_collections(Some(register_ts), collections)
+            .create_collections(storage_metadata, Some(register_ts), collections)
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
@@ -2967,7 +2940,7 @@ pub fn serve(
         let boot_ts = epoch_millis_oracle.write_ts().await.timestamp;
 
         info!("coordinator init: opening catalog");
-        let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
+        let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
             Catalog::open(
                 mz_catalog::config::Config {
                     storage,
@@ -3032,16 +3005,19 @@ pub fn serve(
             .name("coordinator".to_string())
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
-                let catalog = Arc::new(catalog);
 
-                let controller = handle.block_on(
-                    mz_controller::Controller::new(
-                        controller_config,
-                        controller_envd_epoch,
-                        controller_persist_txn_tables,
-                    )
-                    .boxed(),
-                );
+                let controller = handle
+                    .block_on({
+                        catalog.initialize_controller(
+                            controller_config,
+                            controller_envd_epoch,
+                            builtin_migration_metadata,
+                            controller_persist_txn_tables,
+                        )
+                    })
+                    .expect("failed to initialize storage_controller");
+
+                let catalog = Arc::new(catalog);
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let mut coord = Coordinator {
@@ -3082,7 +3058,7 @@ pub fn serve(
                 };
                 let bootstrap = handle.block_on(async {
                     coord
-                        .bootstrap(builtin_migration_metadata, builtin_table_updates)
+                        .bootstrap(builtin_table_updates)
                         .await?;
                     coord
                         .controller

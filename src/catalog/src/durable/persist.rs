@@ -594,6 +594,15 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::SystemPrivilege(key, value) => {
                         apply(&mut snapshot.system_privileges, key, value, diff);
                     }
+                    StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                        apply(&mut snapshot.storage_collection_metadata, key, value, diff);
+                    }
+                    StateUpdateKind::UnfinalizedShard(key, ()) => {
+                        apply(&mut snapshot.unfinalized_shards, key, &(), diff);
+                    }
+                    StateUpdateKind::PersistTxnShard((), value) => {
+                        apply(&mut snapshot.persist_txn_shard, &(), value, diff);
+                    }
                 }
             }
             f(snapshot)
@@ -1555,6 +1564,16 @@ impl Trace {
                 }
                 StateUpdateKind::SystemPrivilege(k, v) => {
                     trace.system_privileges.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::StorageCollectionMetadata(k, v) => trace
+                    .storage_collection_metadata
+                    .values
+                    .push(((k, v), ts, diff)),
+                StateUpdateKind::UnfinalizedShard(k, ()) => {
+                    trace.unfinalized_shards.values.push(((k, ()), ts, diff))
+                }
+                StateUpdateKind::PersistTxnShard((), v) => {
+                    trace.persist_txn_shard.values.push((((), v), ts, diff))
                 }
             }
         }

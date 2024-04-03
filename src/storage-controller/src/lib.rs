@@ -48,8 +48,7 @@ use mz_persist_types::{Codec64, Opaque};
 use mz_proto::RustType;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
-use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
-use mz_stash_types::metrics::Metrics as StashMetrics;
+use mz_stash::{self, TypedCollection};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
     StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
@@ -57,6 +56,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
     ExportState, IntrospectionType, MonotonicAppender, Response, SnapshotCursor, StorageController,
+    StorageMetadata, StorageTxn,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
@@ -66,8 +66,7 @@ use mz_storage_types::collections as proto;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{
-    AlterError, CollectionMetadata, DurableCollectionMetadata, PersistTxnTablesImpl, StorageError,
-    TxnsCodecRow,
+    AlterError, CollectionMetadata, PersistTxnTablesImpl, StorageError, TxnsCodecRow,
 };
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::instances::StorageInstanceId;
@@ -83,13 +82,10 @@ use tokio::sync::watch::{channel, Sender};
 use tokio_stream::StreamMap;
 use tracing::{debug, info, warn};
 
-use crate::command_wals::ProtoShardId;
-
 use crate::persist_handles::SnapshotStatsAsOf;
 use crate::rehydration::RehydratingStorageClient;
 mod collection_mgmt;
 mod collection_status;
-pub mod command_wals;
 mod persist_handles;
 mod rehydration;
 mod statistics;
@@ -100,10 +96,13 @@ pub static METADATA_COLLECTION: TypedCollection<proto::GlobalId, proto::DurableC
 pub static PERSIST_TXNS_SHARD: TypedCollection<(), String> =
     TypedCollection::new("persist-txns-shard");
 
+pub static SHARD_FINALIZATION: TypedCollection<String, ()> =
+    TypedCollection::new("storage-shards-to-finalize");
+
 pub static ALL_COLLECTIONS: &[&str] = &[
     METADATA_COLLECTION.name(),
     PERSIST_TXNS_SHARD.name(),
-    command_wals::SHARD_FINALIZATION.name(),
+    SHARD_FINALIZATION.name(),
 ];
 
 #[derive(Debug)]
@@ -157,13 +156,26 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
 
+    /// The set of [`ShardId`]s to finalize.
+    ///
+    /// This is a separate set from `finalized_shards` because we know that
+    /// some environments have many, many finalizable shards that we are
+    /// struggling to finalize.
+    finalizable_shards: BTreeSet<ShardId>,
+
+    /// The set of [`ShardId`]s we have finalized.
+    ///
+    /// This is a separate set from `finalizable_shards` because we know that
+    /// some environments have many, many finalizable shards that we are
+    /// struggling to finalize.
+    finalized_shards: BTreeSet<ShardId>,
+
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(crate) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(crate) exports: BTreeMap<GlobalId, ExportState<T>>,
-    pub(crate) stash: mz_stash::Stash,
     /// Write handle for table shards.
     pub(crate) persist_table_worker: persist_handles::PersistTableWriteWorker<T>,
     /// Write handle for monotonic shards.
@@ -359,35 +371,12 @@ where
         self.replicas.remove(&instance_id);
     }
 
-    // Add new migrations below and precede them with a short summary of the
-    // migration's purpose and optional additional commentary about safety or
-    // approach.
-    //
-    // Note that:
-    // - The sum of all migrations must be idempotent because all migrations run
-    //   every time the catalog opens, unless migrations are explicitly
-    //   disabled. This might mean changing code outside the migration itself,
-    //   or only executing some migrations when encountering certain versions.
-    // - Migrations must preserve backwards compatibility with all past releases
-    //   of Materialize.
-    #[instrument(level = "debug")]
-    async fn migrate_collections(
-        &mut self,
-        _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        // Collection migrations look something like this:
-        // let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.stash).await?;
-        // do_migration(&mut durable_metadata)?;
-        // self.upsert_collection_metadata(&mut durable_metadata, remap_shard_migration_delta)
-        //     .await;
-        Ok(())
-    }
-
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
     // a method/move individual parts to their own methods.
     #[instrument(name = "storage::create_collections")]
     async fn create_collections(
         &mut self,
+        storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
@@ -411,54 +400,25 @@ where
             }
         }
 
-        // Install collection state for each bound description. Note that this
-        // method implementation attempts to do AS MUCH work concurrently as
-        // possible. There are inline comments explaining the motivation behind
-        // each section.
-        let mut entries = Vec::with_capacity(collections.len());
-
-        for (id, _desc) in &collections {
-            entries.push((
-                *id,
-                DurableCollectionMetadata {
-                    data_shard: ShardId::new(),
-                },
-            ))
-        }
-
-        // Perform all stash writes in a single transaction, to minimize transaction overhead and
-        // the time spent waiting for stash.
-        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
-            .insert_without_overwrite(
-                &mut self.stash,
-                entries
-                    .into_iter()
-                    .map(|(key, val)| (key.into_proto(), val.into_proto())),
-            )
-            .await?
-            .into_iter()
-            .map(RustType::from_proto)
-            .collect::<Result<_, _>>()
-            .map_err(|e| StorageError::IOError(e.into()))?;
-
         // We first enrich each collection description with some additional metadata...
         use futures::stream::{StreamExt, TryStreamExt};
         let enriched_with_metadata = collections
             .into_iter()
             .map(|(id, description)| {
-                let collection_shards = durable_metadata.get(&id).expect("inserted above");
+                let data_shard = storage_metadata.get_collection_shard::<T>(id)?;
 
-                let status_shard =
-                    if let Some(status_collection_id) = description.status_collection_id {
-                        Some(
-                            durable_metadata
-                                .get(&status_collection_id)
-                                .ok_or(StorageError::IdentifierMissing(status_collection_id))?
-                                .data_shard,
-                        )
-                    } else {
-                        None
+                let get_shard = |id| -> Result<ShardId, StorageError<T>> {
+                    let shard = match self.collections.get(&id) {
+                        Some(col) => col.collection_metadata.data_shard,
+                        None => storage_metadata.get_collection_shard::<T>(id)?,
                     };
+                    Ok(shard)
+                };
+
+                let status_shard = match description.status_collection_id {
+                    Some(status_collection_id) => Some(get_shard(status_collection_id)?),
+                    None => None,
+                };
 
                 let remap_shard = match &description.data_source {
                     // Only ingestions can have remap shards.
@@ -468,12 +428,7 @@ where
                     }) => {
                         // Iff ingestion has a remap collection, its metadata must
                         // exist (and be correct) by this point.
-                        Some(
-                            durable_metadata
-                                .get(remap_collection_id)
-                                .ok_or(StorageError::IdentifierMissing(*remap_collection_id))?
-                                .data_shard,
-                        )
+                        Some(get_shard(*remap_collection_id)?)
                     }
                     _ => None,
                 };
@@ -499,7 +454,7 @@ where
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),
                     remap_shard,
-                    data_shard: collection_shards.data_shard,
+                    data_shard,
                     status_shard,
                     relation_desc: description.desc.clone(),
                     txns_shard,
@@ -894,6 +849,8 @@ where
             }
         }
 
+        self.synchronize_finalized_shards(storage_metadata);
+
         Ok(())
     }
 
@@ -1177,14 +1134,30 @@ where
 
     fn drop_sources(
         &mut self,
+        storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         self.validate_collection_ids(identifiers.iter().cloned())?;
-        self.drop_sources_unvalidated(identifiers);
+        self.drop_sources_unvalidated(storage_metadata, identifiers);
         Ok(())
     }
 
-    fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
+    fn drop_sources_unvalidated(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+        identifiers: Vec<GlobalId>,
+    ) {
+        for id in &identifiers {
+            let metadata = storage_metadata.get_collection_shard::<T>(*id);
+            mz_ore::soft_assert_or_log!(
+                matches!(metadata, Err(StorageError::IdentifierMissing(_))),
+                "dropping {id}, but drop was not synchronized with storage \
+                controller via `synchronize_collections`"
+            );
+        }
+
+        self.synchronize_finalized_shards(storage_metadata);
+
         // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
@@ -1678,7 +1651,7 @@ where
                 updated_frontiers = Some(Response::FrontierUpdates(updates));
             }
             Some(StorageResponse::DroppedIds(ids)) => {
-                let shards_to_finalize: Vec<_> = ids
+                let shards_to_finalize = ids
                     .iter()
                     .filter_map(|id| {
                         // Note: All handles to the id should be dropped by now and the since of
@@ -1696,22 +1669,7 @@ where
                     })
                     .collect();
 
-                // Ensure we don't leak any shards by tracking all of them we intend to
-                // finalize.
-                self.register_shards_for_finalization(shards_to_finalize)
-                    .await;
-
-                METADATA_COLLECTION
-                    .delete_keys(
-                        &mut self.stash,
-                        ids.into_iter()
-                            .map(|id| RustType::into_proto(&id))
-                            .collect(),
-                    )
-                    .await
-                    .expect("stash operation must succeed");
-
-                self.finalize_shards().await;
+                self.finalize_shards(shards_to_finalize).await;
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -1918,10 +1876,6 @@ where
             .await;
 
         Ok(updated_frontiers)
-    }
-
-    async fn reconcile_state(&mut self) {
-        self.reconcile_state_inner().await
     }
 
     async fn inspect_persist_state(
@@ -2196,6 +2150,89 @@ where
         self.txns_init_run = true;
         Ok(())
     }
+
+    async fn initialize_state(
+        &mut self,
+        txn: &mut dyn StorageTxn<T>,
+        init_ids: BTreeSet<GlobalId>,
+        drop_ids: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError<T>> {
+        let metadata = txn.get_collection_metadata();
+        let processed_metadata: Result<Vec<_>, _> = metadata
+            .into_iter()
+            .map(|(id, shard)| ShardId::from_str(&shard).map(|shard| (id, shard)))
+            .collect();
+        let metadata = processed_metadata.map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))?;
+        let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
+
+        // Determine which collections we do not yet have metadata for.
+        let new_collections: BTreeSet<GlobalId> = init_ids
+            .iter()
+            .filter(|id| !existing_metadata.contains(id))
+            .cloned()
+            .collect();
+
+        mz_ore::soft_assert_or_log!(
+            new_collections.iter().all(|id| id.is_system()),
+            "initializing collections should only be missing metadata for new system objects, but got {:?}",
+            new_collections
+        );
+
+        self.prepare_state(txn, new_collections, drop_ids).await?;
+
+        // All shards that belong to collections dropped in the last epoch are
+        // eligible for finalization. This intentionally includes any built-in
+        // collections present in `drop_ids`.
+        //
+        // n.b. this introduces an unlikely race condition: if a collection is
+        // dropped from the catalog, but the dataflow is still running on a
+        // worker, assuming the shard is safe to finalize on reboot may cause
+        // the cluster to panic.
+        if self.config.parameters.finalize_shards {
+            self.finalizable_shards.extend(
+                txn.get_unfinalized_shards()
+                    .into_iter()
+                    .map(|shard| ShardId::from_str(&shard).expect("deserialization corrupted")),
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn prepare_state(
+        &mut self,
+        txn: &mut dyn StorageTxn<T>,
+        ids_to_add: BTreeSet<GlobalId>,
+        ids_to_drop: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError<T>> {
+        txn.insert_collection_metadata(
+            ids_to_add
+                .into_iter()
+                .map(|id| (id, ShardId::new().to_string()))
+                .collect(),
+        )?;
+
+        // Delete the metadata for any dropped collections.
+        let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
+
+        let dropped_shards = dropped_mappings
+            .into_iter()
+            .map(|(_id, shard)| shard)
+            .collect();
+
+        txn.insert_unfinalized_shards(dropped_shards)?;
+
+        // Reconcile any shards we've successfully finalized with the shard
+        // finalization collection.
+        txn.mark_shards_as_finalized(
+            self.finalized_shards
+                .iter()
+                .map(|v| v.to_string())
+                .collect(),
+        );
+
+        Ok(())
+    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
@@ -2232,6 +2269,21 @@ impl From<NonZeroI64> for PersistEpoch {
     }
 }
 
+/// Seed [`StorageTxn`] with any state required to instantiate a
+/// [`StorageController`].
+///
+/// This cannot be a member of [`StorageController`] because it cannot take a
+/// `self` parameter.
+///
+pub fn prepare_initialization<T>(txn: &mut dyn StorageTxn<T>) -> Result<(), StorageError<T>> {
+    if txn.get_persist_txn_shard().is_none() {
+        let txns_id = ShardId::new();
+        txn.write_persist_txn_shard(txns_id.to_string())?;
+    }
+
+    Ok(())
+}
+
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
@@ -2244,101 +2296,35 @@ where
     ///
     /// Note that when creating a new storage controller, you must also
     /// reconcile it with the previous state.
+    ///
+    /// # Panics
+    /// If this function is called before [`prepare_initialization`].
     pub async fn new(
         build_info: &'static BuildInfo,
-        postgres_url: String,
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
         now: NowFn,
-        stash_metrics: Arc<StashMetrics>,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
         persist_txn_tables: PersistTxnTablesImpl,
         connection_context: ConnectionContext,
+        txn: &dyn StorageTxn<T>,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let tls = mz_tls_util::make_tls(
-            &tokio_postgres::config::Config::from_str(&postgres_url)
-                .expect("invalid postgres url for storage stash"),
-        )
-        .expect("could not make storage TLS connection");
-        let mut stash = StashFactory::from_metrics(stash_metrics)
-            .open(postgres_url, None, tls, None)
-            .await
-            .expect("could not connect to postgres storage stash");
-
-        // Ensure all collections are initialized, otherwise they cannot
-        // be read.
-        async fn maybe_get_init_batch<'tx, K, V>(
-            tx: &'tx mz_stash::Transaction<'tx>,
-            typed: &TypedCollection<K, V>,
-        ) -> Option<AppendBatch>
-        where
-            K: mz_stash::Data,
-            V: mz_stash::Data,
-        {
-            let collection = tx
-                .collection::<K, V>(typed.name())
-                .await
-                .expect("named collection must exist");
-            if !collection
-                .is_initialized(tx)
-                .await
-                .expect("collection known to exist")
-            {
-                Some(
-                    collection
-                        .make_batch_tx(tx)
-                        .await
-                        .expect("stash operation must succeed"),
-                )
-            } else {
-                None
-            }
-        }
-
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    // Query all collections in parallel. Makes for triplicated
-                    // names, but runs quick.
-                    let (
-                        metadata_collection,
-                        persist_txns_shard,
-                        shard_finalization,
-                    ) = futures::join!(
-                        maybe_get_init_batch(&tx, &METADATA_COLLECTION),
-                        maybe_get_init_batch(&tx, &PERSIST_TXNS_SHARD),
-                        maybe_get_init_batch(&tx, &command_wals::SHARD_FINALIZATION),
-                    );
-                    let batches: Vec<AppendBatch> = [
-                        metadata_collection,
-                        persist_txns_shard,
-                        shard_finalization,
-                    ]
-                    .into_iter()
-                    .filter_map(|b| b)
-                    .collect();
-
-                    // Drop the notification future we don't need.
-                    tx.append(batches).await.map(drop)
-                })
-            })
-            .await
-            .expect("stash operation must succeed");
+        // This value must be already installed because we must ensure it's
+        // durably recorded before it is used, otherwise we risk leaking persist
+        // state.
+        let txns_id = txn
+            .get_persist_txn_shard()
+            .expect("must call prepare initialization before creating storage controller");
+        let txns_id = ShardId::from_str(txns_id.as_str()).expect("shard ID must be valid");
 
         let txns_client = persist_clients
             .open(persist_location.clone())
             .await
             .expect("location should be valid");
         let txns_metrics = Arc::new(TxnMetrics::new(&metrics_registry));
-        let txns_id = PERSIST_TXNS_SHARD
-            .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
-            .await
-            .expect("could not get txns shard id")
-            .parse::<ShardId>()
-            .expect("should be valid shard id");
         let txns = TxnsHandle::open(
             T::minimum(),
             txns_client.clone(),
@@ -2385,9 +2371,10 @@ where
 
         Self {
             build_info,
+            finalizable_shards: BTreeSet::new(),
+            finalized_shards: BTreeSet::new(),
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
-            stash,
             persist_table_worker,
             persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
@@ -2919,165 +2906,30 @@ where
         self.append_to_managed_collection(id, updates).await;
     }
 
-    /// Updates the on-disk and in-memory representation of `DurableCollectionMetadata` (i.e. KV
-    /// pairs in `METADATA_COLLECTION` on-disk and `all_current_metadata` as its in-memory
-    /// representation) to include that of `upsert_state`, i.e. upserting the KV pairs in
-    /// `upsert_state` into in `all_current_metadata`, as well as `METADATA_COLLECTION`.
-    ///
-    /// Any shards no longer referenced after the upsert will be finalized.
-    ///
-    /// Note that this function expects to be called:
-    /// - While no source is currently using the shards identified in the current metadata.
-    /// - Before any sources begins using the shards identified in `new_metadata`.
-    ///
-    /// We allow this being kept around as dead code because we might want to perform similar
-    /// migration in the future.
-    #[allow(dead_code)]
-    async fn upsert_collection_metadata(
-        &mut self,
-        all_current_metadata: &mut BTreeMap<GlobalId, DurableCollectionMetadata>,
-        upsert_state: BTreeMap<GlobalId, DurableCollectionMetadata>,
-    ) {
-        // If nothing changed, don't do any work, which might include async
-        // calls into stash.
-        if upsert_state.is_empty() {
-            return;
-        }
-
-        let mut new_shards = BTreeSet::new();
-        let mut dropped_shards = BTreeSet::new();
-        let mut data_shards_to_replace = BTreeSet::new();
-        for (id, new_metadata) in upsert_state.iter() {
-            match all_current_metadata.get(id) {
-                Some(metadata) => {
-                    let old = metadata.data_shard;
-                    let new = new_metadata.data_shard;
-                    if old != new {
-                        info!("replacing {}'s data shard {:?} with {:?}", id, old, new);
-                        new_shards.insert(new);
-                        dropped_shards.insert(old);
-                        data_shards_to_replace.insert(*id);
-                    }
-                }
-                // New collections, which might use an another collection's
-                // dropped shard.
-                None => {
-                    new_shards.insert(new_metadata.data_shard);
-                    continue;
-                }
-            };
-
-            // Update the in-memory representation.
-            all_current_metadata.insert(*id, new_metadata.clone());
-        }
-
-        // Reconcile dropped shards reference with shards that moved into a new
-        // collection.
-        dropped_shards.retain(|shard| !new_shards.contains(shard));
-
-        // Ensure we don't leak any shards by tracking all of them we intend to
-        // finalize.
-        self.register_shards_for_finalization(dropped_shards.iter().cloned())
-            .await;
-
-        // Update the on-disk representation.
-        METADATA_COLLECTION
-            .upsert(
-                &mut self.stash,
-                upsert_state.into_iter().map(|s| RustType::into_proto(&s)),
-            )
-            .await
-            .expect("connect to stash");
-
-        // Avoid taking lock if unnecessary
-        if data_shards_to_replace.is_empty() {
-            return;
-        }
-
-        let persist_client = self
-            .persist
-            .open(self.persist_location.clone())
-            .await
-            .unwrap();
-
-        // Update the in-memory state for data shards
-        for id in data_shards_to_replace {
-            let c = match self.collection_mut(id) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            assert_ne!(
-                c.description.data_source,
-                DataSource::Progress,
-                "we do not have the logic in place to update a progress collection's shard \
-                to do this, you'll also need to update the in-memory state of the collection \
-                that uses this shard as its progress collection or determine this is set \
-                before that collection is created"
-            );
-
-            let data_shard = all_current_metadata[&id].data_shard;
-            c.collection_metadata.data_shard = data_shard;
-
-            let collection_desc = c.description.clone();
-            let relation_desc = c.collection_metadata.relation_desc.clone();
-
-            // This will halt! if any of the handles cannot be acquired
-            // because we're not the leader anymore. But that's fine, we
-            // already updated all the persistent state (in stash).
-            let (write, since_handle) = self
-                .open_data_handles(
-                    &id,
-                    data_shard,
-                    collection_desc.since.as_ref(),
-                    relation_desc,
-                    &persist_client,
-                )
-                .await;
-
-            match collection_desc.data_source {
-                DataSource::Introspection(_) | DataSource::Webhook => {
-                    self.persist_monotonic_worker.update(id, write);
-                }
-                DataSource::Other(DataSourceOther::TableWrites) => {
-                    self.persist_table_worker.update(id, write);
-                }
-                DataSource::Ingestion(_)
-                | DataSource::Progress
-                | DataSource::Other(DataSourceOther::Compute)
-                | DataSource::Other(DataSourceOther::Source) => {
-                    // No-op.
-                }
-            }
-            self.persist_read_handles.update(id, since_handle);
-        }
+    /// Remove any shards that we know are finalized
+    fn synchronize_finalized_shards(&mut self, storage_metadata: &StorageMetadata) {
+        self.finalized_shards.retain(|shard| {
+            storage_metadata
+                .unfinalized_shards
+                .contains(shard.to_string().as_str())
+        });
     }
 
     /// Attempts to close all shards marked for finalization.
     #[allow(dead_code)]
     #[instrument(level = "debug")]
-    async fn finalize_shards(&mut self) {
+    async fn finalize_shards(&mut self, new_shards: Vec<ShardId>) {
         if !self.config.parameters.finalize_shards {
             info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
             return;
         }
+
         info!("triggering shard finalization due to dropped storage object");
 
-        let shards = self
-            .stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let collection = tx
-                        .collection::<ProtoShardId, ()>(command_wals::SHARD_FINALIZATION.name())
-                        .await
-                        .expect("named collection must exist");
-                    tx.peek_one(collection).await
-                })
-            })
-            .await
-            .expect("stash operation succeeds")
-            .into_iter()
-            .map(|(shard, _)| ShardId::from_proto(shard).expect("invalid ShardId"));
+        self.finalizable_shards.extend(new_shards);
+        if self.finalizable_shards.is_empty() {
+            info!("no shards to finalize");
+        }
 
         // Open a persist client to delete unused shards.
         let persist_client = self
@@ -3095,115 +2947,116 @@ where
         let epoch = &PersistEpoch::from(self.envd_epoch);
 
         use futures::stream::StreamExt;
-        let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(shards)
-            .map(|shard_id| async move {
-                let persist_client = persist_client.clone();
-                let diagnostics = diagnostics.clone();
-                let epoch = epoch.clone();
+        let finalized_shards: BTreeSet<ShardId> =
+            futures::stream::iter(self.finalizable_shards.clone())
+                .map(|shard_id| async move {
+                    let persist_client = persist_client.clone();
+                    let diagnostics = diagnostics.clone();
+                    let epoch = epoch.clone();
 
-                let is_finalized = persist_client
-                    .is_finalized::<SourceData, (), T, Diff>(shard_id, diagnostics)
-                    .await
-                    .expect("invalid persist usage");
+                    let is_finalized = persist_client
+                        .is_finalized::<SourceData, (), T, Diff>(shard_id, diagnostics)
+                        .await
+                        .expect("invalid persist usage");
 
-                if is_finalized {
-                    Some(shard_id)
-                } else {
-                    // Finalizing a shard can take a long time cleaning up existing data.
-                    // Spawning a task means that we can't proactively remove this shard
-                    // from the finalization register, unfortunately... but a future run
-                    // of `finalize_shards` should notice the shard has been finalized and tidy
-                    // up.
-                    mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
-                        let finalize = || async move {
-                            let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
-                            let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
-                                persist_client
-                                    .open_writer(
-                                        shard_id,
-                                        Arc::new(RelationDesc::empty()),
-                                        Arc::new(UnitSchema),
-                                        // TODO: thread the global ID into the shard finalization WAL
-                                        Diagnostics::from_purpose("finalizing shards"),
-                                    )
-                                    .await
-                                    .expect("invalid persist usage");
+                    if is_finalized {
+                        Some(shard_id)
+                    } else {
+                        // Finalizing a shard can take a long time cleaning up existing data.
+                        // Spawning a task means that we can't proactively remove this shard
+                        // from the finalization register, unfortunately... but a future run
+                        // of `finalize_shards` should notice the shard has been finalized and tidy
+                        // up.
+                        mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
+                            let finalize = || async move {
+                                let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
+                                let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
+                                    persist_client
+                                        .open_writer(
+                                            shard_id,
+                                            Arc::new(RelationDesc::empty()),
+                                            Arc::new(UnitSchema),
+                                            // TODO: thread the global ID into the shard finalization WAL
+                                            Diagnostics::from_purpose("finalizing shards"),
+                                        )
+                                        .await
+                                        .expect("invalid persist usage");
 
-                            let upper = write_handle.upper();
-                            if !upper.is_empty() {
-                                let append = write_handle
-                                    .append(empty_batch, upper.clone(), Antichain::new())
-                                    .await?;
+                                let upper = write_handle.upper();
+                                if !upper.is_empty() {
+                                    let append = write_handle
+                                        .append(empty_batch, upper.clone(), Antichain::new())
+                                        .await?;
 
-                                if let Err(e) = append {
-                                    warn!(
+                                    if let Err(e) = append {
+                                        warn!(
                                         "tried to finalize a shard with an advancing upper: {e:?}"
                                     );
-                                    return Ok(());
+                                        return Ok(());
+                                    }
                                 }
-                            }
-                            write_handle.expire().await;
+                                write_handle.expire().await;
 
-                            if force_downgrade_since {
-                                let mut since_handle: SinceHandle<
-                                    SourceData,
-                                    (),
-                                    T,
-                                    Diff,
-                                    PersistEpoch,
-                                > = persist_client
-                                    .open_critical_since(
+                                if force_downgrade_since {
+                                    let mut since_handle: SinceHandle<
+                                        SourceData,
+                                        (),
+                                        T,
+                                        Diff,
+                                        PersistEpoch,
+                                    > = persist_client
+                                        .open_critical_since(
+                                            shard_id,
+                                            PersistClient::CONTROLLER_CRITICAL_SINCE,
+                                            Diagnostics::from_purpose("finalizing shards"),
+                                        )
+                                        .await
+                                        .expect("invalid persist usage");
+                                    let epoch = epoch.clone();
+                                    let new_since = Antichain::new();
+                                    let downgrade = since_handle
+                                        .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+                                        .await;
+                                    if let Err(e) = downgrade {
+                                        warn!(
+                                        "tried to finalize a shard with an advancing epoch: {e:?}"
+                                    );
+                                        return Ok(());
+                                    }
+                                }
+
+                                persist_client
+                                    .finalize_shard::<SourceData, (), T, Diff>(
                                         shard_id,
-                                        PersistClient::CONTROLLER_CRITICAL_SINCE,
                                         Diagnostics::from_purpose("finalizing shards"),
                                     )
                                     .await
-                                    .expect("invalid persist usage");
-                                let epoch = epoch.clone();
-                                let new_since = Antichain::new();
-                                let downgrade = since_handle
-                                    .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
-                                    .await;
-                                if let Err(e) = downgrade {
-                                    warn!(
-                                        "tried to finalize a shard with an advancing epoch: {e:?}"
-                                    );
-                                    return Ok(());
+                            };
+
+                            match finalize().await {
+                                Err(e) => {
+                                    // Rather than error, just leave this shard as one to finalize later.
+                                    warn!("error during background finalization: {e:?}");
                                 }
+                                Ok(()) => {}
                             }
+                        });
+                        None
+                    }
+                })
+                // Poll each future for each collection concurrently, maximum of 10 at a time.
+                .buffer_unordered(10)
+                // HERE BE DRAGONS: see warning on other uses of buffer_unordered
+                // before any changes to `collect`
+                .collect::<BTreeSet<Option<ShardId>>>()
+                .await
+                .into_iter()
+                .filter_map(|shard| shard)
+                .collect();
 
-                            persist_client
-                                .finalize_shard::<SourceData, (), T, Diff>(
-                                    shard_id,
-                                    Diagnostics::from_purpose("finalizing shards"),
-                                )
-                                .await
-                        };
-
-                        match finalize().await {
-                            Err(e) => {
-                                // Rather than error, just leave this shard as one to finalize later.
-                                warn!("error during background finalization: {e:?}");
-                            }
-                            Ok(()) => {}
-                        }
-                    });
-                    None
-                }
-            })
-            // Poll each future for each collection concurrently, maximum of 10 at a time.
-            .buffer_unordered(10)
-            // HERE BE DRAGONS: see warning on other uses of buffer_unordered
-            // before any changes to `collect`
-            .collect::<BTreeSet<Option<ShardId>>>()
-            .await
-            .into_iter()
-            .filter_map(|shard| shard)
-            .collect();
-
-        if !finalized_shards.is_empty() {
-            self.clear_from_shard_finalization_register(finalized_shards)
-                .await;
+        for id in finalized_shards {
+            self.finalizable_shards.remove(&id);
+            self.finalized_shards.insert(id);
         }
     }
 

@@ -317,10 +317,13 @@ impl Coordinator {
                         }
                     };
 
+                    let storage_metadata = coord.catalog.state().storage_metadata();
+
                     coord
                         .controller
                         .storage
                         .create_collections(
+                            storage_metadata,
                             None,
                             vec![(
                                 source_id,
@@ -632,10 +635,15 @@ impl Coordinator {
                     table.desc.clone(),
                     DataSourceOther::TableWrites,
                 );
+                let storage_metadata = coord.catalog.state().storage_metadata();
                 coord
                     .controller
                     .storage
-                    .create_collections(Some(register_ts), vec![(table_id, collection_desc)])
+                    .create_collections(
+                        storage_metadata,
+                        Some(register_ts),
+                        vec![(table_id, collection_desc)],
+                    )
                     .await
                     .unwrap_or_terminate("cannot fail to create collections");
                 coord.apply_local_write(register_ts).await;
@@ -3585,9 +3593,12 @@ impl Coordinator {
                         }
                     };
 
+                    let storage_metadata = self.catalog.state().storage_metadata();
+
                     self.controller
                         .storage
                         .create_collections(
+                            storage_metadata,
                             None,
                             vec![(
                                 source_id,

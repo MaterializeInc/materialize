@@ -40,9 +40,10 @@ use crate::durable::objects::{
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
-    ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemPrivilegesKey,
-    SystemPrivilegesValue,
+    ItemValue, PersistTxnShardValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
+    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, StorageUsageKey,
+    SystemPrivilegesKey, SystemPrivilegesValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -698,6 +699,58 @@ impl RustType<proto::StorageUsageKey> for StorageUsageKey {
         Ok(StorageUsageKey {
             metric: proto.usage.into_rust_if_some("StorageUsageKey::usage")?,
         })
+    }
+}
+
+impl RustType<proto::StorageCollectionMetadataKey> for StorageCollectionMetadataKey {
+    fn into_proto(&self) -> proto::StorageCollectionMetadataKey {
+        proto::StorageCollectionMetadataKey {
+            id: Some(self.id.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::StorageCollectionMetadataKey) -> Result<Self, TryFromProtoError> {
+        Ok(StorageCollectionMetadataKey {
+            id: proto
+                .id
+                .into_rust_if_some("StorageCollectionMetadataKey::id")?,
+        })
+    }
+}
+
+impl RustType<proto::StorageCollectionMetadataValue> for StorageCollectionMetadataValue {
+    fn into_proto(&self) -> proto::StorageCollectionMetadataValue {
+        proto::StorageCollectionMetadataValue {
+            shard: self.shard.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::StorageCollectionMetadataValue) -> Result<Self, TryFromProtoError> {
+        Ok(StorageCollectionMetadataValue { shard: proto.shard })
+    }
+}
+
+impl RustType<proto::UnfinalizedShardKey> for UnfinalizedShardKey {
+    fn into_proto(&self) -> proto::UnfinalizedShardKey {
+        proto::UnfinalizedShardKey {
+            shard: self.shard.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::UnfinalizedShardKey) -> Result<Self, TryFromProtoError> {
+        Ok(UnfinalizedShardKey { shard: proto.shard })
+    }
+}
+
+impl RustType<proto::PersistTxnShardValue> for PersistTxnShardValue {
+    fn into_proto(&self) -> proto::PersistTxnShardValue {
+        proto::PersistTxnShardValue {
+            shard: self.shard.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::PersistTxnShardValue) -> Result<Self, TryFromProtoError> {
+        Ok(PersistTxnShardValue { shard: proto.shard })
     }
 }
 

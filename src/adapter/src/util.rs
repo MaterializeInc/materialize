@@ -340,7 +340,10 @@ impl ShouldHalt for mz_catalog::durable::DurableCatalogError {
 impl<T> ShouldHalt for StorageError<T> {
     fn should_halt(&self) -> bool {
         match self {
-            StorageError::ResourceExhausted(_) => true,
+            StorageError::ResourceExhausted(_)
+            | StorageError::CollectionMetadataAlreadyExists(_)
+            | StorageError::PersistShardAlreadyInUse(_)
+            | StorageError::PersistTxnShardAlreadyExists => true,
             StorageError::UpdateBeyondUpper(_)
             | StorageError::ReadBeforeSince(_)
             | StorageError::InvalidUppers(_)
