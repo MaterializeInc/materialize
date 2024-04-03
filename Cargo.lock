@@ -5041,6 +5041,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-ore",
  "mz-persist",
+ "mz-persist-proc",
  "mz-persist-types",
  "mz-postgres-client",
  "mz-proto",
@@ -5067,6 +5068,16 @@ dependencies = [
  "tonic-build",
  "tracing",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-persist-proc"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.107",
  "workspace-hack",
 ]
 

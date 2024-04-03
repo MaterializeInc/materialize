@@ -1138,16 +1138,18 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
 
 #[cfg(test)]
 mod tests {
+    use mz_dyncfg::ConfigUpdates;
+
     use crate::tests::new_test_client;
 
     use super::*;
 
     /// Regression test for (part of) #17752, where an interrupted
     /// `bin/environmentd --reset` resulted in panic in persist usage code.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn fetch_all_live_states_regression_uninitialized() {
-        let client = new_test_client().await;
+    async fn fetch_all_live_states_regression_uninitialized(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
         let state_versions = StateVersions::new(
             client.cfg.clone(),
             Arc::clone(&client.consensus),

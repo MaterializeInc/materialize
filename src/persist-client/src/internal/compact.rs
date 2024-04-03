@@ -804,6 +804,7 @@ impl Timings {
 
 #[cfg(test)]
 mod tests {
+    use mz_dyncfg::ConfigUpdates;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use timely::progress::Antichain;
 
@@ -817,16 +818,16 @@ mod tests {
     // A regression test for a bug caught during development of #13160 (never
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn regression_minimum_since() {
+    async fn regression_minimum_since(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
             (("0".to_owned(), "zero".to_owned()), 1, -1),
             (("1".to_owned(), "one".to_owned()), 1, 1),
         ];
 
-        let cache = new_test_client_cache();
+        let cache = new_test_client_cache(&dyncfgs);
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 100);
         let (mut write, _) = cache
             .open(PersistLocation::new_in_mem())
@@ -882,9 +883,9 @@ mod tests {
         assert_eq!(updates, all_ok(&data, 10));
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn compaction_partial_order() {
+    async fn compaction_partial_order(dyncfgs: ConfigUpdates) {
         let data = vec![
             (
                 ("0".to_owned(), "zero".to_owned()),
@@ -898,7 +899,7 @@ mod tests {
             ),
         ];
 
-        let cache = new_test_client_cache();
+        let cache = new_test_client_cache(&dyncfgs);
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 100);
         let (mut write, _) = cache
             .open(PersistLocation::new_in_mem())

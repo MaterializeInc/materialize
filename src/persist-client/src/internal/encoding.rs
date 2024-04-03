@@ -1379,6 +1379,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
 mod tests {
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_dyncfg::ConfigUpdates;
     use mz_persist::location::SeqNo;
     use proptest::prelude::*;
 
@@ -1583,9 +1584,9 @@ mod tests {
         );
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn state_diff_migration_rollups() {
+    async fn state_diff_migration_rollups(dyncfgs: ConfigUpdates) {
         let r1_rollup = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
             encoded_size_bytes: None,
@@ -1660,7 +1661,7 @@ mod tests {
         let state: Rollup<u64> = rollup.into_rust().unwrap();
         let state = state.state;
         let mut state = state.check_codecs::<(), (), i64>(&shard_id).unwrap();
-        let cache = new_test_client_cache();
+        let cache = new_test_client_cache(&dyncfgs);
         let encoded_diff = VersionedData {
             seqno: SeqNo(5),
             data: diff_proto.encode_to_vec().into(),

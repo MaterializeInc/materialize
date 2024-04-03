@@ -772,28 +772,29 @@ mod tests {
     use std::str::FromStr;
     use std::sync::mpsc;
 
-    use crate::cache::PersistClientCache;
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_util::FutureExt;
+    use mz_dyncfg::ConfigUpdates;
     use mz_ore::collections::CollectionExt;
     use mz_ore::task;
     use serde_json::json;
 
+    use crate::cache::PersistClientCache;
     use crate::tests::{all_ok, new_test_client};
     use crate::{PersistLocation, ShardId};
 
     use super::*;
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn empty_batches() {
+    async fn empty_batches(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let (mut write, _) = new_test_client()
+        let (mut write, _) = new_test_client(&dyncfgs)
             .await
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
@@ -824,9 +825,9 @@ mod tests {
         assert_eq!(count_after, count_before);
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn compare_and_append_batch_multi() {
+    async fn compare_and_append_batch_multi(dyncfgs: ConfigUpdates) {
         let data0 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -838,7 +839,7 @@ mod tests {
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let (mut write, mut read) = new_test_client()
+        let (mut write, mut read) = new_test_client(&dyncfgs)
             .await
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
@@ -901,16 +902,16 @@ mod tests {
         assert_eq!(container.writer_id, id);
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn hollow_batch_roundtrip() {
+    async fn hollow_batch_roundtrip(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let (mut write, mut read) = new_test_client()
+        let (mut write, mut read) = new_test_client(&dyncfgs)
             .await
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
@@ -937,10 +938,10 @@ mod tests {
         assert_eq!(actual, all_ok(&expected, 3));
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn wait_for_upper_past() {
-        let client = new_test_client().await;
+    async fn wait_for_upper_past(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
         let (mut write, _) = client.expect_open::<(), (), u64, i64>(ShardId::new()).await;
         let five = Antichain::from_elem(5);
 

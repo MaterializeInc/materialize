@@ -142,6 +142,7 @@ mod tests {
     use futures::FutureExt;
     use futures_task::noop_waker;
     use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_dyncfg::ConfigUpdates;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
     use timely::progress::Antichain;
@@ -277,14 +278,14 @@ mod tests {
         }
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn state_watch_listen_snapshot() {
+    async fn state_watch_listen_snapshot(dyncfgs: ConfigUpdates) {
         mz_ore::test::init_logging();
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
         // Override the listen poll so that it's useless.
         client.cfg.set_config(
             &NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,

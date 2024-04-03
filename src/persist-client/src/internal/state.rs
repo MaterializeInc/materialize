@@ -1613,6 +1613,7 @@ pub(crate) mod tests {
     use std::ops::Range;
 
     use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_dyncfg::ConfigUpdates;
     use mz_ore::now::SYSTEM_TIME;
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
@@ -2530,10 +2531,10 @@ pub(crate) mod tests {
         );
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
-    async fn sneaky_downgrades() {
-        let mut clients = new_test_client_cache();
+    async fn sneaky_downgrades(dyncfgs: ConfigUpdates) {
+        let mut clients = new_test_client_cache(&dyncfgs);
         let shard_id = ShardId::new();
 
         async fn open_and_write(

@@ -1018,6 +1018,8 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 
 #[cfg(test)]
 mod tests {
+    use mz_dyncfg::ConfigUpdates;
+
     use crate::cache::PersistClientCache;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::tests::{all_ok, new_test_client, CodecProduct};
@@ -1231,10 +1233,10 @@ mod tests {
     }
 
     // NB: Most edge cases are exercised in datadriven tests.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
-    async fn rewrite_ts_example() {
-        let client = new_test_client().await;
+    async fn rewrite_ts_example(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
         let (mut write, read) = client
             .expect_open::<String, (), u64, i64>(ShardId::new())
             .await;

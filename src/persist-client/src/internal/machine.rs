@@ -1236,6 +1236,7 @@ pub mod datadriven {
     use anyhow::anyhow;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
+    use mz_dyncfg::ConfigUpdates;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{
@@ -1271,9 +1272,9 @@ pub mod datadriven {
     }
 
     impl MachineState {
-        pub async fn new() -> Self {
+        pub async fn new(dyncfgs: &ConfigUpdates) -> Self {
             let shard_id = ShardId::new();
-            let client = new_test_client().await;
+            let client = new_test_client(dyncfgs).await;
             // Reset blob_target_size. Individual batch writes and compactions
             // can override it with an arg.
             client
@@ -2148,24 +2149,25 @@ pub mod datadriven {
 pub mod tests {
     use std::sync::Arc;
 
-    use crate::cache::StateCache;
+    use mz_dyncfg::ConfigUpdates;
     use mz_ore::cast::CastFrom;
     use mz_ore::task::spawn;
     use mz_persist::intercept::{InterceptBlob, InterceptHandle};
     use mz_persist::location::SeqNo;
     use timely::progress::Antichain;
 
+    use crate::cache::StateCache;
     use crate::internal::gc::{GarbageCollector, GcReq};
     use crate::internal::state::{HandleDebugState, ROLLUP_THRESHOLD};
     use crate::tests::new_test_client;
     use crate::ShardId;
 
-    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
-    async fn apply_unbatched_cmd_truncate() {
+    async fn apply_unbatched_cmd_truncate(dyncfgs: ConfigUpdates) {
         mz_ore::test::init_logging();
 
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
         // set a low rollup threshold so GC/truncation is more aggressive
         client.cfg.set_config(&ROLLUP_THRESHOLD, 5);
         let (mut write, _) = client
@@ -2217,10 +2219,10 @@ pub mod tests {
     // A regression test for #14719, where a bug in gc led to an incremental
     // state invariant being violated which resulted in gc being permanently
     // wedged for the shard.
-    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
-    async fn regression_gc_skipped_req_and_interrupted() {
-        let mut client = new_test_client().await;
+    async fn regression_gc_skipped_req_and_interrupted(dyncfgs: ConfigUpdates) {
+        let mut client = new_test_client(&dyncfgs).await;
         let intercept = InterceptHandle::default();
         client.blob = Arc::new(InterceptBlob::new(
             Arc::clone(&client.blob),
@@ -2267,10 +2269,10 @@ pub mod tests {
     // would not fetch the latest state after an upper mismatch. This meant that
     // a write that could succeed if retried on the latest state would instead
     // return an UpperMismatch.
-    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
-    async fn regression_update_state_after_upper_mismatch() {
-        let client = new_test_client().await;
+    async fn regression_update_state_after_upper_mismatch(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
         let mut client2 = client.clone();
 
         // The bug can only happen if the two WriteHandles have separate copies
