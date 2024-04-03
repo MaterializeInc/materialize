@@ -42,7 +42,7 @@ use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput, Var, VarInput, PERSIST_TXN_TABLES};
+use mz_sql::session::vars::{ConnectionCounter, Var, PERSIST_TXN_TABLES};
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
@@ -696,18 +696,12 @@ impl Listeners {
 
 fn get_ld_value<V>(
     name: &str,
-    remote_system_parameters: &Option<BTreeMap<String, OwnedVarInput>>,
+    remote_system_parameters: &Option<BTreeMap<String, String>>,
     parse: impl Fn(&str) -> Result<V, String>,
 ) -> Result<Option<V>, anyhow::Error> {
     remote_system_parameters
         .as_ref()
         .and_then(|params| params.get(name))
-        .map(|value| match value.borrow() {
-            VarInput::Flat(s) => Ok(s),
-            VarInput::SqlSet([s]) => Ok(s.as_str()),
-            VarInput::SqlSet(v) => Err(anyhow!("Invalid remote value for {}: {:?}", name, v,)),
-        })
-        .transpose()?
         .map(|x| {
             parse(x).map_err(|err| anyhow!("failed to parse remote value for {}: {}", name, err))
         })

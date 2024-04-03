@@ -2271,5 +2271,6 @@ pub enum StateUpdateKind {
     Schema(durable::objects::Schema),
     DefaultPrivilege(durable::objects::DefaultPrivilege),
     SystemPrivilege(MzAclItem),
+    SystemConfiguration(durable::objects::SystemConfiguration),
     // TODO(jkosh44) Add all other object variants.
 }

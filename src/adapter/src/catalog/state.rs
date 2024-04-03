@@ -80,7 +80,7 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{SystemVars, Var, VarInput, DEFAULT_DATABASE_NAME};
+use mz_sql::session::vars::{SystemVars, Var, VarError, VarInput, DEFAULT_DATABASE_NAME};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageMetadata;
 use mz_storage_types::connections::inline::{
@@ -2396,6 +2396,28 @@ impl CatalogState {
                 -1 => self.system_privileges.revoke(&system_privilege),
                 _ => unreachable!("invalid diff: {diff}"),
             },
+            StateUpdateKind::SystemConfiguration(system_configuration) => {
+                let res = match diff {
+                    1 => self.insert_system_configuration(
+                        &system_configuration.name,
+                        VarInput::Flat(&system_configuration.value),
+                    ),
+                    -1 => self.remove_system_configuration(&system_configuration.name),
+                    _ => unreachable!("invalid diff: {diff}"),
+                };
+                match res {
+                    Ok(_) => (),
+                    // When system variables are deleted, nothing deletes them from the underlying
+                    // durable catalog, which isn't great. Still, we need to be able to ignore
+                    // unknown variables.
+                    Err(Error {
+                        kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
+                    }) => {
+                        warn!(%name, "unknown system parameter from catalog storage");
+                    }
+                    Err(e) => panic!("unable to update system variable: {e:?}"),
+                }
+            }
         }
     }
 
