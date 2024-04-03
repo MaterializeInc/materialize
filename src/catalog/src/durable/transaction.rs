@@ -281,8 +281,8 @@ impl<'a> Transaction<'a> {
         oid: u32,
     ) -> Result<RoleId, CatalogError> {
         soft_assert_or_log!(
-            id.is_system() || id.is_public(),
-            "ID {id:?} is not system or public variant"
+            id.is_system() || id.is_public() || id.is_group(),
+            "ID {id:?} is not system, group, or public variant"
         );
         self.insert_role(id, name, attributes, membership, vars, oid)?;
         Ok(id)

@@ -3455,6 +3455,10 @@ impl Catalog {
         self.state.ensure_not_system_role(role_id)
     }
 
+    pub fn ensure_not_group_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        self.state.ensure_not_group_role(role_id)
+    }
+
     pub fn ensure_not_reserved_object(
         &self,
         object_id: &ObjectId,

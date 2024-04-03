@@ -13,12 +13,12 @@ reset-server
 
 # Verify initial roles.
 query TTB rowsort
-SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%'
+SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%' OR id LIKE 'g%'
 ----
 s1  mz_system  true
 s2  mz_support  true
-s3  mz_monitor  true
-s4  mz_monitor_redacted  true
+g1  mz_monitor  true
+g2  mz_monitor_redacted  true
 
 query TB
 SELECT name, inherit FROM mz_roles WHERE id LIKE 'u%'

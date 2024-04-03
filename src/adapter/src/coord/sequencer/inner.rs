@@ -3885,6 +3885,7 @@ impl Coordinator {
 
             for grantee in &grantees {
                 self.catalog().ensure_not_system_role(grantee)?;
+                self.catalog().ensure_not_group_role(grantee)?;
                 let existing_privilege = privileges
                     .get_acl_item(grantee, &grantor)
                     .map(Cow::Borrowed)
@@ -3963,6 +3964,8 @@ impl Coordinator {
         for privilege_object in &privilege_objects {
             self.catalog()
                 .ensure_not_system_role(&privilege_object.role_id)?;
+            self.catalog()
+                .ensure_not_group_role(&privilege_object.role_id)?;
             if let Some(database_id) = privilege_object.database_id {
                 self.catalog()
                     .ensure_not_reserved_object(&database_id.into(), session.conn_id())?;
@@ -3979,6 +3982,8 @@ impl Coordinator {
             for privilege_acl_item in &privilege_acl_items {
                 self.catalog()
                     .ensure_not_system_role(&privilege_acl_item.grantee)?;
+                self.catalog()
+                    .ensure_not_group_role(&privilege_acl_item.grantee)?;
                 ops.push(catalog::Op::UpdateDefaultPrivilege {
                     privilege_object: privilege_object.clone(),
                     privilege_acl_item: privilege_acl_item.clone(),

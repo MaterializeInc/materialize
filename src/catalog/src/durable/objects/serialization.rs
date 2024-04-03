@@ -922,6 +922,7 @@ impl RustType<proto::RoleId> for RoleId {
         let value = match self {
             RoleId::User(id) => proto::role_id::Value::User(*id),
             RoleId::System(id) => proto::role_id::Value::System(*id),
+            RoleId::Group(id) => proto::role_id::Value::Group(*id),
             RoleId::Public => proto::role_id::Value::Public(Default::default()),
         };
 
@@ -935,6 +936,7 @@ impl RustType<proto::RoleId> for RoleId {
         let id = match value {
             proto::role_id::Value::User(id) => RoleId::User(id),
             proto::role_id::Value::System(id) => RoleId::System(id),
+            proto::role_id::Value::Group(id) => RoleId::Group(id),
             proto::role_id::Value::Public(_) => RoleId::Public,
         };
         Ok(id)

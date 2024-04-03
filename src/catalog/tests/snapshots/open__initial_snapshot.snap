@@ -784,8 +784,37 @@ Snapshot {
             id: Some(
                 RoleId {
                     value: Some(
-                        System(
-                            3,
+                        Public(
+                            Empty,
+                        ),
+                    ),
+                },
+            ),
+        }: RoleValue {
+            name: "public",
+            attributes: Some(
+                RoleAttributes {
+                    inherit: true,
+                },
+            ),
+            membership: Some(
+                RoleMembership {
+                    map: [],
+                },
+            ),
+            vars: Some(
+                RoleVars {
+                    entries: [],
+                },
+            ),
+            oid: 16944,
+        },
+        RoleKey {
+            id: Some(
+                RoleId {
+                    value: Some(
+                        Group(
+                            1,
                         ),
                     ),
                 },
@@ -813,8 +842,8 @@ Snapshot {
             id: Some(
                 RoleId {
                     value: Some(
-                        System(
-                            4,
+                        Group(
+                            2,
                         ),
                     ),
                 },
@@ -837,35 +866,6 @@ Snapshot {
                 },
             ),
             oid: 16664,
-        },
-        RoleKey {
-            id: Some(
-                RoleId {
-                    value: Some(
-                        Public(
-                            Empty,
-                        ),
-                    ),
-                },
-            ),
-        }: RoleValue {
-            name: "public",
-            attributes: Some(
-                RoleAttributes {
-                    inherit: true,
-                },
-            ),
-            membership: Some(
-                RoleMembership {
-                    map: [],
-                },
-            ),
-            vars: Some(
-                RoleVars {
-                    entries: [],
-                },
-            ),
-            oid: 16944,
         },
     },
     items: {},

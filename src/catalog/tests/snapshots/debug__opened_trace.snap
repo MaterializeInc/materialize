@@ -1131,8 +1131,44 @@ Trace {
                         id: Some(
                             RoleId {
                                 value: Some(
-                                    System(
-                                        3,
+                                    Public(
+                                        Empty,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    RoleValue {
+                        name: "public",
+                        attributes: Some(
+                            RoleAttributes {
+                                inherit: true,
+                            },
+                        ),
+                        membership: Some(
+                            RoleMembership {
+                                map: [],
+                            },
+                        ),
+                        vars: Some(
+                            RoleVars {
+                                entries: [],
+                            },
+                        ),
+                        oid: 16944,
+                    },
+                ),
+                2,
+                1,
+            ),
+            (
+                (
+                    RoleKey {
+                        id: Some(
+                            RoleId {
+                                value: Some(
+                                    Group(
+                                        1,
                                     ),
                                 ),
                             },
@@ -1167,8 +1203,8 @@ Trace {
                         id: Some(
                             RoleId {
                                 value: Some(
-                                    System(
-                                        4,
+                                    Group(
+                                        2,
                                     ),
                                 ),
                             },
@@ -1192,42 +1228,6 @@ Trace {
                             },
                         ),
                         oid: 16664,
-                    },
-                ),
-                2,
-                1,
-            ),
-            (
-                (
-                    RoleKey {
-                        id: Some(
-                            RoleId {
-                                value: Some(
-                                    Public(
-                                        Empty,
-                                    ),
-                                ),
-                            },
-                        ),
-                    },
-                    RoleValue {
-                        name: "public",
-                        attributes: Some(
-                            RoleAttributes {
-                                inherit: true,
-                            },
-                        ),
-                        membership: Some(
-                            RoleMembership {
-                                map: [],
-                            },
-                        ),
-                        vars: Some(
-                            RoleVars {
-                                entries: [],
-                            },
-                        ),
-                        oid: 16944,
                     },
                 ),
                 2,
