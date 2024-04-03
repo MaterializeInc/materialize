@@ -375,7 +375,6 @@ impl SessionVars {
             &AUTO_ROUTE_INTROSPECTION_QUERIES,
             &ENABLE_SESSION_RBAC_CHECKS,
             &ENABLE_SESSION_CARDINALITY_ESTIMATES,
-            &MAX_QUERY_RESULT_SIZE,
             &MAX_IDENTIFIER_LENGTH,
             &STATEMENT_LOGGING_SAMPLE_RATE,
             &EMIT_INTROSPECTION_QUERY_NOTICE,
@@ -1070,6 +1069,7 @@ impl SystemVars {
                 &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
                 &TIMEZONE,
                 &TRANSACTION_ISOLATION,
+                &MAX_QUERY_RESULT_SIZE,
             ]
             .into_iter()
             .map(|var| (UncasedStr::new(var.name()), var))
