@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_adapter_types::dyncfgs;
 use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
 };
@@ -74,7 +75,8 @@ use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
-    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
+    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, SinkEnvelope, SinkPartitionStrategy,
+    StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
@@ -2647,7 +2649,11 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(CreateSinkOption, (Snapshot, bool));
+generate_extracted_config!(
+    CreateSinkOption,
+    (Snapshot, bool),
+    (PartitionStrategy, String)
+);
 
 pub fn plan_create_sink(
     scx: &StatementContext,
@@ -2664,7 +2670,10 @@ pub fn plan_create_sink(
         with_options,
     } = stmt.clone();
 
-    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[CreateSinkOptionName::Snapshot];
+    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[
+        CreateSinkOptionName::Snapshot,
+        CreateSinkOptionName::PartitionStrategy,
+    ];
 
     if let Some(op) = with_options
         .iter()
@@ -2802,10 +2811,29 @@ pub fn plan_create_sink(
         )?,
     };
 
-    let CreateSinkOptionExtracted { snapshot, seen: _ } = with_options.try_into()?;
+    let CreateSinkOptionExtracted {
+        snapshot,
+        partition_strategy,
+        seen: _,
+    } = with_options.try_into()?;
 
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
+
+    let partition_strategy = match partition_strategy.as_deref() {
+        Some("v0") => SinkPartitionStrategy::V0,
+        Some("v1") => SinkPartitionStrategy::V1,
+        Some(strategy) => sql_bail!("{strategy} is not a valid partition strategy"),
+        None => {
+            if dyncfgs::ENABLE_DEFAULT_V1_PARTITION_STRATEGY
+                .get(scx.catalog.system_vars().dyncfgs())
+            {
+                SinkPartitionStrategy::V1
+            } else {
+                SinkPartitionStrategy::V0
+            }
+        }
+    };
 
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
@@ -2819,6 +2847,7 @@ pub fn plan_create_sink(
             create_sql,
             from: from.id(),
             connection: connection_builder,
+            partition_strategy,
             envelope,
         },
         with_snapshot,

@@ -39,6 +39,7 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
+    pub partition_strategy: SinkPartitionStrategy,
     pub with_snapshot: bool,
     pub envelope: SinkEnvelope,
     pub as_of: Antichain<T>,
@@ -73,6 +74,7 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             as_of: _,
             status_id,
             from_storage_metadata,
+            partition_strategy,
             with_snapshot,
         } = self;
 
@@ -86,6 +88,10 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             (envelope == &other.envelope, "envelope"),
             (status_id == &other.status_id, "status_id"),
             (with_snapshot == &other.with_snapshot, "with_snapshot"),
+            (
+                partition_strategy == &other.partition_strategy,
+                "partition_strategy",
+            ),
             (
                 from_storage_metadata == &other.from_storage_metadata,
                 "from_storage_metadata",
@@ -140,6 +146,7 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
             any::<Option<mz_repr::Timestamp>>(),
             any::<Option<ShardId>>(),
             any::<CollectionMetadata>(),
+            any::<SinkPartitionStrategy>(),
             any::<bool>(),
         )
             .prop_map(
@@ -151,6 +158,7 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
                     as_of,
                     status_id,
                     from_storage_metadata,
+                    partition_strategy,
                     with_snapshot,
                 )| {
                     StorageSinkDesc {
@@ -161,6 +169,7 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
                         as_of: Antichain::from_iter(as_of),
                         status_id,
                         from_storage_metadata,
+                        partition_strategy,
                         with_snapshot,
                     }
                 },
@@ -179,6 +188,7 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             as_of: Some(self.as_of.into_proto()),
             status_id: self.status_id.into_proto(),
             from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
+            partition_strategy: Some(self.partition_strategy.into_proto()),
             with_snapshot: self.with_snapshot,
         }
     }
@@ -202,6 +212,9 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             from_storage_metadata: proto
                 .from_storage_metadata
                 .into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,
+            partition_strategy: proto
+                .partition_strategy
+                .into_rust_if_some("ProtoStorageSinkDesc::partition_strategy")?,
             with_snapshot: proto.with_snapshot,
         })
     }
@@ -232,6 +245,39 @@ impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
         Ok(match kind {
             Kind::Debezium(()) => SinkEnvelope::Debezium,
             Kind::Upsert(()) => SinkEnvelope::Upsert,
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SinkPartitionStrategy {
+    /// A partition strategy based on the raw encoded bytes of each row.
+    V0,
+    /// A partition strategy that maintains the property row1 = row2 => partition(row1) =
+    /// partition(row2) even when the encoding of each row changes (e.g due to a new avro schema id
+    /// being recorded in the data).
+    V1,
+}
+
+impl RustType<ProtoSinkPartitionStrategy> for SinkPartitionStrategy {
+    fn into_proto(&self) -> ProtoSinkPartitionStrategy {
+        use proto_sink_partition_strategy::Kind;
+        ProtoSinkPartitionStrategy {
+            kind: Some(match self {
+                SinkPartitionStrategy::V0 => Kind::V0(()),
+                SinkPartitionStrategy::V1 => Kind::V1(()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoSinkPartitionStrategy) -> Result<Self, TryFromProtoError> {
+        use proto_sink_partition_strategy::Kind;
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkPartitionStrategy::kind"))?;
+        Ok(match kind {
+            Kind::V0(()) => SinkPartitionStrategy::V0,
+            Kind::V1(()) => SinkPartitionStrategy::V1,
         })
     }
 }

@@ -51,7 +51,9 @@ use mz_sql::session::vars::OwnedVarInput;
 use mz_sql_parser::ast::ClusterScheduleOptionValue;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sinks::{
+    KafkaSinkFormat, SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection,
+};
 use mz_storage_types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
@@ -642,6 +644,7 @@ pub struct Sink {
     pub connection: StorageSinkConnection<ReferencedConnection>,
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
+    pub partition_strategy: SinkPartitionStrategy,
     pub with_snapshot: bool,
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,

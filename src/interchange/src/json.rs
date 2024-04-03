@@ -61,11 +61,11 @@ impl Encode for JsonEncoder {
         "json"
     }
 
-    fn encode_key_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
-        self.encode_row(
-            row,
-            self.key_columns.as_ref().expect("key schema must exist"),
-        )
+    fn encode_key_unchecked(&self, row: mz_repr::Row) -> (u64, Vec<u8>) {
+        let key_columns = self.key_columns.as_ref().expect("key schema must exist");
+        let buf = self.encode_row(row, key_columns);
+        let hash = seahash::hash(&buf);
+        (hash, buf)
     }
 
     fn encode_value_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
