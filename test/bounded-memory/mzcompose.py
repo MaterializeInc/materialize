@@ -16,6 +16,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -37,10 +38,12 @@ SERVICES = [
         default_timeout="3600s",
         entrypoint_extra=[
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         ],
     ),
     Redpanda(),
     Postgres(),
+    MySql(),
     Clusterd(),
 ]
 
@@ -81,6 +84,51 @@ class PgCdcScenario(Scenario):
         > CREATE SOURCE mz_source
           IN CLUSTER single_replica_cluster
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+          FOR ALL TABLES;
+
+        > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
+        """
+    )
+
+
+class MySqlCdcScenario(Scenario):
+    MYSQL_SETUP = dedent(
+        f"""
+        > CREATE SECRET mysqlpass AS '${{arg.mysql-root-password}}'
+        > CREATE CONNECTION mysql_conn TO MYSQL (
+            HOST mysql,
+            USER root,
+            PASSWORD SECRET mysqlpass
+          )
+
+        $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+
+        $ mysql-execute name=mysql
+        # needed for MySQL 5.7
+        SET GLOBAL max_allowed_packet=67108864;
+
+        # reconnect
+        $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+
+        $ mysql-execute name=mysql
+        DROP DATABASE IF EXISTS public;
+        CREATE DATABASE public;
+        USE public;
+
+        SET @i:=0;
+        CREATE TABLE series_helper (i INT);
+        INSERT INTO series_helper (i) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {REPEAT};
+
+        CREATE TABLE t1 (f1 SERIAL PRIMARY KEY, f2 INTEGER DEFAULT 0, f3 TEXT);
+        """
+    )
+    MZ_SETUP = dedent(
+        """
+        > DROP CLUSTER IF EXISTS single_replica_cluster;
+        > CREATE CLUSTER single_replica_cluster SIZE '${arg.default-storage-size}';
+        > CREATE SOURCE mz_source
+          IN CLUSTER single_replica_cluster
+          FROM MYSQL CONNECTION mysql_conn
           FOR ALL TABLES;
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
@@ -258,6 +306,112 @@ SCENARIOS = [
             """
         ),
         materialized_memory="4.5Gb",
+    ),
+    MySqlCdcScenario(
+        name="mysql-cdc-snapshot",
+        pre_restart=MySqlCdcScenario.MYSQL_SETUP
+        + "$ mysql-execute name=mysql\n"
+        + "\n".join(
+            [
+                dedent(
+                    f"""
+                    INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper;
+                    """
+                )
+                for i in range(0, ITERATIONS)
+            ]
+        )
+        + MySqlCdcScenario.MZ_SETUP
+        + dedent(
+            f"""
+            > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
+            {ITERATIONS * REPEAT}
+            """
+        ),
+        post_restart=dedent(
+            f"""
+            # We do not do DELETE post-restart, as it will cause OOM for clusterd
+            > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
+            {ITERATIONS * REPEAT}
+            """
+        ),
+        clusterd_memory="3.6Gb",
+    ),
+    MySqlCdcScenario(
+        name="mysql-cdc-update",
+        pre_restart=MySqlCdcScenario.MYSQL_SETUP
+        + dedent(
+            f"""
+            $ mysql-execute name=mysql
+            INSERT INTO t1 (f3) VALUES ('START');
+            INSERT INTO t1 (f3) SELECT REPEAT('a', {PAD_LEN}) FROM series_helper;
+            """
+        )
+        + MySqlCdcScenario.MZ_SETUP
+        + "\n".join(
+            [
+                dedent(
+                    """
+                    $ mysql-execute name=mysql
+                    UPDATE t1 SET f2 = f2 + 1;
+                    """
+                )
+                for letter in ascii_lowercase[:ITERATIONS]
+            ]
+        )
+        + dedent(
+            f"""
+            $ mysql-execute name=mysql
+            INSERT INTO t1 (f3) VALUES ('END');
+
+            > SELECT * FROM v1 /* expect: {REPEAT + 2} */;
+            {REPEAT + 2}
+            """
+        ),
+        post_restart=dedent(
+            """
+            $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
+            $ mysql-execute name=mysql
+            USE public;
+            DELETE FROM t1;
+
+            > SELECT * FROM v1;
+            0
+            """
+        ),
+    ),
+    MySqlCdcScenario(
+        name="mysql-cdc-large-tx",
+        pre_restart=MySqlCdcScenario.MYSQL_SETUP
+        + MySqlCdcScenario.MZ_SETUP
+        + "$ mysql-execute name=mysql\n"
+        + "SET AUTOCOMMIT = FALSE;\n"
+        + "\n".join(
+            [
+                dedent(
+                    f"""
+                    INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper LIMIT {int(REPEAT / 24)};
+                    """
+                )
+                for i in range(0, ITERATIONS * 20)
+            ]
+        )
+        + "COMMIT;\n"
+        + dedent(
+            f"""
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20) * int(REPEAT / 24)} */
+            {int(ITERATIONS * 20) * int(REPEAT / 24)}
+            """
+        ),
+        post_restart=dedent(
+            f"""
+            # We do not do DELETE post-restart, as it will cause OOM for clusterd
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20) * int(REPEAT / 24)} */
+            {int(ITERATIONS * 20) * int(REPEAT / 24)}
+            """
+        ),
+        clusterd_memory="8.0Gb",
+        disabled=True,
     ),
     KafkaScenario(
         name="upsert-snapshot",
@@ -685,7 +839,7 @@ def run_scenario(
         Materialized(memory=materialized_memory),
         Clusterd(memory=clusterd_memory),
     ):
-        c.up("redpanda", "materialized", "postgres", "clusterd")
+        c.up("redpanda", "materialized", "postgres", "mysql", "clusterd")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
