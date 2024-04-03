@@ -407,6 +407,7 @@ The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/syste
 | Field          | Type                         | Meaning                                          |
 | ---------------|------------------------------|------------------------------------------------- |
 | `id`           | [`text`]                     | Materialize's unique ID for the object.          |
+| `previous_id`  | [`text`]                     | This item's previous ID, if one exists.          |
 | `object_type`  | [`text`]                     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                                              |
 | `event_type`   | [`text`]                     | The lifetime event, either `create` or `drop`.   |
 | `occurred_at`  | [`timestamp with time zone`] | Wall-clock timestamp of when the event occurred. |

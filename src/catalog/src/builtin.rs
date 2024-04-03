@@ -3232,13 +3232,14 @@ pub static MZ_OBJECT_LIFETIMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_object_lifetimes",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_LIFETIMES_OID,
-    column_defs: Some("id, object_type, event_type, occurred_at"),
+    column_defs: Some("id, previous_id, object_type, event_type, occurred_at"),
     sql: "
     SELECT
         CASE
             WHEN a.object_type = 'cluster-replica' THEN a.details ->> 'replica_id'
             ELSE a.details ->> 'id'
         END id,
+        a.details ->> 'previous_id',
         a.object_type,
         a.event_type,
         a.occurred_at

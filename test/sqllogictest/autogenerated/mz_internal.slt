@@ -237,9 +237,10 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_lifetimes' ORDER BY position
 ----
 1  id  text
-2  object_type  text
-3  event_type  text
-4  occurred_at  timestamp␠with␠time␠zone
+2  previous_id  text
+3  object_type  text
+4  event_type  text
+5  occurred_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
