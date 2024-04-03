@@ -328,7 +328,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                 }
             })
             .collect();
-        self.runs.push(run);
+        self.push_run(run);
     }
 
     /// Add a leased run of data to be consolidated.
@@ -356,7 +356,29 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                 (queued, size)
             })
             .collect();
-        self.runs.push(run);
+        self.push_run(run);
+    }
+
+    fn push_run(&mut self, run: VecDeque<(ConsolidationPart<T, D>, usize)>) {
+        // Normally unconsolidated parts are in their own run, but we can end up with unconsolidated
+        // runs if we change our sort order or have bugs, for example. Defend against this by
+        // splitting up a run if it contains possibly-unconsolidated parts.
+        let maybe_unconsolidated = run.iter().any(|(p, _)| match p {
+            ConsolidationPart::Queued { data } => data.maybe_unconsolidated(),
+            ConsolidationPart::Prefetched {
+                maybe_unconsolidated,
+                ..
+            } => *maybe_unconsolidated,
+            ConsolidationPart::Encoded { part, .. } => part.maybe_unconsolidated(),
+            ConsolidationPart::Sorted { .. } => false,
+        });
+        if run.len() > 1 && maybe_unconsolidated {
+            for part in run {
+                self.runs.push(VecDeque::from([part]));
+            }
+        } else {
+            self.runs.push(run);
+        }
     }
 
     /// Tidy up: discard any empty parts, and discard any runs that have no parts left.
