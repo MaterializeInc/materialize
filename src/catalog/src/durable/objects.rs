@@ -686,7 +686,7 @@ impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
 // Structs used internally to represent on-disk state.
 
 /// A snapshot of the current on-disk state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Snapshot {
     pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
     pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
@@ -707,62 +707,15 @@ pub struct Snapshot {
         BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
     pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+    pub storage_collection_metadata:
+        BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
+    pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
+    pub persist_txn_shard: BTreeMap<(), proto::PersistTxnShardValue>,
 }
 
 impl Snapshot {
     pub fn empty() -> Snapshot {
-        Snapshot {
-            databases: BTreeMap::new(),
-            schemas: BTreeMap::new(),
-            roles: BTreeMap::new(),
-            items: BTreeMap::new(),
-            comments: BTreeMap::new(),
-            clusters: BTreeMap::new(),
-            cluster_replicas: BTreeMap::new(),
-            introspection_sources: BTreeMap::new(),
-            id_allocator: BTreeMap::new(),
-            configs: BTreeMap::new(),
-            settings: BTreeMap::new(),
-            system_object_mappings: BTreeMap::new(),
-            system_configurations: BTreeMap::new(),
-            default_privileges: BTreeMap::new(),
-            system_privileges: BTreeMap::new(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        let Snapshot {
-            databases,
-            schemas,
-            roles,
-            items,
-            comments,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            id_allocator,
-            configs,
-            settings,
-            system_object_mappings,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-        } = self;
-        databases.is_empty()
-            && schemas.is_empty()
-            && roles.is_empty()
-            && items.is_empty()
-            && comments.is_empty()
-            && clusters.is_empty()
-            && cluster_replicas.is_empty()
-            && introspection_sources.is_empty()
-            && id_allocator.is_empty()
-            && configs.is_empty()
-            && settings.is_empty()
-            && system_object_mappings.is_empty()
-            && system_configurations.is_empty()
-            && default_privileges.is_empty()
-            && system_privileges.is_empty()
+        Snapshot::default()
     }
 }
 
@@ -948,6 +901,31 @@ pub struct AuditLogKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageUsageKey {
     pub(crate) metric: VersionedStorageUsage,
+}
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct StorageCollectionMetadataKey {
+    pub(crate) id: GlobalId,
+}
+
+/// This value is stored transparently, however, it should only ever be
+/// manipulated by the storage controller.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct StorageCollectionMetadataValue {
+    pub(crate) shard: String,
+}
+
+/// This value is stored transparently, however, it should only ever be
+/// manipulated by the storage controller.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct UnfinalizedShardKey {
+    pub(crate) shard: String,
+}
+
+/// This value is stored transparently, however, it should only ever be
+/// manipulated by the storage controller.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct PersistTxnShardValue {
+    pub(crate) shard: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

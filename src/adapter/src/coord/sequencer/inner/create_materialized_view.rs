@@ -611,11 +611,14 @@ impl Coordinator {
                     .catalog_mut()
                     .set_dataflow_metainfo(sink_id, df_meta.clone());
 
+                let storage_metadata = coord.catalog.state().storage_metadata();
+
                 // Announce the creation of the materialized view source.
                 coord
                     .controller
                     .storage
                     .create_collections(
+                        storage_metadata,
                         None,
                         vec![(
                             sink_id,

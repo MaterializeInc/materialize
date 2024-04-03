@@ -210,6 +210,12 @@ impl GrpcPubSubClient {
         config: PersistPubSubClientConfig,
         metrics: Arc<Metrics>,
     ) {
+        // Once enabled, the PubSub server cannot be disabled or otherwise
+        // reconfigured. So we wait for at least one configuration sync to
+        // complete. This gives `environmentd` at least one chance to update
+        // PubSub configuration parameters. See #23869 for details.
+        config.persist_cfg.configs_synced_once().await;
+
         let mut is_first_connection_attempt = true;
         loop {
             metrics.pubsub_client.grpc_connection.connected.set(0);
@@ -1315,6 +1321,7 @@ mod grpc {
 
     use bytes::Bytes;
     use futures_util::FutureExt;
+    use mz_dyncfg::ConfigUpdates;
     use mz_ore::collections::HashMap;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist::location::{SeqNo, VersionedData};
@@ -1737,7 +1744,11 @@ mod grpc {
     fn test_persist_config() -> PersistConfig {
         let mut cfg = PersistConfig::new_for_tests();
         cfg.pubsub_reconnect_backoff = Duration::ZERO;
-        cfg.set_config(&PUBSUB_CLIENT_ENABLED, true);
+
+        let mut updates = ConfigUpdates::default();
+        updates.add(&PUBSUB_CLIENT_ENABLED, true);
+        cfg.apply_from(&updates);
+
         cfg
     }
 }

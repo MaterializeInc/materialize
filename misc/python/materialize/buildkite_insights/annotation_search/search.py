@@ -25,11 +25,16 @@ from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIP
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_COMPLETED_BUILD_STATES,
     BUILDKITE_FAILED_BUILD_STATES,
+    BUILDKITE_RELEVANT_FAILED_BUILD_STEP_STATES,
 )
 from materialize.buildkite_insights.cache import annotations_cache, builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
     FetchMode,
+)
+from materialize.buildkite_insights.steps.build_step import (
+    BuildStepMatcher,
+    extract_build_step_outcomes,
 )
 
 
@@ -102,6 +107,36 @@ def clean_annotation_text(annotation_html: str) -> str:
     return re.sub(r"<[^>]+>", "", annotation_html)
 
 
+def filter_builds(
+    builds_data: list[Any],
+    only_failed_build_step_keys: list[str],
+) -> list[Any]:
+    if len(only_failed_build_step_keys) == 0:
+        return builds_data
+
+    failed_build_step_matcher = [
+        BuildStepMatcher(build_step_key, None)
+        for build_step_key in only_failed_build_step_keys
+    ]
+
+    step_outcomes = extract_build_step_outcomes(
+        builds_data=builds_data,
+        selected_build_steps=failed_build_step_matcher,
+        build_step_states=BUILDKITE_RELEVANT_FAILED_BUILD_STEP_STATES,
+    )
+
+    builds_containing_failed_step_keys = {
+        outcome.build_number for outcome in step_outcomes
+    }
+
+    filtered_builds = [
+        build
+        for build in builds_data
+        if int(build["number"]) in builds_containing_failed_step_keys
+    ]
+    return filtered_builds
+
+
 def main(
     pipeline_slug: str,
     branch: str,
@@ -111,10 +146,11 @@ def main(
     first_build_page_to_fetch: int,
     max_results: int,
     only_failed_builds: bool,
-    search_value: str,
+    only_failed_build_step_keys: list[str],
+    pattern: str,
     use_regex: bool,
 ) -> None:
-    assert len(search_value) > 0
+    assert len(pattern) > 0, "pattern must not be empty"
 
     if only_failed_builds:
         build_states = BUILDKITE_FAILED_BUILD_STATES
@@ -139,17 +175,23 @@ def main(
             first_page=first_build_page_to_fetch,
         )
 
+    builds_data = filter_builds(builds_data, only_failed_build_step_keys)
+
     print_before_search_results()
 
     count_matches = 0
 
     for build in builds_data:
+        max_entries_to_print = max(0, max_results - count_matches)
+        if max_entries_to_print == 0:
+            break
+
         matches_in_build = search_build(
             build,
-            search_value,
+            pattern,
             use_regex=use_regex,
             fetch_mode=fetch_annotations_mode,
-            max_entries_to_print=max(0, max_results - count_matches),
+            max_entries_to_print=max_entries_to_print,
         )
         count_matches = count_matches + matches_in_build
 
@@ -161,6 +203,8 @@ if __name__ == "__main__":
         prog="buildkite-failure-search",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
+    parser.add_argument("pattern", nargs="*", type=str)
 
     parser.add_argument(
         "--pipeline",
@@ -196,12 +240,17 @@ if __name__ == "__main__":
         default=False,
         action="store_true",
     )
-    parser.add_argument("--value", required=True, type=str)
+    parser.add_argument(
+        "--only-failed-build-step-key", action="append", default=[], type=str
+    )
     parser.add_argument(
         "--use-regex",
         action="store_true",
     )
     args = parser.parse_args()
+
+    assert len(args.pattern) == 1, "Exactly one search pattern must be provided"
+    pattern = args.pattern[0]
 
     main(
         args.pipeline,
@@ -212,6 +261,7 @@ if __name__ == "__main__":
         args.first_build_page_to_fetch,
         args.max_results,
         args.only_failed_builds,
-        args.value,
+        args.only_failed_build_step_key,
+        pattern,
         args.use_regex,
     )

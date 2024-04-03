@@ -14,7 +14,7 @@ import re
 
 def _search_value_to_pattern(search_value: str, use_regex: bool) -> re.Pattern[str]:
     regex_pattern = _search_value_to_regex(search_value, use_regex)
-    return re.compile(f"({regex_pattern})", re.IGNORECASE)
+    return re.compile(f"({regex_pattern})", re.IGNORECASE | re.DOTALL)
 
 
 def _search_value_to_regex(search_value: str, use_regex: bool) -> str:

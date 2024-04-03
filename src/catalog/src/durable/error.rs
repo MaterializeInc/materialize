@@ -10,7 +10,10 @@
 use std::fmt::Debug;
 
 use mz_proto::TryFromProtoError;
+use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_stash_types::StashError;
+use mz_storage_types::controller::StorageError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -63,6 +66,12 @@ pub enum DurableCatalogError {
     /// Uniqueness violation occurred in some catalog collection.
     #[error("uniqueness violation")]
     UniquenessViolation,
+    /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
+    #[error(transparent)]
+    Storage(StorageError<Timestamp>),
+    // TODO: remove this with migration from storage stash to persist catalog.
+    #[error(transparent)]
+    Stash(StashError),
 }
 
 impl DurableCatalogError {
@@ -72,11 +81,13 @@ impl DurableCatalogError {
             DurableCatalogError::Fence(_)
             | DurableCatalogError::IncompatibleDataVersion { .. }
             | DurableCatalogError::IncompatiblePersistVersion { .. }
-            | DurableCatalogError::Proto(_) => true,
+            | DurableCatalogError::Proto(_)
+            | DurableCatalogError::Stash(_) => true,
             DurableCatalogError::Uninitialized
             | DurableCatalogError::NotWritable(_)
             | DurableCatalogError::DuplicateKey
-            | DurableCatalogError::UniquenessViolation => false,
+            | DurableCatalogError::UniquenessViolation
+            | DurableCatalogError::Storage(_) => false,
         }
     }
 
@@ -98,8 +109,20 @@ impl DurableCatalogError {
     }
 }
 
+impl From<StorageError<Timestamp>> for DurableCatalogError {
+    fn from(e: StorageError<Timestamp>) -> Self {
+        DurableCatalogError::Storage(e)
+    }
+}
+
 impl From<TryFromProtoError> for DurableCatalogError {
     fn from(e: TryFromProtoError) -> Self {
         DurableCatalogError::Proto(e)
+    }
+}
+
+impl From<StashError> for DurableCatalogError {
+    fn from(e: StashError) -> Self {
+        DurableCatalogError::Stash(e)
     }
 }

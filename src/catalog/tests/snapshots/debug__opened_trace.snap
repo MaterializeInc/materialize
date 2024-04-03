@@ -1944,4 +1944,13 @@ Trace {
             ),
         ],
     },
+    storage_collection_metadata: CollectionTrace {
+        values: [],
+    },
+    unfinalized_shards: CollectionTrace {
+        values: [],
+    },
+    persist_txn_shard: CollectionTrace {
+        values: [],
+    },
 }

@@ -67,3 +67,8 @@ BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES = [
     "passed",
     "timed_out",
 ]
+
+BUILDKITE_RELEVANT_FAILED_BUILD_STEP_STATES = [
+    "failed",
+    "timed_out",
+]

@@ -41,7 +41,7 @@ fn bench_transact(c: &mut Criterion) {
                     owner_id: MZ_SYSTEM_ROLE_ID,
                 }];
                 catalog
-                    .transact(mz_repr::Timestamp::MIN, None, ops)
+                    .transact(None, mz_repr::Timestamp::MIN, None, ops)
                     .await
                     .unwrap();
             })

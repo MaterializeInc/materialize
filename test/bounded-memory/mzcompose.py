@@ -640,7 +640,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "scenarios", nargs="*", default=None, help="run specified Scenarios"
     )
     parser.add_argument("--find-minimal-memory", action="store_true")
-    parser.add_argument("--memory-search-step", default=0.2, type=float)
+    parser.add_argument("--materialized-memory-search-step", default=0.2, type=float)
+    parser.add_argument("--clusterd-memory-search-step", default=0.2, type=float)
     args = parser.parse_args()
 
     for scenario in SCENARIOS:
@@ -660,7 +661,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"+++ Running scenario {scenario.name} ...")
 
         if args.find_minimal_memory:
-            run_memory_search(c, scenario, args.memory_search_step)
+            run_memory_search(
+                c,
+                scenario,
+                args.materialized_memory_search_step,
+                args.clusterd_memory_search_step,
+            )
         else:
             run_scenario(
                 c,
@@ -721,30 +727,35 @@ def try_run_scenario(
 
 
 def run_memory_search(
-    c: Composition, scenario: Scenario, memory_search_step_in_gb: float
+    c: Composition,
+    scenario: Scenario,
+    materialized_search_step_in_gb: float,
+    clusterd_search_step_in_gb: float,
 ) -> None:
-    assert memory_search_step_in_gb > 0
+    assert materialized_search_step_in_gb > 0 or clusterd_search_step_in_gb > 0
     materialized_memory = scenario.materialized_memory
     clusterd_memory = scenario.clusterd_memory
 
     print(f"Starting memory search for scenario {scenario.name}")
 
-    materialized_memory, clusterd_memory = find_minimal_memory(
-        c,
-        scenario,
-        initial_materialized_memory=materialized_memory,
-        initial_clusterd_memory=clusterd_memory,
-        reduce_materialized_memory_by_gb=memory_search_step_in_gb,
-        reduce_clusterd_memory_by_gb=0,
-    )
-    materialized_memory, clusterd_memory = find_minimal_memory(
-        c,
-        scenario,
-        initial_materialized_memory=materialized_memory,
-        initial_clusterd_memory=clusterd_memory,
-        reduce_materialized_memory_by_gb=0,
-        reduce_clusterd_memory_by_gb=memory_search_step_in_gb,
-    )
+    if materialized_search_step_in_gb > 0:
+        materialized_memory, clusterd_memory = find_minimal_memory(
+            c,
+            scenario,
+            initial_materialized_memory=materialized_memory,
+            initial_clusterd_memory=clusterd_memory,
+            reduce_materialized_memory_by_gb=materialized_search_step_in_gb,
+            reduce_clusterd_memory_by_gb=0,
+        )
+    if clusterd_search_step_in_gb > 0:
+        materialized_memory, clusterd_memory = find_minimal_memory(
+            c,
+            scenario,
+            initial_materialized_memory=materialized_memory,
+            initial_clusterd_memory=clusterd_memory,
+            reduce_materialized_memory_by_gb=0,
+            reduce_clusterd_memory_by_gb=clusterd_search_step_in_gb,
+        )
 
     print(f"Found minimal memory for scenario {scenario.name}:")
     print(

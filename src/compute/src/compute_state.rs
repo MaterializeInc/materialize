@@ -357,7 +357,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         tracing.apply(self.compute_state.tracing_handle.as_ref());
 
         dyncfg_updates.apply(&self.compute_state.worker_config);
-        dyncfg_updates.apply(&self.compute_state.persist_clients.cfg().configs);
+        self.compute_state
+            .persist_clients
+            .cfg()
+            .apply_from(&dyncfg_updates);
 
         self.compute_state.apply_worker_config();
     }

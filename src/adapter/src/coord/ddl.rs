@@ -479,14 +479,18 @@ impl Coordinator {
         let Coordinator {
             catalog,
             active_conns,
+            controller,
             ..
         } = self;
         let catalog = Arc::make_mut(catalog);
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
+
         let TransactionResult {
             builtin_table_updates,
             audit_events,
-        } = catalog.transact(oracle_write_ts, conn, ops).await?;
+        } = catalog
+            .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
+            .await?;
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
@@ -684,9 +688,10 @@ impl Coordinator {
             self.active_webhooks.remove(id);
             self.drop_storage_read_policy(id);
         }
+        let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_sources(sources)
+            .drop_sources(storage_metadata, sources)
             .unwrap_or_terminate("cannot fail to drop sources");
     }
 

@@ -1447,18 +1447,22 @@ Explained Query:
                             ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
                         Distinct project=[#0] // { arity: 1 }
                           Union // { arity: 1 }
-                            Get l8 // { arity: 1 }
+                            Project (#0) // { arity: 1 }
+                              Get l7 // { arity: 2 }
                             Constant // { arity: 1 }
                               - (null)
               ArrangeBy keys=[[#0{person2id}]] // { arity: 3 }
                 Union // { arity: 3 }
-                  Map (true) // { arity: 3 }
-                    Get l7 // { arity: 2 }
+                  Filter (#0) IS NOT NULL // { arity: 3 }
+                    Map (true) // { arity: 3 }
+                      Get l7 // { arity: 2 }
                   Map (null, null) // { arity: 3 }
                     Threshold // { arity: 1 }
                       Union // { arity: 1 }
                         Negate // { arity: 1 }
-                          Get l8 // { arity: 1 }
+                          Project (#0) // { arity: 1 }
+                            Filter (#0) IS NOT NULL // { arity: 2 }
+                              Get l7 // { arity: 2 }
                         Distinct project=[#0{person2id}] // { arity: 1 }
                           Union // { arity: 1 }
                             Project (#2) // { arity: 1 }
@@ -1466,9 +1470,6 @@ Explained Query:
                             Constant // { arity: 1 }
                               - (null)
     With
-      cte l8 =
-        Project (#0) // { arity: 1 }
-          Get l7 // { arity: 2 }
       cte l7 =
         Project (#3, #4) // { arity: 2 }
           Map (coalesce(#0{id}, #1{creatorpersonid}), (integer_to_bigint(case when (#0{id}) IS NULL then 0 else 100 end) + coalesce(#2, 0))) // { arity: 5 }
