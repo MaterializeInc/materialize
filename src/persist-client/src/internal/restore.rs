@@ -49,8 +49,8 @@ pub(crate) async fn restore_blob(
     };
 
     for diff in diffs.0 {
-        let diff: StateDiff<u64> = StateDiff::decode(build_version, diff.data);
-        for rollup in diff.rollups {
+        let mut diff: StateDiff<u64> = StateDiff::decode(build_version, diff.data);
+        for rollup in std::mem::take(&mut diff.rollups) {
             // We never actually reference rollups from before the first live diff.
             if rollup.key < first_live_seqno {
                 continue;
@@ -91,9 +91,9 @@ pub(crate) async fn restore_blob(
                 }
             }
         }
-        for batch in diff.spine {
-            if let Some(_) = after(batch.val) {
-                for part in batch.key.parts {
+        for diff in diff.referenced_batches() {
+            if let Some(after) = after(diff) {
+                for part in &after.parts {
                     let key = part.key.complete(&shard_id);
                     check_restored(&key, blob.restore(&key).await);
                 }
