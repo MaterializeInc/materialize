@@ -125,7 +125,7 @@ def print_summary(
         most_recent_build_number = builds_data[0]["number"]
         oldest_build_number = builds_data[-1]["number"]
         suppressed_results_info = (
-            f"Showing only the first {max_results} matches. "
+            f"Showing only the first {max_results} matches! "
             if count_matches > max_results
             else ""
         )
