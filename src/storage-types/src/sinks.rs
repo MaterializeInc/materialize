@@ -783,8 +783,8 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
 /// Info required to copy the data to s3.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct S3UploadInfo {
-    /// The s3 prefix path to write the data to.
-    pub prefix: String,
+    /// The s3 uri path to write the data to.
+    pub uri: String,
     /// The max file size of each file uploaded to S3.
     pub max_file_size: u64,
     /// The relation desc of the data to be uploaded to S3.
@@ -796,7 +796,7 @@ pub struct S3UploadInfo {
 impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
     fn into_proto(&self) -> ProtoS3UploadInfo {
         ProtoS3UploadInfo {
-            prefix: self.prefix.clone(),
+            uri: self.uri.clone(),
             max_file_size: self.max_file_size,
             desc: Some(self.desc.into_proto()),
             format: Some(self.format.into_proto()),
@@ -805,7 +805,7 @@ impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
 
     fn from_proto(proto: ProtoS3UploadInfo) -> Result<Self, TryFromProtoError> {
         Ok(S3UploadInfo {
-            prefix: proto.prefix,
+            uri: proto.uri,
             max_file_size: proto.max_file_size,
             desc: proto.desc.into_rust_if_some("ProtoS3UploadInfo::desc")?,
             format: proto

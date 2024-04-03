@@ -109,7 +109,7 @@ message ProtoPersistSinkConnection {
 }
 
 message ProtoS3UploadInfo {
-    string prefix = 1;
+    string uri = 1;
     uint64 max_file_size = 2;
     mz_repr.relation_and_scalar.ProtoRelationDesc desc = 3;
     mz_pgcopy.copy.ProtoCopyFormatParams format = 4;

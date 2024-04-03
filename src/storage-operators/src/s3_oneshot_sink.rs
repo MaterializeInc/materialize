@@ -41,10 +41,6 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::{debug, info};
 
-/// The key used to write a sentinel file to the S3 bucket path to indicate that
-/// the upload is in progress but is not yet complete.
-const INCOMPLETE_SENTINEL_KEY: &str = "INCOMPLETE";
-
 /// Copy the rows from the input collection to s3.
 /// `onetime_callback` is used to send the final count of rows uploaded to s3,
 /// or an error message if the operator failed.
@@ -146,22 +142,22 @@ pub fn copy_to<G, F>(
                         worker_received_count += 1;
                         if worker_received_count == num_workers {
                             // Remove the INCOMPLETE sentinel file to indicate that the upload is complete.
-                            // TODO: Should the leader also write a manifest of all the files uploaded?
+                            // This will race against other replicas who are completing the same uploads,
+                            // such that the first replica to complete its uploads will delete the sentinel
+                            // and the subsequent replicas shouldn't error if the object is already deleted.
+                            // TODO: Should we also write a manifest of all the files uploaded?
                             let client = mz_aws_util::s3::new_client(&sdk_config);
-
-                            let (bucket, path_prefix) = CopyToS3Uploader::extract_s3_bucket_path(
-                                &connection_details.prefix,
-                            );
+                            let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
 
                             info!(%sink_id, %worker_id, "removing INCOMPLETE sentinel file");
                             match mz_aws_util::s3::delete_object(
                                 &client,
-                                &bucket,
-                                &format!("{path_prefix}/{INCOMPLETE_SENTINEL_KEY}"),
+                                &s3_key_manager.bucket,
+                                &s3_key_manager.incomplete_sentinel_key(),
                             )
                             .await
                             {
-                                Ok(res) => break,
+                                Ok(_) => break,
                                 Err(e) => {
                                     info!(%sink_id, %worker_id, "error removing sentinel file: {}", e);
                                     res = Err(e.to_string());
@@ -226,6 +222,8 @@ async fn handle_inputs_and_upload(
         }
     }
 
+    let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
+
     if is_leader {
         // Check that the S3 bucket path is empty before beginning the upload.
         // We check the S3 bucket path from a single worker to avoid a race
@@ -235,29 +233,27 @@ async fn handle_inputs_and_upload(
         // (identified by the sink_id prefix).
         info!(%sink_id, %worker_id, "verifying S3 bucket path is empty");
 
-        let (bucket, path_prefix) =
-            CopyToS3Uploader::extract_s3_bucket_path(&connection_details.prefix);
-
         let client = mz_aws_util::s3::new_client(sdk_config);
-        match mz_aws_util::s3::list_bucket_path(&client, &bucket, &path_prefix).await {
+        match mz_aws_util::s3::list_bucket_path(
+            &client,
+            &s3_key_manager.bucket,
+            &s3_key_manager.path_prefix(),
+        )
+        .await
+        {
             Ok(Some(files)) => {
-                let sink_id_prefix = format!("batch-{}-", sink_id);
                 let files = files
                     .iter()
-                    .filter(|file| !file.starts_with(&sink_id_prefix))
+                    .filter(|key| !s3_key_manager.is_sink_object(key))
                     .collect::<Vec<_>>();
                 if !files.is_empty() {
-                    onetime_callback(Err(format!(
+                    Err(anyhow::anyhow!(
                         "S3 bucket path is not empty, contains: {:?}",
                         files
-                    )));
-                    return;
+                    ))?;
                 }
             }
-            Err(e) => {
-                onetime_callback(Err(e.to_string()));
-                return;
-            }
+            Err(e) => Err(e)?,
             _ => {}
         }
 
@@ -266,8 +262,8 @@ async fn handle_inputs_and_upload(
         info!(%sink_id, %worker_id, "uploading INCOMPLETE sentinel file");
         mz_aws_util::s3::upload_object(
             &client,
-            &bucket,
-            &format!("{path_prefix}/{INCOMPLETE_SENTINEL_KEY}"),
+            &s3_key_manager.bucket,
+            &s3_key_manager.incomplete_sentinel_key(),
             vec![],
         )
         .await?;
@@ -313,11 +309,11 @@ async fn handle_inputs_and_upload(
                         row_count += u64::try_from(diff).unwrap();
                         let uploader = s3_uploaders.entry(batch).or_insert_with(|| {
                             debug!(%sink_id, %worker_id, "handling batch: {}", batch);
-                            let file_name_prefix = format!("batch-{}-{:04}", &sink_id, batch);
                             CopyToS3Uploader::new(
                                 sdk_config.clone(),
                                 connection_details.clone(),
-                                file_name_prefix,
+                                &sink_id,
+                                batch,
                             )
                         });
                         for _ in 0..diff {
@@ -340,6 +336,51 @@ async fn handle_inputs_and_upload(
     Ok(row_count)
 }
 
+struct S3KeyManager {
+    pub bucket: String,
+    object_key_prefix: String,
+}
+
+impl S3KeyManager {
+    pub fn new(sink_id: &GlobalId, s3_uri: &str) -> Self {
+        // This url is already validated to be a valid s3 url in sequencer.
+        let uri = Uri::from_str(s3_uri).expect("valid s3 url");
+        let bucket = uri.host().expect("s3 bucket");
+        // TODO: Can an empty path be provided?
+        let path = uri.path().trim_start_matches('/').trim_end_matches('/');
+
+        Self {
+            bucket: bucket.to_string(),
+            object_key_prefix: format!("{}/mz-{}-", path, sink_id),
+        }
+    }
+
+    /// The S3 key to use for a specific data file, based on the batch
+    /// it belongs to and the index within that batch.
+    fn data_key(&self, batch: u64, file_index: usize, extension: &str) -> String {
+        format!(
+            "{}batch-{:04}-{:04}.{}",
+            self.object_key_prefix, batch, file_index, extension
+        )
+    }
+
+    /// The S3 key to use for the incomplete sentinel file
+    fn incomplete_sentinel_key(&self) -> String {
+        format!("{}INCOMPLETE", self.object_key_prefix)
+    }
+
+    /// Whether the given object key belongs to this sink instance
+    fn is_sink_object(&self, object_key: &str) -> bool {
+        object_key.starts_with(&self.object_key_prefix)
+    }
+
+    /// The key prefix provided by the user. NOTE this doesn't contain the additional
+    /// prefix we include on all keys written by the sink `mz-{sink_id}-`
+    fn path_prefix(&self) -> &str {
+        &self.object_key_prefix.rsplit_once('/').expect("exists").0
+    }
+}
+
 /// Required state to upload batches to S3
 struct CopyToS3Uploader {
     /// The output description.
@@ -348,12 +389,10 @@ struct CopyToS3Uploader {
     format: CopyFormatParams<'static>,
     /// The index of the current file.
     file_index: usize,
-    /// The prefix for the file names.
-    file_name_prefix: String,
-    /// The s3 bucket.
-    bucket: String,
-    ///The path prefix where the files should be uploaded to.
-    path_prefix: String,
+    /// Provides the appropriate bucket and object keys to use for uploads
+    key_manager: S3KeyManager,
+    /// Identifies the batch that files uploaded by this uploader belong to
+    batch: u64,
     /// The desired file size. A new file upload will be started
     /// when the size exceeds this amount.
     max_file_size: u64,
@@ -374,16 +413,15 @@ impl CopyToS3Uploader {
     fn new(
         sdk_config: SdkConfig,
         connection_details: S3UploadInfo,
-        file_name_prefix: String,
+        sink_id: &GlobalId,
+        batch: u64,
     ) -> CopyToS3Uploader {
-        let (bucket, path_prefix) = Self::extract_s3_bucket_path(&connection_details.prefix);
         CopyToS3Uploader {
             desc: connection_details.desc,
             sdk_config: Some(sdk_config),
             format: connection_details.format,
-            file_name_prefix,
-            bucket,
-            path_prefix,
+            key_manager: S3KeyManager::new(sink_id, &connection_details.uri),
+            batch,
             max_file_size: connection_details.max_file_size,
             file_index: 0,
             current_file_uploader: None,
@@ -397,10 +435,11 @@ impl CopyToS3Uploader {
         assert!(self.current_file_uploader.is_none());
 
         self.file_index += 1;
-        let file_path = self.current_file_path();
-
-        let bucket = self.bucket.clone();
-        info!("starting upload: bucket {}, file {}", &bucket, &file_path);
+        let object_key =
+            self.key_manager
+                .data_key(self.batch, self.file_index, self.format.file_extension());
+        let bucket = self.key_manager.bucket.clone();
+        info!("starting upload: bucket {}, key {}", &bucket, &object_key);
         let sdk_config = self
             .sdk_config
             .take()
@@ -411,7 +450,7 @@ impl CopyToS3Uploader {
             let uploader = S3MultiPartUploader::try_new(
                 &sdk_config,
                 bucket,
-                file_path,
+                object_key,
                 S3MultiPartUploaderConfig {
                     part_size_limit: ByteSize::mib(10).as_u64(),
                     file_size_limit: max_file_size,
@@ -426,26 +465,14 @@ impl CopyToS3Uploader {
         Ok(())
     }
 
-    fn current_file_path(&self) -> String {
-        // TODO: remove hard-coded file extension .csv
-        format!(
-            "{}/{}-{:04}.csv",
-            self.path_prefix, self.file_name_prefix, self.file_index
-        )
-    }
-
-    fn extract_s3_bucket_path(prefix: &str) -> (String, String) {
-        // This url is already validated to be a valid s3 url in sequencer.
-        let uri = Uri::from_str(prefix).expect("valid s3 url");
-        let bucket = uri.host().expect("s3 bucket");
-        let path = uri.path().trim_start_matches('/').trim_end_matches('/');
-        (bucket.to_string(), path.to_string())
-    }
-
     /// Finishes any remaining in-progress upload.
     async fn flush(&mut self) -> Result<(), anyhow::Error> {
         if let Some(uploader) = self.current_file_uploader.take() {
-            let current_file = self.current_file_path();
+            let object_key = self.key_manager.data_key(
+                self.batch,
+                self.file_index,
+                self.format.file_extension(),
+            );
             // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
             let handle =
                 mz_ore::task::spawn(|| "s3_uploader::finish", async { uploader.finish().await });
@@ -454,8 +481,8 @@ impl CopyToS3Uploader {
                 total_bytes_uploaded,
             } = handle.wait_and_assert_finished().await?;
             info!(
-                "finished upload: bucket {}, file {}, bytes_uploaded {}, parts_uploaded {}",
-                &self.bucket, current_file, total_bytes_uploaded, part_count
+                "finished upload: bucket {}, key {}, bytes_uploaded {}, parts_uploaded {}",
+                &self.key_manager.bucket, object_key, total_bytes_uploaded, part_count
             );
         }
         Ok(())
@@ -558,6 +585,8 @@ mod tests {
             Some(tuple) => tuple,
             None => return Ok(()),
         };
+        let sink_id = GlobalId::User(123);
+        let batch = 456;
         let typ: RelationType = RelationType::new(vec![ColumnType {
             scalar_type: mz_repr::ScalarType::String,
             nullable: true,
@@ -567,13 +596,14 @@ mod tests {
         let mut uploader = CopyToS3Uploader::new(
             sdk_config.clone(),
             S3UploadInfo {
-                prefix: format!("s3://{}/{}", bucket, path),
+                uri: format!("s3://{}/{}", bucket, path),
                 // this is only for testing, users will not be able to set value smaller than 16MB.
                 max_file_size: ByteSize::b(6).as_u64(),
                 desc,
                 format: CopyFormatParams::Csv(Default::default()),
             },
-            "part".to_string(),
+            &sink_id,
+            batch,
         );
         let mut row = Row::default();
         // Even though this will exceed max_file_size, it should be successfully uploaded in a single file.
@@ -595,7 +625,10 @@ mod tests {
         let first_file = s3_client
             .get_object()
             .bucket(bucket.clone())
-            .key(format!("{}/part-0001.csv", path))
+            .key(format!(
+                "{}/mz-{}-batch-{:04}-0001.csv",
+                path, sink_id, batch
+            ))
             .send()
             .await
             .unwrap();
@@ -607,7 +640,10 @@ mod tests {
         let second_file = s3_client
             .get_object()
             .bucket(bucket)
-            .key(format!("{}/part-0002.csv", path))
+            .key(format!(
+                "{}/mz-{}-batch-{:04}-0002.csv",
+                path, sink_id, batch
+            ))
             .send()
             .await
             .unwrap();

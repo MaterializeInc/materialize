@@ -476,6 +476,15 @@ impl Arbitrary for CopyFormatParams<'static> {
     }
 }
 
+impl CopyFormatParams<'static> {
+    pub fn file_extension(&self) -> &str {
+        match self {
+            &CopyFormatParams::Text(_) => "txt",
+            &CopyFormatParams::Csv(_) => "csv",
+        }
+    }
+}
+
 /// Decodes the given bytes into `Row`-s based on the given `CopyFormatParams`.
 pub fn decode_copy_format<'a>(
     data: &[u8],
