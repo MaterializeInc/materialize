@@ -27,14 +27,17 @@ serde_json = { version = "1.0.89", features = ["arbitrary_precision"] }
 tokio-postgres = { version = "0.7.8", optional = true }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = "1.2.2"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
+default = ["protobuf-src", "workspace-hack"]
+
 chrono = ["dep:chrono", "dep:chrono-tz"]
+protobuf-src = ["dep:protobuf-src"]
 
 [build-dependencies]
 prost-build = "0.11.2"
-protobuf-src = "1.1.0"
+protobuf-src = { version = "1.1.0", optional = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
