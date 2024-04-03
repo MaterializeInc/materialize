@@ -20,7 +20,9 @@ use chrono::Utc;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
-use mz_sql::session::vars::{Var, VarInput, DISK_CLUSTER_REPLICAS_DEFAULT};
+use mz_sql::session::vars::{
+    Var, VarInput, DISK_CLUSTER_REPLICAS_DEFAULT, ENABLE_LOGICAL_COMPACTION_WINDOW,
+};
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 use mz_tracing::CloneableEnvFilter;
@@ -129,13 +131,10 @@ async fn main() -> ExitCode {
     // sqllogictest requires that Materialize have some system variables set to some specific value
     // to pass. If the caller hasn't set this variable, then we set it for them. If the caller has
     // set this variable, then we assert that it's set to the right value.
-    let required_system_defaults: Vec<_> = [(
-        &DISK_CLUSTER_REPLICAS_DEFAULT,
-        DISK_CLUSTER_REPLICAS_DEFAULT
-            .parse(VarInput::Flat("true"))
-            .expect("known to be valid")
-            .format(),
-    )]
+    let required_system_defaults: Vec<_> = [
+        (&DISK_CLUSTER_REPLICAS_DEFAULT, "true"),
+        (ENABLE_LOGICAL_COMPACTION_WINDOW.flag, "true"),
+    ]
     .into();
     let mut system_parameter_defaults: BTreeMap<_, _> = args
         .system_parameter_default
@@ -144,6 +143,12 @@ async fn main() -> ExitCode {
         .map(|kv| (kv.key, kv.value))
         .collect();
     for (var, value) in required_system_defaults {
+        let parse = |value| {
+            var.parse(VarInput::Flat(value))
+                .expect("invalid value")
+                .format()
+        };
+        let value = parse(value);
         match system_parameter_defaults.entry(var.name().to_string()) {
             Entry::Vacant(entry) => {
                 entry.insert(value);
@@ -151,9 +156,7 @@ async fn main() -> ExitCode {
             Entry::Occupied(entry) => {
                 assert_eq!(
                     value,
-                    var.parse(VarInput::Flat(entry.get()))
-                        .expect("invalid value")
-                        .format(),
+                    parse(entry.get()),
                     "sqllogictest test requires {} to have a value of {}",
                     var.name(),
                     value
