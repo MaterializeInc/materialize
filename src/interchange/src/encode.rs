@@ -13,6 +13,13 @@ use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
 
 pub trait Encode {
     fn encode_unchecked(&self, row: Row) -> Vec<u8>;
+
+    /// Encodes the row and additionally returns a hash that is suitable for stable partitioning.
+    fn encode_hashed_unchecked(&self, row: mz_repr::Row) -> (u64, Vec<u8>) {
+        let buf = self.encode_unchecked(row);
+        let hash = seahash::hash(&buf);
+        (hash, buf)
+    }
 }
 
 /// Bundled information sufficient to encode Datums.

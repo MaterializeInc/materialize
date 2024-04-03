@@ -50,7 +50,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sinks::{SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, Timeline,
 };
@@ -807,6 +807,7 @@ pub struct Sink {
     pub connection: StorageSinkConnection<ReferencedConnection>,
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
+    pub partition_strategy: SinkPartitionStrategy,
     pub with_snapshot: bool,
     pub version: u64,
     pub resolved_ids: ResolvedIds,

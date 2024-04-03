@@ -87,7 +87,7 @@ fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
     // serialization format version, and the next four bytes are a
     // 32-bit schema ID.
     //
-    // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+    // https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format
     buf.write_u8(0).expect("writing to vec cannot fail");
     buf.write_i32::<NetworkEndian>(schema_id)
         .expect("writing to vec cannot fail");
@@ -239,6 +239,18 @@ impl AvroEncoder {
 impl Encode for AvroEncoder {
     fn encode_unchecked(&self, row: Row) -> Vec<u8> {
         encode_message_unchecked(self.schema_id, row, &self.schema, &self.columns)
+    }
+
+    fn encode_hashed_unchecked(&self, row: Row) -> (u64, Vec<u8>) {
+        let buf = encode_message_unchecked(self.schema_id, row, &self.schema, &self.columns);
+        // Compute a stable hash by ignoring the avro header which might contain a
+        // non-deterministic schema id.
+        let (_schema_id, payload) = crate::confluent::extract_avro_header(&buf).unwrap();
+        // We use seahash as it outperforms pretty much all all other options, and has great
+        // mathematically proven statistical properties. It truly is a remarkable non-cryptographic
+        // hash, more details can be found here: https://docs.rs/seahash/latest/seahash/
+        let hash = seahash::hash(payload);
+        (hash, buf)
     }
 }
 

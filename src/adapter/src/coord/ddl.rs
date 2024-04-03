@@ -1208,6 +1208,7 @@ impl Coordinator {
                 .connection
                 .clone()
                 .into_inline_connection(self.catalog().state()),
+            partition_strategy: sink.partition_strategy.clone(),
             envelope: sink.envelope,
             as_of,
             with_snapshot: sink.with_snapshot,

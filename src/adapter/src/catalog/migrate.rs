@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use futures::future::BoxFuture;
+use mz_adapter_types::dyncfgs::DEFAULT_SINK_PARTITION_STRATEGY;
 use mz_catalog::durable::Item;
 use mz_catalog::memory::objects::{StateDiff, StateUpdate};
 use mz_catalog::{durable::Transaction, memory::objects::StateUpdateKind};
@@ -18,7 +19,11 @@ use mz_ore::now::NowFn;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::VisitMut;
-use mz_sql::ast::{CreateSourceStatement, UnresolvedItemName};
+use mz_sql::ast::{
+    CreateSinkOption, CreateSinkOptionName, CreateSourceStatement, UnresolvedItemName, Value,
+    WithOptionValue,
+};
+use mz_sql::catalog::SessionCatalog;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
@@ -141,7 +146,7 @@ pub(crate) async fn migrate(
 
     let conn_cat = state.for_system_session();
 
-    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
+    rewrite_items(tx, &conn_cat, |_tx, conn_cat, _id, stmt| {
         let _catalog_version = catalog_version.clone();
         Box::pin(async move {
             // Add per-item, post-planning AST migrations below. Most
@@ -158,6 +163,7 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
+            ast_rewrite_create_sink_partition_strategy(conn_cat, stmt)?;
             Ok(())
         })
     })
@@ -497,6 +503,29 @@ fn ast_rewrite_create_subsource_options(
         source_id_to_stmt,
     }
     .visit_statement_mut(stmt);
+
+    Ok(())
+}
+
+fn ast_rewrite_create_sink_partition_strategy(
+    cat: &ConnCatalog<'_>,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    let Statement::CreateSink(stmt) = stmt else {
+        return Ok(());
+    };
+
+    if !stmt
+        .with_options
+        .iter()
+        .any(|op| op.name == CreateSinkOptionName::PartitionStrategy)
+    {
+        let default_strategy = DEFAULT_SINK_PARTITION_STRATEGY.get(cat.system_vars().dyncfgs());
+        stmt.with_options.push(CreateSinkOption {
+            name: CreateSinkOptionName::PartitionStrategy,
+            value: Some(WithOptionValue::Value(Value::String(default_strategy))),
+        });
+    }
 
     Ok(())
 }

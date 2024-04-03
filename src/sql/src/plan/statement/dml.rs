@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 
+use mz_adapter_types::dyncfgs::DEFAULT_SINK_PARTITION_STRATEGY;
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
@@ -28,9 +29,10 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    CteBlock, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
-    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
-    IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
+    CreateSinkOption, CreateSinkOptionName, CteBlock, ExplainPlanOption, ExplainPlanOptionName,
+    ExplainPushdownStatement, ExplainSinkSchemaFor, ExplainSinkSchemaStatement,
+    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput,
+    UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
@@ -592,6 +594,11 @@ pub fn plan_explain_schema(
     ]));
 
     crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
+    let default_strategy = DEFAULT_SINK_PARTITION_STRATEGY.get(scx.catalog.system_vars().dyncfgs());
+    statement.with_options.push(CreateSinkOption {
+        name: CreateSinkOptionName::PartitionStrategy,
+        value: Some(WithOptionValue::Value(Value::String(default_strategy))),
+    });
 
     match ddl::plan_create_sink(scx, statement)? {
         Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {

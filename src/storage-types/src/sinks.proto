@@ -36,6 +36,14 @@ message ProtoStorageSinkDesc {
     mz_repr.antichain.ProtoU64Antichain as_of = 11;
     bool with_snapshot = 12;
     uint64 version = 13;
+    ProtoSinkPartitionStrategy partition_strategy = 14;
+}
+
+message ProtoSinkPartitionStrategy {
+    oneof kind {
+        google.protobuf.Empty v0 = 1;
+        google.protobuf.Empty v1 = 2;
+    }
 }
 
 message ProtoSinkEnvelope {
