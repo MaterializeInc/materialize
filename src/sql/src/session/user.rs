@@ -14,8 +14,6 @@ use mz_repr::user::ExternalUserMetadata;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
-use crate::session::vars::Var;
-
 pub const SYSTEM_USER_NAME: &str = "mz_system";
 pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
     name: SYSTEM_USER_NAME.into(),
@@ -70,11 +68,6 @@ impl User {
     /// Returns whether this is an internal user.
     pub fn is_internal(&self) -> bool {
         INTERNAL_USER_NAMES.contains(&self.name)
-    }
-
-    /// Returns whether this is the mz_system user.
-    pub fn is_mz_system(&self) -> bool {
-        SYSTEM_USER.name() == &self.name
     }
 
     /// Returns whether this user is an admin in an external system.

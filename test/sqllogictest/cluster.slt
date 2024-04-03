@@ -39,7 +39,7 @@ ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: system cluster 'mz_introspection' cannot be modified
+statement error db error: ERROR: must be owner of CLUSTER mz_introspection
 ALTER CLUSTER mz_introspection RENAME TO foo
 
 simple conn=mz_system,user=mz_system
@@ -831,34 +831,6 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 DROP CLUSTER t1
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER CLUSTER mz_system SET (SIZE = '2')
-----
-COMPLETE 0
-
-query I
-SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'mz_system') AND id LIKE 's%';
-----
-1
-
-query I
-SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'mz_system') AND id LIKE 'u%';
-----
-0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO false;
-----
-COMPLETE 0
-
-statement error system cluster 'mz_system' cannot be modified
-ALTER CLUSTER mz_system SET (MANAGED = false)
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO true;
 ----
 COMPLETE 0
 

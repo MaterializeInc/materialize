@@ -11,7 +11,6 @@
 
 use mz_audit_log::{EventDetails, EventType, VersionedEvent};
 use mz_catalog::durable::Transaction;
-use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{GlobalId, Timestamp};
@@ -44,27 +43,6 @@ impl Catalog {
         let name = entry.name().clone();
 
         let cluster = state.get_cluster(cluster_id);
-
-        // Prevent changing system objects.
-        if entry.id().is_system() {
-            let schema_name = state
-                .resolve_full_name(&name, session.map(|session| session.conn_id()))
-                .schema;
-            return Err(AdapterError::Catalog(Error::new(
-                ErrorKind::ReadOnlySystemSchema(schema_name),
-            )));
-        }
-
-        // Only internal users can move objects to system clusters
-        if cluster.id.is_system()
-            && !session
-                .map(|session| session.user().is_internal())
-                .unwrap_or(false)
-        {
-            return Err(AdapterError::Catalog(Error::new(
-                ErrorKind::ReadOnlyCluster(cluster.name.clone()),
-            )));
-        }
 
         // Since the catalog serializes the items using only their creation statement
         // and context, we need to parse and rewrite the with options in that statement.

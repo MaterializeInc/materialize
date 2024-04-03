@@ -30,10 +30,10 @@ $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-inter
 ALTER SYSTEM SET enable_rbac_checks TO false
 
 ! DROP CLUSTER mz_system CASCADE
-contains:system cluster 'mz_system' cannot be modified
+contains:must be owner of CLUSTER mz_system
 
 ! DROP CLUSTER mz_introspection CASCADE
-contains:system cluster 'mz_introspection' cannot be modified
+contains:must be owner of CLUSTER mz_introspection
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO true
