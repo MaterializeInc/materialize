@@ -145,6 +145,7 @@ def main(
     max_build_fetches: int,
     first_build_page_to_fetch: int,
     max_results: int,
+    only_one_result_per_build: bool,
     only_failed_builds: bool,
     only_failed_build_step_keys: list[str],
     pattern: str,
@@ -186,6 +187,9 @@ def main(
         if max_entries_to_print == 0:
             break
 
+        if only_one_result_per_build:
+            max_entries_to_print = 1
+
         matches_in_build = search_build(
             build,
             pattern,
@@ -193,6 +197,10 @@ def main(
             fetch_mode=fetch_annotations_mode,
             max_entries_to_print=max_entries_to_print,
         )
+
+        if only_one_result_per_build:
+            matches_in_build = min(1, matches_in_build)
+
         count_matches = count_matches + matches_in_build
 
     print_summary(pipeline_slug, builds_data, count_matches, max_results)
@@ -236,6 +244,11 @@ if __name__ == "__main__":
     parser.add_argument("--first-build-page-to-fetch", default=1, type=int)
     parser.add_argument("--max-results", default=50, type=int)
     parser.add_argument(
+        "--only-one-result-per-build",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
         "--only-failed-builds",
         default=False,
         action="store_true",
@@ -260,6 +273,7 @@ if __name__ == "__main__":
         args.max_build_fetches,
         args.first_build_page_to_fetch,
         args.max_results,
+        args.only_one_result_per_build,
         args.only_failed_builds,
         args.only_failed_build_step_key,
         pattern,
