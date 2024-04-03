@@ -111,10 +111,10 @@ def main(
     first_build_page_to_fetch: int,
     max_results: int,
     only_failed_builds: bool,
-    search_value: str,
+    pattern: str,
     use_regex: bool,
 ) -> None:
-    assert len(search_value) > 0
+    assert len(pattern) > 0, "pattern must not be empty"
 
     if only_failed_builds:
         build_states = BUILDKITE_FAILED_BUILD_STATES
@@ -146,7 +146,7 @@ def main(
     for build in builds_data:
         matches_in_build = search_build(
             build,
-            search_value,
+            pattern,
             use_regex=use_regex,
             fetch_mode=fetch_annotations_mode,
             max_entries_to_print=max(0, max_results - count_matches),
@@ -161,6 +161,8 @@ if __name__ == "__main__":
         prog="buildkite-failure-search",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
+    parser.add_argument("pattern", nargs="*", type=str)
 
     parser.add_argument(
         "--pipeline",
@@ -196,12 +198,14 @@ if __name__ == "__main__":
         default=False,
         action="store_true",
     )
-    parser.add_argument("--value", required=True, type=str)
     parser.add_argument(
         "--use-regex",
         action="store_true",
     )
     args = parser.parse_args()
+
+    assert len(args.pattern) == 1, "Exactly one search pattern must be provided"
+    pattern = args.pattern[0]
 
     main(
         args.pipeline,
@@ -212,6 +216,6 @@ if __name__ == "__main__":
         args.first_build_page_to_fetch,
         args.max_results,
         args.only_failed_builds,
-        args.value,
+        pattern,
         args.use_regex,
     )
