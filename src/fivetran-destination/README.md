@@ -28,17 +28,17 @@ SDK. From the root of the Materialize repository run:
 git submodule update --init --recursive misc/fivetran-sdk
 ```
 
-Once you have the `fivetran-sdk` submodule updated you can build the binary. If you already have 
-[`protoc`](https://grpc.io/docs/protoc-installation/) installed and part of your PATH run:
+Once you have the `fivetran-sdk` submodule updated you can build the binary with:
 
 ```shell
 cargo build --release -p mz-fivetran-destination
 ```
 
-Otherwise you can enable the `protobuf-src` feature to build `protoc` from the vendored source:
+> **Note:** If you already have [`protoc`](https://grpc.io/docs/protoc-installation/) installed
+and in your PATH, you can skip building the vendored version with:
 
 ```shell
-cargo build --release -p mz-fivetran-destination --features protobuf-src
+cargo build --release -p mz-fivetran-destination --no-default-features
 ```
 
 Cargo will emit the built binary at
