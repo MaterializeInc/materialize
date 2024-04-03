@@ -93,6 +93,7 @@ where
             self.upload_info.clone(),
             connection_context,
             self.aws_connection.clone(),
+            sink_id,
             self.connection_id,
             one_time_callback,
         );

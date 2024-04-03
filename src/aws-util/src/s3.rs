@@ -23,3 +23,27 @@ pub fn new_client(sdk_config: &SdkConfig) -> Client {
         .build();
     Client::from_conf(conf)
 }
+
+pub async fn list_bucket_path(
+    client: &Client,
+    bucket: &str,
+    prefix: &str,
+) -> Result<Option<Vec<String>>, anyhow::Error> {
+    let res = client
+        .list_objects_v2()
+        .bucket(bucket)
+        .prefix(prefix)
+        .send()
+        .await?;
+    Ok(res
+        .contents
+        .map(|objs| {
+            objs.into_iter()
+                .map(|obj| {
+                    obj.key
+                        .ok_or(anyhow::anyhow!("key not provided from list_objects_v2"))
+                })
+                .collect::<Result<Vec<String>, _>>()
+        })
+        .transpose()?)
+}
