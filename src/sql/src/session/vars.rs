@@ -1155,7 +1155,7 @@ impl SystemVars {
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
-            &DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY,
+            &ARRANGEMENT_EXERT_PROPORTIONALITY,
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
             &ENABLE_DEFAULT_CONNECTION_VALIDATION,
@@ -1894,9 +1894,9 @@ impl SystemVars {
         *self.expect_value(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
     }
 
-    /// Returns the `default_arrangement_exert_proportionality` configuration parameter.
-    pub fn default_arrangement_exert_proportionality(&self) -> u32 {
-        *self.expect_value(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
+    /// Returns the `arrangement_exert_proportionality` configuration parameter.
+    pub fn arrangement_exert_proportionality(&self) -> u32 {
+        *self.expect_value(&ARRANGEMENT_EXERT_PROPORTIONALITY)
     }
 
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
