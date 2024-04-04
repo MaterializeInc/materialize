@@ -34,6 +34,3 @@ class K8sPod(K8sResource):
 
     def copy(self, source: str, destination: str) -> None:
         self.kubectl("cp", source, f"{self.name()}:{destination}")
-
-    def delete(self, path: str) -> None:
-        self.kubectl("exec", self.name(), "--", "rm", path)
