@@ -42,6 +42,7 @@ mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["bytes_", "test", "tracing_"] }
 mz-persist = { path = "../persist" }
+mz-persist-proc = { path = "../persist-proc" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 mz-timely-util = { path = "../timely-util" }

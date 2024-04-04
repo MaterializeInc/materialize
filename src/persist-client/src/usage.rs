@@ -21,7 +21,7 @@ use tracing::{error, info};
 
 use crate::cfg::PersistConfig;
 use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey, WriterKey};
-use crate::internal::state::HollowBlobRef;
+use crate::internal::state::{BatchPart, HollowBlobRef};
 use crate::internal::state_versions::StateVersions;
 use crate::write::WriterId;
 use crate::{retry_external, Metrics, PersistClient, ShardId};
@@ -215,7 +215,7 @@ impl StorageUsageClient {
             diff.referenced_blob_fn(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     for part in &batch.parts {
-                        batches_bytes += part.encoded_size_bytes;
+                        batches_bytes += part.encoded_size_bytes();
                     }
                 }
                 HollowBlobRef::Rollup(rollup) => {
@@ -452,6 +452,9 @@ impl StorageUsageClient {
             x.referenced_blob_fn(|x| match x {
                 HollowBlobRef::Batch(x) => {
                     for part in x.parts.iter() {
+                        let part = match part {
+                            BatchPart::Hollow(x) => x,
+                        };
                         let parsed = BlobKey::parse_ids(&part.key.complete(&shard_id));
                         if let Ok((_, PartialBlobKey::Batch(writer_id, _))) = parsed {
                             let writer_referenced_batches_bytes =
@@ -476,6 +479,9 @@ impl StorageUsageClient {
         states_iter.state().map_blobs(|x| match x {
             HollowBlobRef::Batch(x) => {
                 for part in x.parts.iter() {
+                    let part = match part {
+                        BatchPart::Hollow(x) => x,
+                    };
                     current_state_batches_bytes += u64::cast_from(part.encoded_size_bytes);
                 }
             }
@@ -728,21 +734,22 @@ impl std::fmt::Display for HumanBytes {
 
 #[cfg(test)]
 mod tests {
-    use crate::batch::BLOB_TARGET_SIZE;
     use bytes::Bytes;
+    use mz_dyncfg::ConfigUpdates;
     use mz_persist::location::SeqNo;
     use semver::Version;
     use timely::progress::Antichain;
 
+    use crate::batch::BLOB_TARGET_SIZE;
     use crate::internal::paths::{PartialRollupKey, RollupId};
     use crate::tests::new_test_client;
     use crate::ShardId;
 
     use super::*;
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn size() {
+    async fn size(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -750,7 +757,7 @@ mod tests {
             (("4".to_owned(), "four".to_owned()), 4, 1),
         ];
 
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
         let build_version = client.cfg.build_version.clone();
         let shard_id_one = ShardId::new();
         let shard_id_two = ShardId::new();
@@ -847,9 +854,9 @@ mod tests {
 
     /// This is just a sanity check for the overall flow of computing ShardUsage.
     /// The edge cases are exercised in separate tests.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn usage_sanity() {
+    async fn usage_sanity(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -858,7 +865,7 @@ mod tests {
         ];
 
         let shard_id = ShardId::new();
-        let mut client = new_test_client().await;
+        let mut client = new_test_client(&dyncfgs).await;
 
         let (mut write0, _) = client
             .expect_open::<String, String, u64, i64>(shard_id)
@@ -911,9 +918,9 @@ mod tests {
         assert!(shard_usage_audit.leaked_bytes > 0);
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn usage_referenced() {
+    async fn usage_referenced(dyncfgs: ConfigUpdates) {
         mz_ore::test::init_logging();
 
         let data = vec![
@@ -924,7 +931,7 @@ mod tests {
         ];
 
         let shard_id = ShardId::new();
-        let mut client = new_test_client().await;
+        let mut client = new_test_client(&dyncfgs).await;
         // make our bookkeeping simple by skipping compaction blobs writes
         client.cfg.compaction_enabled = false;
         // make things interesting and create multiple parts per batch
@@ -941,12 +948,12 @@ mod tests {
             .batch
             .parts
             .iter()
-            .map(|x| u64::cast_from(x.encoded_size_bytes))
+            .map(|x| u64::cast_from(x.encoded_size_bytes()))
             .sum::<u64>()
             + b2.batch
                 .parts
                 .iter()
-                .map(|x| u64::cast_from(x.encoded_size_bytes))
+                .map(|x| u64::cast_from(x.encoded_size_bytes()))
                 .sum::<u64>();
 
         write
@@ -1227,10 +1234,10 @@ mod tests {
     /// This also tests a (hypothesized) race that's possible in prod where an
     /// initial rollup is written for a shard, but the initial CaS hasn't yet
     /// succeeded.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn usage_regression_shard_in_blob_not_consensus() {
-        let client = new_test_client().await;
+    async fn usage_regression_shard_in_blob_not_consensus(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
         let shard_id = ShardId::new();
 
         // Somewhat unsatisfying, we manually construct a rollup blob key.

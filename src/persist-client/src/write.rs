@@ -37,9 +37,9 @@ use crate::batch::{
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::{check_data_version, Schemas};
-use crate::internal::machine::Machine;
+use crate::internal::machine::{CompareAndAppendRes, Machine};
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{HandleDebugState, HollowBatch, Upper};
+use crate::internal::state::{HandleDebugState, HollowBatch};
 use crate::read::ReadHandle;
 use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
@@ -480,7 +480,7 @@ where
 
         let any_batch_rewrite = batches
             .iter()
-            .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite.is_some()));
+            .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
         let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
         for batch in batches.iter() {
             let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
@@ -512,15 +512,15 @@ where
             .await;
 
         let maintenance = match res {
-            Ok(Ok((_seqno, maintenance))) => {
+            CompareAndAppendRes::Success(_seqno, maintenance) => {
                 self.upper = desc.upper().clone();
                 for batch in batches.iter_mut() {
                     batch.mark_consumed();
                 }
                 maintenance
             }
-            Ok(Err(invalid_usage)) => return Err(invalid_usage),
-            Err(Upper(current_upper)) => {
+            CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
+            CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
                 // We tried to to a compare_and_append with the wrong expected upper, that
                 // won't work. Update the cached upper to the current upper.
                 self.upper = current_upper.clone();
@@ -539,13 +539,16 @@ where
     /// Turns the given [`ProtoBatch`] back into a [`Batch`] which can be used
     /// to append it to this shard.
     pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
+        let shard_id: ShardId = batch
+            .shard_id
+            .into_rust()
+            .expect("valid transmittable batch");
+        assert_eq!(shard_id, self.machine.shard_id());
+
         let ret = Batch {
             batch_delete_enabled: BATCH_DELETE_ENABLED.get(&self.cfg),
             metrics: Arc::clone(&self.metrics),
-            shard_id: batch
-                .shard_id
-                .into_rust()
-                .expect("valid transmittable batch"),
+            shard_metrics: Arc::clone(&self.machine.applier.shard_metrics),
             version: Version::parse(&batch.version).expect("valid transmittable batch"),
             batch: batch
                 .batch
@@ -554,7 +557,7 @@ where
             blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
         };
-        assert_eq!(ret.shard_id, self.machine.shard_id());
+        assert_eq!(ret.shard_id(), self.machine.shard_id());
         ret
     }
 
@@ -772,28 +775,29 @@ mod tests {
     use std::str::FromStr;
     use std::sync::mpsc;
 
-    use crate::cache::PersistClientCache;
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_util::FutureExt;
+    use mz_dyncfg::ConfigUpdates;
     use mz_ore::collections::CollectionExt;
     use mz_ore::task;
     use serde_json::json;
 
+    use crate::cache::PersistClientCache;
     use crate::tests::{all_ok, new_test_client};
     use crate::{PersistLocation, ShardId};
 
     use super::*;
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn empty_batches() {
+    async fn empty_batches(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let (mut write, _) = new_test_client()
+        let (mut write, _) = new_test_client(&dyncfgs)
             .await
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
@@ -824,9 +828,9 @@ mod tests {
         assert_eq!(count_after, count_before);
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn compare_and_append_batch_multi() {
+    async fn compare_and_append_batch_multi(dyncfgs: ConfigUpdates) {
         let data0 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -838,7 +842,7 @@ mod tests {
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let (mut write, mut read) = new_test_client()
+        let (mut write, mut read) = new_test_client(&dyncfgs)
             .await
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
@@ -901,16 +905,16 @@ mod tests {
         assert_eq!(container.writer_id, id);
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn hollow_batch_roundtrip() {
+    async fn hollow_batch_roundtrip(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let (mut write, mut read) = new_test_client()
+        let (mut write, mut read) = new_test_client(&dyncfgs)
             .await
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
@@ -937,10 +941,10 @@ mod tests {
         assert_eq!(actual, all_ok(&expected, 3));
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn wait_for_upper_past() {
-        let client = new_test_client().await;
+    async fn wait_for_upper_past(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
         let (mut write, _) = client.expect_open::<(), (), u64, i64>(ShardId::new()).await;
         let five = Antichain::from_elem(5);
 

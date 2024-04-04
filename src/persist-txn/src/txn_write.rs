@@ -218,7 +218,7 @@ where
                             handle.metrics.batches.commit_count.inc();
                             let commit_bytes = &handle.metrics.batches.commit_bytes;
                             for part in batch.parts.iter() {
-                                commit_bytes.inc_by(u64::cast_from(part.encoded_size_bytes));
+                                commit_bytes.inc_by(u64::cast_from(part.encoded_size_bytes()));
                             }
                             handle.datas.put_write(data_write);
                         }
