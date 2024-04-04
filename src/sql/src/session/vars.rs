@@ -1155,7 +1155,6 @@ impl SystemVars {
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
-            &DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT,
             &DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY,
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
@@ -1893,11 +1892,6 @@ impl SystemVars {
 
     pub fn keep_n_privatelink_status_history_entries(&self) -> usize {
         *self.expect_value(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
-    }
-
-    /// Returns the `default_idle_arrangement_merge_effort` configuration parameter.
-    pub fn default_idle_arrangement_merge_effort(&self) -> u32 {
-        *self.expect_value(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
     }
 
     /// Returns the `default_arrangement_exert_proportionality` configuration parameter.

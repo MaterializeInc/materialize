@@ -1291,13 +1291,6 @@ pub static STATEMENT_LOGGING_SAMPLE_RATE: VarDefinition = VarDefinition::new_laz
     false,
 ).with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
 
-pub static DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: VarDefinition = VarDefinition::new(
-    "default_idle_arrangement_merge_effort",
-    value!(u32; 0),
-    "The default value to use for the `IDLE ARRANGEMENT MERGE EFFORT` cluster/replica option.",
-    true,
-);
-
 pub static DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY: VarDefinition = VarDefinition::new(
     "default_arrangement_exert_proportionality",
     value!(u32; 16),

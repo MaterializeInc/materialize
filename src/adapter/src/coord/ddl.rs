@@ -313,8 +313,6 @@ impl Coordinator {
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
                     update_default_arrangement_merge_options |=
-                        name == vars::DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT.name();
-                    update_default_arrangement_merge_options |=
                         name == vars::DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY.name();
                     update_http_config |= vars::is_http_config_var(name);
                 }
@@ -956,14 +954,6 @@ impl Coordinator {
     }
 
     fn update_default_arrangement_merge_options(&mut self) {
-        let effort = self
-            .catalog()
-            .system_config()
-            .default_idle_arrangement_merge_effort();
-        self.controller
-            .compute
-            .set_default_idle_arrangement_merge_effort(effort);
-
         let prop = self
             .catalog()
             .system_config()
