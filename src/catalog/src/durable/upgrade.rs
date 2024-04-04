@@ -199,7 +199,7 @@ mod v48_to_v49;
 mod v49_to_v50;
 mod v50_to_v51;
 mod v51_to_v52;
-mod v52_to_v53;
+mod v53_to_v54;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -309,7 +309,7 @@ async fn run_upgrade(
             run_versioned_upgrade(unopened_catalog_state, mode, version, v51_to_v52::upgrade).await
         }
         52 => {
-            run_versioned_upgrade(unopened_catalog_state, mode, version, v52_to_v53::upgrade).await
+            run_versioned_upgrade(unopened_catalog_state, mode, version, v53_to_v54::upgrade).await
         }
 
         // Up-to-date, no migration needed!
