@@ -28,7 +28,7 @@ def initialize_logging() -> None:
     lock = threading.Lock()
 
 
-class Executor:
+class ParallelWorkloadExecutor:
     rng: random.Random
     cur: pg8000.Cursor
     pg_pid: int
@@ -40,7 +40,9 @@ class Executor:
     last_log: str
     action_run_since_last_commit_rollback: bool
 
-    def __init__(self, rng: random.Random, cur: pg8000.Cursor, db: "Database"):
+    def __init__(
+        self, rng: random.Random, cur: pg8000.Cursor, db: "Database"
+    ):
         self.rng = rng
         self.cur = cur
         self.db = db
