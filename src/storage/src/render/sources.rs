@@ -308,7 +308,6 @@ where
                                 };
                             let (stream, tok) = persist_source::persist_source_core(
                                 scope,
-                                format!("upsert_rehydration({})", id),
                                 id,
                                 persist_clients,
                                 description.ingestion_metadata,
