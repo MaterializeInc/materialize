@@ -1283,11 +1283,10 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
                 assert_eq!(proto.encoded_size_bytes, 0);
                 assert!(proto.key_stats.is_none());
-                let key_lower = proto.key_lower.into();
                 let updates = LazyInlineBatchPart(x.into_rust()?);
                 Ok(BatchPart::Inline {
                     updates,
-                    key_lower,
+                    key_lower: proto.key_lower.into(),
                     ts_rewrite,
                 })
             }
@@ -1412,7 +1411,8 @@ impl LazyInlineBatchPart {
         self.0.buf.len()
     }
 
-    /// Decodes and returns PartStats from the encoded representation.
+    /// Decodes and returns a BlobTraceBatchPart from the encoded
+    /// representation.
     ///
     /// This does not cache the returned value, it decodes each time it's
     /// called.

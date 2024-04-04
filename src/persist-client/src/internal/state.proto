@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// buf breaking: ignore (working around a false positive in buf's breaking change lint)
-
 syntax = "proto3";
 
 package mz_persist_client.internal.state;
@@ -33,7 +31,7 @@ message ProtoHollowBatchPart {
     bytes key_lower = 3;
     ProtoU64Antichain ts_rewrite = 4;
 
-    // Only set when Kind is Inline
+    // Only set when Kind is Key
     uint64 encoded_size_bytes = 2;
     optional bytes key_stats = 536870906;
 

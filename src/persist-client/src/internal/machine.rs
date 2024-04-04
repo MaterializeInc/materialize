@@ -1023,6 +1023,7 @@ pub(crate) enum CompareAndAppendRes<T> {
 
 #[cfg(test)]
 impl<T: Debug> CompareAndAppendRes<T> {
+    #[track_caller]
     fn unwrap(self) -> (SeqNo, WriterMaintenance<T>) {
         match self {
             CompareAndAppendRes::Success(seqno, maintenance) => (seqno, maintenance),
@@ -1345,6 +1346,17 @@ pub mod datadriven {
                 listens: BTreeMap::default(),
                 routine: Vec::new(),
             }
+        }
+
+        fn to_batch(&self, hollow: HollowBatch<u64>) -> Batch<String, (), u64, i64> {
+            Batch::new(
+                true,
+                Arc::clone(&self.client.metrics),
+                Arc::clone(&self.client.blob),
+                self.client.metrics.shards.shard(&self.shard_id, "test"),
+                self.client.cfg.build_version.clone(),
+                hollow,
+            )
         }
     }
 
@@ -2094,18 +2106,7 @@ pub mod datadriven {
                     .get(batch)
                     .expect("unknown batch")
                     .clone();
-                Batch::new(
-                    true,
-                    Arc::clone(&datadriven.client.metrics),
-                    Arc::clone(&datadriven.client.blob),
-                    datadriven
-                        .client
-                        .metrics
-                        .shards
-                        .shard(&datadriven.shard_id, "test"),
-                    datadriven.client.cfg.build_version.clone(),
-                    hollow,
-                )
+                datadriven.to_batch(hollow)
             })
             .collect();
 
@@ -2165,33 +2166,52 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
         let writer_id = args.expect("writer_id");
-        let batch = datadriven
+        let mut batch = datadriven
             .batches
             .get(input)
             .expect("unknown batch")
             .clone();
         let token = args.optional("token").unwrap_or_else(IdempotencyToken::new);
-        let indeterminate = args
-            .optional::<String>("prev_indeterminate")
-            .map(|x| Indeterminate::new(anyhow::Error::msg(x)));
         let now = (datadriven.client.cfg.now)();
-        let res = datadriven
-            .machine
-            .compare_and_append_idempotent(
-                &batch,
-                &writer_id,
-                now,
-                &token,
-                &HandleDebugState::default(),
-                indeterminate,
-            )
-            .await;
-        let maintenance = match res {
-            CompareAndAppendRes::Success(_, x) => x,
-            CompareAndAppendRes::UpperMismatch(_seqno, upper) => {
-                return Err(anyhow!("{:?}", Upper(upper)))
-            }
-            _ => panic!("{:?}", res),
+        let maintenance = loop {
+            let indeterminate = args
+                .optional::<String>("prev_indeterminate")
+                .map(|x| Indeterminate::new(anyhow::Error::msg(x)));
+            let res = datadriven
+                .machine
+                .compare_and_append_idempotent(
+                    &batch,
+                    &writer_id,
+                    now,
+                    &token,
+                    &HandleDebugState::default(),
+                    indeterminate,
+                )
+                .await;
+            match res {
+                CompareAndAppendRes::Success(_, x) => break x,
+                CompareAndAppendRes::UpperMismatch(_seqno, upper) => {
+                    return Err(anyhow!("{:?}", Upper(upper)))
+                }
+                CompareAndAppendRes::InlineBackpressure => {
+                    let mut b = datadriven.to_batch(batch.clone());
+                    let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &writer_id);
+                    let schemas = Schemas::<String, ()> {
+                        key: Arc::new(StringSchema),
+                        val: Arc::new(UnitSchema),
+                    };
+                    b.flush_to_blob(
+                        &cfg,
+                        &datadriven.client.metrics.user,
+                        &datadriven.client.isolated_runtime,
+                        &schemas,
+                    )
+                    .await;
+                    batch = b.into_hollow_batch();
+                    continue;
+                }
+                _ => panic!("{:?}", res),
+            };
         };
         // TODO: Don't throw away writer maintenance. It's slightly tricky
         // because we need a WriterId for Compactor.
@@ -2256,6 +2276,7 @@ pub mod tests {
     use mz_persist::location::SeqNo;
     use timely::progress::Antichain;
 
+    use crate::batch::BatchBuilderConfig;
     use crate::cache::StateCache;
     use crate::internal::gc::{GarbageCollector, GcReq};
     use crate::internal::state::{HandleDebugState, ROLLUP_THRESHOLD};
@@ -2278,8 +2299,19 @@ pub mod tests {
         // live entries in consensus.
         const NUM_BATCHES: u64 = 100;
         for idx in 0..NUM_BATCHES {
-            let batch = write
+            let mut batch = write
                 .expect_batch(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+                .await;
+            // Flush this batch out so the CaA doesn't get inline writes
+            // backpressure.
+            let cfg = BatchBuilderConfig::new(&client.cfg, &write.writer_id);
+            batch
+                .flush_to_blob(
+                    &cfg,
+                    &client.metrics.user,
+                    &client.isolated_runtime,
+                    &write.schemas,
+                )
                 .await;
             let (_, writer_maintenance) = write
                 .machine

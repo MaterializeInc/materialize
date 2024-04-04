@@ -87,6 +87,11 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 BatchPart::Hollow(x) => x.key.split().0 >= min_version,
                 // Inline parts are only written directly by the user and so may
                 // be unconsolidated.
+                //
+                // WIP: This makes me realize that having the version of the
+                // writer in metadata has been useful for hollow parts. Should
+                // we do the same for inline or is it less important because the
+                // full data is already there in metadata?
                 BatchPart::Inline { .. } => true,
             },
             FetchData::AlreadyFetched => false,

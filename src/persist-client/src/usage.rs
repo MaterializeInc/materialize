@@ -742,7 +742,10 @@ mod tests {
     use semver::Version;
     use timely::progress::Antichain;
 
-    use crate::batch::{BLOB_TARGET_SIZE, INLINE_UPDATE_THRESHOLD_BYTES};
+    use crate::batch::{
+        BatchBuilderConfig, BLOB_TARGET_SIZE, INLINE_UPDATE_MAX_BYTES,
+        INLINE_UPDATE_THRESHOLD_BYTES,
+    };
     use crate::internal::paths::{PartialRollupKey, RollupId};
     use crate::tests::new_test_client;
     use crate::ShardId;
@@ -949,6 +952,11 @@ mod tests {
         client.cfg.compaction_enabled = false;
         // make things interesting and create multiple parts per batch
         client.cfg.set_config(&BLOB_TARGET_SIZE, 0);
+        // Inline write backpressure will change the encoded size, but the CaAB
+        // call consumes the Batch, so we don't have any way of getting the new
+        // one. So, sniff out whether backpressure would flush out the part and
+        // do it before we get the sizes.
+        let backpressure_would_flush = INLINE_UPDATE_MAX_BYTES.get(&client.cfg) == 0;
 
         let (mut write, _read) = client
             .expect_open::<String, String, u64, i64>(shard_id)
@@ -956,6 +964,23 @@ mod tests {
 
         let mut b1 = write.expect_batch(&data[..2], 0, 3).await;
         let mut b2 = write.expect_batch(&data[2..], 2, 5).await;
+        if backpressure_would_flush {
+            let cfg = BatchBuilderConfig::new(&client.cfg, &write.writer_id);
+            b1.flush_to_blob(
+                &cfg,
+                &client.metrics.user,
+                &client.isolated_runtime,
+                &write.schemas,
+            )
+            .await;
+            b2.flush_to_blob(
+                &cfg,
+                &client.metrics.user,
+                &client.isolated_runtime,
+                &write.schemas,
+            )
+            .await;
+        }
 
         let batches_size = b1
             .batch
