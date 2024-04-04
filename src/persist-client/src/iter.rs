@@ -24,6 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use mz_dyncfg::Config;
 use mz_ore::task::JoinHandle;
 use mz_persist::location::Blob;
 use mz_persist_types::Codec64;
@@ -247,6 +248,7 @@ pub(crate) struct Consolidator<T, D> {
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
+    split_old_runs: bool,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
@@ -259,6 +261,12 @@ pub(crate) struct Consolidator<T, D> {
     drop_stash: Option<Tuple<T, D>>,
 }
 
+pub(crate) const SPLIT_OLD_RUNS: Config<bool> = Config::new(
+    "persist_split_old_runs",
+    true,
+    "If set, split up runs that were written by older versions of Materialize and may not truly be consolidated."
+);
+
 impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D> {
     /// Create a new [Self] instance with the given prefetch budget. This budget is a "soft limit"
     /// on the size of the parts that the consolidator will fetch... we'll try and stay below the
@@ -268,6 +276,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         metrics: Arc<Metrics>,
         filter: FetchBatchFilter<T>,
         prefetch_budget_bytes: usize,
+        split_old_runs: bool,
     ) -> Self {
         Self {
             context,
@@ -275,6 +284,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
             runs: vec![],
             filter,
             budget: prefetch_budget_bytes,
+            split_old_runs,
             initial_state: None,
             drop_stash: None,
         }
@@ -375,7 +385,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
             ConsolidationPart::Encoded { part, .. } => part.maybe_unconsolidated(),
             ConsolidationPart::Sorted { .. } => false,
         });
-        if run.len() > 1 && maybe_unconsolidated {
+        if run.len() > 1 && maybe_unconsolidated && self.split_old_runs {
             for part in run {
                 self.runs.push(VecDeque::from([part]));
             }
@@ -951,6 +961,7 @@ mod tests {
                         since: Antichain::from_elem(0),
                     },
                     budget: 0,
+                    split_old_runs: true,
                     initial_state: None,
                     drop_stash: None,
                 };
@@ -1014,6 +1025,7 @@ mod tests {
                     since: desc.since().clone(),
                 },
                 budget,
+                false,
             );
 
             for run in runs {

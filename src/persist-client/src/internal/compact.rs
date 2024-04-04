@@ -40,7 +40,7 @@ use crate::internal::machine::Machine;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::iter::Consolidator;
+use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.
@@ -72,6 +72,7 @@ pub struct CompactRes<T> {
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
     pub(crate) compaction_yield_after_n_updates: usize,
+    pub(crate) split_old_runs: bool,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
 }
@@ -82,6 +83,7 @@ impl CompactConfig {
         let mut ret = CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
+            split_old_runs: SPLIT_OLD_RUNS.get(&value.configs),
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, writer_id),
         };
@@ -715,6 +717,7 @@ where
                 since: desc.since().clone(),
             },
             prefetch_budget_bytes,
+            cfg.split_old_runs,
         );
 
         for (desc, parts) in runs {
