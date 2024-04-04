@@ -67,7 +67,6 @@ impl Coordinator {
                     size: plan.size.clone(),
                     availability_zones: plan.availability_zones.clone(),
                     logging,
-                    idle_arrangement_merge_effort: plan.compute.idle_arrangement_merge_effort,
                     replication_factor: plan.replication_factor,
                     disk: plan.disk,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
@@ -210,10 +209,7 @@ impl Coordinator {
                     .allowed_cluster_replica_sizes(),
                 azs,
             )?,
-            compute: ComputeReplicaConfig {
-                logging,
-                idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
-            },
+            compute: ComputeReplicaConfig { logging },
         };
 
         ops.push(catalog::Op::CreateClusterReplica {
@@ -343,10 +339,7 @@ impl Coordinator {
                         .allowed_cluster_replica_sizes(),
                     None,
                 )?,
-                compute: ComputeReplicaConfig {
-                    logging,
-                    idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
-                },
+                compute: ComputeReplicaConfig { logging },
             };
 
             let replica_id = self.catalog_mut().allocate_replica_id(&id).await?;
@@ -477,10 +470,7 @@ impl Coordinator {
                 // are unmanaged.
                 None,
             )?,
-            compute: ComputeReplicaConfig {
-                logging,
-                idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
-            },
+            compute: ComputeReplicaConfig { logging },
         };
 
         let cluster = self.catalog().get_cluster(cluster_id);
@@ -587,7 +577,6 @@ impl Coordinator {
                     size,
                     availability_zones: Default::default(),
                     logging,
-                    idle_arrangement_merge_effort: None,
                     replication_factor: 1,
                     disk,
                     optimizer_feature_overrides: Default::default(),
@@ -601,7 +590,6 @@ impl Coordinator {
                 size,
                 availability_zones,
                 logging,
-                idle_arrangement_merge_effort,
                 replication_factor,
                 disk,
                 optimizer_feature_overrides: _,
@@ -631,11 +619,6 @@ impl Coordinator {
                 match &options.introspection_interval {
                     Set(ii) => logging.interval = ii.0,
                     Reset => logging.interval = Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
-                    Unchanged => {}
-                }
-                match &options.idle_arrangement_merge_effort {
-                    Set(effort) => *idle_arrangement_merge_effort = Some(*effort),
-                    Reset => *idle_arrangement_merge_effort = None,
                     Unchanged => {}
                 }
                 match &options.replication_factor {
@@ -674,11 +657,6 @@ impl Coordinator {
                 }
                 if !matches!(options.introspection_interval, Unchanged) {
                     coord_bail!("Cannot change INTROSPECTION INTERVAL of unmanaged clusters");
-                }
-                if !matches!(options.idle_arrangement_merge_effort, Unchanged) {
-                    coord_bail!(
-                        "Cannot change IDLE ARRANGEMENT MERGE EFFORT of unmanaged clusters"
-                    );
                 }
                 if !matches!(options.replication_factor, Unchanged) {
                     coord_bail!("Cannot change REPLICATION FACTOR of unmanaged clusters");
@@ -737,7 +715,6 @@ impl Coordinator {
                 replication_factor,
                 availability_zones,
                 logging,
-                idle_arrangement_merge_effort,
                 disk,
                 optimizer_feature_overrides: _,
                 schedule: _,
@@ -747,7 +724,6 @@ impl Coordinator {
                 replication_factor: new_replication_factor,
                 availability_zones: new_availability_zones,
                 logging: new_logging,
-                idle_arrangement_merge_effort: new_idle_arrangement_merge_effort,
                 disk: new_disk,
                 optimizer_feature_overrides: _,
                 schedule: _,
@@ -764,7 +740,6 @@ impl Coordinator {
         let mut create_cluster_replicas = vec![];
 
         let compute = mz_sql::plan::ComputeReplicaConfig {
-            idle_arrangement_merge_effort: new_idle_arrangement_merge_effort.clone(),
             introspection: new_logging
                 .interval
                 .map(|interval| ComputeReplicaIntrospectionConfig {
@@ -789,7 +764,6 @@ impl Coordinator {
 
         if new_size != size
             || new_availability_zones != availability_zones
-            || new_idle_arrangement_merge_effort != idle_arrangement_merge_effort
             || new_logging != logging
             || new_disk != disk
         {
@@ -883,7 +857,6 @@ impl Coordinator {
             replication_factor: new_replication_factor,
             availability_zones: new_availability_zones,
             logging: _,
-            idle_arrangement_merge_effort: _,
             disk: new_disk,
             optimizer_feature_overrides: _,
             schedule: _,

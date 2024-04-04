@@ -1005,6 +1005,17 @@ impl Coordinator {
             storage_ids: btreeset! {sink.from},
             compute_ids: btreemap! {},
         };
+
+        // We're putting in place read holds, such that create_exports, below,
+        // which calls update_read_capabilities, can successfully do so.
+        // Otherwise, the since of dependencies might move along concurrently,
+        // pulling the rug from under us!
+        //
+        // TODO: Maybe in the future, pass those holds on to storage, to hold on
+        // to them and downgrade when possible?
+        let read_holds = self
+            .acquire_read_holds(mz_repr::Timestamp::MIN, &id_bundle, false)
+            .expect("can acquire read holds");
         let as_of = self.least_valid_read(&id_bundle);
 
         let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
@@ -1028,7 +1039,7 @@ impl Coordinator {
             from_storage_metadata: (),
         };
 
-        Ok(self
+        let res = self
             .controller
             .storage
             .create_exports(vec![(
@@ -1038,7 +1049,13 @@ impl Coordinator {
                     instance_id: sink.cluster_id,
                 },
             )])
-            .await?)
+            .await;
+
+        // Drop read holds after the export has been created, at which point
+        // storage will have put in its own read holds.
+        drop(read_holds);
+
+        Ok(res?)
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is

@@ -26,6 +26,9 @@ use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
+use mz_adapter::InternalReadHolds;
+use mz_adapter::ReadHolds;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(transparent)]
 struct Set {
@@ -63,6 +66,7 @@ struct Frontiers {
     compute: BTreeMap<(ComputeInstanceId, GlobalId), Frontier>,
     storage: BTreeMap<GlobalId, Frontier>,
     oracle: Timestamp,
+    catalog_state: CatalogState,
 }
 
 struct Frontier {
@@ -124,6 +128,40 @@ impl TimestampProvider for Frontiers {
         id: GlobalId,
     ) -> &'a timely::progress::Antichain<Timestamp> {
         &self.storage.get(&id).unwrap().write
+    }
+
+    fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
+        let mut read_holds = InternalReadHolds::new();
+
+        for (instance_id, ids) in id_bundle.compute_ids.iter() {
+            for id in ids.iter() {
+                let frontiers = self.compute.get(&(*instance_id, *id)).unwrap();
+                read_holds
+                    .holds
+                    .entry(frontiers.read.to_owned())
+                    .or_default()
+                    .compute_ids
+                    .entry(*instance_id)
+                    .or_default()
+                    .insert(*id);
+            }
+        }
+        for id in id_bundle.storage_ids.iter() {
+            let frontiers = self.storage.get(id).unwrap();
+            read_holds
+                .holds
+                .entry(frontiers.read.to_owned())
+                .or_default()
+                .storage_ids
+                .insert(*id);
+        }
+
+        let (dummy_tx, _dummy_rx) = tokio::sync::mpsc::unbounded_channel();
+        ReadHolds::new(read_holds, dummy_tx)
+    }
+
+    fn catalog_state(&self) -> &CatalogState {
+        &self.catalog_state
     }
 }
 
@@ -196,8 +234,8 @@ fn test_timestamp_selection() {
             compute: BTreeMap::new(),
             storage: BTreeMap::new(),
             oracle: Timestamp::MIN,
+            catalog_state: CatalogState::empty(),
         };
-        let catalog = CatalogState::empty();
         let mut isolation = TransactionIsolationLevel::StrictSerializable;
         tf.run(move |tc| -> String {
             match tc.directive.as_str() {
@@ -262,8 +300,7 @@ fn test_timestamp_selection() {
                         Some(_) | None => None,
                     };
 
-                    let ts = block_on(f.determine_timestamp_for(
-                        &catalog,
+                    let (ts, _read_holds) = block_on(f.determine_timestamp_for(
                         &session,
                         &det.id_bundle.into(),
                         &parse_query_when(&det.when),
