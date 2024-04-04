@@ -2300,16 +2300,15 @@ impl CatalogState {
         {
             if diff == 1 {
                 let prev = map.insert(key, value());
-                soft_assert_eq_or_log!(
-                    prev,
-                    None,
+                assert_eq!(
+                    prev, None,
                     "values must be explicitly retracted before inserting a new value"
                 );
             } else if diff == -1 {
                 let prev = map.remove(&key);
                 // We can't assert the exact contents of the previous value, since we don't know
                 // what it should look like.
-                soft_assert_or_log!(
+                assert!(
                     prev.is_some(),
                     "retraction does not match existing value: {key:?}"
                 );
@@ -2441,9 +2440,8 @@ impl CatalogState {
                         comment.sub_component,
                         Some(comment.comment),
                     );
-                    soft_assert_eq_or_log!(
-                        prev,
-                        None,
+                    assert_eq!(
+                        prev, None,
                         "values must be explicitly retracted before inserting a new value"
                     );
                 }
@@ -2453,7 +2451,7 @@ impl CatalogState {
                         comment.sub_component,
                         None,
                     );
-                    soft_assert_eq_or_log!(
+                    assert_eq!(
                         prev,
                         Some(comment.comment),
                         "retraction does not match existing value: ({:?}, {:?})",

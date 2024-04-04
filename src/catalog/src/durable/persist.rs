@@ -516,14 +516,13 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
             let value = value.clone();
             if diff == 1 {
                 let prev = map.insert(key, value);
-                soft_assert_eq_or_log!(
-                    prev,
-                    None,
+                assert_eq!(
+                    prev, None,
                     "values must be explicitly retracted before inserting a new value"
                 );
             } else if diff == -1 {
                 let prev = map.remove(&key);
-                soft_assert_eq_or_log!(
+                assert_eq!(
                     prev,
                     Some(value),
                     "retraction does not match existing value"
@@ -660,15 +659,14 @@ impl ApplyUpdate<StateUpdateKindRaw> for UnopenedCatalogStateInner {
             match (kind, update.diff) {
                 (StateUpdateKind::Config(key, value), 1) => {
                     let prev = self.configs.insert(key.key, value.value);
-                    soft_assert_eq_or_log!(
-                        prev,
-                        None,
+                    assert_eq!(
+                        prev, None,
                         "values must be explicitly retracted before inserting a new value"
                     );
                 }
                 (StateUpdateKind::Config(key, value), -1) => {
                     let prev = self.configs.remove(&key.key);
-                    soft_assert_eq_or_log!(
+                    assert_eq!(
                         prev,
                         Some(value.value),
                         "retraction does not match existing value"
