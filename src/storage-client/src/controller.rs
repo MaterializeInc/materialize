@@ -582,7 +582,10 @@ pub trait StorageController: Debug {
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    async fn process(&mut self) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
+    async fn process(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+    ) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
 
     /// Exposes the internal state of the data shard for debugging and QA.
     ///
