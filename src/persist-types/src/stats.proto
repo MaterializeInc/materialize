@@ -31,7 +31,7 @@ message ProtoDynStats {
         ProtoStructStats struct = 2;
         ProtoPrimitiveStats primitive = 3;
         ProtoBytesStats bytes = 4;
-        ProtoNoneStats none = 5;
+        google.protobuf.Empty none = 5;
     }
 }
 
@@ -111,8 +111,4 @@ message ProtoBytesStats {
 message ProtoAtomicBytesStats {
     bytes lower = 1;
     bytes upper = 2;
-}
-
-message ProtoNoneStats {
-    // Purposefully empty.
 }

@@ -551,8 +551,7 @@ impl TrimStats for ProtoStructStats {
                 Some(Kind::Primitive(stats)) => stats.trim(),
                 Some(Kind::Bytes(stats)) => stats.trim(),
                 Some(Kind::Struct(stats)) => stats.trim(),
-                // Nothing to trim for NoneStats.
-                Some(Kind::None(_)) => (),
+                Some(Kind::None(())) => (),
                 None => {}
             }
         }
@@ -764,9 +763,8 @@ mod impls {
         truncate_bytes, truncate_string, AtomicBytesStats, BytesStats, ColumnStats, DynStats,
         JsonMapElementStats, JsonStats, NoneStats, OptionStats, PrimitiveStats,
         ProtoAtomicBytesStats, ProtoBytesStats, ProtoDynStats, ProtoJsonMapElementStats,
-        ProtoJsonMapStats, ProtoJsonStats, ProtoNoneStats, ProtoOptionStats,
-        ProtoPrimitiveBytesStats, ProtoPrimitiveStats, ProtoStructStats, StatsFrom, StructStats,
-        TruncateBound, TRUNCATE_LEN,
+        ProtoJsonMapStats, ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveBytesStats,
+        ProtoPrimitiveStats, ProtoStructStats, StatsFrom, StructStats, TruncateBound, TRUNCATE_LEN,
     };
 
     impl<T: Serialize> Debug for PrimitiveStats<T>
@@ -1359,12 +1357,12 @@ mod impls {
         }
     }
 
-    impl RustType<ProtoNoneStats> for NoneStats {
-        fn into_proto(&self) -> ProtoNoneStats {
-            ProtoNoneStats::default()
+    impl RustType<()> for NoneStats {
+        fn into_proto(&self) -> () {
+            ()
         }
 
-        fn from_proto(_proto: ProtoNoneStats) -> Result<Self, TryFromProtoError> {
+        fn from_proto(_proto: ()) -> Result<Self, TryFromProtoError> {
             Ok(NoneStats)
         }
     }
