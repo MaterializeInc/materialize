@@ -14,7 +14,6 @@
 //! Compute layer client and server.
 
 use std::collections::BTreeMap;
-use std::iter;
 use std::num::NonZeroUsize;
 
 use async_trait::async_trait;
@@ -118,8 +117,7 @@ pub struct PartitionedComputeState<T> {
     ///
     /// This is updated upon receiving [`ComputeCommand::UpdateConfiguration`]s.
     max_result_size: u64,
-    /// Upper frontiers for indexes and sinks, both collected as a `MutableAntichain` across all
-    /// partitions and individually listed for each partition.
+    /// Upper frontiers for indexes and sinks.
     ///
     /// Frontier tracking for a collection is initialized when the first `FrontierUpper` response
     /// for that collection is received. Frontier tracking is ceased when all shards have reported
@@ -131,7 +129,20 @@ pub struct PartitionedComputeState<T> {
     /// reported. These properties ensure that a) we always cease frontier tracking for collections
     /// that have been dropped and b) frontier tracking for a collection is not re-initialized
     /// after it was ceased.
-    uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
+    uppers: FrontierState<T>,
+    /// Read capabilities held by collections.
+    ///
+    /// Capability tracking for a collection is initialized when the first `ReadCapability`
+    /// response for that collection is received. Capability tracking is ceased when all shards
+    /// have reported advancement to the empty frontier.
+    ///
+    /// The compute protocol requires that shards always emit a `ReadCapability` response reporting
+    /// the empty frontier when a collection is dropped. It further requires that no further
+    /// `ReadCapability` responses are emitted for a collection after the empty capability was
+    /// reported. These properties ensure that a) we always cease capability tracking for
+    /// collections that have been dropped and b) capability tracking for a collection is not
+    /// re-initialized after it was ceased.
+    capabilities: FrontierState<T>,
     /// Pending responses for a peek; returnable once all are available.
     ///
     /// Tracking of responses for a peek is initialized when the first `PeekResponse` for that peek
@@ -189,7 +200,8 @@ where
         PartitionedComputeState {
             parts,
             max_result_size: u64::MAX,
-            uppers: BTreeMap::new(),
+            uppers: FrontierState::new(parts),
+            capabilities: FrontierState::new(parts),
             peek_responses: BTreeMap::new(),
             pending_subscribes: BTreeMap::new(),
             copy_to_responses: BTreeMap::new(),
@@ -206,11 +218,13 @@ where
             parts: _,
             max_result_size: _,
             uppers,
+            capabilities,
             peek_responses,
             pending_subscribes,
             copy_to_responses,
         } = self;
         uppers.clear();
+        capabilities.clear();
         peek_responses.clear();
         pending_subscribes.clear();
         copy_to_responses.clear();
@@ -230,27 +244,6 @@ where
                 // must therefore not add any logic here that relies on doing so.
             }
         }
-    }
-
-    fn start_frontier_tracking(&mut self, id: GlobalId) {
-        let mut frontier = MutableAntichain::new();
-        // TODO(benesch): fix this dangerous use of `as`.
-        #[allow(clippy::as_conversions)]
-        frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-        let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
-        let previous = self.uppers.insert(id, (frontier, part_frontiers));
-        assert!(
-            previous.is_none(),
-            "starting frontier tracking for already present identifier {id}"
-        );
-    }
-
-    fn cease_frontier_tracking(&mut self, id: GlobalId) {
-        let previous = self.uppers.remove(&id);
-        assert!(
-            previous.is_some(),
-            "ceasing frontier tracking for absent identifier {id}",
-        );
     }
 }
 
@@ -290,43 +283,24 @@ where
         message: ComputeResponse<T>,
     ) -> Option<Result<ComputeResponse<T>, anyhow::Error>> {
         match message {
-            ComputeResponse::FrontierUpper {
-                id,
-                upper: new_shard_upper,
-            } => {
-                // Initialize frontier tracking state for this collection, if necessary.
-                if !self.uppers.contains_key(&id) {
-                    self.start_frontier_tracking(id);
-                }
-
-                let (frontier, shard_frontiers) = self.uppers.get_mut(&id).unwrap();
-
-                let old_upper = frontier.frontier().to_owned();
-                let shard_upper = &mut shard_frontiers[shard_id];
-                frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
-                shard_upper.join_assign(&new_shard_upper);
-                frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), 1)));
-
-                let new_upper = frontier.frontier();
-
-                let result = if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
-                    Some(Ok(ComputeResponse::FrontierUpper {
+            ComputeResponse::FrontierUpper { id, upper } => self
+                .uppers
+                .update_frontier(id, shard_id, upper)
+                .map(|new_upper| {
+                    Ok(ComputeResponse::FrontierUpper {
                         id,
-                        upper: new_upper.to_owned(),
-                    }))
-                } else {
-                    None
-                };
-
-                if new_upper.is_empty() {
-                    // All shards have reported advancement to the empty frontier, so we do not
-                    // expect further updates for this collection.
-                    self.cease_frontier_tracking(id);
-                }
-
-                result
-            }
-            ComputeResponse::ReadCapability { id, frontier } => None, // TODO
+                        upper: new_upper,
+                    })
+                }),
+            ComputeResponse::ReadCapability { id, frontier } => self
+                .capabilities
+                .update_frontier(id, shard_id, frontier)
+                .map(|new_frontier| {
+                    Ok(ComputeResponse::ReadCapability {
+                        id,
+                        frontier: new_frontier,
+                    })
+                }),
             ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
                 // Incorporate new peek responses; awaiting all responses.
                 let entry = self
@@ -506,6 +480,91 @@ where
                 Some(Ok(response))
             }
         }
+    }
+}
+
+/// State for generically tracking per-collection, per-partition frontiers.
+///
+/// Used by `PartitionedComputeState` to track both uppers and read capabilities.
+#[derive(Debug)]
+struct FrontierState<T> {
+    /// The number of partions.
+    parts: u32,
+    /// Frontiers for each tracked collection, both as a `MutableAntichain` across all partitions
+    /// and individually for each partition.
+    frontiers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
+}
+
+impl<T> FrontierState<T> {
+    fn new(parts: usize) -> Self {
+        Self {
+            parts: u32::try_from(parts).expect("reasonable number of partitions"),
+            frontiers: Default::default(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.frontiers.clear();
+    }
+}
+
+impl<T> FrontierState<T>
+where
+    T: timely::progress::Timestamp + Lattice,
+{
+    fn update_frontier(
+        &mut self,
+        id: GlobalId,
+        shard_id: usize,
+        new_shard_frontier: Antichain<T>,
+    ) -> Option<Antichain<T>> {
+        // Initialize frontier tracking state for this collection, if necessary.
+        if !self.frontiers.contains_key(&id) {
+            self.add_collection(id);
+        }
+
+        let (frontier, shard_frontiers) = self.frontiers.get_mut(&id).unwrap();
+
+        let old_frontier = frontier.frontier().to_owned();
+        let shard_frontier = &mut shard_frontiers[shard_id];
+        frontier.update_iter(shard_frontier.iter().map(|t| (t.clone(), -1)));
+        shard_frontier.join_assign(&new_shard_frontier);
+        frontier.update_iter(shard_frontier.iter().map(|t| (t.clone(), 1)));
+
+        let new_frontier = frontier.frontier();
+
+        let result = if PartialOrder::less_than(&old_frontier.borrow(), &new_frontier) {
+            Some(new_frontier.to_owned())
+        } else {
+            None
+        };
+
+        if new_frontier.is_empty() {
+            // All shards have reported advancement to the empty frontier, so we do not
+            // expect further updates for this collection.
+            self.remove_collection(id);
+        }
+
+        result
+    }
+
+    fn add_collection(&mut self, id: GlobalId) {
+        let mut frontier = MutableAntichain::new();
+        frontier.update_iter([(T::minimum(), self.parts.into())]);
+        let part_frontiers = vec![Antichain::from_elem(T::minimum()); usize::cast_from(self.parts)];
+        let previous = self.frontiers.insert(id, (frontier, part_frontiers));
+        assert!(
+            previous.is_none(),
+            "attempt to add already present identifier {id}"
+        );
+    }
+
+    fn remove_collection(&mut self, id: GlobalId) {
+        let previous = self.frontiers.remove(&id);
+        assert!(
+            previous.is_some(),
+            "attempt to remove absent identifier {id}",
+        );
     }
 }
 
