@@ -555,7 +555,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
-        if error.details1.value == int and error.details2.value == float:
+        details_by_strategy_key = error.get_details_by_strategy_key()
+
+        mz_error = details_by_strategy_key[EvaluationStrategyKey.MZ_DATAFLOW_RENDERING]
+        pg_error = details_by_strategy_key[EvaluationStrategyKey.POSTGRES]
+
+        if mz_error.value == float and pg_error.value == int:
             return YesIgnore("#26306: float instead of int returned")
 
         return self._shall_ignore_content_mismatch(
