@@ -203,7 +203,11 @@ impl Coordinator {
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_read_holds.remove(conn_id) {
-            self.release_read_holds(txn_reads);
+            tracing::debug!(?txn_reads, "releasing txn read holds");
+
+            // Make it explicit that we're dropping these read holds. Dropping
+            // them will release them at the Coordinator.
+            drop(txn_reads);
         }
     }
 

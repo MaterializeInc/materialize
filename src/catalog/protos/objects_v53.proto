@@ -19,7 +19,7 @@
 
 syntax = "proto3";
 
-package objects;
+package objects_v53;
 
 message ConfigKey {
   string key = 1;
@@ -388,7 +388,6 @@ message RoleId {
     uint64 system = 1;
     uint64 user = 2;
     Empty public = 3;
-    uint64 group = 4;
   }
 }
 

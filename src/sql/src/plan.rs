@@ -528,7 +528,6 @@ pub struct ComputeReplicaIntrospectionConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComputeReplicaConfig {
     pub introspection: Option<ComputeReplicaIntrospectionConfig>,
-    pub idle_arrangement_merge_effort: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1538,7 +1537,6 @@ pub enum TableOption {
 #[derive(Clone, Debug)]
 pub struct PlanClusterOption {
     pub availability_zones: AlterOptionParameter<Vec<String>>,
-    pub idle_arrangement_merge_effort: AlterOptionParameter<u32>,
     pub introspection_debugging: AlterOptionParameter<bool>,
     pub introspection_interval: AlterOptionParameter<OptionalDuration>,
     pub managed: AlterOptionParameter<bool>,
@@ -1553,7 +1551,6 @@ impl Default for PlanClusterOption {
     fn default() -> Self {
         Self {
             availability_zones: AlterOptionParameter::Unchanged,
-            idle_arrangement_merge_effort: AlterOptionParameter::Unchanged,
             introspection_debugging: AlterOptionParameter::Unchanged,
             introspection_interval: AlterOptionParameter::Unchanged,
             managed: AlterOptionParameter::Unchanged,

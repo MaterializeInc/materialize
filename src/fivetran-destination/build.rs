@@ -20,6 +20,7 @@ fn main() {
 
     // Build protobufs.
     {
+        #[cfg(feature = "protobuf-src")]
         env::set_var("PROTOC", protobuf_src::protoc());
 
         let mut config = prost_build::Config::new();

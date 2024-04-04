@@ -113,7 +113,7 @@ impl Schema {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Role {
     pub name: String,
     pub id: RoleId,
@@ -1902,7 +1902,6 @@ pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
-    pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
@@ -1915,7 +1914,6 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             size: managed.size,
             availability_zones: managed.availability_zones,
             logging: managed.logging,
-            idle_arrangement_merge_effort: managed.idle_arrangement_merge_effort,
             replication_factor: managed.replication_factor,
             disk: managed.disk,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
@@ -1930,7 +1928,6 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             size: managed.size,
             availability_zones: managed.availability_zones,
             logging: managed.logging,
-            idle_arrangement_merge_effort: managed.idle_arrangement_merge_effort,
             replication_factor: managed.replication_factor,
             disk: managed.disk,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
@@ -2267,9 +2264,12 @@ pub struct StateUpdate {
 /// Variants are listed in dependency order.
 #[derive(Debug)]
 pub enum StateUpdateKind {
+    Role(durable::objects::Role),
     Database(durable::objects::Database),
     Schema(durable::objects::Schema),
     DefaultPrivilege(durable::objects::DefaultPrivilege),
     SystemPrivilege(MzAclItem),
+    SystemConfiguration(durable::objects::SystemConfiguration),
+    Comment(durable::objects::Comment),
     // TODO(jkosh44) Add all other object variants.
 }

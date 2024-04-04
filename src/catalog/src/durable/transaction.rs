@@ -50,9 +50,9 @@ use crate::durable::objects::{
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
-    SystemConfiguration, AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY,
-    DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateUpdate, StateUpdateKind};
 
@@ -1391,14 +1391,6 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
-    pub fn get_system_configurations(&self) -> impl Iterator<Item = SystemConfiguration> {
-        self.system_configurations
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
     pub fn get_system_object_mappings(&self) -> impl Iterator<Item = SystemObjectMapping> {
         self.system_gid_mapping
             .items()
@@ -1428,40 +1420,49 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_updates(&self) -> impl Iterator<Item = StateUpdate> {
+        fn get_collection_updates<K, V, T>(
+            table_txn: &TableTransaction<K, V>,
+            kind_fn: impl FnMut(T) -> StateUpdateKind,
+        ) -> impl Iterator<Item = StateUpdateKind>
+        where
+            K: Ord + Eq + Clone,
+            V: Ord + Clone,
+            T: DurableType<K, V>,
+        {
+            table_txn
+                .items()
+                .into_iter()
+                .map(|(k, v)| DurableType::from_key_value(k, v))
+                .map(kind_fn)
+        }
+
         std::iter::empty()
-            .chain(Self::get_collection_updates(
+            .chain(get_collection_updates(&self.roles, StateUpdateKind::Role))
+            .chain(get_collection_updates(
                 &self.databases,
                 StateUpdateKind::Database,
             ))
-            .chain(Self::get_collection_updates(
+            .chain(get_collection_updates(
                 &self.schemas,
                 StateUpdateKind::Schema,
             ))
-            .chain(Self::get_collection_updates(
+            .chain(get_collection_updates(
                 &self.default_privileges,
                 StateUpdateKind::DefaultPrivilege,
             ))
-            .chain(Self::get_collection_updates(
+            .chain(get_collection_updates(
                 &self.system_privileges,
                 StateUpdateKind::SystemPrivilege,
             ))
+            .chain(get_collection_updates(
+                &self.system_configurations,
+                StateUpdateKind::SystemConfiguration,
+            ))
+            .chain(get_collection_updates(
+                &self.comments,
+                StateUpdateKind::Comment,
+            ))
             .map(|kind| StateUpdate { kind, diff: 1 })
-    }
-
-    fn get_collection_updates<K, V, T>(
-        table_txn: &TableTransaction<K, V>,
-        kind_fn: impl FnMut(T) -> StateUpdateKind,
-    ) -> impl Iterator<Item = StateUpdateKind>
-    where
-        K: Ord + Eq + Clone,
-        V: Ord + Clone,
-        T: DurableType<K, V>,
-    {
-        table_txn
-            .items()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-            .map(kind_fn)
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {

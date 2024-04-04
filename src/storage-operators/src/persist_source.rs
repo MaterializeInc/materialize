@@ -130,7 +130,6 @@ impl Subtime {
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn persist_source<G>(
     scope: &mut G,
-    reason: String,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
@@ -193,7 +192,6 @@ where
 
         let (stream, source_tokens) = persist_source_core(
             scope,
-            format!("persist_source({}, {})", source_id, reason),
             source_id,
             Arc::clone(&persist_clients),
             metadata.clone(),
@@ -261,7 +259,6 @@ type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)
 #[allow(clippy::needless_borrow)]
 pub fn persist_source_core<'g, G>(
     scope: &RefinedScope<'g, G>,
-    name: String,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
@@ -288,6 +285,7 @@ where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     let cfg = persist_clients.cfg().clone();
+    let name = source_id.to_string();
     let desc = metadata.relation_desc.clone();
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
 

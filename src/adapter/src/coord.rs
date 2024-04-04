@@ -119,7 +119,7 @@ use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{self, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
-use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput, SystemVars};
+use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
@@ -149,6 +149,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
+use crate::coord::read_policy::InternalReadHolds;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
@@ -163,7 +164,7 @@ use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
-use crate::{flags, AdapterNotice, TimestampProvider};
+use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_ore::future::TimeoutError;
@@ -188,7 +189,7 @@ mod indexes;
 mod introspection;
 mod message_handler;
 mod privatelink_status;
-mod read_policy;
+pub mod read_policy;
 mod sequencer;
 mod sql;
 
@@ -214,6 +215,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         Option<GroupCommitPermit>,
     ),
     AdvanceTimelines,
+    DropReadHolds(Vec<InternalReadHolds<Timestamp>>),
     ClusterEvent(ClusterEvent),
     CancelPendingPeeks {
         conn_id: ConnectionId,
@@ -296,6 +298,7 @@ impl Message {
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApply(..) => "group_commit_apply",
             Message::AdvanceTimelines => "advance_timelines",
+            Message::DropReadHolds(_) => "drop_read_holds",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
@@ -863,7 +866,7 @@ pub struct Config {
     pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
-    pub remote_system_parameters: Option<BTreeMap<String, OwnedVarInput>>,
+    pub remote_system_parameters: Option<BTreeMap<String, String>>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub connection_context: ConnectionContext,
@@ -1266,6 +1269,14 @@ pub struct Coordinator {
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
 
+    /// Channel for returning/releasing [InternalReadHolds](InternalReadHolds).
+    ///
+    /// We're using a special purpose channel rather than using
+    /// `internal_cmd_tx` so that we can control the priority of working off
+    /// dropped read holds. If we sent them as [Message] on the internal cmd
+    /// channel, these would always get top priority, which is not necessary.
+    dropped_read_holds_tx: mpsc::UnboundedSender<InternalReadHolds<Timestamp>>,
+
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
@@ -1630,7 +1641,7 @@ impl Coordinator {
                             idx.custom_logical_compaction_window.unwrap_or_default()
                         };
 
-                        let as_of = self.bootstrap_dataflow_as_of(
+                        let (as_of, read_holds) = self.bootstrap_dataflow_as_of(
                             &df_desc,
                             idx.cluster_id,
                             storage_constraints,
@@ -1664,6 +1675,10 @@ impl Coordinator {
                             .active_compute()
                             .create_dataflow(idx.cluster_id, df_desc)
                             .unwrap_or_terminate("cannot fail to create dataflows");
+
+                        // Drop read holds after the dataflow has been shipped, at which
+                        // point compute will have put in its own read holds.
+                        drop(read_holds);
                     }
                 }
                 CatalogItem::View(_) => (),
@@ -1685,7 +1700,7 @@ impl Coordinator {
                         .remove(&entry.id())
                         .expect("all dataflow storage constraints were collected");
 
-                    let as_of = self.bootstrap_dataflow_as_of(
+                    let (as_of, read_holds) = self.bootstrap_dataflow_as_of(
                         &df_desc,
                         mview.cluster_id,
                         storage_constraints,
@@ -1718,6 +1733,10 @@ impl Coordinator {
                     }
 
                     self.ship_dataflow(df_desc, mview.cluster_id).await;
+
+                    // Drop read holds after the dataflow has been shipped, at which
+                    // point compute will have put in its own read holds.
+                    drop(read_holds);
                 }
                 CatalogItem::Sink(sink) => {
                     let id = entry.id();
@@ -2196,18 +2215,19 @@ impl Coordinator {
     }
 
     /// Returns an `as_of` suitable for bootstrapping the given index or materialized view
-    /// dataflow.
+    /// dataflow, along with a [ReadHolds] that ensures the sinces of involved collections
+    /// stay in place.
     ///
     /// # Panics
     ///
     /// Panics if the given dataflow exports neither an index nor a materialized view.
     fn bootstrap_dataflow_as_of(
-        &self,
+        &mut self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
         storage_constraints: StorageConstraints,
         compaction_window: CompactionWindow,
-    ) -> Antichain<Timestamp> {
+    ) -> (Antichain<Timestamp>, ReadHolds<Timestamp>) {
         // Supporting multi-export dataflows is not impossible but complicates the logic, so we
         // punt on it until we actually want to create such dataflows.
         assert!(
@@ -2218,6 +2238,14 @@ impl Coordinator {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let direct_dependencies = dataflow_import_id_bundle(dataflow, cluster_id);
+
+        // We're putting in place read holds, to prevent the since of
+        // dependencies moving along concurrently, pulling the rug from under
+        // us!
+        let read_holds = self
+            .acquire_read_holds(mz_repr::Timestamp::minimum(), &direct_dependencies, false)
+            .expect("can acquire un-precise read holds");
+
         let min_as_of = self.least_valid_read(&direct_dependencies);
 
         // We must not select an `as_of` that is beyond any times that have not yet been written to
@@ -2343,7 +2371,7 @@ impl Coordinator {
             "bootstrapping dataflow `as_of`",
         );
 
-        as_of
+        (as_of, read_holds)
     }
 
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
@@ -2358,6 +2386,7 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
+        mut dropped_read_holds_rx: mpsc::UnboundedReceiver<InternalReadHolds<Timestamp>>,
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
@@ -2501,6 +2530,15 @@ impl Coordinator {
                             )
                         }
                         Message::LinearizeReads
+                    }
+                    // `recv()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    Some(dropped_read_hold) = dropped_read_holds_rx.recv() => {
+                        let mut dropped_read_holds = vec![dropped_read_hold];
+                        while let Ok(dropped_read_hold) = dropped_read_holds_rx.try_recv() {
+                            dropped_read_holds.push(dropped_read_hold);
+                        }
+                        Message::DropReadHolds(dropped_read_holds)
                     }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
@@ -2886,6 +2924,7 @@ pub fn serve(
         let (group_commit_tx, group_commit_rx) = appends::notifier();
         let (strict_serializable_reads_tx, strict_serializable_reads_rx) =
             mpsc::unbounded_channel();
+        let (dropped_read_holds_tx, dropped_read_holds_rx) = mpsc::unbounded_channel();
 
         // Validate and process availability zones.
         if !availability_zones.iter().all_unique() {
@@ -3026,6 +3065,7 @@ pub fn serve(
                     internal_cmd_tx,
                     group_commit_tx,
                     strict_serializable_reads_tx,
+                    dropped_read_holds_tx,
                     global_timelines: timestamp_oracles,
                     transient_id_counter: 1,
                     active_conns: BTreeMap::new(),
@@ -3079,6 +3119,7 @@ pub fn serve(
                     handle.block_on(coord.serve(
                         internal_cmd_rx,
                         strict_serializable_reads_rx,
+                        dropped_read_holds_rx,
                         cmd_rx,
                         group_commit_rx,
                     ));
@@ -3174,7 +3215,7 @@ pub async fn load_remote_system_parameters(
     storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     system_parameter_sync_timeout: Duration,
-) -> Result<Option<BTreeMap<String, OwnedVarInput>>, AdapterError> {
+) -> Result<Option<BTreeMap<String, String>>, AdapterError> {
     if let Some(system_parameter_sync_config) = system_parameter_sync_config {
         tracing::info!("parameter sync on boot: start sync");
 
@@ -3228,7 +3269,7 @@ pub async fn load_remote_system_parameters(
                     let name = param.name;
                     let value = param.value;
                     tracing::info!(name, value, initial = true, "sync parameter");
-                    (name, OwnedVarInput::Flat(value))
+                    (name, value)
                 })
                 .collect();
             tracing::info!("parameter sync on boot: end sync");

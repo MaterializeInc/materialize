@@ -952,8 +952,7 @@ impl ObjectId {
     pub fn is_system(&self) -> bool {
         match self {
             ObjectId::Cluster(cluster_id) => cluster_id.is_system(),
-            // replica IDs aren't namespaced so we rely on the cluster ID.
-            ObjectId::ClusterReplica((cluster_id, _replica_id)) => cluster_id.is_system(),
+            ObjectId::ClusterReplica((_cluster_id, replica_id)) => replica_id.is_system(),
             ObjectId::Database(database_id) => database_id.is_system(),
             ObjectId::Schema((_database_id, schema_id)) => schema_id.is_system(),
             ObjectId::Role(role_id) => role_id.is_system(),
@@ -964,8 +963,7 @@ impl ObjectId {
     pub fn is_user(&self) -> bool {
         match self {
             ObjectId::Cluster(cluster_id) => cluster_id.is_user(),
-            // replica IDs aren't namespaced so we rely on the cluster ID.
-            ObjectId::ClusterReplica((cluster_id, _replica_id)) => cluster_id.is_user(),
+            ObjectId::ClusterReplica((_cluster_id, replica_id)) => replica_id.is_user(),
             ObjectId::Database(database_id) => database_id.is_user(),
             ObjectId::Schema((_database_id, schema_id)) => schema_id.is_user(),
             ObjectId::Role(role_id) => role_id.is_user(),

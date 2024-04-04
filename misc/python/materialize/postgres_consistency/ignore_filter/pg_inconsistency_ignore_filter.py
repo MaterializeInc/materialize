@@ -213,7 +213,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             )
 
         if (
-            db_operation.pattern in {"$ < $", "$ > $"}
+            db_operation.is_tagged(TAG_EQUALITY_ORDERING)
             and expression.args[0].resolve_return_type_category()
             == DataTypeCategory.NUMERIC
             and expression.args[1].resolve_return_type_category()

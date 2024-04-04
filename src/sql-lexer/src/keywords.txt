@@ -131,7 +131,6 @@ Dot
 Double
 Drop
 Eager
-Effort
 Element
 Else
 Enable
@@ -186,7 +185,6 @@ Hours
 Humanized
 Id
 Identifiers
-Idle
 Ids
 If
 Ignore
@@ -248,7 +246,6 @@ Materialized
 Max
 Mechanisms
 Membership
-Merge
 Message
 Metadata
 Minute

@@ -874,14 +874,19 @@ impl Coordinator {
                 .index_oracle(cluster)
                 .sufficient_collections(resolved_ids.0.iter());
             let oracle_timestamp = timestamp;
-            timestamp.advance_by(self.least_valid_read(&ids).borrow());
-            if oracle_timestamp != timestamp {
-                warn!(%cmvs.name, %oracle_timestamp, %timestamp, "REFRESH MV's inputs are not readable at the oracle read ts");
-            }
 
+            // Acquire read holds _before_ we determine the least valid read.
+            // Otherwise, we're not guaranteed that the since frontier doesn't
+            // advance forward from underneath us.
             if acquire_read_holds {
                 self.acquire_read_holds_auto_cleanup(session, timestamp, &ids, false)
                     .expect("precise==false, so acquiring read holds always succeeds");
+            }
+
+            timestamp.advance_by(self.least_valid_read(&ids).borrow());
+
+            if oracle_timestamp != timestamp {
+                warn!(%cmvs.name, %oracle_timestamp, %timestamp, "REFRESH MV's inputs are not readable at the oracle read ts");
             }
 
             Ok(Some(timestamp))
