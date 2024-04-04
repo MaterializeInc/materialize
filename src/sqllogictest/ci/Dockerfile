@@ -7,11 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
-
-RUN apt-get update \
-    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
-        llvm
+MZFROM prod-base
 
 COPY clusterd sqllogictest /usr/local/bin/
 
