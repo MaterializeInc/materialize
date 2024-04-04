@@ -547,6 +547,7 @@ where
                 description.clone(),
                 data_shard_since,
                 write.upper().clone(),
+                // Any dependencies will be installed elsewhere.
                 vec![],
                 metadata.clone(),
             );
@@ -570,8 +571,6 @@ where
                     id: source_id,
                     output_index,
                 } => {
-                    self.collections.insert(id, collection_state);
-
                     // Adjust the source to contain this export.
                     let source_collection = self.collection_mut(source_id).expect("known to exist");
                     match &mut source_collection.description {
@@ -589,6 +588,8 @@ where
                             "SourceExport must only refer to primary sources that already exist"
                         ),
                     };
+
+                    self.collections.insert(id, collection_state);
 
                     // Executing the source export doesn't do anything, ensure we execute the source instead.
                     to_execute.remove(&id);
@@ -610,7 +611,9 @@ where
                     new_source_statistic_entries.insert(id);
                 }
             }
+
             self.persist_read_handles.register(id, since_handle);
+            self.install_dependency_read_hold(id)?;
         }
 
         {
@@ -656,49 +659,6 @@ where
                     }
                 }
                 self.collections.insert(id, collection_state);
-            }
-        }
-
-        // Patch up the since of all subsources (which includes the "main"
-        // collection) and install read holds from the subsources on the since
-        // of the remap collection. We need to do this here because a) the since
-        // of the remap collection might be in advance of the since of the data
-        // collections because we lazily forward commands to downgrade the since
-        // to persist, and b) at the time the subsources are created we know
-        // close to nothing about them, not even that they are subsources.
-        //
-        // N.B. Patching up the since based on the since of the remap collection
-        // is correct because the since of the remap collection can advance iff
-        // the storage controller allowed it to, which it only does when it
-        // would also allow the since of the data collections to advance. It's
-        // just that we need to reconcile outselves to the outside world
-        // (persist) here.
-        //
-        // TODO(aljoscha): We should find a way to put this information and the
-        // read holds in place when we create the subsource collections. OR, we
-        // could create the subsource collections only as part of creating the
-        // main source/ingestion.
-        for id in to_execute.iter() {
-            let description = self.collection(*id).unwrap().description.clone();
-            match &description.data_source {
-                DataSource::Ingestion(ingestion) => {
-                    let storage_dependencies = description.get_storage_dependencies();
-
-                    self.install_dependency_read_holds(
-                        // N.B. The "main" collection of the source is included in
-                        // `source_exports`.
-                        ingestion.source_exports.keys().cloned(),
-                        &storage_dependencies,
-                    )?;
-                }
-                DataSource::SourceExport { .. } => todo!(),
-                DataSource::Webhook
-                | DataSource::Introspection(_)
-                | DataSource::Progress
-                | DataSource::Other(_) => {
-                    // No since to patch up and no read holds to install on
-                    // dependencies!
-                }
             }
         }
 
@@ -928,16 +888,8 @@ where
                 _ => unreachable!("verified collection refers to ingestion"),
             };
 
-            // Assess dependency since, which we have to fast-forward this
-            // collection's since to.
-            let storage_dependencies = collection.description.get_storage_dependencies();
-
-            // Ensure this new collection's since is aligned with the dependencies.
-            // This will likely place its since beyond its upper which is OK because
-            // its snapshot will catch it up with the rest of the source, i.e. we
-            // will never see its upper at a state beyond 0 and less than its since.
-            for id in new_source_exports {
-                self.install_dependency_read_holds([id].into_iter(), &storage_dependencies)?;
+            for _id in new_source_exports {
+                todo!("refactor alter collection");
             }
 
             // Fetch the client for this ingestion's instance.
@@ -992,9 +944,9 @@ where
 
         for (id, description) in exports {
             let from_id = description.sink.from;
-
-            let dependency_since = self.determine_collection_since_joins(&[from_id])?;
-            self.install_read_capabilities(id, &[from_id], dependency_since.clone())?;
+            let dep_collection = self.collection(from_id)?;
+            let dependency_since = dep_collection.implied_capability.clone();
+            self.install_read_capability(id, from_id, dependency_since.clone())?;
 
             info!(
                 sink_id = id.to_string(),
@@ -2481,32 +2433,12 @@ where
             .map(|(id, e)| (*id, e))
     }
 
-    /// Return the since frontier at which we can read from all the given
-    /// collections.
-    ///
-    /// The outer error is a potentially recoverable internal error, while the
-    /// inner error is appropriate to return to the adapter.
-    fn determine_collection_since_joins(
-        &self,
-        collections: &[GlobalId],
-    ) -> Result<Antichain<T>, StorageError<T>> {
-        let mut joined_since = Antichain::from_elem(T::minimum());
-        for id in collections {
-            let collection = self.collection(*id)?;
-
-            let since = collection.implied_capability.clone();
-            joined_since.join_assign(&since);
-        }
-
-        Ok(joined_since)
-    }
-
-    /// Install read capabilities on the given `storage_dependencies`.
+    /// Install read capabilities on the given `storage_dependency`.
     #[instrument(level = "info", fields(from_id, storage_dependencies, read_capability))]
-    fn install_read_capabilities(
+    fn install_read_capability(
         &mut self,
         _from_id: GlobalId,
-        storage_dependencies: &[GlobalId],
+        storage_dependency: GlobalId,
         read_capability: Antichain<T>,
     ) -> Result<(), StorageError<T>> {
         let mut changes = ChangeBatch::new();
@@ -2514,11 +2446,7 @@ where
             changes.update(time.clone(), 1);
         }
 
-        let mut storage_read_updates = storage_dependencies
-            .iter()
-            .map(|id| (*id, changes.clone()))
-            .collect();
-
+        let mut storage_read_updates = BTreeMap::from_iter([(storage_dependency, changes)]);
         self.update_read_capabilities(&mut storage_read_updates);
 
         Ok(())
@@ -3112,10 +3040,6 @@ where
         // space".
         let mut collection_description = self.collection(id)?.description.clone();
 
-        // Get the previous storage dependencies; we need these to understand if something has
-        // changed in what we depend upon.
-        let prev_storage_dependencies = collection_description.get_storage_dependencies();
-
         // We cannot know the metadata of exports yet to be created, so we have
         // to remove them. However, we know that adding source exports is
         // compatible, so still OK to proceed.
@@ -3144,134 +3068,85 @@ where
             }
         };
 
-        let new_storage_dependencies = collection_description.get_storage_dependencies();
-
-        if prev_storage_dependencies != new_storage_dependencies {
-            tracing::info!(
-                    "{id:?} inalterable because its storage dependencies have changed: were {:?} but are now {:?}",
-                    prev_storage_dependencies,
-                    new_storage_dependencies
-                );
-            return Err(StorageError::InvalidAlter(AlterError { id }));
-        }
-
         Ok(())
     }
 
-    /// For each element of `collections`, install a read hold on all of the
-    /// `storage_dependencies`.
-    ///
-    /// Note that this adjustment is only guaranteed to be reflected in memory;
-    /// downgrades to persist shards are not guaranteed to occur unless they
-    /// close the shard.
-    ///
-    /// # Panics
-    ///
-    /// - If any identified collection's since is less than the dependency since
-    ///   and:
-    ///     - Its read policy is not `ReadPolicy::NoPolicy`
-    ///     - Its read policy is `ReadPolicy::NoPolicy(f)` and the dependency
-    ///       since is <= `f`.
-    ///
-    ///     - Its write frontier is neither `T::minimum` nor beyond the
-    ///       dependency since.
-    /// - If any identified collection's data source is not
-    ///   [`DataSource::Ingestion] (primary source) or [`DataSource::Other`]
-    ///   (subsources).
-    fn install_dependency_read_holds<I: Iterator<Item = GlobalId>>(
-        &mut self,
-        collections: I,
-        storage_dependencies: &[GlobalId],
-    ) -> Result<(), StorageError<T>> {
-        let dependency_since = self.determine_collection_since_joins(storage_dependencies)?;
+    /// Fast-forward a collection's since as far as its dependencies, and then
+    /// install a read capability from the ID onto the dependencies.
+    fn install_dependency_read_hold(&mut self, id: GlobalId) -> Result<(), StorageError<T>> {
+        let collection = match self.collection(id) {
+            Err(_) => return Ok(()),
+            Ok(desc) => desc,
+        };
+
+        let storage_dependency = match &collection.description.data_source {
+            DataSource::Ingestion(ingestion) => ingestion.remap_collection_id,
+            // Source exports rely on their primary source's remap collection
+            // and not the source itself.
+            DataSource::SourceExport { id, .. } => {
+                match &self.collection(*id)?.description.data_source {
+                    DataSource::Ingestion(ingestion) => ingestion.remap_collection_id,
+                    _ => unreachable!("SourceExport's ID must be of an ingestion"),
+                }
+            }
+            _ => return Ok(()),
+        };
+
+        let dep_collection = self.collection(storage_dependency)?;
+        let dependency_since = dep_collection.implied_capability.clone();
+
         let enable_asserts = self.config().parameters.enable_dependency_read_hold_asserts;
 
-        for id in collections {
+        if PartialOrder::less_than(&collection.implied_capability, &dependency_since) {
+            // Patch up the implied capability + maybe the persist shard's
+            // since.
+            self.set_read_policy(vec![(
+                id,
+                ReadPolicy::NoPolicy {
+                    initial_since: dependency_since.clone(),
+                },
+            )]);
+
+            // We have to re-borrow.
             let collection = self.collection(id).expect("known to exist");
             assert!(
-                matches!(collection.description.data_source, DataSource::Other(_) | DataSource::Ingestion(_)),
-                "only primary sources w/ subsources and subsources can have dependency read holds installed"
-            );
-
-            // Because of the "backward" dependency structure (primary sources
-            // depend on subsources, rather than the other way around, which one
-            // might expect), we do not know what the initial since of the
-            // collection should be. We only find out that information once its
-            // primary sources comes along and correlates the subsource to its
-            // dependency sinces (e.g. remap shards).
-            //
-            // Once we find that out, we need ensure that the controller's
-            // version of the since is sufficiently advanced so that we may
-            // install the read hold.
-            //
-            // TODO: remove this if statement once we fix the inverse dependency
-            // of subsources
-            if PartialOrder::less_than(&collection.implied_capability, &dependency_since) {
-                assert!(
-                    match &collection.read_policy {
-                        ReadPolicy::NoPolicy { initial_since } =>
-                            PartialOrder::less_than(initial_since, &dependency_since),
-                        _ => false,
-                    } || !enable_asserts,
-                    "subsources should not have external read holds installed until \
-                                    their ingestion is created, but {:?} has read policy {:?}",
-                    id,
-                    collection.read_policy
-                );
-
-                // Patch up the implied capability + maybe the persist shard's
-                // since.
-                self.set_read_policy(vec![(
-                    id,
-                    ReadPolicy::NoPolicy {
-                        initial_since: dependency_since.clone(),
-                    },
-                )]);
-
-                // We have to re-borrow.
-                let collection = self.collection(id).expect("known to exist");
-                assert!(
-                    collection.implied_capability == dependency_since || !enable_asserts,
-                    "monkey patching the implied_capability to {:?} did not work, is still {:?}",
-                    dependency_since,
-                    collection.implied_capability,
-                );
-            }
-
-            // Fill in the storage dependencies.
-            let collection = self.collection_mut(id).expect("known to exist");
-
-            assert!(
-                PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
-                    // Whenever a collection is being initialized, this state is
-                    // acceptable.
-                    || *collection.write_frontier == [T::minimum()]
-                    || !enable_asserts,
-                "{id}:  the implied capability {:?} should be less than the write_frontier {:?}. Collection state dump: {:#?}",
+                collection.implied_capability == dependency_since || !enable_asserts,
+                "monkey patching the implied_capability to {:?} did not work, is still {:?}",
+                dependency_since,
                 collection.implied_capability,
-                collection.write_frontier,
-                collection
             );
+        }
 
+        // Fill in the storage dependencies.
+        let collection = self.collection_mut(id).expect("known to exist");
+        collection.storage_dependencies.push(storage_dependency);
+
+        assert!(
+            PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
+                // Whenever a collection is being initialized, this state is
+                // acceptable.
+                || *collection.write_frontier == [T::minimum()]
+                || !enable_asserts,
+            "{id}:  the implied capability {:?} should be less than the write_frontier {:?}. Collection state dump: {:#?}",
+            collection.implied_capability,
+            collection.write_frontier,
             collection
-                .storage_dependencies
-                .extend(storage_dependencies.iter().cloned());
+        );
 
-            assert!(
-                !PartialOrder::less_than(
-                    &collection.read_capabilities.frontier(),
-                    &collection.implied_capability.borrow()
-                ) || !enable_asserts,
-                "{id}: at this point, there can be no read holds for any time that is not \
+        assert!(
+            !PartialOrder::less_than(
+                &collection.read_capabilities.frontier(),
+                &collection.implied_capability.borrow()
+            ) || !enable_asserts,
+            "{id}: at this point, there can be no read holds for any time that is not \
                     beyond the implied capability  but we have implied_capability {:?}, \
                     read_capabilities {:?}",
-                collection.implied_capability,
-                collection.read_capabilities,
-            );
+            collection.implied_capability,
+            collection.read_capabilities,
+        );
 
-            let read_hold = collection.implied_capability.clone();
-            self.install_read_capabilities(id, storage_dependencies, read_hold)?;
-        }
+        let read_hold = collection.implied_capability.clone();
+        self.install_read_capability(id, storage_dependency, read_hold)?;
 
         Ok(())
     }
