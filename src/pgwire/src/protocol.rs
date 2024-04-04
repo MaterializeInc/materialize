@@ -2041,8 +2041,10 @@ where
                     },
                 );
             }
-            _ => {
-                assert!(ctx_extra.is_trivial())
+            other => {
+                tracing::warn!(?other, "aborting COPY FROM");
+                self.adapter_client
+                    .retire_execute(ctx_extra, StatementEndedExecutionReason::Aborted);
             }
         }
         res
