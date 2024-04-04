@@ -93,7 +93,11 @@ $ fivetran-destination action=write_batch
         }
     }
 }
-{}
+{
+    "response": {
+        "Success": true
+    }
+}
 
 > SELECT a, b FROM foo.bar ORDER BY a DESC;
 100 world
@@ -164,13 +168,74 @@ $ fivetran-destination action=write_batch
         }
     }
 }
-{}
+{
+    "response": {
+        "Success": true
+    }
+}
 
 > SELECT COUNT(*) FROM foo.large;
 2600000
 
 > SELECT * FROM foo.large LIMIT 1;
 5000 "I am a large log line, <- can this comma mess us up?" foo_bar_baz 10
+
+# Try copying a file that is over the limit.
+
+$ file-append container=fivetran path=too_large.csv compression=gzip header=a,b,c,d repeat=2000000
+5000,"I am a large log line, <- can this comma mess us up?",foo_bar_baz,10
+
+$ fivetran-destination action=write_batch
+{
+    "schema_name": "foo",
+    "table_name": "large",
+    "table": {
+        "name": "large",
+        "columns": [
+            {
+                "name": "a",
+                "type": 3,
+                "primary_key": true
+            },
+            {
+                "name": "b",
+                "type": 13,
+                "primary_key": false
+            },
+            {
+                "name": "c",
+                "type": 13,
+                "primary_key": false
+            },
+            {
+                "name": "d",
+                "type": 3,
+                "primary_key": false
+            }
+        ]
+    },
+    "keys": {},
+    "replace_files": ["${testdrive.fivetran-destination-files-path}/too_large.csv"],
+    "update_files": [],
+    "delete_files": [],
+    "file_params": {
+        "Csv": {
+            "compression": 2,
+            "encryption": 0,
+            "null_string": "null-123",
+            "unmodified_string": "unmodified-123"
+        }
+    }
+}
+{
+    "response": {
+        "Failure": "error when calling Materialize: Error { kind: Db, cause: Some(DbError { severity: \"ERROR\", parsed_severity: None, code: SqlState(E53000), message: \"COPY FROM STDIN too large\", detail: None, hint: None, position: None, where_: None, schema: None, table: None, column: None, datatype: None, constraint: None, file: None, line: None, routine: None }) }: closing sink: replace_files: replace files: write_batch"
+    }
+}
+
+# No new data should have been inserted.
+> SELECT COUNT(*) FROM foo.large;
+2600000
 
 # Cleanup.
 > DROP SCHEMA foo CASCADE;
@@ -179,3 +244,4 @@ $ file-delete container=fivetran path=a.csv
 $ file-delete container=fivetran path=b.csv
 $ file-delete container=fivetran path=c.csv
 $ file-delete container=fivetran path=d.csv
+$ file-delete container=fivetran path=too_large.csv
