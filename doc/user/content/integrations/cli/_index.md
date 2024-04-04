@@ -10,8 +10,6 @@ menu:
 disable_list: true
 ---
 
-{{< public-preview />}}
-
 The Materialize command-line interface (CLI), lets you interact with
 Materialize from your terminal.
 
