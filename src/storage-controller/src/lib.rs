@@ -11,7 +11,7 @@
 
 use std::any::Any;
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 use std::fmt::{Debug, Display};
 use std::num::NonZeroI64;
 use std::str::FromStr;
@@ -197,9 +197,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
     pending_compaction_commands: Vec<PendingCompactionCommand<T>>,
-    /// Futures for table handle drops to await while processing compaction commands.
+    /// TODO(jkosh44) Look for actual queue type.
     #[derivative(Debug = "ignore")]
-    pending_table_handle_drops: BTreeMap<GlobalId, BoxFuture<'static, ()>>,
+    pending_table_handle_drops: VecDeque<oneshot::Receiver<Vec<GlobalId>>>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -1154,20 +1154,13 @@ where
         let drop_notif = self
             .persist_table_worker
             .drop_handles(identifiers.clone(), ts);
-        let (tx, _) = tokio::sync::broadcast::channel(1);
-        for id in &identifiers {
-            let mut rx = tx.subscribe();
-            let drop_notif = async move {
-                let _ = rx.recv().await;
-            }
-            .boxed();
-            self.pending_table_handle_drops.insert(*id, drop_notif);
-        }
+        let (tx, rx) = oneshot::channel();
         mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
             drop_notif.await;
-            let _ = tx.send(());
+            let _ = tx.send(identifiers);
         });
-        self.drop_sources(identifiers)
+        self.pending_table_handle_drops.push_back(rx);
+        Ok(())
     }
 
     fn drop_sources(
@@ -1680,7 +1673,10 @@ where
     }
 
     #[instrument(level = "debug")]
-    async fn process(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+    async fn process(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+    ) -> Result<Option<Response<T>>, anyhow::Error> {
         let mut updated_frontiers = None;
         match self.stashed_response.take() {
             None => (),
@@ -1764,6 +1760,15 @@ where
         // IDs of sources (and subsources) whose statistics should be cleared.
         let mut source_statistics_to_drop = vec![];
 
+        while let Some(Ok(dropped_ids)) = self
+            .pending_table_handle_drops
+            .front_mut()
+            .map(|rx| rx.try_recv())
+        {
+            self.pending_table_handle_drops.pop_front();
+            self.drop_sources(storage_metadata, dropped_ids)?;
+        }
+
         // TODO(aljoscha): We could consolidate these before sending to
         // instances, but this seems fine for now.
         for compaction_command in self.pending_compaction_commands.drain(..) {
@@ -1799,7 +1804,8 @@ where
                 let drop_notif = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) if read_frontier.is_empty() => {
                         pending_collection_drops.push(id);
-                        self.pending_table_handle_drops.remove(&id)
+                        // TODO(jkosh44) empty future so the shards are finalized.
+                        Some(async move {}.boxed())
                     }
                     DataSource::Webhook | DataSource::Introspection(_)
                         if read_frontier.is_empty() =>
@@ -2420,7 +2426,7 @@ where
             txns_metrics,
             stashed_response: None,
             pending_compaction_commands: vec![],
-            pending_table_handle_drops: BTreeMap::new(),
+            pending_table_handle_drops: VecDeque::new(),
             collection_manager,
             collection_status_manager,
             introspection_ids,

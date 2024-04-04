@@ -54,7 +54,7 @@ use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
-use mz_storage_client::controller::{StorageController, StorageTxn};
+use mz_storage_client::controller::{StorageController, StorageMetadata, StorageTxn};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
@@ -393,8 +393,9 @@ where
     /// return a higher-level response to our client.
     async fn process_storage_response(
         &mut self,
+        storage_metadata: &StorageMetadata,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let maybe_response = self.storage.process().await?;
+        let maybe_response = self.storage.process(storage_metadata).await?;
         Ok(maybe_response.and_then(
             |mz_storage_client::controller::Response::FrontierUpdates(r)| {
                 self.handle_frontier_updates(&r)
@@ -434,10 +435,13 @@ where
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     #[mz_ore::instrument(level = "debug")]
-    pub async fn process(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+    pub async fn process(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
-            Readiness::Storage => self.process_storage_response().await,
+            Readiness::Storage => self.process_storage_response(storage_metadata).await,
             Readiness::Compute => self.process_compute_response().await,
             Readiness::Metrics => Ok(self
                 .metrics_rx
