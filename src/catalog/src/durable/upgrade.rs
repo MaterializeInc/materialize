@@ -170,14 +170,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v42, v43, v44, v45, v46, v47, v48, v49, v50, v51, v52, v53);
+objects!(v42, v43, v44, v45, v46, v47, v48, v49, v50, v51, v52, v53, v54);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 53;
+pub const CATALOG_VERSION: u64 = 54;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -199,11 +199,8 @@ mod v48_to_v49;
 mod v49_to_v50;
 mod v50_to_v51;
 mod v51_to_v52;
-<<<<<<< HEAD
-mod v53_to_v54;
-=======
 mod v52_to_v53;
->>>>>>> 172211192976a041bf7e261319f6f3360634613e
+mod v53_to_v54;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -261,78 +258,6 @@ pub(crate) async fn upgrade(
         version = new_version;
     }
 
-<<<<<<< HEAD
-=======
-    /// Determines which upgrade to run for the `version` and executes it.
-    ///
-    /// Returns the new version and upper.
-    async fn run_upgrade(
-        unopened_catalog_state: &mut UnopenedPersistCatalogState,
-        mode: Mode,
-        version: u64,
-    ) -> Result<u64, CatalogError> {
-        let incompatible = DurableCatalogError::IncompatibleDataVersion {
-            found_version: version,
-            min_catalog_version: MIN_CATALOG_VERSION,
-            catalog_version: CATALOG_VERSION,
-        }
-        .into();
-
-        match version {
-            ..=TOO_OLD_VERSION => Err(incompatible),
-
-            42 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v42_to_v43::upgrade)
-                    .await
-            }
-            43 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v43_to_v44::upgrade)
-                    .await
-            }
-            44 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v44_to_v45::upgrade)
-                    .await
-            }
-            45 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v45_to_v46::upgrade)
-                    .await
-            }
-            46 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v46_to_v47::upgrade)
-                    .await
-            }
-            47 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v47_to_v48::upgrade)
-                    .await
-            }
-            48 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v48_to_v49::upgrade)
-                    .await
-            }
-            49 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v49_to_v50::upgrade)
-                    .await
-            }
-            50 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v50_to_v51::upgrade)
-                    .await
-            }
-            51 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v51_to_v52::upgrade)
-                    .await
-            }
-            52 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v52_to_v53::upgrade)
-                    .await
-            }
-
-            // Up-to-date, no migration needed!
-            CATALOG_VERSION => Ok(CATALOG_VERSION),
-            FUTURE_VERSION.. => Err(incompatible),
-        }
-    }
-
->>>>>>> 172211192976a041bf7e261319f6f3360634613e
     Ok(())
 }
 
@@ -385,6 +310,9 @@ async fn run_upgrade(
             run_versioned_upgrade(unopened_catalog_state, mode, version, v51_to_v52::upgrade).await
         }
         52 => {
+            run_versioned_upgrade(unopened_catalog_state, mode, version, v52_to_v53::upgrade).await
+        }
+        53 => {
             run_versioned_upgrade(unopened_catalog_state, mode, version, v53_to_v54::upgrade).await
         }
 
