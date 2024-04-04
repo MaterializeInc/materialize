@@ -221,6 +221,8 @@ pub enum ColumnFormat {
     String,
     /// A column of type [crate::dyn_struct::DynStruct].
     Struct(DynStructCfg),
+    /// A column of type [`Vec<u8>`] that contains opaque bytes.
+    OpaqueData,
     // TODO: FixedSizedBytes for UUIDs?
 }
 
@@ -298,3 +300,7 @@ pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
         Ok(())
     }
 }
+
+/// Opaque binary encoded data.
+#[derive(Debug)]
+pub struct OpaqueData;

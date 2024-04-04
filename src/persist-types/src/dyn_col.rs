@@ -16,7 +16,7 @@ use arrow2::array::Array;
 use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
-use crate::columnar::{ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType};
+use crate::columnar::{ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData};
 use crate::dyn_struct::{DynStruct, ValidityRef};
 use crate::stats::{DynStats, StatsFrom};
 
@@ -243,6 +243,8 @@ impl DataType {
             (true, ColumnFormat::String) => logic.call::<Option<String>>(&()),
             (false, ColumnFormat::Struct(cfg)) => logic.call::<DynStruct>(cfg),
             (true, ColumnFormat::Struct(cfg)) => logic.call::<Option<DynStruct>>(cfg),
+            (false, ColumnFormat::OpaqueData) => logic.call::<OpaqueData>(&()),
+            (true, ColumnFormat::OpaqueData) => logic.call::<Option<OpaqueData>>(&()),
         }
     }
 }
