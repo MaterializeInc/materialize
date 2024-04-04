@@ -540,24 +540,16 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             .await?;
             // Instantiating the transactional producer fences out all previous ones, making it
             // safe to determine the resume upper.
-            let resume_upper =
-                determine_sink_resume_upper(sink_id, &connection, &storage_configuration, metrics)
-                    .await?;
+            let resume_upper = determine_sink_resume_upper(
+                sink_id,
+                &connection,
+                &storage_configuration,
+                Arc::clone(&metrics),
+            )
+            .await?;
 
             let resume_upper = match resume_upper {
-                Some(upper) => {
-                    // If there are committed progress messages then we only check if the data
-                    // topic exists, because if it does not then it must have been deleted after
-                    // the fact, which is a bit of a problem.
-                    let meta = producer.fetch_metadata().await?;
-                    if !meta.topics().iter().any(|t| t.name() == &connection.topic) {
-                        return Err(anyhow!(
-                            "sink progress data exists, but sink data topic is missing"
-                        )
-                        .into());
-                    }
-                    upper
-                }
+                Some(upper) => upper,
                 None => {
                     mz_storage_client::sink::ensure_kafka_topic(
                         &connection,
@@ -577,6 +569,16 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                     Antichain::from_elem(Timestamp::minimum())
                 }
             };
+
+            // At this point the topic must exist and so we can query for its metadata.
+            let meta = producer.fetch_metadata().await?;
+            match meta.topics().iter().find(|t| t.name() == &connection.topic) {
+                Some(topic) => {
+                    let partition_count = u64::cast_from(topic.partitions().len());
+                    metrics.partition_count.set(partition_count);
+                }
+                None => return Err(anyhow!("sink data topic is missing").into()),
+            }
 
             // The input has overcompacted if
             let overcompacted =

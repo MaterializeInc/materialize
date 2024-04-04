@@ -445,7 +445,7 @@ disruptions: list[Disruption] = [
     KafkaSinkDisruption(
         name="delete-sink-topic-delete-progress-fix",
         breakage=lambda c, seed: delete_sink_topic(c, seed),
-        expected_error="sink progress data exists, but sink data topic is missing",
+        expected_error="sink data topic is missing",
         # If we delete the progress topic, we will re-create the sink as if it is new.
         fixage=lambda c, seed: c.exec(
             "redpanda", "rpk", "topic", "delete", f"testdrive-progress-topic-{seed}"
@@ -454,7 +454,7 @@ disruptions: list[Disruption] = [
     KafkaSinkDisruption(
         name="delete-sink-topic-recreate-topic-fix",
         breakage=lambda c, seed: delete_sink_topic(c, seed),
-        expected_error="sink progress data exists, but sink data topic is missing",
+        expected_error="sink data topic is missing",
         # If we recreate the sink topic, the sink will work but will likely be inconsistent.
         fixage=lambda c, seed: c.exec(
             "redpanda", "rpk", "topic", "create", f"testdrive-sink-topic-{seed}"
