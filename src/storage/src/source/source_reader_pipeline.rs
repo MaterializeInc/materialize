@@ -57,7 +57,7 @@ use mz_timely_util::builder_async::{
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -297,7 +297,9 @@ where
     let (progress_output, derived_progress) = builder.new_output();
     let mut data_input = builder.new_input_for_many(
         &input_data.inner,
-        Pipeline,
+        Exchange::new(
+            |((_, data), _, _): &((usize, Result<_, _>), G::Timestamp, Diff)| data.hashed(),
+        ),
         [&data_output, &progress_output],
     );
     let (mut health_output, derived_health) = builder.new_output();
