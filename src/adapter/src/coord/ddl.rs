@@ -1250,7 +1250,6 @@ impl Coordinator {
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
-                | Op::AlterSetCluster { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
