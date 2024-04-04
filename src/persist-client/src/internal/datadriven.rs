@@ -222,6 +222,7 @@ mod tests {
                             "downgrade-since" => {
                                 machine_dd::downgrade_since(&mut state, args).await
                             }
+                            "dyncfg" => machine_dd::dyncfg(&mut state, args).await,
                             "expire-critical-reader" => {
                                 machine_dd::expire_critical_reader(&mut state, args).await
                             }

@@ -1259,7 +1259,7 @@ pub mod datadriven {
     use anyhow::anyhow;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
-    use mz_dyncfg::ConfigUpdates;
+    use mz_dyncfg::{ConfigUpdates, ConfigVal};
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{
@@ -1453,6 +1453,36 @@ pub mod datadriven {
             datadriven.machine.seqno(),
             since.0.elements()
         ))
+    }
+
+    pub async fn dyncfg(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let mut updates = ConfigUpdates::default();
+        for x in args.input.trim().split('\n') {
+            match x.split(' ').collect::<Vec<_>>().as_slice() {
+                &[name, val] => {
+                    let config = datadriven
+                        .client
+                        .cfg
+                        .entries()
+                        .find(|x| x.name() == name)
+                        .ok_or_else(|| anyhow!("unknown dyncfg: {}", name))?;
+                    match config.val() {
+                        ConfigVal::Usize(_) => {
+                            let val = val.parse().map_err(anyhow::Error::new)?;
+                            updates.add_dynamic(name, ConfigVal::Usize(val));
+                        }
+                        x => unimplemented!("dyncfg type: {:?}", x),
+                    }
+                }
+                x => return Err(anyhow!("expected `name val` got: {:?}", x)),
+            }
+        }
+        updates.apply(&datadriven.client.cfg);
+
+        Ok("ok\n".to_string())
     }
 
     pub async fn compare_and_downgrade_since(
