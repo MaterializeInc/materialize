@@ -94,7 +94,7 @@ class Connections(Generator):
 
 
 class Tables(Generator):
-    COUNT = 100  # https://github.com/MaterializeInc/materialize/issues/12773
+    COUNT = 90  # https://github.com/MaterializeInc/materialize/issues/12773 and https://github.com/MaterializeInc/materialize/issues/26404
 
     @classmethod
     def body(cls) -> None:
