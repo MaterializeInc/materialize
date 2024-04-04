@@ -27,6 +27,7 @@ pub mod chrono;
 
 #[cfg(feature = "tokio-postgres")]
 pub mod tokio_postgres;
+pub mod wire_compatible;
 
 include!(concat!(env!("OUT_DIR"), "/mz_proto.rs"));
 

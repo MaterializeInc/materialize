@@ -20,7 +20,6 @@ name = "mz-transform"
 dependencies = [
     "mz-compute-client",
     "mz-storage-client",
-    "mz-stash",
 ]
 
 [[deny]]
@@ -28,7 +27,6 @@ name = "mz-sql"
 dependencies = [
     "mz-compute-client",
     "mz-storage-client",
-    "mz-stash",
 ]
 
 [[deny]]
@@ -36,7 +34,6 @@ name = "mz-compute"
 dependencies = [
     "mz-storage-controller",
     "mz-storage",
-    "mz-stash",
 ]
 
 [[deny]]
@@ -44,7 +41,6 @@ name = "mz-storage"
 dependencies = [
     "mz-storage-controller",
     "mz-compute",
-    "mz-stash",
 ]
 
 # Keep various `*-types` crates from depending on `*-client` crates. This list
@@ -81,12 +77,6 @@ dependencies = [
 ]
 
 [[deny]]
-name = "mz-stash-types"
-dependencies = [
-    "mz-persist-client",
-]
-
-[[deny]]
 name = "mz-storage-types"
 dependencies = [
     "mz-persist-client",
@@ -112,7 +102,6 @@ dependencies = [
 name = "mz-clusterd"
 dependencies = [
     "mz-storage-controller",
-    "mz-stash",
 ]
 
 # Persist is meant to be a strong enough abstraction that it doesn't depend on

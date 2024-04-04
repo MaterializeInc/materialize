@@ -40,8 +40,6 @@ mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-secrets = { path = "../secrets" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
-mz-stash = { path = "../stash" }
-mz-stash-types = { path = "../stash-types" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-controller = { path = "../storage-controller" }
 mz-storage-types = { path = "../storage-types" }

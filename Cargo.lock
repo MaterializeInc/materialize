@@ -3867,8 +3867,6 @@ dependencies = [
  "mz-secrets",
  "mz-sql",
  "mz-sql-parser",
- "mz-stash",
- "mz-stash-types",
  "mz-storage-client",
  "mz-storage-controller",
  "mz-storage-types",
@@ -4230,7 +4228,6 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-service",
- "mz-stash-types",
  "mz-storage-client",
  "mz-storage-controller",
  "mz-storage-types",
@@ -4353,8 +4350,6 @@ dependencies = [
  "mz-service",
  "mz-sql",
  "mz-sql-parser",
- "mz-stash",
- "mz-stash-types",
  "mz-storage-client",
  "mz-storage-types",
  "mz-tls-util",
@@ -5368,6 +5363,7 @@ name = "mz-proto"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "chrono-tz",
  "globset",
@@ -5775,7 +5771,6 @@ dependencies = [
  "mz-service",
  "mz-sql",
  "mz-sql-parser",
- "mz-stash-types",
  "mz-storage-types",
  "mz-tracing",
  "once_cell",
@@ -5818,70 +5813,6 @@ dependencies = [
  "tracing",
  "workspace-hack",
  "zeroize",
-]
-
-[[package]]
-name = "mz-stash"
-version = "0.0.0"
-dependencies = [
- "bytes",
- "criterion",
- "derivative",
- "differential-dataflow",
- "fail",
- "futures",
- "itertools",
- "mz-ore",
- "mz-proto",
- "mz-stash-types",
- "mz-tls-util",
- "once_cell",
- "paste",
- "postgres-openssl",
- "prometheus",
- "proptest",
- "prost",
- "rand",
- "serde",
- "timely",
- "tokio",
- "tokio-postgres",
- "tracing",
- "workspace-hack",
-]
-
-[[package]]
-name = "mz-stash-debug"
-version = "0.95.0-dev"
-dependencies = [
- "anyhow",
- "clap",
- "mz-build-info",
- "mz-ore",
- "mz-stash",
- "mz-storage-controller",
- "mz-tls-util",
- "once_cell",
- "serde_json",
- "tokio",
- "tokio-postgres",
- "tracing-subscriber",
- "workspace-hack",
-]
-
-[[package]]
-name = "mz-stash-types"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "mz-ore",
- "mz-proto",
- "paste",
- "prometheus",
- "prost",
- "serde",
- "tokio-postgres",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6036,8 +5967,6 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-service",
- "mz-stash",
- "mz-stash-types",
  "mz-storage-client",
  "mz-storage-types",
  "mz-tls-util",
@@ -6125,7 +6054,6 @@ dependencies = [
  "mz-service",
  "mz-sql-parser",
  "mz-ssh-util",
- "mz-stash-types",
  "mz-timely-util",
  "mz-tls-util",
  "mz-tracing",
@@ -6212,7 +6140,6 @@ dependencies = [
  "mz-repr",
  "mz-sql",
  "mz-sql-parser",
- "mz-stash",
  "mz-storage-types",
  "mz-tls-util",
  "once_cell",
@@ -10256,8 +10183,6 @@ dependencies = [
  "tikv-jemalloc-sys",
  "time",
  "time-macros",
- "timely",
- "timely_communication",
  "tokio",
  "tokio-postgres",
  "tokio-stream",

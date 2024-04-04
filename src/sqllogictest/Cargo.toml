@@ -37,7 +37,6 @@ mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
-mz-stash-types = { path = "../stash-types" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 mz-cloud-resources = { path = "../cloud-resources" }
