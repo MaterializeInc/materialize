@@ -34,8 +34,8 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, DefaultPrivileges, Func, Log, Role,
-    Source, Table, Type,
+    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, DefaultPrivileges, Func, Log, Source,
+    Table, Type,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -264,6 +264,16 @@ impl Catalog {
                     }
                     txn.set_system_config_synced_once()?;
                 }
+                // Add any new builtin Clusters, Cluster Replicas, or Roles that may be newly defined.
+                if !is_read_only {
+                    let cluster_sizes = BuiltinBootstrapClusterSizes {
+                        system_cluster: config.builtin_system_cluster_replica_size,
+                        introspection_cluster: config.builtin_introspection_cluster_replica_size,
+                    };
+                    add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
+                    add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
+                    add_new_builtin_roles_migration(&mut txn)?;
+                }
             }
 
             // Seed the in-memory catalog with values that don't come from the durable catalog.
@@ -291,53 +301,6 @@ impl Catalog {
             // storage "config" collection so that we can toggle the flag with
             // Launch Darkly, but use it in boot before Launch Darkly is available.
             txn.set_persist_txn_tables(state.system_config().persist_txn_tables())?;
-
-            // Add any new builtin Clusters, Cluster Replicas, or Roles that may be newly defined.
-            if !is_read_only {
-                let cluster_sizes = BuiltinBootstrapClusterSizes {
-                    system_cluster: config.builtin_system_cluster_replica_size,
-                    introspection_cluster: config.builtin_introspection_cluster_replica_size,
-                };
-                add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
-                add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
-                add_new_builtin_roles_migration(&mut txn)?;
-            }
-
-            let roles = txn.get_roles();
-            for mz_catalog::durable::Role {
-                id,
-                oid,
-                name,
-                attributes,
-                membership,
-                vars,
-            } in roles
-            {
-                state.roles_by_name.insert(name.clone(), id);
-                state.roles_by_id.insert(
-                    id,
-                    Role {
-                        name,
-                        id,
-                        oid,
-                        attributes,
-                        membership,
-                        vars,
-                    },
-                );
-            }
-
-            let comments = txn.get_comments();
-            for mz_catalog::durable::Comment {
-                object_id,
-                sub_component,
-                comment,
-            } in comments
-            {
-                state
-                    .comments
-                    .update_comment(object_id, sub_component, Some(comment));
-            }
 
             Catalog::load_builtin_types(&mut state, &mut txn)?;
 

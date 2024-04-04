@@ -2321,6 +2321,22 @@ impl CatalogState {
             "invalid update in catalog updates: ({kind:?}, {diff:?})"
         );
         match kind {
+            StateUpdateKind::Role(role) => {
+                apply(
+                    &mut self.roles_by_id,
+                    role.id,
+                    || Role {
+                        name: role.name.clone(),
+                        id: role.id,
+                        oid: role.oid,
+                        attributes: role.attributes,
+                        membership: role.membership,
+                        vars: role.vars,
+                    },
+                    diff,
+                );
+                apply(&mut self.roles_by_name, role.name, || role.id, diff);
+            }
             StateUpdateKind::Database(database) => {
                 apply(
                     &mut self.database_by_id,
@@ -2418,6 +2434,35 @@ impl CatalogState {
                     Err(e) => panic!("unable to update system variable: {e:?}"),
                 }
             }
+            StateUpdateKind::Comment(comment) => match diff {
+                1 => {
+                    let prev = self.comments.update_comment(
+                        comment.object_id,
+                        comment.sub_component,
+                        Some(comment.comment),
+                    );
+                    soft_assert_eq_or_log!(
+                        prev,
+                        None,
+                        "values must be explicitly retracted before inserting a new value"
+                    );
+                }
+                -1 => {
+                    let prev = self.comments.update_comment(
+                        comment.object_id,
+                        comment.sub_component,
+                        None,
+                    );
+                    soft_assert_eq_or_log!(
+                        prev,
+                        Some(comment.comment),
+                        "retraction does not match existing value: ({:?}, {:?})",
+                        comment.object_id,
+                        comment.sub_component,
+                    );
+                }
+                _ => unreachable!("invalid diff: {diff}"),
+            },
         }
     }
 
