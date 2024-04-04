@@ -18,7 +18,7 @@ use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
     decode_startup, Conn, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION,
 };
-use mz_server_core::{ConnectionHandler, TlsConfig};
+use mz_server_core::{ConnectionHandler, ReloadingTlsConfig};
 use mz_sql::session::vars::ConnectionCounter;
 use openssl::ssl::Ssl;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -41,7 +41,7 @@ pub struct Config {
     ///
     /// If not present, then TLS is not enabled, and clients requests to
     /// negotiate TLS will be rejected.
-    pub tls: Option<TlsConfig>,
+    pub tls: Option<ReloadingTlsConfig>,
     /// The Frontegg authentication configuration.
     ///
     /// If present, Frontegg authentication is enabled, and users may present
@@ -59,7 +59,7 @@ pub struct Config {
 
 /// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
-    tls: Option<TlsConfig>,
+    tls: Option<ReloadingTlsConfig>,
     adapter_client: mz_adapter::Client,
     frontegg: Option<FronteggAuthentication>,
     metrics: Metrics,
@@ -159,7 +159,7 @@ impl Server {
                                     trace!("cid={} send=AcceptSsl", conn_id);
                                     conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
                                     let mut ssl_stream =
-                                        SslStream::new(Ssl::new(&tls.context)?, conn)?;
+                                        SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
                                     if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
                                         let _ = ssl_stream.get_mut().shutdown().await;
                                         return Err(e.into());
