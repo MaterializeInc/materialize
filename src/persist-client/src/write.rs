@@ -480,40 +480,41 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        let any_batch_rewrite = batches
-            .iter()
-            .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
-        let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
-        for batch in batches.iter() {
-            let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
-            for run in batch.batch.runs() {
-                // Mark the boundary if this is not the first run in the batch.
-                let start_index = parts.len();
-                if start_index != 0 {
-                    runs.push(start_index);
-                }
-                parts.extend_from_slice(run);
-            }
-            num_updates += batch.batch.len;
-        }
-
-        let heartbeat_timestamp = (self.cfg.now)();
-        let res = self
-            .machine
-            .compare_and_append(
-                &HollowBatch {
-                    desc: desc.clone(),
-                    parts,
-                    len: num_updates,
-                    runs,
-                },
-                &self.writer_id,
-                &self.debug_state,
-                heartbeat_timestamp,
-            )
-            .await;
-
+        let mut received_inline_backpressure = false;
         let maintenance = loop {
+            let any_batch_rewrite = batches
+                .iter()
+                .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
+            let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
+            for batch in batches.iter() {
+                let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
+                for run in batch.batch.runs() {
+                    // Mark the boundary if this is not the first run in the batch.
+                    let start_index = parts.len();
+                    if start_index != 0 {
+                        runs.push(start_index);
+                    }
+                    parts.extend_from_slice(run);
+                }
+                num_updates += batch.batch.len;
+            }
+
+            let heartbeat_timestamp = (self.cfg.now)();
+            let res = self
+                .machine
+                .compare_and_append(
+                    &HollowBatch {
+                        desc: desc.clone(),
+                        parts,
+                        len: num_updates,
+                        runs,
+                    },
+                    &self.writer_id,
+                    &self.debug_state,
+                    heartbeat_timestamp,
+                )
+                .await;
+
             match res {
                 CompareAndAppendRes::Success(_seqno, maintenance) => {
                     self.upper = desc.upper().clone();
@@ -535,10 +536,13 @@ where
                 CompareAndAppendRes::InlineBackpressure => {
                     // We tried to write an inline part, but there was already
                     // too much in state. Flush it out to s3 and try again.
+                    assert_eq!(received_inline_backpressure, false);
+                    received_inline_backpressure = true;
+
                     let cfg = BatchBuilderConfig::new(&self.cfg, &self.writer_id);
                     // We could have a large number of inline parts (imagine the
                     // sharded persist_sink), do this flushing concurrently.
-                    let batches = batches
+                    let flush_batches = batches
                         .iter_mut()
                         .map(|batch| async {
                             batch
@@ -551,7 +555,12 @@ where
                                 .await
                         })
                         .collect::<FuturesUnordered<_>>();
-                    let () = batches.collect::<()>().await;
+                    let () = flush_batches.collect::<()>().await;
+
+                    for batch in batches.iter() {
+                        assert_eq!(batch.batch.inline_bytes(), 0);
+                    }
+
                     continue;
                 }
             }

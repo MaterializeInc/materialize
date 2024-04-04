@@ -259,7 +259,7 @@ where
                     .or_current();
             let handle = mz_ore::task::spawn(
                 || "batch::flush_to_blob",
-                BatchParts::write_part(
+                BatchParts::write_hollow_part(
                     cfg.clone(),
                     Arc::clone(&self.blob),
                     Arc::clone(&self.metrics),
@@ -935,7 +935,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 debug_span!("batch::write_part", shard = %self.shard_metrics.shard_id).or_current();
             mz_ore::task::spawn(
                 || "batch::write_part",
-                BatchParts::write_part(
+                BatchParts::write_hollow_part(
                     self.cfg.clone(),
                     Arc::clone(&self.blob),
                     Arc::clone(&self.metrics),
@@ -966,7 +966,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    async fn write_part<K: Codec, V: Codec>(
+    async fn write_hollow_part<K: Codec, V: Codec>(
         cfg: BatchBuilderConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
