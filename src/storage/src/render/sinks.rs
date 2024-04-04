@@ -53,7 +53,6 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     };
     let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
         scope,
-        "render_storage_sink".to_string(),
         sink.from,
         Arc::clone(&storage_state.persist_clients),
         sink.from_storage_metadata.clone(),
