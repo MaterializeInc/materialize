@@ -53,6 +53,7 @@ class ParallelWorkloadExecutor:
         self.rollback_next = True
         self.last_log = ""
         self.action_run_since_last_commit_rollback = False
+        self._atomic_counter = 0
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -85,6 +86,13 @@ class ParallelWorkloadExecutor:
         with lock:
             print(f"[{thread_name}] {msg}", file=logging)
             logging.flush()
+
+    def next_counter_value(self) -> int:
+        with self.db.lock:
+            value = self._atomic_counter
+            self._atomic_counter = self._atomic_counter + 1
+
+        return value
 
     def execute(
         self, query: str, extra_info: str = "", explainable: bool = False
