@@ -539,13 +539,16 @@ where
     /// Turns the given [`ProtoBatch`] back into a [`Batch`] which can be used
     /// to append it to this shard.
     pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
+        let shard_id: ShardId = batch
+            .shard_id
+            .into_rust()
+            .expect("valid transmittable batch");
+        assert_eq!(shard_id, self.machine.shard_id());
+
         let ret = Batch {
             batch_delete_enabled: BATCH_DELETE_ENABLED.get(&self.cfg),
             metrics: Arc::clone(&self.metrics),
-            shard_id: batch
-                .shard_id
-                .into_rust()
-                .expect("valid transmittable batch"),
+            shard_metrics: Arc::clone(&self.machine.applier.shard_metrics),
             version: Version::parse(&batch.version).expect("valid transmittable batch"),
             batch: batch
                 .batch
@@ -554,7 +557,7 @@ where
             blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
         };
-        assert_eq!(ret.shard_id, self.machine.shard_id());
+        assert_eq!(ret.shard_id(), self.machine.shard_id());
         ret
     }
 

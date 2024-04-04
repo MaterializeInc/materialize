@@ -68,7 +68,7 @@ where
 {
     pub(crate) batch_delete_enabled: bool,
     pub(crate) metrics: Arc<Metrics>,
-    pub(crate) shard_id: ShardId,
+    pub(crate) shard_metrics: Arc<ShardMetrics>,
 
     /// The version of Materialize which wrote this batch.
     pub(crate) version: Version,
@@ -114,14 +114,14 @@ where
         batch_delete_enabled: bool,
         metrics: Arc<Metrics>,
         blob: Arc<dyn Blob + Send + Sync>,
-        shard_id: ShardId,
+        shard_metrics: Arc<ShardMetrics>,
         version: Version,
         batch: HollowBatch<T>,
     ) -> Self {
         Self {
             batch_delete_enabled,
             metrics,
-            shard_id,
+            shard_metrics,
             version,
             batch,
             blob,
@@ -131,7 +131,7 @@ where
 
     /// The `shard_id` of this [Batch].
     pub fn shard_id(&self) -> ShardId {
-        self.shard_id
+        self.shard_metrics.shard_id
     }
 
     /// The `upper` of this [Batch].
@@ -186,7 +186,7 @@ where
 
     /// Deletes the blobs that make up this batch from the given blob store and
     /// marks them as deleted.
-    #[instrument(level = "debug", fields(shard = %self.shard_id))]
+    #[instrument(level = "debug", fields(shard = %self.shard_id()))]
     pub async fn delete(mut self) {
         self.mark_consumed();
         if !self.batch_delete_enabled {
@@ -226,7 +226,7 @@ where
     /// [`WriteHandle::batch_from_transmittable_batch`](crate::write::WriteHandle::batch_from_transmittable_batch).
     pub fn into_transmittable_batch(mut self) -> ProtoBatch {
         let ret = ProtoBatch {
-            shard_id: self.shard_id.into_proto(),
+            shard_id: self.shard_metrics.shard_id.into_proto(),
             version: self.version.to_string(),
             batch: Some(self.batch.into_proto()),
         };
@@ -528,6 +528,7 @@ where
         self.flush_part(stats_schemas, key_lower, remainder).await;
 
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
+        let shard_metrics = Arc::clone(&self.parts.shard_metrics);
         let parts = self.parts.finish().await;
 
         let desc = Description::new(self.lower, registered_upper, self.since);
@@ -535,7 +536,7 @@ where
             batch_delete_enabled,
             Arc::clone(&self.metrics),
             self.blob,
-            self.shard_id.clone(),
+            shard_metrics,
             self.version,
             HollowBatch {
                 desc,

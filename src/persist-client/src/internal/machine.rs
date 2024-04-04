@@ -2030,7 +2030,11 @@ pub mod datadriven {
                     true,
                     Arc::clone(&datadriven.client.metrics),
                     Arc::clone(&datadriven.client.blob),
-                    datadriven.shard_id,
+                    datadriven
+                        .client
+                        .metrics
+                        .shards
+                        .shard(&datadriven.shard_id, "test"),
                     datadriven.client.cfg.build_version.clone(),
                     hollow,
                 )
