@@ -52,6 +52,8 @@ SELECT id, name, managed, replication_factor, size FROM mz_clusters
 ----
 s1  mz_system  true  1  2
 s2  mz_introspection  true  1  2
+s3  mz_probe  true  1  2
+s4  mz_support  true  1  2
 u1  quickstart  true  1  2
 
 
@@ -59,6 +61,8 @@ query T rowsort
 SELECT name FROM (SHOW CLUSTERS)
 ----
 mz_system
+mz_support
+mz_probe
 mz_introspection
 quickstart
 
@@ -119,6 +123,7 @@ query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
@@ -135,6 +140,7 @@ foo  r1  1
 foo  r2  1
 foo  r3  1
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
@@ -153,6 +159,7 @@ foo  r1  1
 foo  r2  1
 foo  r3  1
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
@@ -180,6 +187,7 @@ foo  r1  1
 foo  r2  1
 foo  r3  1
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
@@ -195,6 +203,7 @@ foo  r1  u3
 foo  r2  u4
 foo  r3  u5
 mz_introspection  r1  s2
+mz_probe  r1  s3
 mz_system  r1  s1
 quickstart  r1  u1
 
@@ -212,6 +221,7 @@ SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
 foo  r1  1
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
@@ -232,6 +242,7 @@ SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 foo  r1  1
 foo  r2  1
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
@@ -248,6 +259,7 @@ SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
 foo  r1  1
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
@@ -264,6 +276,7 @@ SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
 foo  r1  2
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
@@ -280,6 +293,7 @@ SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
 foo  r1  1
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
@@ -314,12 +328,14 @@ query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
 ----
+r1  2  1  18446744073709000000  18446744073709551615  2  1
 r1  2  1  18446744073709000000  18446744073709551615  2  1
 r1  2  1  18446744073709000000  18446744073709551615  2  1
 r1  2  1  18446744073709000000  18446744073709551615  2  1

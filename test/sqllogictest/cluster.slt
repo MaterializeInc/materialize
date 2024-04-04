@@ -89,6 +89,8 @@ SELECT id, name FROM mz_clusters
 ----
 s1  mz_system
 s2  mz_introspection
+s3  mz_probe
+s4  mz_support
 u1  quickstart
 u4  foo
 u7  bar
@@ -418,7 +420,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-156
+214
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -426,7 +428,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-127
+185
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize
@@ -446,6 +448,7 @@ query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 quickstart  size_1  1
@@ -459,6 +462,7 @@ SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 foo  size_1  1
 foo  size_2  2
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 quickstart  size_1  1
@@ -485,6 +489,7 @@ query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
 mz_introspection  r1  2
+mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
 
@@ -639,6 +644,7 @@ CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (S
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
 ----
+r1  2  1  18446744073709000000  18446744073709551615  2  1
 r1  2  1  18446744073709000000  18446744073709551615  2  1
 r1  2  1  18446744073709000000  18446744073709551615  2  1
 r1  2  1  18446744073709000000  18446744073709551615  2  1
