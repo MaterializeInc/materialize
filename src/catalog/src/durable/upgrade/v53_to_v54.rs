@@ -11,14 +11,14 @@ use mz_stash::upgrade::WireCompatible;
 use mz_stash::wire_compatible;
 
 use crate::durable::upgrade::MigrationAction;
-use crate::durable::upgrade::{objects_v52 as v52, objects_v54 as v54};
+use crate::durable::upgrade::{objects_v53 as v53, objects_v54 as v54};
 
-wire_compatible!(v52::RoleAttributes with v54::RoleAttributes);
-wire_compatible!(v52::RoleVars with v54::RoleVars);
-wire_compatible!(v52::ItemKey with v54::ItemKey);
-wire_compatible!(v52::SchemaId with v54::SchemaId);
-wire_compatible!(v52::CatalogItem with v54::CatalogItem);
-wire_compatible!(v52::AclMode with v54::AclMode);
+wire_compatible!(v53::RoleAttributes with v54::RoleAttributes);
+wire_compatible!(v53::RoleVars with v54::RoleVars);
+wire_compatible!(v53::ItemKey with v54::ItemKey);
+wire_compatible!(v53::SchemaId with v54::SchemaId);
+wire_compatible!(v53::CatalogItem with v54::CatalogItem);
+wire_compatible!(v53::AclMode with v54::AclMode);
 
 const MZ_MONITOR_SYSTEM_ID: u64 = 3;
 const MZ_MONITOR_REDACTED_SYSTEM_ID: u64 = 4;
@@ -35,12 +35,12 @@ const MZ_MONITOR_REDACTED_GROUP_ID: u64 = 2;
 ///   - In a `RoleMembership` in the Roles collection.
 ///   - As a grantee in an `MzAclItem` in the Items collection.
 pub fn upgrade(
-    snapshot: Vec<v52::StateUpdateKind>,
-) -> Vec<MigrationAction<v52::StateUpdateKind, v54::StateUpdateKind>> {
+    snapshot: Vec<v53::StateUpdateKind>,
+) -> Vec<MigrationAction<v53::StateUpdateKind, v54::StateUpdateKind>> {
     snapshot
         .into_iter()
         .filter_map(|update| match update.kind.expect("missing kind field") {
-            v52::state_update_kind::Kind::Item(old_item) => {
+            v53::state_update_kind::Kind::Item(old_item) => {
                 let item = old_item.clone();
                 let key = item.key.as_ref().map(WireCompatible::convert);
                 let value = item.value.map(|old_val| v54::ItemValue {
@@ -56,8 +56,8 @@ pub fn upgrade(
                     oid: old_val.oid,
                 });
                 Some((
-                    v52::StateUpdateKind {
-                        kind: Some(v52::state_update_kind::Kind::Item(old_item)),
+                    v53::StateUpdateKind {
+                        kind: Some(v53::state_update_kind::Kind::Item(old_item)),
                     },
                     v54::StateUpdateKind {
                         kind: Some(v54::state_update_kind::Kind::Item(
@@ -66,7 +66,7 @@ pub fn upgrade(
                     },
                 ))
             }
-            v52::state_update_kind::Kind::Role(old_role) => {
+            v53::state_update_kind::Kind::Role(old_role) => {
                 let role = old_role.clone();
                 let key = role.key.map(migrate_role_key);
                 let value = role.value.map(|old_val| v54::RoleValue {
@@ -77,8 +77,8 @@ pub fn upgrade(
                     oid: old_val.oid,
                 });
                 Some((
-                    v52::StateUpdateKind {
-                        kind: Some(v52::state_update_kind::Kind::Role(old_role)),
+                    v53::StateUpdateKind {
+                        kind: Some(v53::state_update_kind::Kind::Role(old_role)),
                     },
                     v54::StateUpdateKind {
                         kind: Some(v54::state_update_kind::Kind::Role(
@@ -87,46 +87,46 @@ pub fn upgrade(
                     },
                 ))
             }
-            v52::state_update_kind::Kind::AuditLog(_)
-            | v52::state_update_kind::Kind::Cluster(_)
-            | v52::state_update_kind::Kind::ClusterReplica(_)
-            | v52::state_update_kind::Kind::Comment(_)
-            | v52::state_update_kind::Kind::Config(_)
-            | v52::state_update_kind::Kind::Database(_)
-            | v52::state_update_kind::Kind::DefaultPrivileges(_)
-            | v52::state_update_kind::Kind::Epoch(_)
-            | v52::state_update_kind::Kind::IdAlloc(_)
-            | v52::state_update_kind::Kind::ClusterIntrospectionSourceIndex(_)
-            | v52::state_update_kind::Kind::Schema(_)
-            | v52::state_update_kind::Kind::Setting(_)
-            | v52::state_update_kind::Kind::StorageUsage(_)
-            | v52::state_update_kind::Kind::ServerConfiguration(_)
-            | v52::state_update_kind::Kind::GidMapping(_)
-            | v52::state_update_kind::Kind::SystemPrivileges(_)
-            | v52::state_update_kind::Kind::StorageCollectionMetadata(_)
-            | v52::state_update_kind::Kind::UnfinalizedShard(_)
-            | v52::state_update_kind::Kind::PersistTxnShard(_) => None,
+            v53::state_update_kind::Kind::AuditLog(_)
+            | v53::state_update_kind::Kind::Cluster(_)
+            | v53::state_update_kind::Kind::ClusterReplica(_)
+            | v53::state_update_kind::Kind::Comment(_)
+            | v53::state_update_kind::Kind::Config(_)
+            | v53::state_update_kind::Kind::Database(_)
+            | v53::state_update_kind::Kind::DefaultPrivileges(_)
+            | v53::state_update_kind::Kind::Epoch(_)
+            | v53::state_update_kind::Kind::IdAlloc(_)
+            | v53::state_update_kind::Kind::ClusterIntrospectionSourceIndex(_)
+            | v53::state_update_kind::Kind::Schema(_)
+            | v53::state_update_kind::Kind::Setting(_)
+            | v53::state_update_kind::Kind::StorageUsage(_)
+            | v53::state_update_kind::Kind::ServerConfiguration(_)
+            | v53::state_update_kind::Kind::GidMapping(_)
+            | v53::state_update_kind::Kind::SystemPrivileges(_)
+            | v53::state_update_kind::Kind::StorageCollectionMetadata(_)
+            | v53::state_update_kind::Kind::UnfinalizedShard(_)
+            | v53::state_update_kind::Kind::PersistTxnShard(_) => None,
         })
         .map(|(old_update, new_update)| MigrationAction::Update(old_update, new_update))
         .collect()
 }
 
-fn migrate_role_id(role_id: v52::RoleId) -> v54::RoleId {
+fn migrate_role_id(role_id: v53::RoleId) -> v54::RoleId {
     let value = match role_id.value.expect("missing value") {
-        v52::role_id::Value::System(MZ_MONITOR_SYSTEM_ID) => {
+        v53::role_id::Value::System(MZ_MONITOR_SYSTEM_ID) => {
             v54::role_id::Value::Group(MZ_MONITOR_GROUP_ID)
         }
-        v52::role_id::Value::System(MZ_MONITOR_REDACTED_SYSTEM_ID) => {
+        v53::role_id::Value::System(MZ_MONITOR_REDACTED_SYSTEM_ID) => {
             v54::role_id::Value::Group(MZ_MONITOR_REDACTED_GROUP_ID)
         }
-        v52::role_id::Value::System(id) => v54::role_id::Value::System(id),
-        v52::role_id::Value::User(id) => v54::role_id::Value::User(id),
-        v52::role_id::Value::Public(_empty) => v54::role_id::Value::Public(v54::Empty {}),
+        v53::role_id::Value::System(id) => v54::role_id::Value::System(id),
+        v53::role_id::Value::User(id) => v54::role_id::Value::User(id),
+        v53::role_id::Value::Public(_empty) => v54::role_id::Value::Public(v54::Empty {}),
     };
     v54::RoleId { value: Some(value) }
 }
 
-fn migrate_mz_acl_item(mz_acl_item: v52::MzAclItem) -> v54::MzAclItem {
+fn migrate_mz_acl_item(mz_acl_item: v53::MzAclItem) -> v54::MzAclItem {
     v54::MzAclItem {
         grantee: mz_acl_item.grantee.map(migrate_role_id),
         grantor: mz_acl_item.grantor.map(migrate_role_id),
@@ -134,13 +134,13 @@ fn migrate_mz_acl_item(mz_acl_item: v52::MzAclItem) -> v54::MzAclItem {
     }
 }
 
-fn migrate_role_key(role_key: v52::RoleKey) -> v54::RoleKey {
+fn migrate_role_key(role_key: v53::RoleKey) -> v54::RoleKey {
     v54::RoleKey {
         id: role_key.id.map(migrate_role_id),
     }
 }
 
-fn migrate_role_membership(role_membership: v52::RoleMembership) -> v54::RoleMembership {
+fn migrate_role_membership(role_membership: v53::RoleMembership) -> v54::RoleMembership {
     v54::RoleMembership {
         map: role_membership
             .map
@@ -151,7 +151,7 @@ fn migrate_role_membership(role_membership: v52::RoleMembership) -> v54::RoleMem
 }
 
 fn migrate_role_membership_entry(
-    role_membership_entry: v52::role_membership::Entry,
+    role_membership_entry: v53::role_membership::Entry,
 ) -> v54::role_membership::Entry {
     v54::role_membership::Entry {
         key: role_membership_entry.key.map(migrate_role_id),
@@ -170,48 +170,48 @@ mod tests {
         const MZ_MONITOR_NAME: &str = "mz_monitor";
         const MZ_MONITOR_REDACTED_NAME: &str = "mz_monitor_redacted";
 
-        let v52_mz_monitor_role_id = v52::RoleId {
-            value: Some(v52::role_id::Value::System(MZ_MONITOR_SYSTEM_ID)),
+        let v53_mz_monitor_role_id = v53::RoleId {
+            value: Some(v53::role_id::Value::System(MZ_MONITOR_SYSTEM_ID)),
         };
-        let v52_mz_monitor_redacted_role_id = v52::RoleId {
-            value: Some(v52::role_id::Value::System(MZ_MONITOR_REDACTED_SYSTEM_ID)),
+        let v53_mz_monitor_redacted_role_id = v53::RoleId {
+            value: Some(v53::role_id::Value::System(MZ_MONITOR_REDACTED_SYSTEM_ID)),
         };
-        let v52_mz_monitor = v52::StateUpdateKind {
-            kind: Some(v52::state_update_kind::Kind::Role(empty_role_v52(
-                v52_mz_monitor_role_id.clone(),
+        let v53_mz_monitor = v53::StateUpdateKind {
+            kind: Some(v53::state_update_kind::Kind::Role(empty_role_v53(
+                v53_mz_monitor_role_id.clone(),
                 MZ_MONITOR_NAME,
                 1,
             ))),
         };
-        let v52_mz_monitor_redacted = v52::StateUpdateKind {
-            kind: Some(v52::state_update_kind::Kind::Role(empty_role_v52(
-                v52_mz_monitor_redacted_role_id.clone(),
+        let v53_mz_monitor_redacted = v53::StateUpdateKind {
+            kind: Some(v53::state_update_kind::Kind::Role(empty_role_v53(
+                v53_mz_monitor_redacted_role_id.clone(),
                 MZ_MONITOR_REDACTED_NAME,
                 2,
             ))),
         };
-        let v52_mz_monitor_member = v52::StateUpdateKind {
-            kind: Some(v52::state_update_kind::Kind::Role(
-                role_with_membership_v52(v52_mz_monitor_role_id.clone(), MZ_MONITOR_NAME, 1),
+        let v53_mz_monitor_member = v53::StateUpdateKind {
+            kind: Some(v53::state_update_kind::Kind::Role(
+                role_with_membership_v53(v53_mz_monitor_role_id.clone(), MZ_MONITOR_NAME, 1),
             )),
         };
-        let v52_mz_monitor_redacted_member = v52::StateUpdateKind {
-            kind: Some(v52::state_update_kind::Kind::Role(
-                role_with_membership_v52(
-                    v52_mz_monitor_redacted_role_id.clone(),
+        let v53_mz_monitor_redacted_member = v53::StateUpdateKind {
+            kind: Some(v53::state_update_kind::Kind::Role(
+                role_with_membership_v53(
+                    v53_mz_monitor_redacted_role_id.clone(),
                     MZ_MONITOR_REDACTED_NAME,
                     2,
                 ),
             )),
         };
-        let v52_item_monitor = v52::StateUpdateKind {
-            kind: Some(v52::state_update_kind::Kind::Item(empty_view_v52(
-                v52_mz_monitor_role_id,
+        let v53_item_monitor = v53::StateUpdateKind {
+            kind: Some(v53::state_update_kind::Kind::Item(empty_view_v53(
+                v53_mz_monitor_role_id,
             ))),
         };
-        let v52_item_monitor_redacted = v52::StateUpdateKind {
-            kind: Some(v52::state_update_kind::Kind::Item(empty_view_v52(
-                v52_mz_monitor_redacted_role_id,
+        let v53_item_monitor_redacted = v53::StateUpdateKind {
+            kind: Some(v53::state_update_kind::Kind::Item(empty_view_v53(
+                v53_mz_monitor_redacted_role_id,
             ))),
         };
 
@@ -261,48 +261,48 @@ mod tests {
         };
 
         let mut expected_updates: BTreeSet<_> = [
-            (v52_mz_monitor.clone(), v54_mz_monitor),
-            (v52_mz_monitor_redacted.clone(), v54_mz_monitor_redacted),
-            (v52_mz_monitor_member.clone(), v54_mz_monitor_member),
+            (v53_mz_monitor.clone(), v54_mz_monitor),
+            (v53_mz_monitor_redacted.clone(), v54_mz_monitor_redacted),
+            (v53_mz_monitor_member.clone(), v54_mz_monitor_member),
             (
-                v52_mz_monitor_redacted_member.clone(),
+                v53_mz_monitor_redacted_member.clone(),
                 v54_mz_monitor_redacted_member,
             ),
-            (v52_item_monitor.clone(), v54_item_monitor),
-            (v52_item_monitor_redacted.clone(), v54_item_monitor_redacted),
+            (v53_item_monitor.clone(), v54_item_monitor),
+            (v53_item_monitor_redacted.clone(), v54_item_monitor_redacted),
         ]
         .into_iter()
         .collect();
 
         let actions = upgrade(vec![
-            v52_mz_monitor,
-            v52_mz_monitor_redacted,
-            v52_mz_monitor_member,
-            v52_mz_monitor_redacted_member,
-            v52_item_monitor,
-            v52_item_monitor_redacted,
+            v53_mz_monitor,
+            v53_mz_monitor_redacted,
+            v53_mz_monitor_member,
+            v53_mz_monitor_redacted_member,
+            v53_item_monitor,
+            v53_item_monitor_redacted,
         ]);
 
         for action in actions {
             match action {
                 MigrationAction::Insert(v54) => panic!("unexpected insert: {v54:?}"),
-                MigrationAction::Update(v52, v54) => {
+                MigrationAction::Update(v53, v54) => {
                     assert!(
-                        expected_updates.remove(&(v52.clone(), v54.clone())),
-                        "unexpected update from {v52:?} to {v54:?}"
+                        expected_updates.remove(&(v53.clone(), v54.clone())),
+                        "unexpected update from {v53:?} to {v54:?}"
                     )
                 }
-                MigrationAction::Delete(v52) => panic!("unexpected delete: {v52:?}"),
+                MigrationAction::Delete(v53) => panic!("unexpected delete: {v53:?}"),
             }
         }
 
         assert_eq!(expected_updates, BTreeSet::new(), "missing updates");
     }
 
-    fn empty_role_v52(role_id: v52::RoleId, name: &str, oid: u32) -> v52::state_update_kind::Role {
-        v52::state_update_kind::Role {
-            key: Some(v52::RoleKey { id: Some(role_id) }),
-            value: Some(v52::RoleValue {
+    fn empty_role_v53(role_id: v53::RoleId, name: &str, oid: u32) -> v53::state_update_kind::Role {
+        v53::state_update_kind::Role {
+            key: Some(v53::RoleKey { id: Some(role_id) }),
+            value: Some(v53::RoleValue {
                 name: name.to_string(),
                 attributes: Some(Default::default()),
                 membership: Some(Default::default()),
@@ -325,18 +325,18 @@ mod tests {
         }
     }
 
-    fn role_with_membership_v52(
-        role_id: v52::RoleId,
+    fn role_with_membership_v53(
+        role_id: v53::RoleId,
         name: &str,
         oid: u32,
-    ) -> v52::state_update_kind::Role {
-        let mut role = empty_role_v52(role_id, name, oid);
-        let entry = v52::role_membership::Entry {
-            key: Some(v52::RoleId {
-                value: Some(v52::role_id::Value::User(2)),
+    ) -> v53::state_update_kind::Role {
+        let mut role = empty_role_v53(role_id, name, oid);
+        let entry = v53::role_membership::Entry {
+            key: Some(v53::RoleId {
+                value: Some(v53::role_id::Value::User(2)),
             }),
-            value: Some(v52::RoleId {
-                value: Some(v52::role_id::Value::System(1)),
+            value: Some(v53::RoleId {
+                value: Some(v53::role_id::Value::System(1)),
             }),
         };
         role.value
@@ -375,32 +375,32 @@ mod tests {
         role
     }
 
-    fn empty_view_v52(role_id: v52::RoleId) -> v52::state_update_kind::Item {
-        v52::state_update_kind::Item {
-            key: Some(v52::ItemKey {
-                gid: Some(v52::GlobalId {
-                    value: Some(v52::global_id::Value::User(1)),
+    fn empty_view_v53(role_id: v53::RoleId) -> v53::state_update_kind::Item {
+        v53::state_update_kind::Item {
+            key: Some(v53::ItemKey {
+                gid: Some(v53::GlobalId {
+                    value: Some(v53::global_id::Value::User(1)),
                 }),
             }),
-            value: Some(v52::ItemValue {
-                schema_id: Some(v52::SchemaId {
-                    value: Some(v52::schema_id::Value::System(4)),
+            value: Some(v53::ItemValue {
+                schema_id: Some(v53::SchemaId {
+                    value: Some(v53::schema_id::Value::System(4)),
                 }),
                 name: "t".to_string(),
-                definition: Some(v52::CatalogItem {
-                    value: Some(v52::catalog_item::Value::V1(v52::catalog_item::V1 {
+                definition: Some(v53::CatalogItem {
+                    value: Some(v53::catalog_item::Value::V1(v53::catalog_item::V1 {
                         create_sql: "CREATE TABLE t (a INT)".to_string(),
                     })),
                 }),
-                owner_id: Some(v52::RoleId {
-                    value: Some(v52::role_id::Value::User(1)),
+                owner_id: Some(v53::RoleId {
+                    value: Some(v53::role_id::Value::User(1)),
                 }),
-                privileges: vec![v52::MzAclItem {
+                privileges: vec![v53::MzAclItem {
                     grantee: Some(role_id),
-                    grantor: Some(v52::RoleId {
-                        value: Some(v52::role_id::Value::System(1)),
+                    grantor: Some(v53::RoleId {
+                        value: Some(v53::role_id::Value::System(1)),
                     }),
-                    acl_mode: Some(v52::AclMode { bitflags: 42666 }),
+                    acl_mode: Some(v53::AclMode { bitflags: 42666 }),
                 }],
                 oid: 8,
             }),
