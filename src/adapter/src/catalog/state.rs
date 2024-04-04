@@ -51,7 +51,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
 use mz_ore::str::StrExt;
-use mz_ore::{instrument, soft_assert_eq_or_log, soft_assert_no_log, soft_assert_or_log};
+use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
@@ -2309,16 +2309,15 @@ impl CatalogState {
         {
             if diff == 1 {
                 let prev = map.insert(key, value());
-                soft_assert_eq_or_log!(
-                    prev,
-                    None,
+                assert_eq!(
+                    prev, None,
                     "values must be explicitly retracted before inserting a new value"
                 );
             } else if diff == -1 {
                 let prev = map.remove(&key);
                 // We can't assert the exact contents of the previous value, since we don't know
                 // what it should look like.
-                soft_assert_or_log!(
+                assert!(
                     prev.is_some(),
                     "retraction does not match existing value: {key:?}"
                 );
@@ -2450,9 +2449,8 @@ impl CatalogState {
                         comment.sub_component,
                         Some(comment.comment),
                     );
-                    soft_assert_eq_or_log!(
-                        prev,
-                        None,
+                    assert_eq!(
+                        prev, None,
                         "values must be explicitly retracted before inserting a new value"
                     );
                 }
@@ -2462,7 +2460,7 @@ impl CatalogState {
                         comment.sub_component,
                         None,
                     );
-                    soft_assert_eq_or_log!(
+                    assert_eq!(
                         prev,
                         Some(comment.comment),
                         "retraction does not match existing value: ({:?}, {:?})",

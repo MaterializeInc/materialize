@@ -59,21 +59,27 @@ class ReproductionCodePrinter(BaseOutputPrinter):
 
         # evaluation strategy 1
         self.__print_setup_code_for_error(
-            query_template, error.strategy1, table_column_selection, apply_row_filter
+            query_template,
+            error.details1.strategy,
+            table_column_selection,
+            apply_row_filter,
         )
         self.print_separator_line()
         self.__print_query_of_error(
-            query_template, error.strategy1, query_column_selection
+            query_template, error.details1.strategy, query_column_selection
         )
         self.print_separator_line()
 
         # evaluation strategy 2
         self.__print_setup_code_for_error(
-            query_template, error.strategy2, table_column_selection, apply_row_filter
+            query_template,
+            error.details2.strategy,
+            table_column_selection,
+            apply_row_filter,
         )
         self.print_separator_line()
         self.__print_query_of_error(
-            query_template, error.strategy2, query_column_selection
+            query_template, error.details2.strategy, query_column_selection
         )
         self.print_separator_line()
 

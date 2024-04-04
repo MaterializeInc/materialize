@@ -269,6 +269,8 @@ impl Catalog {
                     let cluster_sizes = BuiltinBootstrapClusterSizes {
                         system_cluster: config.builtin_system_cluster_replica_size,
                         introspection_cluster: config.builtin_introspection_cluster_replica_size,
+                        probe_cluster:  config.builtin_probe_cluster_replica_size,
+                        support_cluster:  config.builtin_support_cluster_replica_size,
                     };
                     add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
                     add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
@@ -301,7 +303,6 @@ impl Catalog {
             // storage "config" collection so that we can toggle the flag with
             // Launch Darkly, but use it in boot before Launch Darkly is available.
             txn.set_persist_txn_tables(state.system_config().persist_txn_tables())?;
-
             Catalog::load_builtin_types(&mut state, &mut txn)?;
 
             let persisted_builtin_ids: BTreeMap<_, _> = txn
@@ -1549,6 +1550,7 @@ fn add_new_builtin_clusters_migration(
                 builtin_cluster.name,
                 vec![],
                 builtin_cluster.privileges.to_vec(),
+                builtin_cluster.owner_id.to_owned(),
                 mz_catalog::durable::ClusterConfig {
                     variant: mz_catalog::durable::ClusterVariant::Managed(ClusterVariantManaged {
                         size: cluster_size.clone(),
@@ -1607,7 +1609,6 @@ fn add_new_builtin_cluster_replicas_migration(
         let cluster = cluster_lookup
             .get(builtin_replica.cluster_name)
             .expect("builtin cluster replica references non-existent cluster");
-
         let replica_names = replicas.get(&cluster.id);
         if matches!(replica_names, None)
             || matches!(replica_names, Some(names) if !names.contains(builtin_replica.name))
@@ -1656,10 +1657,14 @@ fn default_logging_config() -> ReplicaLogging {
     }
 }
 pub struct BuiltinBootstrapClusterSizes {
-    /// Size to default system_cluster init to
+    /// Size to default system_cluster on bootstrap
     pub system_cluster: String,
-    /// Size to default introspection_cluster init to
+    /// Size to default introspection_cluster on bootstrap
     pub introspection_cluster: String,
+    /// Size to default probe_cluster on bootstrap
+    pub probe_cluster: String,
+    /// Size to default support_cluster on bootstrap
+    pub support_cluster: String,
 }
 
 impl BuiltinBootstrapClusterSizes {
@@ -1669,6 +1674,10 @@ impl BuiltinBootstrapClusterSizes {
             Ok(self.system_cluster.clone())
         } else if cluster_name == mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER.name {
             Ok(self.introspection_cluster.clone())
+        } else if cluster_name == mz_catalog::builtin::MZ_PROBE_CLUSTER.name {
+            Ok(self.probe_cluster.clone())
+        } else if cluster_name == mz_catalog::builtin::MZ_SUPPORT_CLUSTER.name {
+            Ok(self.support_cluster.clone())
         } else {
             Err(mz_catalog::durable::CatalogError::Catalog(
                 SqlCatalogError::UnexpectedBuiltinCluster(cluster_name.to_owned()),

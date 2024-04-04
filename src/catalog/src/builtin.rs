@@ -38,7 +38,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, CatalogTypePgMetadata, NameReference,
-    ObjectType, RoleAttributes, TypeReference,
+    ObjectType, RoleAttributes, SystemObjectType, TypeReference,
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{
@@ -223,6 +223,7 @@ pub struct BuiltinCluster {
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
     pub privileges: &'static [MzAclItem],
+    pub owner_id: &'static RoleId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6688,6 +6689,7 @@ pub const MZ_MONITOR_REDACTED: BuiltinRole = BuiltinRole {
 
 pub const MZ_SYSTEM_CLUSTER: BuiltinCluster = BuiltinCluster {
     name: SYSTEM_USER_NAME,
+    owner_id: &MZ_SYSTEM_ROLE_ID,
     privileges: &[
         MzAclItem {
             grantee: MZ_SUPPORT_ROLE_ID,
@@ -6705,6 +6707,7 @@ pub const MZ_SYSTEM_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterRepli
 
 pub const MZ_INTROSPECTION_CLUSTER: BuiltinCluster = BuiltinCluster {
     name: "mz_introspection",
+    owner_id: &MZ_SYSTEM_ROLE_ID,
     privileges: &[
         MzAclItem {
             grantee: RoleId::Public,
@@ -6723,6 +6726,41 @@ pub const MZ_INTROSPECTION_CLUSTER: BuiltinCluster = BuiltinCluster {
 pub const MZ_INTROSPECTION_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
     name: BUILTIN_CLUSTER_REPLICA_NAME,
     cluster_name: MZ_INTROSPECTION_CLUSTER.name,
+};
+
+pub const MZ_PROBE_CLUSTER: BuiltinCluster = BuiltinCluster {
+    name: "mz_probe",
+    owner_id: &MZ_SYSTEM_ROLE_ID,
+    privileges: &[
+        MzAclItem {
+            grantee: MZ_SUPPORT_ROLE_ID,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE,
+        },
+        MzAclItem {
+            grantee: MZ_MONITOR_ROLE_ID,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE,
+        },
+        rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
+    ],
+};
+pub const MZ_PROBE_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
+    name: BUILTIN_CLUSTER_REPLICA_NAME,
+    cluster_name: MZ_PROBE_CLUSTER.name,
+};
+
+pub const MZ_SUPPORT_CLUSTER: BuiltinCluster = BuiltinCluster {
+    name: "mz_support",
+    owner_id: &MZ_SUPPORT_ROLE_ID,
+    privileges: &[
+        MzAclItem {
+            grantee: MZ_SYSTEM_ROLE_ID,
+            grantor: MZ_SUPPORT_ROLE_ID,
+            acl_mode: rbac::all_object_privileges(SystemObjectType::Object(ObjectType::Cluster)),
+        },
+        rbac::owner_privilege(ObjectType::Cluster, MZ_SUPPORT_ROLE_ID),
+    ],
 };
 
 /// List of all builtin objects sorted topologically by dependency.
@@ -7125,10 +7163,16 @@ pub const BUILTIN_ROLES: &[&BuiltinRole] = &[
     &MZ_MONITOR_ROLE,
     &MZ_MONITOR_REDACTED,
 ];
-pub const BUILTIN_CLUSTERS: &[&BuiltinCluster] = &[&MZ_SYSTEM_CLUSTER, &MZ_INTROSPECTION_CLUSTER];
+pub const BUILTIN_CLUSTERS: &[&BuiltinCluster] = &[
+    &MZ_SYSTEM_CLUSTER,
+    &MZ_INTROSPECTION_CLUSTER,
+    &MZ_PROBE_CLUSTER,
+    &MZ_SUPPORT_CLUSTER,
+];
 pub const BUILTIN_CLUSTER_REPLICAS: &[&BuiltinClusterReplica] = &[
     &MZ_SYSTEM_CLUSTER_REPLICA,
     &MZ_INTROSPECTION_CLUSTER_REPLICA,
+    &MZ_PROBE_CLUSTER_REPLICA,
 ];
 
 #[allow(non_snake_case)]

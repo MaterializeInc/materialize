@@ -28,7 +28,6 @@ use mz_sql::catalog::{
     RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
-use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::{PersistTxnTablesImpl, StorageError};
@@ -353,13 +352,14 @@ impl<'a> Transaction<'a> {
         cluster_name: &str,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         privileges: Vec<MzAclItem>,
+        owner_id: RoleId,
         config: ClusterConfig,
     ) -> Result<Vec<(&'static BuiltinLog, GlobalId, u32)>, CatalogError> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
             introspection_source_indexes,
-            MZ_SYSTEM_ROLE_ID,
+            owner_id,
             privileges,
             config,
         )

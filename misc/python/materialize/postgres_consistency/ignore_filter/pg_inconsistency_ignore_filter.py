@@ -528,8 +528,8 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             True,
         ):
             # cut ".000" endings
-            value1_str = re.sub(r"\.0+$", "", str(error.value1))
-            value2_str = re.sub(r"\.0+$", "", str(error.value2))
+            value1_str = re.sub(r"\.0+$", "", str(error.details1.value))
+            value2_str = re.sub(r"\.0+$", "", str(error.details2.value))
 
             if value1_str == value2_str:
                 return YesIgnore("#24687: different representation of DECIMAL type")
@@ -555,7 +555,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
-        if error.value1 == int and error.value2 == float:
+        details_by_strategy_key = error.get_details_by_strategy_key()
+
+        mz_error = details_by_strategy_key[EvaluationStrategyKey.MZ_DATAFLOW_RENDERING]
+        pg_error = details_by_strategy_key[EvaluationStrategyKey.POSTGRES]
+
+        if mz_error.value == float and pg_error.value == int:
             return YesIgnore("#26306: float instead of int returned")
 
         return self._shall_ignore_content_mismatch(

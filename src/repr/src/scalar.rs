@@ -3228,6 +3228,9 @@ impl ScalarType {
                 Datum::String(&"x".repeat(100)),
                 // Valid timezone.
                 Datum::String("JAPAN"),
+                Datum::String("1,2,3"),
+                Datum::String("\r\n"),
+                Datum::String("\"\""),
             ])
         });
         static CHAR: Lazy<Row> = Lazy::new(|| {
@@ -3236,6 +3239,23 @@ impl ScalarType {
                 Datum::String("'"),
                 Datum::String("\""),
                 Datum::String("."),
+                Datum::String(","),
+                Datum::String("\t"),
+                Datum::String("\n"),
+                Datum::String("\r"),
+                Datum::String("\\"),
+                // Null character.
+                Datum::String(std::str::from_utf8(b"\x00").unwrap()),
+                // Start of text.
+                Datum::String(std::str::from_utf8(b"\x02").unwrap()),
+                // End of text.
+                Datum::String(std::str::from_utf8(b"\x03").unwrap()),
+                // Backspace.
+                Datum::String(std::str::from_utf8(b"\x08").unwrap()),
+                // Escape.
+                Datum::String(std::str::from_utf8(b"\x1B").unwrap()),
+                // Delete.
+                Datum::String(std::str::from_utf8(b"\x7F").unwrap()),
             ])
         });
         static JSONB: Lazy<Row> = Lazy::new(|| {

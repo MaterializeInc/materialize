@@ -102,6 +102,7 @@ query T
 SELECT owner_id FROM mz_clusters GROUP BY owner_id
 ----
 s1
+s2
 
 query T
 SELECT owner_id FROM mz_cluster_replicas GROUP BY owner_id

@@ -11,6 +11,7 @@ from typing import Any
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
+    EvaluationStrategyKey,
 )
 from materialize.output_consistency.query.query_result import QueryExecution
 
@@ -71,20 +72,28 @@ class ValidationWarning(ValidationMessage):
         return f"{self.message}{strategy_desc}{warning_desc}{query_desc}"
 
 
+class ValidationErrorDetails:
+    def __init__(
+        self,
+        strategy: EvaluationStrategy,
+        value: Any,
+        sql: str | None = None,
+        sql_error: str | None = None,
+    ):
+        self.strategy = strategy
+        self.value = value
+        self.sql = sql
+        self.sql_error = sql_error
+
+
 class ValidationError(ValidationMessage):
     def __init__(
         self,
         query_execution: QueryExecution,
         error_type: ValidationErrorType,
         message: str,
-        strategy1: EvaluationStrategy,
-        strategy2: EvaluationStrategy,
-        value1: Any,
-        value2: Any,
-        sql1: str | None = None,
-        sql2: str | None = None,
-        sql_error1: str | None = None,
-        sql_error2: str | None = None,
+        details1: ValidationErrorDetails,
+        details2: ValidationErrorDetails,
         description: str | None = None,
         col_index: int | None = None,
         concerned_expression: str | None = None,
@@ -93,38 +102,40 @@ class ValidationError(ValidationMessage):
         super().__init__(message, description)
         self.query_execution = query_execution
         self.error_type = error_type
-        self.value1 = value1
-        self.value2 = value2
-        self.strategy1 = strategy1
-        self.strategy2 = strategy2
-        self.sql1 = sql1
-        self.sql2 = sql2
-        self.sql_error1 = sql_error1
-        self.sql_error2 = sql_error2
+        self.details1 = details1
+        self.details2 = details2
         self.col_index = col_index
         self.concerned_expression = concerned_expression
         self.location = location
+
+    def get_details_by_strategy_key(
+        self,
+    ) -> dict[EvaluationStrategyKey, ValidationErrorDetails]:
+        return {
+            details.strategy.identifier: details
+            for details in [self.details1, self.details2]
+        }
 
     def __str__(self) -> str:
         error_desc = f" ({self.description})" if self.description else ""
         location_desc = f" at {self.location}" if self.location is not None else ""
 
-        strategy1_desc = f" ({self.strategy1})"
-        strategy2_desc = f" ({self.strategy2})"
+        strategy1_desc = f" ({self.details1.strategy})"
+        strategy2_desc = f" ({self.details2.strategy})"
         value_and_strategy_desc = (
-            f"\n  Value 1{strategy1_desc}: '{self.value1}' (type: {type(self.value1)})"
-            f"\n  Value 2{strategy2_desc}: '{self.value2}' (type: {type(self.value2)})"
+            f"\n  Value 1{strategy1_desc}: '{self.details1.value}' (type: {type(self.details1.value)})"
+            f"\n  Value 2{strategy2_desc}: '{self.details2.value}' (type: {type(self.details2.value)})"
         )
 
         if self.error_type == ValidationErrorType.SUCCESS_MISMATCH:
-            if self.sql_error1 is not None:
+            if self.details1.sql_error is not None:
                 value_and_strategy_desc = value_and_strategy_desc + (
-                    f"\n  Error 1: '{self.sql_error1}'"
+                    f"\n  Error 1: '{self.details1.sql_error}'"
                 )
-            if self.sql_error2 is not None:
+            if self.details2.sql_error is not None:
                 value_and_strategy_desc = value_and_strategy_desc + (
-                    f"\n  Error 2: '{self.sql_error2}'"
+                    f"\n  Error 2: '{self.details2.sql_error}'"
                 )
 
-        sql_desc = f"\n  Query 1: {self.sql1}\n  Query 2: {self.sql2}"
+        sql_desc = f"\n  Query 1: {self.details1.sql}\n  Query 2: {self.details2.sql}"
         return f"{self.error_type}: {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}{sql_desc}"
