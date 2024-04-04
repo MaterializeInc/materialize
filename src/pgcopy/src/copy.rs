@@ -624,12 +624,19 @@ impl Arbitrary for CopyCsvFormatParams<'static> {
             any::<bool>(),
             any::<String>(),
         )
-            .prop_map(|(delimiter, quote, escape, header, null)| Self {
-                delimiter,
-                quote,
-                escape,
-                header,
-                null: Cow::Owned(null),
+            .prop_map(|(delimiter, diff, escape, header, null)| {
+                // Delimiter and Quote need to be different.
+                let diff = diff.saturating_sub(1).max(1);
+                let quote = delimiter.wrapping_add(diff);
+
+                Self::try_new(
+                    Some(delimiter),
+                    Some(quote),
+                    Some(escape),
+                    Some(header),
+                    Some(null),
+                )
+                .expect("delimiter and quote should be different")
             })
             .boxed()
     }
@@ -757,7 +764,9 @@ pub fn decode_copy_format_csv(
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::ColumnType;
+    use mz_ore::collections::CollectionExt;
+    use mz_repr::{ColumnType, ScalarType};
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -1030,5 +1039,98 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    proptest! {
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn proptest_csv_roundtrips(copy_csv_params: CopyCsvFormatParams)  {
+            // Given a ScalarType and Datum roundtrips it through the CSV COPY format.
+            let try_roundtrip_datum = |scalar_type: &ScalarType, datum| {
+                let row = Row::pack_slice(&[datum]);
+                let typ = RelationType::new(vec![
+                    ColumnType {
+                        scalar_type: scalar_type.clone(),
+                        nullable: true,
+                    }
+                ]);
+
+                let mut buf = Vec::new();
+                let mut csv_params = copy_csv_params.clone();
+                // TODO: Encoding never writes a header.
+                csv_params.header = false;
+                let params = CopyFormatParams::Csv(csv_params);
+
+                // Roundtrip the Row through our CSV format.
+                encode_copy_format(params.clone(), &row, &typ, &mut buf)?;
+                let column_types = typ
+                    .column_types
+                    .iter()
+                    .map(|x| &x.scalar_type)
+                    .map(mz_pgrepr::Type::from)
+                    .collect::<Vec<mz_pgrepr::Type>>();
+                let result = decode_copy_format(&buf, &column_types, params);
+
+                match result {
+                    Ok(rows) => {
+                        let out_str = std::str::from_utf8(&buf[..]);
+
+                        prop_assert_eq!(
+                            rows.len(),
+                            1,
+                            "unexpected number of rows! {:?}, csv string: {:?}", rows, out_str
+                        );
+                        let output = rows.into_element();
+
+                        prop_assert_eq!(
+                            row,
+                            output,
+                            "csv string: {:?}, scalar_type: {:?}", out_str, scalar_type
+                        );
+                    }
+                    _ => {
+                        // ignoring decoding failures
+                    }
+                }
+
+                Ok(())
+            };
+
+            // Try roundtripping all of our interesting Datums.
+            for scalar_type in ScalarType::enumerate() {
+                for datum in scalar_type.interesting_datums() {
+                    // TODO: The decoder cannot differentiate between empty string and null.
+                    if let Some(value) = mz_pgrepr::Value::from_datum(datum, scalar_type) {
+                        let mut buf = bytes::BytesMut::new();
+                        value.encode_text(&mut buf);
+
+                        if let Ok(datum_str) = std::str::from_utf8(&buf[..]) {
+                            if datum_str == copy_csv_params.null {
+                                continue;
+                            }
+                        }
+                    }
+
+                    let updated_datum = match datum {
+                        // TODO: Fix roundtrip decoding of these types.
+                        Datum::Timestamp(_) | Datum::TimestampTz(_) | Datum::Null => {
+                            continue;
+                        }
+                        Datum::String(s) => {
+                            // TODO: The decoder cannot differentiate between empty string and null.
+                            if s.trim() == copy_csv_params.null || s.trim().is_empty() {
+                                continue;
+                            } else {
+                                Datum::String(s)
+                            }
+                        }
+                        other => other,
+                    };
+
+                    let result = try_roundtrip_datum(scalar_type, updated_datum);
+                    prop_assert!(result.is_ok(), "failure: {result:?}");
+                }
+            }
+        }
     }
 }
