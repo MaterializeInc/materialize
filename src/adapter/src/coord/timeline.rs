@@ -27,7 +27,6 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
-use mz_sql::session::vars::TimestampOracleImpl;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
 use mz_timestamp_oracle::postgres_oracle::{
@@ -39,7 +38,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{debug, error, info, Instrument};
 
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::read_policy::ReadHolds;
+use crate::coord::read_policy::InternalReadHolds;
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::AdapterError;
@@ -80,7 +79,7 @@ impl TimelineContext {
 /// guarantee that those read timestamps are valid.
 pub(crate) struct TimelineState<T> {
     pub(crate) oracle: Arc<dyn TimestampOracle<T> + Send + Sync>,
-    pub(crate) read_holds: ReadHolds<T>,
+    pub(crate) read_holds: InternalReadHolds<T>,
 }
 
 impl<T: fmt::Debug> fmt::Debug for TimelineState<T> {
@@ -179,7 +178,6 @@ impl Coordinator {
             timeline,
             Timestamp::minimum(),
             self.catalog().config().now.clone(),
-            self.timestamp_oracle_impl,
             self.pg_timestamp_oracle_config.clone(),
             &mut self.global_timelines,
         )
@@ -193,14 +191,13 @@ impl Coordinator {
         timeline: &'a Timeline,
         initially: Timestamp,
         now: NowFn,
-        timestamp_oracle_impl: TimestampOracleImpl,
         pg_oracle_config: Option<PostgresTimestampOracleConfig>,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
     ) -> &'a mut TimelineState<Timestamp> {
         if !global_timelines.contains_key(timeline) {
             info!(
-                "opening a new {:?} TimestampOracle for timeline {:?}",
-                timestamp_oracle_impl, timeline,
+                "opening a new CRDB/postgres TimestampOracle for timeline {:?}",
+                timeline,
             );
 
             let now_fn = if timeline == &Timeline::EpochMilliseconds {
@@ -217,38 +214,31 @@ impl Coordinator {
                 NowFn::from(|| Timestamp::minimum().into())
             };
 
-            let oracle = match timestamp_oracle_impl {
-                TimestampOracleImpl::Postgres => {
-                    let pg_oracle_config = pg_oracle_config.expect(
+            let pg_oracle_config = pg_oracle_config.expect(
                         "missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
 
-                    let batching_metrics = Arc::clone(&pg_oracle_config.metrics);
+            let batching_metrics = Arc::clone(&pg_oracle_config.metrics);
 
-                    let pg_oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> =
-                        Arc::new(
-                            PostgresTimestampOracle::open(
-                                pg_oracle_config,
-                                timeline.to_string(),
-                                initially,
-                                now_fn,
-                            )
-                            .await,
-                        );
+            let pg_oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> = Arc::new(
+                PostgresTimestampOracle::open(
+                    pg_oracle_config,
+                    timeline.to_string(),
+                    initially,
+                    now_fn,
+                )
+                .await,
+            );
 
-                    let batching_oracle = BatchingTimestampOracle::new(batching_metrics, pg_oracle);
+            let batching_oracle = BatchingTimestampOracle::new(batching_metrics, pg_oracle);
 
-                    let oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> =
-                        Arc::new(batching_oracle);
-
-                    oracle
-                }
-            };
+            let oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> =
+                Arc::new(batching_oracle);
 
             global_timelines.insert(
                 timeline.clone(),
                 TimelineState {
                     oracle,
-                    read_holds: ReadHolds::new(),
+                    read_holds: InternalReadHolds::new(),
                 },
             );
         }

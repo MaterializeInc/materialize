@@ -16,12 +16,13 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime};
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use maplit::btreemap;
 use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
 use mz_ore::error::ErrorExt;
+use mz_ore::future::InTask;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
@@ -283,6 +284,7 @@ impl SourceRender for KafkaSourceConnection {
                         // consumer.
                         "client.id" => client_id.clone(),
                     },
+                    InTask::Yes,
                 )
                 .await;
 
@@ -1133,9 +1135,10 @@ fn construct_source_message(
                     .to_millis()
                     .expect("kafka sources always have upstream_time");
 
-                let d: Datum = NaiveDateTime::from_timestamp_millis(ts)
+                let d: Datum = DateTime::from_timestamp_millis(ts)
                     .and_then(|dt| {
-                        let ct: Option<CheckedTimestamp<NaiveDateTime>> = dt.try_into().ok();
+                        let ct: Option<CheckedTimestamp<NaiveDateTime>> =
+                            dt.naive_utc().try_into().ok();
                         ct
                     })
                     .into();

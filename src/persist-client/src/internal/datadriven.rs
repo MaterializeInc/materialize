@@ -151,6 +151,7 @@ mod tests {
         use crate::internal::trace::datadriven as trace_dd;
 
         datadriven::walk("tests/trace", |f| {
+            println!("running datadriven file: {}", f.filename);
             let mut state = trace_dd::TraceState::default();
             f.run(move |tc| -> String {
                 let args = DirectiveArgs {
@@ -183,6 +184,7 @@ mod tests {
         ::datadriven::walk_async("tests/machine", |mut f| {
             let initial_state_fut = machine_dd::MachineState::new();
             async move {
+                println!("running datadriven file: {}", f.filename);
                 let state = Arc::new(Mutex::new(initial_state_fut.await));
                 f.run_async(move |tc| {
                     let state = Arc::clone(&state);

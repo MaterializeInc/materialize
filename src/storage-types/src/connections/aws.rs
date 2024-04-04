@@ -18,12 +18,15 @@ use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
 use aws_types::region::Region;
 use aws_types::SdkConfig;
 use mz_ore::error::ErrorExt;
+use mz_ore::future::{InTask, OreFutureExt};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::controller::AlterError;
+use crate::AlterCompatible;
 use crate::{
     configuration::StorageConfiguration,
     connections::{ConnectionContext, StringOrSecret},
@@ -83,6 +86,13 @@ impl RustType<ProtoAwsConnection> for AwsConnection {
     }
 }
 
+impl AlterCompatible for AwsConnection {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+        // Every element of the AWS connection is configurable.
+        Ok(())
+    }
+}
+
 /// Describes how to authenticate with AWS.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AwsAuth {
@@ -108,11 +118,14 @@ impl AwsCredentials {
     async fn load_credentials_provider(
         &self,
         connection_context: &ConnectionContext,
+        // Whether or not to do IO in a separate Tokio task.
+        in_task: InTask,
     ) -> Result<impl ProvideCredentials, anyhow::Error> {
-        let secrets_reader = connection_context.secrets_reader.as_ref();
+        let secrets_reader = &connection_context.secrets_reader;
         Ok(Credentials::from_keys(
             self.access_key_id
-                .get_string(secrets_reader)
+                // We will already be contained within a tokio task from `load_sdk_config`.
+                .get_string(in_task, secrets_reader)
                 .await
                 .map_err(|_| {
                     anyhow!("internal error: failed to read access key ID from secret store")
@@ -126,7 +139,7 @@ impl AwsCredentials {
                 })?,
             match &self.session_token {
                 Some(t) => {
-                    let t = t.get_string(secrets_reader).await.map_err(|_| {
+                    let t = t.get_string(in_task, secrets_reader).await.map_err(|_| {
                         anyhow!("internal error: failed to read session token from secret store")
                     })?;
                     Some(t)
@@ -309,20 +322,29 @@ impl AwsConnection {
         &self,
         connection_context: &ConnectionContext,
         connection_id: GlobalId,
+        in_task: InTask,
     ) -> Result<SdkConfig, anyhow::Error> {
-        let credentials = match &self.auth {
-            AwsAuth::Credentials(credentials) => SharedCredentialsProvider::new(
-                credentials
-                    .load_credentials_provider(connection_context)
-                    .await?,
-            ),
-            AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
-                assume_role
-                    .load_credentials_provider(connection_context, connection_id)
-                    .await?,
-            ),
-        };
-        self.load_sdk_config_from_credentials(credentials).await
+        let connection_context = connection_context.clone();
+        let this = self.clone();
+        // This entire block is wrapped in a `run_in_task_if`, so the inner futures are
+        // run in-line with `InTask::No`.
+        async move {
+            let credentials = match &this.auth {
+                AwsAuth::Credentials(credentials) => SharedCredentialsProvider::new(
+                    credentials
+                        .load_credentials_provider(&connection_context, InTask::No)
+                        .await?,
+                ),
+                AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
+                    assume_role
+                        .load_credentials_provider(&connection_context, connection_id)
+                        .await?,
+                ),
+            };
+            this.load_sdk_config_from_credentials(credentials).await
+        }
+        .run_in_task_if(in_task, || "load_sdk_config".to_string())
+        .await
     }
 
     async fn load_sdk_config_from_credentials(
@@ -345,7 +367,12 @@ impl AwsConnection {
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), AwsConnectionValidationError> {
         let aws_config = self
-            .load_sdk_config(&storage_configuration.connection_context, id)
+            .load_sdk_config(
+                &storage_configuration.connection_context,
+                id,
+                // We are in a normal tokio context during validation, already.
+                InTask::No,
+            )
             .await?;
         let sts_client = aws_sdk_sts::Client::new(&aws_config);
         let _ = sts_client.get_caller_identity().send().await?;

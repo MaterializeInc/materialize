@@ -1,7 +1,7 @@
 # Note that this file will not work on PG due to the not standard COPY TO s3 command
 
 send
-Query {"query": "CREATE SECRET aws_secret_access_key AS 'secret'"}
+Query {"query": "CREATE SECRET aws_secret_access_key AS 'minioadmin'"}
 ----
 
 until
@@ -12,7 +12,7 @@ ReadyForQuery {"status":"I"}
 
 # Create aws connection to be used
 send
-Query {"query": "CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET aws_secret_access_key)"}
+Query {"query": "CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = 'minioadmin', SECRET ACCESS KEY = SECRET aws_secret_access_key, REGION = 'us-east-1', ENDPOINT = 'http://localhost:40109')"}
 ----
 
 until
@@ -24,7 +24,7 @@ ReadyForQuery {"status":"I"}
 # Ensure COPY TO works and returns COPY tag.
 # Using a SELECT query with zero rows so that it does not try to write to s3.
 send
-Query {"query": "COPY (SELECT generate_series(1, 0)) TO 's3://path' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv', MAX FILE SIZE = '100MB')"}
+Query {"query": "COPY (SELECT generate_series(1, 0)) TO 's3://copytos3/1' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv', MAX FILE SIZE = '100MB')"}
 ----
 
 until

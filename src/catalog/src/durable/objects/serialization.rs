@@ -10,11 +10,11 @@
 //! This module is responsible for serializing catalog objects into Protobuf.
 
 use mz_audit_log::{
-    AlterDefaultPrivilegeV1, AlterSetClusterV1, AlterSourceSinkV1, CreateClusterReplicaV1,
-    CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3, DropClusterReplicaV1, EventDetails,
-    EventType, EventV1, FullNameV1, GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1,
-    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
-    RevokeRoleV2, SchemaV1, SchemaV2, StorageUsageV1, UpdateItemV1, UpdateOwnerV1,
+    AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
+    CreateClusterReplicaV1, CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3,
+    DropClusterReplicaV1, EventDetails, EventType, EventV1, FullNameV1, GrantRoleV1, GrantRoleV2,
+    IdFullNameV1, IdNameV1, RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1,
+    RevokeRoleV1, RevokeRoleV2, SchemaV1, SchemaV2, StorageUsageV1, UpdateItemV1, UpdateOwnerV1,
     UpdatePrivilegeV1, VersionedEvent, VersionedStorageUsage,
 };
 use mz_compute_client::controller::ComputeReplicaLogging;
@@ -40,9 +40,10 @@ use crate::durable::objects::{
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
-    ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemPrivilegesKey,
-    SystemPrivilegesValue,
+    ItemValue, PersistTxnShardValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
+    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, StorageUsageKey,
+    SystemPrivilegesKey, SystemPrivilegesValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -125,7 +126,6 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 size,
                 availability_zones,
                 logging,
-                idle_arrangement_merge_effort,
                 replication_factor,
                 disk,
                 optimizer_feature_overrides,
@@ -134,8 +134,6 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
                 logging: Some(logging.into_proto()),
-                idle_arrangement_merge_effort: idle_arrangement_merge_effort
-                    .map(|effort| proto::ReplicaMergeEffort { effort }),
                 replication_factor: *replication_factor,
                 disk: *disk,
                 optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
@@ -155,9 +153,6 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                     logging: managed
                         .logging
                         .into_rust_if_some("ManagedCluster::logging")?,
-                    idle_arrangement_merge_effort: managed
-                        .idle_arrangement_merge_effort
-                        .map(|e| e.effort),
                     replication_factor: managed.replication_factor,
                     disk: managed.disk,
                     optimizer_feature_overrides: managed.optimizer_feature_overrides.into_rust()?,
@@ -173,9 +168,6 @@ impl RustType<proto::ReplicaConfig> for ReplicaConfig {
         proto::ReplicaConfig {
             logging: Some(self.logging.into_proto()),
             location: Some(self.location.into_proto()),
-            idle_arrangement_merge_effort: self
-                .idle_arrangement_merge_effort
-                .map(|effort| proto::ReplicaMergeEffort { effort }),
         }
     }
 
@@ -185,7 +177,6 @@ impl RustType<proto::ReplicaConfig> for ReplicaConfig {
                 .location
                 .into_rust_if_some("ReplicaConfig::location")?,
             logging: proto.logging.into_rust_if_some("ReplicaConfig::logging")?,
-            idle_arrangement_merge_effort: proto.idle_arrangement_merge_effort.map(|e| e.effort),
         })
     }
 }
@@ -698,6 +689,58 @@ impl RustType<proto::StorageUsageKey> for StorageUsageKey {
         Ok(StorageUsageKey {
             metric: proto.usage.into_rust_if_some("StorageUsageKey::usage")?,
         })
+    }
+}
+
+impl RustType<proto::StorageCollectionMetadataKey> for StorageCollectionMetadataKey {
+    fn into_proto(&self) -> proto::StorageCollectionMetadataKey {
+        proto::StorageCollectionMetadataKey {
+            id: Some(self.id.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::StorageCollectionMetadataKey) -> Result<Self, TryFromProtoError> {
+        Ok(StorageCollectionMetadataKey {
+            id: proto
+                .id
+                .into_rust_if_some("StorageCollectionMetadataKey::id")?,
+        })
+    }
+}
+
+impl RustType<proto::StorageCollectionMetadataValue> for StorageCollectionMetadataValue {
+    fn into_proto(&self) -> proto::StorageCollectionMetadataValue {
+        proto::StorageCollectionMetadataValue {
+            shard: self.shard.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::StorageCollectionMetadataValue) -> Result<Self, TryFromProtoError> {
+        Ok(StorageCollectionMetadataValue { shard: proto.shard })
+    }
+}
+
+impl RustType<proto::UnfinalizedShardKey> for UnfinalizedShardKey {
+    fn into_proto(&self) -> proto::UnfinalizedShardKey {
+        proto::UnfinalizedShardKey {
+            shard: self.shard.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::UnfinalizedShardKey) -> Result<Self, TryFromProtoError> {
+        Ok(UnfinalizedShardKey { shard: proto.shard })
+    }
+}
+
+impl RustType<proto::PersistTxnShardValue> for PersistTxnShardValue {
+    fn into_proto(&self) -> proto::PersistTxnShardValue {
+        proto::PersistTxnShardValue {
+            shard: self.shard.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::PersistTxnShardValue) -> Result<Self, TryFromProtoError> {
+        Ok(PersistTxnShardValue { shard: proto.shard })
     }
 }
 
@@ -1992,6 +2035,26 @@ impl RustType<proto::audit_log_event_v1::UpdateItemV1> for UpdateItemV1 {
     }
 }
 
+impl RustType<proto::audit_log_event_v1::AlterRetainHistoryV1> for AlterRetainHistoryV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterRetainHistoryV1 {
+        proto::audit_log_event_v1::AlterRetainHistoryV1 {
+            id: self.id.to_string(),
+            old_history: self.old_history.clone(),
+            new_history: self.new_history.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterRetainHistoryV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterRetainHistoryV1 {
+            id: proto.id,
+            old_history: proto.old_history,
+            new_history: proto.new_history,
+        })
+    }
+}
+
 impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
     fn into_proto(&self) -> proto::audit_log_event_v1::Details {
         use proto::audit_log_event_v1::Details::*;
@@ -2028,6 +2091,9 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             EventDetails::SchemaV2(details) => SchemaV2(details.into_proto()),
             EventDetails::RenameSchemaV1(details) => RenameSchemaV1(details.into_proto()),
             EventDetails::UpdateItemV1(details) => UpdateItemV1(details.into_proto()),
+            EventDetails::AlterRetainHistoryV1(details) => {
+                AlterRetainHistoryV1(details.into_proto())
+            }
         }
     }
 
@@ -2072,6 +2138,9 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             SchemaV2(details) => Ok(EventDetails::SchemaV2(details.into_rust()?)),
             RenameSchemaV1(details) => Ok(EventDetails::RenameSchemaV1(details.into_rust()?)),
             UpdateItemV1(details) => Ok(EventDetails::UpdateItemV1(details.into_rust()?)),
+            AlterRetainHistoryV1(details) => {
+                Ok(EventDetails::AlterRetainHistoryV1(details.into_rust()?))
+            }
         }
     }
 }
@@ -2155,12 +2224,6 @@ impl RustType<proto::storage_usage_key::Usage> for VersionedStorageUsage {
                 Ok(VersionedStorageUsage::V1(usage.into_rust()?))
             }
         }
-    }
-}
-
-impl proto::Duration {
-    pub const fn from_secs(secs: u64) -> proto::Duration {
-        proto::Duration { secs, nanos: 0 }
     }
 }
 

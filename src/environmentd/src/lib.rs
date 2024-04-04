@@ -28,21 +28,21 @@ use mz_adapter::load_remote_system_parameters;
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_catalog::durable::{BootstrapArgs, CatalogError, OpenableDurableCatalogState};
+use mz_catalog::durable::{BootstrapArgs, CatalogError};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::task;
 use mz_ore::tracing::TracingHandle;
+use mz_ore::{instrument, task};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput, Var, VarInput, PERSIST_TXN_TABLES};
+use mz_sql::session::vars::{ConnectionCounter, Var, PERSIST_TXN_TABLES};
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
@@ -253,7 +253,7 @@ impl Listeners {
     /// Starts an `environmentd` server.
     ///
     /// Returns a handle to the server once it is fully booted.
-    #[mz_ore::instrument(name = "environmentd::serve", level = "info")]
+    #[instrument(name = "environmentd::serve")]
     pub async fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
         let Listeners {
             sql: (sql_listener, sql_conns),
@@ -313,15 +313,13 @@ impl Listeners {
             .persist_clients
             .open(config.controller.persist_location.clone())
             .await?;
-        let mut openable_adapter_storage: Box<dyn OpenableDurableCatalogState> = Box::new(
-            mz_catalog::durable::persist_backed_catalog_state(
-                persist_client.clone(),
-                config.environment_id.organization_id(),
-                BUILD_INFO.semver_version(),
-                Arc::clone(&config.catalog_config.metrics),
-            )
-            .await?,
-        );
+        let mut openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+            persist_client.clone(),
+            config.environment_id.organization_id(),
+            BUILD_INFO.semver_version(),
+            Arc::clone(&config.catalog_config.metrics),
+        )
+        .await?;
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
@@ -381,15 +379,14 @@ impl Listeners {
                         // implementation. Still it's easy to protect against this and worth it in
                         // case things change in the future.
                         tracing::warn!("Unable to perform upgrade test because the target implementation is uninitialized");
-                        openable_adapter_storage = Box::new(
+                        openable_adapter_storage =
                             mz_catalog::durable::persist_backed_catalog_state(
                                 persist_client,
                                 config.environment_id.organization_id(),
                                 BUILD_INFO.semver_version(),
                                 Arc::clone(&config.catalog_config.metrics),
                             )
-                            .await?,
-                        );
+                            .await?;
                         break 'leader_promotion;
                     }
                     Err(e) => {
@@ -412,15 +409,13 @@ impl Listeners {
                     ));
                 }
 
-                openable_adapter_storage = Box::new(
-                    mz_catalog::durable::persist_backed_catalog_state(
-                        persist_client,
-                        config.environment_id.organization_id(),
-                        BUILD_INFO.semver_version(),
-                        Arc::clone(&config.catalog_config.metrics),
-                    )
-                    .await?,
-                );
+                openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+                    persist_client,
+                    config.environment_id.organization_id(),
+                    BUILD_INFO.semver_version(),
+                    Arc::clone(&config.catalog_config.metrics),
+                )
+                .await?;
             } else if catalog_generation == Some(deploy_generation) {
                 tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
             } else {
@@ -428,19 +423,33 @@ impl Listeners {
             }
         }
 
+        let bootstrap_args = BootstrapArgs {
+            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
+            bootstrap_role: config.bootstrap_role,
+        };
+
         let mut adapter_storage = openable_adapter_storage
-            .open(
-                boot_ts,
-                &BootstrapArgs {
-                    default_cluster_replica_size: config
-                        .bootstrap_default_cluster_replica_size
-                        .clone(),
-                    bootstrap_role: config.bootstrap_role,
-                },
-                config.deploy_generation,
-                None,
-            )
+            .open(boot_ts, &bootstrap_args, config.deploy_generation, None)
             .await?;
+
+        // Migrate the storage metadata to the persist-backed catalog. This can
+        // be deleted in the version following this merge.
+        {
+            let stash_factory =
+                mz_stash::StashFactory::from_metrics(Arc::clone(&config.controller.stash_metrics));
+            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(
+                &config.controller.storage_stash_url,
+            )?)?;
+
+            let mut storage_stash = stash_factory
+                .open(config.controller.storage_stash_url.clone(), None, tls, None)
+                .await?;
+
+            adapter_storage
+                .migrate_storage_state_from(&mut storage_stash)
+                .await?;
+        }
+
         let persist_txn_tables_current_ld =
             get_ld_value(PERSIST_TXN_TABLES.name(), &remote_system_parameters, |x| {
                 PersistTxnTablesImpl::from_str(x).map_err(|x| x.to_string())
@@ -542,7 +551,7 @@ impl Listeners {
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
         })
-        .instrument(info_span!(parent: None, "adapter::serve"))
+        .instrument(info_span!("adapter::serve"))
         .await?;
 
         // Install an adapter client in the internal HTTP server.
@@ -687,18 +696,12 @@ impl Listeners {
 
 fn get_ld_value<V>(
     name: &str,
-    remote_system_parameters: &Option<BTreeMap<String, OwnedVarInput>>,
+    remote_system_parameters: &Option<BTreeMap<String, String>>,
     parse: impl Fn(&str) -> Result<V, String>,
 ) -> Result<Option<V>, anyhow::Error> {
     remote_system_parameters
         .as_ref()
         .and_then(|params| params.get(name))
-        .map(|value| match value.borrow() {
-            VarInput::Flat(s) => Ok(s),
-            VarInput::SqlSet([s]) => Ok(s.as_str()),
-            VarInput::SqlSet(v) => Err(anyhow!("Invalid remote value for {}: {:?}", name, v,)),
-        })
-        .transpose()?
         .map(|x| {
             parse(x).map_err(|err| anyhow!("failed to parse remote value for {}: {}", name, err))
         })

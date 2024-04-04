@@ -12,7 +12,7 @@ use std::time::Duration;
 use itertools::max;
 use mz_audit_log::{EventV1, VersionedEvent};
 use mz_controller::clusters::ReplicaLogging;
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::{is_cluster_size_v2, ClusterId, ReplicaId};
 use mz_ore::now::EpochMillis;
 use mz_pgrepr::oid::{
     FIRST_USER_OID, ROLE_PUBLIC_OID, SCHEMA_INFORMATION_SCHEMA_OID, SCHEMA_MZ_CATALOG_OID,
@@ -77,7 +77,7 @@ const DEFAULT_ALLOCATOR_ID: u64 = 1;
 
 /// Initializes the Catalog with some default objects.
 #[mz_ore::instrument]
-pub async fn initialize(
+pub(crate) async fn initialize(
     tx: &mut Transaction<'_>,
     options: &BootstrapArgs,
     initial_ts: EpochMillis,
@@ -555,7 +555,7 @@ pub async fn initialize(
             replica_name: DEFAULT_USER_REPLICA_NAME.to_string(),
             replica_id: Some(DEFAULT_USER_REPLICA_ID.to_string()),
             logical_size: options.default_cluster_replica_size.to_string(),
-            disk: false,
+            disk: is_cluster_size_v2(&options.default_cluster_replica_size),
             billed_as: None,
             internal: false,
         }),
@@ -630,8 +630,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> ClusterConfig {
                 log_logging: false,
                 interval: Some(Duration::from_secs(1)),
             },
-            idle_arrangement_merge_effort: None,
-            disk: false,
+            disk: is_cluster_size_v2(&args.default_cluster_replica_size),
             optimizer_feature_overrides: Default::default(),
             schedule: Default::default(),
         }),
@@ -644,7 +643,7 @@ fn default_replica_config(args: &BootstrapArgs) -> ReplicaConfig {
         location: ReplicaLocation::Managed {
             size: args.default_cluster_replica_size.to_string(),
             availability_zone: None,
-            disk: false,
+            disk: is_cluster_size_v2(&args.default_cluster_replica_size),
             internal: false,
             billed_as: None,
         },
@@ -652,6 +651,5 @@ fn default_replica_config(args: &BootstrapArgs) -> ReplicaConfig {
             log_logging: false,
             interval: Some(Duration::from_secs(1)),
         },
-        idle_arrangement_merge_effort: None,
     }
 }

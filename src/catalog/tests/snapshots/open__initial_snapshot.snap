@@ -988,7 +988,6 @@ Snapshot {
                                         ),
                                     },
                                 ),
-                                idle_arrangement_merge_effort: None,
                                 disk: false,
                                 optimizer_feature_overrides: [],
                                 schedule: Some(
@@ -1042,7 +1041,6 @@ Snapshot {
                             ),
                         },
                     ),
-                    idle_arrangement_merge_effort: None,
                     location: Some(
                         Managed(
                             ManagedLocation {
@@ -1291,4 +1289,7 @@ Snapshot {
             ),
         },
     },
+    storage_collection_metadata: {},
+    unfinalized_shards: {},
+    persist_txn_shard: {},
 }

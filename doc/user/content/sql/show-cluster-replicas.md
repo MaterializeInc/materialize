@@ -23,8 +23,8 @@ SHOW CLUSTER REPLICAS;
 ```nofmt
     cluster    | replica |  size  | ready |
 ---------------+---------|--------|-------|
- auction_house | bigger  | xlarge | t     |
- quickstart    | r1      | xsmall | t     |
+ auction_house | bigger  | 1600cc | t     |
+ quickstart    | r1      | 100cc  | t     |
 ```
 
 ```sql
@@ -34,7 +34,7 @@ SHOW CLUSTER REPLICAS WHERE cluster='quickstart';
 ```nofmt
     cluster    | replica |  size  | ready|
 ---------------+---------|--------|-------
- quickstart    | r1      | xsmall | t    |
+ quickstart    | r1      | 100cc  | t    |
 ```
 
 

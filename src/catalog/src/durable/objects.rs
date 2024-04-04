@@ -7,6 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! The current types used to represent catalog data stored on disk. These objects generally fall
+//! into two categories.
+//!
+//! The key-value objects are a one-to-one mapping of the protobuf objects used to save catalog
+//! data durably. They can be converted to and from protobuf via the [`mz_proto::RustType`] trait.
+//! These objects should not be exposed anywhere outside the [`crate::durable`] module.
+//!
+//! The other type of objects combine the information from keys and values into a single struct,
+//! but are still a direct representation of the data stored on disk. They can be converted to and
+//! from the key-value objects via the [`DurableType`] trait. These objects are used to pass
+//! information to other modules in this crate and other catalog related code.
+//!
+//! All non-catalog code should interact with the objects in [`crate::memory::objects`] and never
+//! directly interact with the objects in this module.
+//!
+//! As an example, [`DatabaseKey`] and [`DatabaseValue`] are key-value objects, while [`Database`]
+//! is the non-key-value counterpart.
+
 pub mod serialization;
 pub(crate) mod state_update;
 
@@ -205,7 +223,6 @@ pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
-    pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
@@ -308,7 +325,6 @@ impl DurableType<ClusterReplicaKey, ClusterReplicaValue> for ClusterReplica {
 pub struct ReplicaConfig {
     pub location: ReplicaLocation,
     pub logging: ReplicaLogging,
-    pub idle_arrangement_merge_effort: Option<u32>,
 }
 
 impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
@@ -316,7 +332,6 @@ impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
         Self {
             location: config.location.into(),
             logging: config.compute.logging,
-            idle_arrangement_merge_effort: config.compute.idle_arrangement_merge_effort,
         }
     }
 }
@@ -668,7 +683,7 @@ impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
 // Structs used internally to represent on-disk state.
 
 /// A snapshot of the current on-disk state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Snapshot {
     pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
     pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
@@ -689,62 +704,15 @@ pub struct Snapshot {
         BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
     pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+    pub storage_collection_metadata:
+        BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
+    pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
+    pub persist_txn_shard: BTreeMap<(), proto::PersistTxnShardValue>,
 }
 
 impl Snapshot {
     pub fn empty() -> Snapshot {
-        Snapshot {
-            databases: BTreeMap::new(),
-            schemas: BTreeMap::new(),
-            roles: BTreeMap::new(),
-            items: BTreeMap::new(),
-            comments: BTreeMap::new(),
-            clusters: BTreeMap::new(),
-            cluster_replicas: BTreeMap::new(),
-            introspection_sources: BTreeMap::new(),
-            id_allocator: BTreeMap::new(),
-            configs: BTreeMap::new(),
-            settings: BTreeMap::new(),
-            system_object_mappings: BTreeMap::new(),
-            system_configurations: BTreeMap::new(),
-            default_privileges: BTreeMap::new(),
-            system_privileges: BTreeMap::new(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        let Snapshot {
-            databases,
-            schemas,
-            roles,
-            items,
-            comments,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            id_allocator,
-            configs,
-            settings,
-            system_object_mappings,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-        } = self;
-        databases.is_empty()
-            && schemas.is_empty()
-            && roles.is_empty()
-            && items.is_empty()
-            && comments.is_empty()
-            && clusters.is_empty()
-            && cluster_replicas.is_empty()
-            && introspection_sources.is_empty()
-            && id_allocator.is_empty()
-            && configs.is_empty()
-            && settings.is_empty()
-            && system_object_mappings.is_empty()
-            && system_configurations.is_empty()
-            && default_privileges.is_empty()
-            && system_privileges.is_empty()
+        Snapshot::default()
     }
 }
 
@@ -930,6 +898,31 @@ pub struct AuditLogKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageUsageKey {
     pub(crate) metric: VersionedStorageUsage,
+}
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct StorageCollectionMetadataKey {
+    pub(crate) id: GlobalId,
+}
+
+/// This value is stored transparently, however, it should only ever be
+/// manipulated by the storage controller.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct StorageCollectionMetadataValue {
+    pub(crate) shard: String,
+}
+
+/// This value is stored transparently, however, it should only ever be
+/// manipulated by the storage controller.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct UnfinalizedShardKey {
+    pub(crate) shard: String,
+}
+
+/// This value is stored transparently, however, it should only ever be
+/// manipulated by the storage controller.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct PersistTxnShardValue {
+    pub(crate) shard: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

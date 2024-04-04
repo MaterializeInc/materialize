@@ -17,6 +17,7 @@ use itertools::Either;
 use maplit::btreemap;
 use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
+use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, task};
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -142,6 +143,8 @@ impl Coordinator {
                     connection_id,
                     format_params,
                     max_file_size,
+                    // This will be set in `peek_stage_validate` stage below.
+                    output_batch_count: None,
                 }),
                 explain_ctx: ExplainContext::None,
             }),
@@ -297,6 +300,12 @@ impl Coordinator {
             .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
             .override_from(&explain_ctx);
 
+        if cluster.replicas().next().is_none() {
+            return Err(AdapterError::NoClusterReplicasAvailable(
+                cluster.name.clone(),
+            ));
+        }
+
         let optimizer = match copy_to_ctx {
             None => {
                 // Collect optimizer parameters specific to the peek::Optimizer.
@@ -317,7 +326,23 @@ impl Coordinator {
                     self.optimizer_metrics(),
                 ))
             }
-            Some(copy_to_ctx) => {
+            Some(mut copy_to_ctx) => {
+                // Getting the max worker count across replicas
+                // and using that value for the number of batches to
+                // divide the copy output into.
+                let max_worker_count = match cluster
+                    .replicas()
+                    .map(|r| r.config.location.workers())
+                    .max()
+                {
+                    Some(count) => u64::cast_from(count),
+                    None => {
+                        return Err(AdapterError::NoClusterReplicasAvailable(
+                            cluster.name.clone(),
+                        ))
+                    }
+                };
+                copy_to_ctx.output_batch_count = Some(max_worker_count);
                 // Build an optimizer for this COPY TO.
                 Either::Right(optimize::copy_to::Optimizer::new(
                     Arc::clone(&catalog),
@@ -341,12 +366,6 @@ impl Coordinator {
                     })
             })
             .transpose()?;
-
-        if cluster.replicas().next().is_none() {
-            return Err(AdapterError::NoClusterReplicasAvailable(
-                cluster.name.clone(),
-            ));
-        }
 
         let source_ids = plan.source.depends_on();
         let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
@@ -942,7 +961,6 @@ impl Coordinator {
         stage: PeekStageExplainPushdown,
     ) -> Result<ExecuteResponse, AdapterError> {
         use futures::stream::TryStreamExt;
-        use mz_ore::cast::CastFrom;
 
         let as_of = stage.determination.timestamp_context.antichain();
         let mz_now = stage
@@ -1044,52 +1062,56 @@ impl Coordinator {
 
         // Fetch or generate a timestamp for this query and what the read holds would be if we need to set
         // them.
-        let (determination, potential_read_holds) =
-            match session.get_transaction_timestamp_determination() {
-                // Use the transaction's timestamp if it exists and this isn't an AS OF query.
-                Some(
-                    determination @ TimestampDetermination {
-                        timestamp_context: TimestampContext::TimelineTimestamp { .. },
-                        ..
-                    },
-                ) if in_immediate_multi_stmt_txn => (determination, None),
-                _ => {
-                    let determine_bundle = if in_immediate_multi_stmt_txn {
-                        // In a transaction, determine a timestamp that will be valid for anything in
-                        // any schema referenced by the first query.
-                        timedomain_bundle = self.timedomain_for(
-                            source_ids,
-                            &timeline_context,
-                            session.conn_id(),
-                            cluster_id,
-                        )?;
-                        &timedomain_bundle
-                    } else {
-                        // If not in a transaction, use the source.
-                        source_bundle
-                    };
-                    let determination = self
-                        .determine_timestamp(
-                            session,
-                            determine_bundle,
-                            when,
-                            cluster_id,
-                            &timeline_context,
-                            oracle_read_ts,
-                            real_time_recency_ts,
-                        )
-                        .await?;
-                    // We only need read holds if the read depends on a timestamp. We don't set the
-                    // read holds here because it makes the code a bit more clear to handle the two
-                    // cases for "is this the first statement in a transaction?" in an if/else block
-                    // below.
-                    let read_holds = determination
-                        .timestamp_context
-                        .timestamp()
-                        .map(|timestamp| (timestamp.clone(), determine_bundle));
-                    (determination, read_holds)
-                }
-            };
+        let (determination, read_holds) = match session.get_transaction_timestamp_determination() {
+            // Use the transaction's timestamp if it exists and this isn't an AS OF query.
+            Some(
+                determination @ TimestampDetermination {
+                    timestamp_context: TimestampContext::TimelineTimestamp { .. },
+                    ..
+                },
+            ) if in_immediate_multi_stmt_txn => (determination, None),
+            _ => {
+                let determine_bundle = if in_immediate_multi_stmt_txn {
+                    // In a transaction, determine a timestamp that will be valid for anything in
+                    // any schema referenced by the first query.
+                    timedomain_bundle = self.timedomain_for(
+                        source_ids,
+                        &timeline_context,
+                        session.conn_id(),
+                        cluster_id,
+                    )?;
+
+                    &timedomain_bundle
+                } else {
+                    // If not in a transaction, use the source.
+                    source_bundle
+                };
+                let (determination, read_holds) = self
+                    .determine_timestamp(
+                        session,
+                        determine_bundle,
+                        when,
+                        cluster_id,
+                        &timeline_context,
+                        oracle_read_ts,
+                        real_time_recency_ts,
+                    )
+                    .await?;
+                // We only need read holds if the read depends on a timestamp.
+                let read_holds = match determination.timestamp_context.timestamp() {
+                    Some(_ts) => Some(read_holds),
+                    None => {
+                        // We don't need the read holds and shouldn't add them
+                        // to the txn.
+                        //
+                        // TODO: Handle this within determine_timestamp.
+                        drop(read_holds);
+                        None
+                    }
+                };
+                (determination, read_holds)
+            }
+        };
 
         // Always either verify the current statement ids are within the existing
         // transaction's read hold set (timedomain), or create the read holds if this is the
@@ -1098,14 +1120,20 @@ impl Coordinator {
         // this that happen off thread, so no matter the kind of statement or transaction,
         // we must acquire read holds here so they are held until the off-thread work
         // returns to the coordinator.
+
         if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
-            // Transactions involving peeks will acquire read holds at most once.
             assert_eq!(txn_reads.len(), 1);
             let txn_reads = &txn_reads[0];
+
             // Find referenced ids not in the read hold. A reference could be caused by a
             // user specifying an object in a different schema than the first query. An
             // index could be caused by a CREATE INDEX after the transaction started.
             let allowed_id_bundle = txn_reads.id_bundle();
+
+            // We don't need the read holds that determine_timestamp acquired
+            // for us.
+            drop(read_holds);
+
             let outside = source_bundle.difference(&allowed_id_bundle);
             // Queries without a timestamp and timeline can belong to any existing timedomain.
             if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
@@ -1117,9 +1145,11 @@ impl Coordinator {
                     names: valid_names,
                 });
             }
-        } else if let Some((timestamp, bundle)) = potential_read_holds {
-            self.acquire_read_holds_auto_cleanup(session, timestamp, bundle, true)
-                .expect("able to acquire read holds at the time that we just got from `determine_timestamp`");
+        } else if let Some(read_holds) = read_holds {
+            self.txn_read_holds
+                .entry(session.conn_id().clone())
+                .or_insert_with(Vec::new)
+                .push(read_holds);
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems

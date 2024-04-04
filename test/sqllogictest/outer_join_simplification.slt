@@ -149,14 +149,16 @@ Explained Query:
             ReadStorage materialize.public.foo
           ArrangeBy keys=[[#0]]
             Union
-              Map (true)
-                ReadStorage materialize.public.bar
+              Filter (#0) IS NOT NULL
+                Map (true)
+                  ReadStorage materialize.public.bar
               Map (null, null)
                 Threshold
                   Union
                     Negate
                       Project (#0)
-                        ReadStorage materialize.public.bar
+                        Filter (#0) IS NOT NULL
+                          ReadStorage materialize.public.bar
                     Distinct project=[#0]
                       Project (#0)
                         Get l0
@@ -196,6 +198,9 @@ Explained Query:
           ReadStorage materialize.public.foo
         Constant
           - (null, null)
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
 
 EOF
 
@@ -268,7 +273,8 @@ Explained Query:
         ReadStorage materialize.public.quux
     cte l2 =
       Project (#0)
-        ReadStorage materialize.public.bar
+        Filter (#0) IS NOT NULL
+          ReadStorage materialize.public.bar
     cte l1 =
       Union
         Get l0
@@ -277,6 +283,9 @@ Explained Query:
     cte l0 =
       Project (#0, #1)
         ReadStorage materialize.public.foo
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
 
 EOF
 
@@ -844,14 +853,16 @@ Explained Query:
                 ArrangeBy keys=[[#0]]
                   Union
                     Project (#0, #2)
-                      Map (true)
-                        ReadStorage materialize.public.bar
+                      Filter (#0) IS NOT NULL
+                        Map (true)
+                          ReadStorage materialize.public.bar
                     Map (null)
                       Threshold
                         Union
                           Negate
                             Project (#0)
-                              ReadStorage materialize.public.bar
+                              Filter (#0) IS NOT NULL
+                                ReadStorage materialize.public.bar
                           Distinct project=[#0]
                             Project (#0)
                               Get l0
@@ -893,6 +904,9 @@ Explained Query:
           Get l1
         Constant
           - (null, null)
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
 
 EOF
 
@@ -968,12 +982,16 @@ Explained Query:
         ReadStorage materialize.public.quux // { arity: 2 }
     cte l1 =
       Project (#0) // { arity: 1 }
-        ReadStorage materialize.public.bar // { arity: 2 }
+        Filter (#0) IS NOT NULL // { arity: 2 }
+          ReadStorage materialize.public.bar // { arity: 2 }
     cte l0 =
       Union // { arity: 2 }
         Project (#0, #1) // { arity: 2 }
           Get l3 // { arity: 3 }
         Constant // { arity: 2 }
           - (null, null)
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
 
 EOF

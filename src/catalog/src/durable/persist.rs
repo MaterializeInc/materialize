@@ -124,7 +124,7 @@ pub(crate) enum Mode {
 
 /// Enum representing a potentially fenced epoch.
 #[derive(Debug)]
-pub enum FenceableEpoch {
+pub(crate) enum FenceableEpoch {
     /// The current epoch, if one exists, has not been fenced.
     Unfenced(Option<Epoch>),
     /// The current epoch has been fenced.
@@ -185,7 +185,7 @@ impl FenceableEpoch {
     }
 }
 
-pub trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
+pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
     /// Process and apply `update`.
     ///
     /// Returns `Some` if `update` should be cached in memory and `None` otherwise.
@@ -199,7 +199,7 @@ pub trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
 
 /// A handle for interacting with the persist catalog shard.
 #[derive(Debug)]
-pub struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
+pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
@@ -516,14 +516,13 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
             let value = value.clone();
             if diff == 1 {
                 let prev = map.insert(key, value);
-                soft_assert_eq_or_log!(
-                    prev,
-                    None,
+                assert_eq!(
+                    prev, None,
                     "values must be explicitly retracted before inserting a new value"
                 );
             } else if diff == -1 {
                 let prev = map.remove(&key);
-                soft_assert_eq_or_log!(
+                assert_eq!(
                     prev,
                     Some(value),
                     "retraction does not match existing value"
@@ -594,6 +593,15 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::SystemPrivilege(key, value) => {
                         apply(&mut snapshot.system_privileges, key, value, diff);
                     }
+                    StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                        apply(&mut snapshot.storage_collection_metadata, key, value, diff);
+                    }
+                    StateUpdateKind::UnfinalizedShard(key, ()) => {
+                        apply(&mut snapshot.unfinalized_shards, key, &(), diff);
+                    }
+                    StateUpdateKind::PersistTxnShard((), value) => {
+                        apply(&mut snapshot.persist_txn_shard, &(), value, diff);
+                    }
                 }
             }
             f(snapshot)
@@ -622,7 +630,7 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
 }
 
 #[derive(Debug)]
-pub struct UnopenedCatalogStateInner {
+pub(crate) struct UnopenedCatalogStateInner {
     /// The organization ID of the environment.
     organization_id: Uuid,
     /// A cache of the config collection of the catalog.
@@ -651,15 +659,14 @@ impl ApplyUpdate<StateUpdateKindRaw> for UnopenedCatalogStateInner {
             match (kind, update.diff) {
                 (StateUpdateKind::Config(key, value), 1) => {
                     let prev = self.configs.insert(key.key, value.value);
-                    soft_assert_eq_or_log!(
-                        prev,
-                        None,
+                    assert_eq!(
+                        prev, None,
                         "values must be explicitly retracted before inserting a new value"
                     );
                 }
                 (StateUpdateKind::Config(key, value), -1) => {
                     let prev = self.configs.remove(&key.key);
-                    soft_assert_eq_or_log!(
+                    assert_eq!(
                         prev,
                         Some(value.value),
                         "retraction does not match existing value"
@@ -684,7 +691,8 @@ impl ApplyUpdate<StateUpdateKindRaw> for UnopenedCatalogStateInner {
 ///
 /// Production users should call [`Self::expire`] before dropping a [`UnopenedPersistCatalogState`]
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
-pub type UnopenedPersistCatalogState = PersistHandle<StateUpdateKindRaw, UnopenedCatalogStateInner>;
+pub(crate) type UnopenedPersistCatalogState =
+    PersistHandle<StateUpdateKindRaw, UnopenedCatalogStateInner>;
 
 impl UnopenedPersistCatalogState {
     /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with
@@ -1119,7 +1127,7 @@ impl<T: Ord> LargeCollectionStartupCache<T> {
 }
 
 #[derive(Debug)]
-pub struct CatalogStateInner {
+struct CatalogStateInner {
     /// The [`Mode`] that this catalog was opened in.
     mode: Mode,
     /// A cache of audit logs that is only populated during startup.
@@ -1175,7 +1183,7 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
 }
 
 /// A durable store of the catalog state using Persist as an implementation.
-pub type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
+type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 
 #[async_trait]
 impl ReadOnlyDurableCatalogState for PersistCatalogState {
@@ -1554,6 +1562,16 @@ impl Trace {
                 }
                 StateUpdateKind::SystemPrivilege(k, v) => {
                     trace.system_privileges.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::StorageCollectionMetadata(k, v) => trace
+                    .storage_collection_metadata
+                    .values
+                    .push(((k, v), ts, diff)),
+                StateUpdateKind::UnfinalizedShard(k, ()) => {
+                    trace.unfinalized_shards.values.push(((k, ()), ts, diff))
+                }
+                StateUpdateKind::PersistTxnShard((), v) => {
+                    trace.persist_txn_shard.values.push((((), v), ts, diff))
                 }
             }
         }

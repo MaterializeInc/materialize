@@ -70,6 +70,9 @@ pub enum CollectionType {
     SystemConfiguration,
     SystemGidMapping,
     SystemPrivileges,
+    StorageCollectionMetadata,
+    UnfinalizedShard,
+    PersistTxnShard,
 }
 
 derive_display_from_serialize!(CollectionType);
@@ -252,6 +255,31 @@ collection_impl!({
     update: StateUpdateKind::SystemPrivilege,
 });
 
+collection_impl!({
+    name: StorageCollectionMetadataCollection,
+    key: proto::StorageCollectionMetadataKey,
+    value: proto::StorageCollectionMetadataValue,
+    collection_type: CollectionType::StorageCollectionMetadata,
+    trace_field: storage_collection_metadata,
+    update: StateUpdateKind::StorageCollectionMetadata,
+});
+collection_impl!({
+    name: UnfinalizedShardsCollection,
+    key: proto::UnfinalizedShardKey,
+    value: (),
+    collection_type: CollectionType::UnfinalizedShard,
+    trace_field: unfinalized_shards,
+    update: StateUpdateKind::UnfinalizedShard,
+});
+collection_impl!({
+    name: PersistTxnShardCollection,
+    key: (),
+    value: proto::PersistTxnShardValue,
+    collection_type: CollectionType::PersistTxnShard,
+    trace_field: persist_txn_shard,
+    update: StateUpdateKind::PersistTxnShard,
+});
+
 /// A trace of timestamped diffs for a particular [`Collection`].
 ///
 /// The timestamps are represented as strings since different implementations use non-compatible
@@ -287,6 +315,9 @@ pub struct Trace {
     pub system_object_mappings: CollectionTrace<SystemItemMappingCollection>,
     pub system_configurations: CollectionTrace<SystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
+    pub storage_collection_metadata: CollectionTrace<StorageCollectionMetadataCollection>,
+    pub unfinalized_shards: CollectionTrace<UnfinalizedShardsCollection>,
+    pub persist_txn_shard: CollectionTrace<PersistTxnShardCollection>,
 }
 
 impl Trace {
@@ -309,6 +340,9 @@ impl Trace {
             system_object_mappings: CollectionTrace::new(),
             system_configurations: CollectionTrace::new(),
             system_privileges: CollectionTrace::new(),
+            storage_collection_metadata: CollectionTrace::new(),
+            unfinalized_shards: CollectionTrace::new(),
+            persist_txn_shard: CollectionTrace::new(),
         }
     }
 }

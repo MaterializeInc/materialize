@@ -85,7 +85,8 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestampTz {
         &self,
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-        let out = CheckedTimestamp::try_from(DateTime::<Utc>::from_utc(a.into(), Utc))?;
+        let out =
+            CheckedTimestamp::try_from(DateTime::<Utc>::from_naive_utc_and_offset(a.into(), Utc))?;
         let updated = out.round_to_precision(self.to)?;
         Ok(updated)
     }
@@ -626,7 +627,9 @@ pub fn timezone_timestamp(
             Some(offset) => offset.fix(),
             None => {
                 let dt = dt
-                    .checked_add_signed(Duration::hours(1))
+                    .checked_add_signed(
+                        Duration::try_hours(1).ok_or(EvalError::TimestampOutOfRange)?,
+                    )
                     .ok_or(EvalError::TimestampOutOfRange)?;
                 tz.offset_from_local_datetime(&dt)
                     .latest()
@@ -635,7 +638,9 @@ pub fn timezone_timestamp(
             }
         },
     };
-    DateTime::from_utc(dt - offset, Utc).try_into().err_into()
+    DateTime::from_naive_utc_and_offset(dt - offset, Utc)
+        .try_into()
+        .err_into()
 }
 
 /// Converts the UTC timestamptz `utc` to the local timestamp of the timezone `tz`.
@@ -654,8 +659,11 @@ fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option
     let nanos = lhs.nanosecond();
     let lhs = lhs.with_nanosecond(0).unwrap();
     let rhs = rhs.local_minus_utc();
-    lhs.checked_add_signed(chrono::Duration::seconds(i64::from(rhs)))
-        .map(|dt| dt.with_nanosecond(nanos).unwrap())
+    lhs.checked_add_signed(match chrono::Duration::try_seconds(i64::from(rhs)) {
+        Some(dur) => dur,
+        None => return None,
+    })
+    .map(|dt| dt.with_nanosecond(nanos).unwrap())
 }
 
 #[derive(

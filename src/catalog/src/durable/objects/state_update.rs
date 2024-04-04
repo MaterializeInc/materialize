@@ -9,20 +9,22 @@
 
 use std::fmt::Debug;
 
-use crate::durable::debug::CollectionType;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::Diff;
 use mz_storage_types::sources::SourceData;
 use proptest_derive::Arbitrary;
 
+use crate::durable::debug::CollectionType;
 use crate::durable::objects::serialization::proto;
+use crate::durable::objects::DurableType;
 use crate::durable::persist::Timestamp;
 use crate::durable::transaction::TransactionBatch;
-use crate::durable::Epoch;
+use crate::durable::{DurableCatalogError, Epoch};
+use crate::memory;
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKindRaw`].
-pub trait IntoStateUpdateKindRaw:
+pub(crate) trait IntoStateUpdateKindRaw:
     Into<StateUpdateKindRaw> + PartialEq + Eq + PartialOrd + Ord + Debug + Clone
 {
     type Error: Debug;
@@ -50,7 +52,7 @@ where
 }
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKind`].
-pub trait TryIntoStateUpdateKind: IntoStateUpdateKindRaw {
+pub(crate) trait TryIntoStateUpdateKind: IntoStateUpdateKindRaw {
     type Error: Debug;
 
     fn try_into(self) -> Result<StateUpdateKind, <Self as TryIntoStateUpdateKind>::Error>;
@@ -68,7 +70,7 @@ where
 
 /// A single update to the catalog state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdate<T: IntoStateUpdateKindRaw = StateUpdateKind> {
+pub(crate) struct StateUpdate<T: IntoStateUpdateKindRaw = StateUpdateKind> {
     /// They kind and contents of the state update.
     pub(crate) kind: T,
     /// The timestamp at which the update occurred.
@@ -114,6 +116,9 @@ impl StateUpdate {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_collection_metadata,
+            unfinalized_shards,
+            persist_txn_shard,
             audit_log_updates,
             storage_usage_updates,
         } = txn_batch;
@@ -137,6 +142,12 @@ impl StateUpdate {
             from_batch(system_configurations, StateUpdateKind::SystemConfiguration);
         let default_privileges = from_batch(default_privileges, StateUpdateKind::DefaultPrivilege);
         let system_privileges = from_batch(system_privileges, StateUpdateKind::SystemPrivilege);
+        let storage_collection_metadata = from_batch(
+            storage_collection_metadata,
+            StateUpdateKind::StorageCollectionMetadata,
+        );
+        let unfinalized_shards = from_batch(unfinalized_shards, StateUpdateKind::UnfinalizedShard);
+        let persist_txn_shard = from_batch(persist_txn_shard, StateUpdateKind::PersistTxnShard);
         let audit_logs = from_batch(audit_log_updates, StateUpdateKind::AuditLog);
         let storage_usage_updates =
             from_batch(storage_usage_updates, StateUpdateKind::StorageUsage);
@@ -156,6 +167,9 @@ impl StateUpdate {
             .chain(system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
+            .chain(storage_collection_metadata)
+            .chain(unfinalized_shards)
+            .chain(persist_txn_shard)
             .chain(audit_logs)
             .chain(storage_usage_updates)
     }
@@ -202,6 +216,18 @@ impl TryFrom<StateUpdate<StateUpdateKindRaw>> for StateUpdate<StateUpdateKind> {
     }
 }
 
+impl TryFrom<StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
+    type Error = DurableCatalogError;
+
+    fn try_from(
+        StateUpdate { kind, ts: _, diff }: StateUpdate<StateUpdateKind>,
+    ) -> Result<Self, Self::Error> {
+        let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
+        let update = kind.map(|kind| memory::objects::StateUpdate { kind, diff });
+        Ok(update)
+    }
+}
+
 /// The contents of a single state update.
 ///
 /// The entire catalog is serialized as bytes and saved in a single persist shard. We use this
@@ -232,6 +258,12 @@ pub enum StateUpdateKind {
     ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
+    StorageCollectionMetadata(
+        proto::StorageCollectionMetadataKey,
+        proto::StorageCollectionMetadataValue,
+    ),
+    UnfinalizedShard(proto::UnfinalizedShardKey, ()),
+    PersistTxnShard((), proto::PersistTxnShardValue),
 }
 
 impl StateUpdateKind {
@@ -257,6 +289,11 @@ impl StateUpdateKind {
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
+            StateUpdateKind::StorageCollectionMetadata(_, _) => {
+                Some(CollectionType::StorageCollectionMetadata)
+            }
+            StateUpdateKind::UnfinalizedShard(_, _) => Some(CollectionType::UnfinalizedShard),
+            StateUpdateKind::PersistTxnShard(_, _) => Some(CollectionType::PersistTxnShard),
         }
     }
 }
@@ -380,6 +417,28 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     proto::state_update_kind::Kind::SystemPrivileges(
                         proto::state_update_kind::SystemPrivileges {
                             key: Some(key.clone()),
+                            value: Some(value.clone()),
+                        },
+                    )
+                }
+                StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                    proto::state_update_kind::Kind::StorageCollectionMetadata(
+                        proto::state_update_kind::StorageCollectionMetadata {
+                            key: Some(key.clone()),
+                            value: Some(value.clone()),
+                        },
+                    )
+                }
+                StateUpdateKind::UnfinalizedShard(key, ()) => {
+                    proto::state_update_kind::Kind::UnfinalizedShard(
+                        proto::state_update_kind::UnfinalizedShard {
+                            key: Some(key.clone()),
+                        },
+                    )
+                }
+                StateUpdateKind::PersistTxnShard((), value) => {
+                    proto::state_update_kind::Kind::PersistTxnShard(
+                        proto::state_update_kind::PersistTxnShard {
                             value: Some(value.clone()),
                         },
                     )
@@ -588,6 +647,40 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         )
                     })?,
                 ),
+                proto::state_update_kind::Kind::StorageCollectionMetadata(
+                    proto::state_update_kind::StorageCollectionMetadata { key, value },
+                ) => StateUpdateKind::StorageCollectionMetadata(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::StorageCollectionMetadata::key",
+                        )
+                    })?,
+                    value.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::StorageCollectionMetadata::value",
+                        )
+                    })?,
+                ),
+                proto::state_update_kind::Kind::UnfinalizedShard(
+                    proto::state_update_kind::UnfinalizedShard { key },
+                ) => StateUpdateKind::UnfinalizedShard(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::StorageCollectionMetadata::key",
+                        )
+                    })?,
+                    (),
+                ),
+                proto::state_update_kind::Kind::PersistTxnShard(
+                    proto::state_update_kind::PersistTxnShard { value },
+                ) => StateUpdateKind::PersistTxnShard(
+                    (),
+                    value.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::PersistTxnShard::value",
+                        )
+                    })?,
+                ),
             },
         )
     }
@@ -595,7 +688,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
 
 /// Version of [`StateUpdateKind`] to allow reading/writing raw json from/to persist.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdateKindRaw(Jsonb);
+pub(crate) struct StateUpdateKindRaw(Jsonb);
 
 impl From<StateUpdateKind> for StateUpdateKindRaw {
     fn from(value: StateUpdateKind) -> Self {
@@ -631,22 +724,91 @@ impl From<SourceData> for StateUpdateKindRaw {
 }
 
 impl StateUpdateKindRaw {
-    pub fn from_serde<S: serde::Serialize>(s: &S) -> Self {
+    pub(crate) fn from_serde<S: serde::Serialize>(s: &S) -> Self {
         let serde_value = serde_json::to_value(s).expect("valid json");
         let row =
             Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
         StateUpdateKindRaw(row)
     }
 
-    pub fn to_serde<D: serde::de::DeserializeOwned>(&self) -> D {
+    pub(crate) fn to_serde<D: serde::de::DeserializeOwned>(&self) -> D {
         self.try_to_serde().expect("jsonb should roundtrip")
     }
 
-    pub fn try_to_serde<D: serde::de::DeserializeOwned>(
+    pub(crate) fn try_to_serde<D: serde::de::DeserializeOwned>(
         &self,
     ) -> Result<D, serde_json::error::Error> {
         let serde_value = self.0.as_ref().to_serde_json();
         serde_json::from_value::<D>(serde_value)
+    }
+}
+
+impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
+    type Error = DurableCatalogError;
+
+    fn try_from(kind: StateUpdateKind) -> Result<Self, Self::Error> {
+        fn into_durable<PK, PV, K, V, T>(key: PK, value: PV) -> Result<T, DurableCatalogError>
+        where
+            PK: ProtoType<K>,
+            PV: ProtoType<V>,
+            T: DurableType<K, V>,
+        {
+            let key = key.into_rust()?;
+            let value = value.into_rust()?;
+            Ok(T::from_key_value(key, value))
+        }
+
+        Ok(match kind {
+            StateUpdateKind::Comment(key, value) => {
+                let comment = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Comment(comment))
+            }
+            StateUpdateKind::Database(key, value) => {
+                let database = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Database(database))
+            }
+            StateUpdateKind::DefaultPrivilege(key, value) => {
+                let default_privilege = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::DefaultPrivilege(
+                    default_privilege,
+                ))
+            }
+            StateUpdateKind::Role(key, value) => {
+                let role = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Role(role))
+            }
+            StateUpdateKind::Schema(key, value) => {
+                let schema = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Schema(schema))
+            }
+            StateUpdateKind::SystemConfiguration(key, value) => {
+                let system_configuration = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SystemConfiguration(
+                    system_configuration,
+                ))
+            }
+            StateUpdateKind::SystemPrivilege(key, value) => {
+                let system_privilege = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SystemPrivilege(
+                    system_privilege,
+                ))
+            }
+            // TODO(jkosh44) Add conversions for valid variants.
+            StateUpdateKind::AuditLog(_, _)
+            | StateUpdateKind::Cluster(_, _)
+            | StateUpdateKind::ClusterReplica(_, _)
+            | StateUpdateKind::Config(_, _)
+            | StateUpdateKind::Epoch(_)
+            | StateUpdateKind::IdAllocator(_, _)
+            | StateUpdateKind::IntrospectionSourceIndex(_, _)
+            | StateUpdateKind::Item(_, _)
+            | StateUpdateKind::Setting(_, _)
+            | StateUpdateKind::StorageUsage(_, _)
+            | StateUpdateKind::SystemObjectMapping(_, _)
+            | StateUpdateKind::StorageCollectionMetadata(_, _)
+            | StateUpdateKind::UnfinalizedShard(_, _)
+            | StateUpdateKind::PersistTxnShard(_, _) => None,
+        })
     }
 }
 

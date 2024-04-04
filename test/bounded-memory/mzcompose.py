@@ -11,10 +11,12 @@ from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
 
+from materialize.buildkite import accepted_by_shard
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -36,10 +38,12 @@ SERVICES = [
         default_timeout="3600s",
         entrypoint_extra=[
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         ],
     ),
     Redpanda(),
     Postgres(),
+    MySql(),
     Clusterd(),
 ]
 
@@ -80,6 +84,51 @@ class PgCdcScenario(Scenario):
         > CREATE SOURCE mz_source
           IN CLUSTER single_replica_cluster
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+          FOR ALL TABLES;
+
+        > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
+        """
+    )
+
+
+class MySqlCdcScenario(Scenario):
+    MYSQL_SETUP = dedent(
+        f"""
+        > CREATE SECRET mysqlpass AS '${{arg.mysql-root-password}}'
+        > CREATE CONNECTION mysql_conn TO MYSQL (
+            HOST mysql,
+            USER root,
+            PASSWORD SECRET mysqlpass
+          )
+
+        $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+
+        $ mysql-execute name=mysql
+        # needed for MySQL 5.7
+        SET GLOBAL max_allowed_packet=67108864;
+
+        # reconnect
+        $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+
+        $ mysql-execute name=mysql
+        DROP DATABASE IF EXISTS public;
+        CREATE DATABASE public;
+        USE public;
+
+        SET @i:=0;
+        CREATE TABLE series_helper (i INT);
+        INSERT INTO series_helper (i) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {REPEAT};
+
+        CREATE TABLE t1 (f1 SERIAL PRIMARY KEY, f2 INTEGER DEFAULT 0, f3 TEXT);
+        """
+    )
+    MZ_SETUP = dedent(
+        """
+        > DROP CLUSTER IF EXISTS single_replica_cluster;
+        > CREATE CLUSTER single_replica_cluster SIZE '${arg.default-storage-size}';
+        > CREATE SOURCE mz_source
+          IN CLUSTER single_replica_cluster
+          FROM MYSQL CONNECTION mysql_conn
           FOR ALL TABLES;
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
@@ -225,6 +274,144 @@ SCENARIOS = [
             0
             """
         ),
+    ),
+    PgCdcScenario(
+        name="pg-cdc-large-tx",
+        pre_restart=PgCdcScenario.PG_SETUP
+        + PgCdcScenario.MZ_SETUP
+        + "$ postgres-execute connection=postgres://postgres:postgres@postgres\n"
+        + "BEGIN;\n"
+        + "\n".join(
+            [
+                dedent(
+                    f"""
+                    INSERT INTO t1 (f3) SELECT '{i}' || REPEAT('a', {PAD_LEN}) FROM generate_series(1, {int(REPEAT / 16)});
+                    """
+                )
+                for i in range(0, ITERATIONS * 20)
+            ]
+        )
+        + "COMMIT;\n"
+        + dedent(
+            f"""
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+            {int(ITERATIONS * 20 * REPEAT / 16)}
+            """
+        ),
+        post_restart=dedent(
+            f"""
+            # We do not do DELETE post-restart, as it will cause OOM for clusterd
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
+            {int(ITERATIONS * 20 * REPEAT / 16)}
+            """
+        ),
+        materialized_memory="4.5Gb",
+    ),
+    MySqlCdcScenario(
+        name="mysql-cdc-snapshot",
+        pre_restart=MySqlCdcScenario.MYSQL_SETUP
+        + "$ mysql-execute name=mysql\n"
+        + "\n".join(
+            [
+                dedent(
+                    f"""
+                    INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper;
+                    """
+                )
+                for i in range(0, ITERATIONS)
+            ]
+        )
+        + MySqlCdcScenario.MZ_SETUP
+        + dedent(
+            f"""
+            > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
+            {ITERATIONS * REPEAT}
+            """
+        ),
+        post_restart=dedent(
+            f"""
+            # We do not do DELETE post-restart, as it will cause OOM for clusterd
+            > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
+            {ITERATIONS * REPEAT}
+            """
+        ),
+        clusterd_memory="3.6Gb",
+    ),
+    MySqlCdcScenario(
+        name="mysql-cdc-update",
+        pre_restart=MySqlCdcScenario.MYSQL_SETUP
+        + dedent(
+            f"""
+            $ mysql-execute name=mysql
+            INSERT INTO t1 (f3) VALUES ('START');
+            INSERT INTO t1 (f3) SELECT REPEAT('a', {PAD_LEN}) FROM series_helper;
+            """
+        )
+        + MySqlCdcScenario.MZ_SETUP
+        + "\n".join(
+            [
+                dedent(
+                    """
+                    $ mysql-execute name=mysql
+                    UPDATE t1 SET f2 = f2 + 1;
+                    """
+                )
+                for letter in ascii_lowercase[:ITERATIONS]
+            ]
+        )
+        + dedent(
+            f"""
+            $ mysql-execute name=mysql
+            INSERT INTO t1 (f3) VALUES ('END');
+
+            > SELECT * FROM v1 /* expect: {REPEAT + 2} */;
+            {REPEAT + 2}
+            """
+        ),
+        post_restart=dedent(
+            """
+            $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
+            $ mysql-execute name=mysql
+            USE public;
+            DELETE FROM t1;
+
+            > SELECT * FROM v1;
+            0
+            """
+        ),
+    ),
+    MySqlCdcScenario(
+        name="mysql-cdc-large-tx",
+        pre_restart=MySqlCdcScenario.MYSQL_SETUP
+        + MySqlCdcScenario.MZ_SETUP
+        + "$ mysql-execute name=mysql\n"
+        + "SET AUTOCOMMIT = FALSE;\n"
+        + "\n".join(
+            [
+                dedent(
+                    f"""
+                    INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper LIMIT {int(REPEAT / 24)};
+                    """
+                )
+                for i in range(0, ITERATIONS * 20)
+            ]
+        )
+        + "COMMIT;\n"
+        + dedent(
+            f"""
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20) * int(REPEAT / 24)} */
+            {int(ITERATIONS * 20) * int(REPEAT / 24)}
+            """
+        ),
+        post_restart=dedent(
+            f"""
+            # We do not do DELETE post-restart, as it will cause OOM for clusterd
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20) * int(REPEAT / 24)} */
+            {int(ITERATIONS * 20) * int(REPEAT / 24)}
+            """
+        ),
+        clusterd_memory="8.0Gb",
+        disabled=True,
     ),
     KafkaScenario(
         name="upsert-snapshot",
@@ -607,7 +794,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "scenarios", nargs="*", default=None, help="run specified Scenarios"
     )
     parser.add_argument("--find-minimal-memory", action="store_true")
-    parser.add_argument("--memory-search-step", default=0.2, type=float)
+    parser.add_argument("--materialized-memory-search-step", default=0.2, type=float)
+    parser.add_argument("--clusterd-memory-search-step", default=0.2, type=float)
     args = parser.parse_args()
 
     for scenario in SCENARIOS:
@@ -621,11 +809,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if scenario.disabled:
             print(f"+++ Scenario {scenario.name} is disabled, skipping.")
             continue
+        if not accepted_by_shard(scenario.name):
+            continue
         else:
             print(f"+++ Running scenario {scenario.name} ...")
 
         if args.find_minimal_memory:
-            run_memory_search(c, scenario, args.memory_search_step)
+            run_memory_search(
+                c,
+                scenario,
+                args.materialized_memory_search_step,
+                args.clusterd_memory_search_step,
+            )
         else:
             run_scenario(
                 c,
@@ -644,7 +839,7 @@ def run_scenario(
         Materialized(memory=materialized_memory),
         Clusterd(memory=clusterd_memory),
     ):
-        c.up("redpanda", "materialized", "postgres", "clusterd")
+        c.up("redpanda", "materialized", "postgres", "mysql", "clusterd")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -663,14 +858,16 @@ def run_scenario(
         """
         )
 
+        testdrive_timeout_arg = "--default-timeout=5m"
+
         c.up("testdrive", persistent=True)
-        c.testdrive(scenario.pre_restart)
+        c.testdrive(scenario.pre_restart, args=[testdrive_timeout_arg])
 
         # Restart Mz to confirm that re-hydration is also bounded memory
         c.kill("materialized", "clusterd")
         c.up("materialized", "clusterd")
 
-        c.testdrive(scenario.post_restart)
+        c.testdrive(scenario.post_restart, args=[testdrive_timeout_arg])
 
 
 def try_run_scenario(
@@ -684,30 +881,35 @@ def try_run_scenario(
 
 
 def run_memory_search(
-    c: Composition, scenario: Scenario, memory_search_step_in_gb: float
+    c: Composition,
+    scenario: Scenario,
+    materialized_search_step_in_gb: float,
+    clusterd_search_step_in_gb: float,
 ) -> None:
-    assert memory_search_step_in_gb > 0
+    assert materialized_search_step_in_gb > 0 or clusterd_search_step_in_gb > 0
     materialized_memory = scenario.materialized_memory
     clusterd_memory = scenario.clusterd_memory
 
     print(f"Starting memory search for scenario {scenario.name}")
 
-    materialized_memory, clusterd_memory = find_minimal_memory(
-        c,
-        scenario,
-        materialized_memory=materialized_memory,
-        clusterd_memory=clusterd_memory,
-        reduce_materialized_memory_by_gb=memory_search_step_in_gb,
-        reduce_clusterd_memory_by_gb=0,
-    )
-    materialized_memory, clusterd_memory = find_minimal_memory(
-        c,
-        scenario,
-        materialized_memory=materialized_memory,
-        clusterd_memory=clusterd_memory,
-        reduce_materialized_memory_by_gb=0,
-        reduce_clusterd_memory_by_gb=memory_search_step_in_gb,
-    )
+    if materialized_search_step_in_gb > 0:
+        materialized_memory, clusterd_memory = find_minimal_memory(
+            c,
+            scenario,
+            initial_materialized_memory=materialized_memory,
+            initial_clusterd_memory=clusterd_memory,
+            reduce_materialized_memory_by_gb=materialized_search_step_in_gb,
+            reduce_clusterd_memory_by_gb=0,
+        )
+    if clusterd_search_step_in_gb > 0:
+        materialized_memory, clusterd_memory = find_minimal_memory(
+            c,
+            scenario,
+            initial_materialized_memory=materialized_memory,
+            initial_clusterd_memory=clusterd_memory,
+            reduce_materialized_memory_by_gb=0,
+            reduce_clusterd_memory_by_gb=clusterd_search_step_in_gb,
+        )
 
     print(f"Found minimal memory for scenario {scenario.name}:")
     print(
@@ -722,12 +924,17 @@ def run_memory_search(
 def find_minimal_memory(
     c: Composition,
     scenario: Scenario,
-    materialized_memory: str,
-    clusterd_memory: str,
+    initial_materialized_memory: str,
+    initial_clusterd_memory: str,
     reduce_materialized_memory_by_gb: float,
     reduce_clusterd_memory_by_gb: float,
 ) -> tuple[str, str]:
     assert reduce_materialized_memory_by_gb > 0 or reduce_clusterd_memory_by_gb > 0
+
+    materialized_memory = initial_materialized_memory
+    clusterd_memory = initial_clusterd_memory
+    materialized_memory_steps = [materialized_memory]
+    clusterd_memory_steps = [clusterd_memory]
 
     while True:
         new_materialized_memory = _reduce_memory(
@@ -755,9 +962,58 @@ def find_minimal_memory(
             print(f"Scenario {scenario_desc} succeeded.")
             materialized_memory = new_materialized_memory
             clusterd_memory = new_clusterd_memory
+            materialized_memory_steps.append(new_materialized_memory)
+            clusterd_memory_steps.append(new_clusterd_memory)
         else:
             print(f"Scenario {scenario_desc} failed.")
             break
+
+    if (
+        materialized_memory != initial_materialized_memory
+        or clusterd_memory != initial_clusterd_memory
+    ):
+        print(f"Validating again the memory configuration for {scenario.name}")
+        materialized_memory, clusterd_memory = _validate_new_memory_configuration(
+            c,
+            scenario,
+            materialized_memory,
+            clusterd_memory,
+            materialized_memory_steps,
+            clusterd_memory_steps,
+        )
+
+    return materialized_memory, clusterd_memory
+
+
+def _validate_new_memory_configuration(
+    c: Composition,
+    scenario: Scenario,
+    materialized_memory: str,
+    clusterd_memory: str,
+    materialized_memory_steps: list[str],
+    clusterd_memory_steps: list[str],
+) -> tuple[str, str]:
+    success = try_run_scenario(
+        c,
+        scenario,
+        materialized_memory=materialized_memory,
+        clusterd_memory=clusterd_memory,
+    )
+
+    scenario_desc = f"{scenario.name} with materialized_memory={materialized_memory} and clusterd_memory={clusterd_memory}"
+
+    if success:
+        print(f"Successfully validated {scenario_desc}")
+    else:
+        print(f"Validation of {scenario_desc} failed")
+
+        assert len(materialized_memory_steps) > 1 and len(clusterd_memory_steps) > 1
+        materialized_memory = materialized_memory_steps[-2]
+        clusterd_memory = clusterd_memory_steps[-2]
+
+        print(
+            f"Going back one step to materialized_memory={materialized_memory} and clusterd_memory={clusterd_memory}"
+        )
 
     return materialized_memory, clusterd_memory
 

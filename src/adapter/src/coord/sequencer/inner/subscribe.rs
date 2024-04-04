@@ -236,7 +236,7 @@ impl Coordinator {
         // Timestamp selection
         let oracle_read_ts = self.oracle_read_ts(ctx.session(), &timeline, when).await;
         let bundle = &global_mir_plan.id_bundle(optimizer.cluster_id());
-        let as_of = self
+        let (determination, read_holds) = self
             .determine_timestamp(
                 ctx.session(),
                 bundle,
@@ -246,9 +246,10 @@ impl Coordinator {
                 oracle_read_ts,
                 None,
             )
-            .await?
-            .timestamp_context
-            .timestamp_or_default();
+            .await?;
+
+        let as_of = determination.timestamp_context.timestamp_or_default();
+
         if let Some(id) = ctx.extra().contents() {
             self.set_statement_execution_timestamp(id, as_of);
         }
@@ -260,11 +261,14 @@ impl Coordinator {
                 return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
             }
         }
-        // Get read holds so that dependencies cannot be dropped during off-thread optimization.
+        // Store read holds so that dependencies cannot be dropped during off-thread optimization.
         // Invariant: the last element in this connection's self.txn_read_holds must be the holds
         // here, because the last that same element will be removed during the finish stage.
-        self.acquire_read_holds_auto_cleanup(ctx.session(), as_of, bundle, true)
-            .expect("able to acquire read holds at the time that we just got from `determine_timestamp`");
+        self.txn_read_holds
+            .entry(ctx.session().conn_id().clone())
+            .or_insert_with(Vec::new)
+            .push(read_holds);
+
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
         // Optimize LIR
@@ -345,7 +349,10 @@ impl Coordinator {
             .remove(ctx.session().conn_id())
             .expect("expected read holds to exist for sequenced SUBSCRIBE");
         let last = txn_reads.pop().expect("expected read hold to exist");
-        self.release_read_holds(vec![last]);
+
+        // Explicitly drop read holds, just to make it obvious what's happening.
+        drop(last);
+
         if !txn_reads.is_empty() {
             self.txn_read_holds
                 .insert(ctx.session().conn_id().clone(), txn_reads);

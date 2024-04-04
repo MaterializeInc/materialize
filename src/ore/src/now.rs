@@ -142,7 +142,7 @@ mod tests {
             assert_eq!(datetime, converted_datetime);
             assert_eq!(
                 millis,
-                u64::try_from(converted_datetime.timestamp_millis()).unwrap()
+                u64::try_from(converted_datetime.and_utc().timestamp_millis()).unwrap()
             )
         }
     }

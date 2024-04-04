@@ -29,6 +29,7 @@ use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use timely::progress::Antichain;
+use timely::progress::Timestamp;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -46,6 +47,7 @@ use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::util::ResultExt;
+use crate::ReadHolds;
 use crate::{catalog, AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider};
 
 impl Staged for CreateMaterializedViewStage {
@@ -170,7 +172,7 @@ impl Coordinator {
         };
 
         let state = self.catalog().state();
-        let plan_result = state.deserialize_plan(id, item.create_sql.clone(), true);
+        let plan_result = state.deserialize_plan(id, &item.create_sql, true);
         let (plan, resolved_ids) = return_if_err!(plan_result, ctx);
 
         let plan::Plan::CreateMaterializedView(plan) = plan else {
@@ -530,7 +532,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
-        let (dataflow_as_of, storage_as_of, until) =
+        let (read_holds, dataflow_as_of, storage_as_of, until) =
             self.select_timestamps(id_bundle, refresh_schedule.as_ref())?;
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
@@ -611,11 +613,14 @@ impl Coordinator {
                     .catalog_mut()
                     .set_dataflow_metainfo(sink_id, df_meta.clone());
 
+                let storage_metadata = coord.catalog.state().storage_metadata();
+
                 // Announce the creation of the materialized view source.
                 coord
                     .controller
                     .storage
                     .create_collections(
+                        storage_metadata,
                         None,
                         vec![(
                             sink_id,
@@ -663,6 +668,10 @@ impl Coordinator {
             })
             .await;
 
+        // Only drop the read holds once the dataflow has been installed,
+        // which acquires its own read holds.
+        drop(read_holds);
+
         match transact_result {
             Ok(_) => Ok(ExecuteResponse::CreatedMaterializedView),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
@@ -684,17 +693,25 @@ impl Coordinator {
     /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
     /// materialized view.
     fn select_timestamps(
-        &self,
+        &mut self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
     ) -> Result<
         (
+            ReadHolds<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
         ),
         AdapterError,
     > {
+        // Acquire read holds _before_ determining the least valid read.
+        // Otherwise the frontier might advance away from under us,
+        // concurrently.
+        let read_holds = self
+            .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
+            .expect("can always acquire non-precise read holds");
+
         // For non-REFRESH MVs both the `dataflow_as_of` and the `storage_as_of` should be simply
         // `least_valid_read`.
         let least_valid_read = self.least_valid_read(&id_bundle);
@@ -725,6 +742,7 @@ impl Coordinator {
                     let last_refresh = refresh_schedule.last_refresh().expect(
                         "if round_up_timestamp returned None, then there should be a last refresh",
                     );
+
                     return Err(AdapterError::MaterializedViewWouldNeverRefresh(
                         last_refresh,
                         *least_valid_read_ts,
@@ -744,7 +762,7 @@ impl Coordinator {
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
 
-        Ok((dataflow_as_of, storage_as_of, until))
+        Ok((read_holds, dataflow_as_of, storage_as_of, until))
     }
 
     #[instrument]

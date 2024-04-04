@@ -27,6 +27,7 @@ from materialize.output_consistency.validation.error_message_normalizer import (
 )
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
+    ValidationErrorDetails,
     ValidationErrorType,
     ValidationRemark,
     ValidationWarning,
@@ -101,18 +102,22 @@ class ResultComparator:
                     query_execution,
                     ValidationErrorType.SUCCESS_MISMATCH,
                     "Outcome differs",
-                    value1=outcome1.__class__.__name__,
-                    value2=outcome2.__class__.__name__,
-                    sql_error1=outcome1.error_message
-                    if isinstance(outcome1, QueryFailure)
-                    else None,
-                    sql_error2=outcome2.error_message
-                    if isinstance(outcome2, QueryFailure)
-                    else None,
-                    strategy1=outcome1.strategy,
-                    strategy2=outcome2.strategy,
-                    sql1=outcome1.sql,
-                    sql2=outcome2.sql,
+                    details1=ValidationErrorDetails(
+                        strategy=outcome1.strategy,
+                        value=outcome1.__class__.__name__,
+                        sql=outcome1.sql,
+                        sql_error=outcome1.error_message
+                        if isinstance(outcome1, QueryFailure)
+                        else None,
+                    ),
+                    details2=ValidationErrorDetails(
+                        strategy=outcome2.strategy,
+                        value=outcome2.__class__.__name__,
+                        sql=outcome2.sql,
+                        sql_error=outcome2.error_message
+                        if isinstance(outcome2, QueryFailure)
+                        else None,
+                    ),
                 ),
             )
             return
@@ -173,12 +178,12 @@ class ResultComparator:
                     query_execution,
                     ValidationErrorType.ROW_COUNT_MISMATCH,
                     "Row count differs",
-                    value1=str(num_rows1),
-                    value2=str(num_rows2),
-                    strategy1=result1.strategy,
-                    strategy2=result2.strategy,
-                    sql1=result1.sql,
-                    sql2=result2.sql,
+                    details1=ValidationErrorDetails(
+                        strategy=result1.strategy, value=str(num_rows1), sql=result1.sql
+                    ),
+                    details2=ValidationErrorDetails(
+                        strategy=result2.strategy, value=str(num_rows2), sql=result2.sql
+                    ),
                 ),
             )
 
@@ -203,14 +208,18 @@ class ResultComparator:
                     query_execution,
                     ValidationErrorType.ERROR_MISMATCH,
                     "Error message differs",
-                    value1=norm_error_message_1,
-                    value2=norm_error_message_2,
-                    sql_error1=failure1.error_message,
-                    sql_error2=failure2.error_message,
-                    strategy1=failure1.strategy,
-                    strategy2=failure2.strategy,
-                    sql1=failure1.sql,
-                    sql2=failure2.sql,
+                    details1=ValidationErrorDetails(
+                        strategy=failure1.strategy,
+                        value=norm_error_message_1,
+                        sql=failure1.sql,
+                        sql_error=failure1.error_message,
+                    ),
+                    details2=ValidationErrorDetails(
+                        strategy=failure2.strategy,
+                        value=norm_error_message_2,
+                        sql=failure2.sql,
+                        sql_error=failure2.error_message,
+                    ),
                 ),
             )
 
@@ -321,12 +330,12 @@ class ResultComparator:
                     query_execution,
                     error_type,
                     error_message,
-                    value1=result_value1,
-                    value2=result_value2,
-                    strategy1=result1.strategy,
-                    strategy2=result2.strategy,
-                    sql1=result1.sql,
-                    sql2=result2.sql,
+                    details1=ValidationErrorDetails(
+                        strategy=result1.strategy, value=result_value1, sql=result1.sql
+                    ),
+                    details2=ValidationErrorDetails(
+                        strategy=result2.strategy, value=result_value2, sql=result2.sql
+                    ),
                     col_index=col_index,
                     concerned_expression=expression,
                     location=f"row index {row_index}, column index {col_index} ('{expression}')",

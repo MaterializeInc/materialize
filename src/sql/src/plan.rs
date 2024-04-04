@@ -46,7 +46,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterScheduleOptionValue, ConnectionOptionName,
-    CreateSourceSubsource, QualifiedReplica, TransactionIsolationLevel, TransactionMode,
+    CreateSourceSubsource, QualifiedReplica, TransactionIsolationLevel, TransactionMode, Value,
     WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -56,8 +56,8 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, Raw, Statement,
-    StatementKind, TransactionAccessMode,
+    ExplainStage, Expr, FetchDirection, NoticeSeverity, Raw, Statement, StatementKind,
+    TransactionAccessMode,
 };
 use crate::catalog::{
     CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
@@ -151,8 +151,6 @@ pub enum Plan {
     AlterCluster(AlterClusterPlan),
     AlterClusterSwap(AlterClusterSwapPlan),
     AlterNoop(AlterNoopPlan),
-    AlterIndexSetOptions(AlterIndexSetOptionsPlan),
-    AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSetCluster(AlterSetClusterPlan),
     AlterConnection(AlterConnectionPlan),
     AlterSource(AlterSourcePlan),
@@ -201,11 +199,7 @@ impl Plan {
             StatementKind::AlterCluster => &[PlanKind::AlterNoop, PlanKind::AlterCluster],
             StatementKind::AlterConnection => &[PlanKind::AlterNoop, PlanKind::AlterConnection],
             StatementKind::AlterDefaultPrivileges => &[PlanKind::AlterDefaultPrivileges],
-            StatementKind::AlterIndex => &[
-                PlanKind::AlterIndexResetOptions,
-                PlanKind::AlterIndexSetOptions,
-                PlanKind::AlterNoop,
-            ],
+            StatementKind::AlterIndex => &[PlanKind::AlterRetainHistory, PlanKind::AlterNoop],
             StatementKind::AlterObjectRename => &[
                 PlanKind::AlterClusterRename,
                 PlanKind::AlterClusterReplicaRename,
@@ -224,7 +218,11 @@ impl Plan {
             StatementKind::AlterSetCluster => &[PlanKind::AlterNoop, PlanKind::AlterSetCluster],
             // TODO: If we ever support ALTER SINK again, this will need to be changed
             StatementKind::AlterSink => &[PlanKind::AlterNoop],
-            StatementKind::AlterSource => &[PlanKind::AlterNoop, PlanKind::AlterSource],
+            StatementKind::AlterSource => &[
+                PlanKind::AlterNoop,
+                PlanKind::AlterSource,
+                PlanKind::AlterRetainHistory,
+            ],
             StatementKind::AlterSystemReset => &[PlanKind::AlterNoop, PlanKind::AlterSystemReset],
             StatementKind::AlterSystemResetAll => {
                 &[PlanKind::AlterNoop, PlanKind::AlterSystemResetAll]
@@ -379,8 +377,6 @@ impl Plan {
             Plan::AlterClusterSwap(_) => "alter cluster swap",
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
-            Plan::AlterIndexSetOptions(_) => "alter index",
-            Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterConnection(_) => "alter connection",
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
@@ -532,7 +528,6 @@ pub struct ComputeReplicaIntrospectionConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComputeReplicaConfig {
     pub introspection: Option<ComputeReplicaIntrospectionConfig>,
-    pub idle_arrangement_merge_effort: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -973,19 +968,9 @@ pub struct AlterSetClusterPlan {
 #[derive(Debug)]
 pub struct AlterRetainHistoryPlan {
     pub id: GlobalId,
-    pub history: CompactionWindow,
-}
-
-#[derive(Debug)]
-pub struct AlterIndexSetOptionsPlan {
-    pub id: GlobalId,
-    pub options: Vec<IndexOption>,
-}
-
-#[derive(Debug)]
-pub struct AlterIndexResetOptionsPlan {
-    pub id: GlobalId,
-    pub options: BTreeSet<IndexOptionName>,
+    pub value: Option<Value>,
+    pub window: CompactionWindow,
+    pub object_type: ObjectType,
 }
 
 #[derive(Debug, Clone)]
@@ -1552,7 +1537,6 @@ pub enum TableOption {
 #[derive(Clone, Debug)]
 pub struct PlanClusterOption {
     pub availability_zones: AlterOptionParameter<Vec<String>>,
-    pub idle_arrangement_merge_effort: AlterOptionParameter<u32>,
     pub introspection_debugging: AlterOptionParameter<bool>,
     pub introspection_interval: AlterOptionParameter<OptionalDuration>,
     pub managed: AlterOptionParameter<bool>,
@@ -1567,7 +1551,6 @@ impl Default for PlanClusterOption {
     fn default() -> Self {
         Self {
             availability_zones: AlterOptionParameter::Unchanged,
-            idle_arrangement_merge_effort: AlterOptionParameter::Unchanged,
             introspection_debugging: AlterOptionParameter::Unchanged,
             introspection_interval: AlterOptionParameter::Unchanged,
             managed: AlterOptionParameter::Unchanged,

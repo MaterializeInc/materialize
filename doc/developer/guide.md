@@ -279,6 +279,21 @@ you can use the internal port with the `mz_system` user:
 psql -U mz_system -h localhost -p 6877 materialize
 ```
 
+## Console UI
+
+Console can point at your local environmentd. To use this feature, pass the
+internal console flag:
+
+```shell
+bin/environmentd -- --internal-console-redirect-url="https://local.console.materialize.com"
+```
+
+Then visit http://localhost:6878/internal-console/. This is a great way to
+dogfood the console, feedback is valuable.
+
+Note there is no frontegg login in this mode, so all frontegg features are
+disabled.
+
 ## Web UI
 
 Materialize embeds a web UI, which it serves from port 6876. If you're running

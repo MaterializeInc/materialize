@@ -29,7 +29,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
 ```sql
-CREATE CLUSTER webhooks_cluster (SIZE = '3xsmall');
+CREATE CLUSTER webhooks_cluster (SIZE = '25cc');
 
 SET CLUSTER = webhooks_cluster;
 ```

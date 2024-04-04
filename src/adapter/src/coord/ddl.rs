@@ -28,6 +28,7 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::error::ErrorExt;
+use mz_ore::future::InTask;
 use mz_ore::instrument;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
@@ -229,6 +230,7 @@ impl Coordinator {
                                             .config(
                                                 self.secrets_reader(),
                                                 self.controller.storage.config(),
+                                                InTask::No,
                                             )
                                             .await
                                             .map_err(|e| {
@@ -477,14 +479,18 @@ impl Coordinator {
         let Coordinator {
             catalog,
             active_conns,
+            controller,
             ..
         } = self;
         let catalog = Arc::make_mut(catalog);
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
+
         let TransactionResult {
             builtin_table_updates,
             audit_events,
-        } = catalog.transact(oracle_write_ts, conn, ops).await?;
+        } = catalog
+            .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
+            .await?;
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
@@ -683,9 +689,10 @@ impl Coordinator {
             self.active_webhooks.remove(id);
             self.drop_storage_read_policy(id);
         }
+        let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_sources(sources)
+            .drop_sources(storage_metadata, sources)
             .unwrap_or_terminate("cannot fail to drop sources");
     }
 
@@ -1009,6 +1016,17 @@ impl Coordinator {
             storage_ids: btreeset! {sink.from},
             compute_ids: btreemap! {},
         };
+
+        // We're putting in place read holds, such that create_exports, below,
+        // which calls update_read_capabilities, can successfully do so.
+        // Otherwise, the since of dependencies might move along concurrently,
+        // pulling the rug from under us!
+        //
+        // TODO: Maybe in the future, pass those holds on to storage, to hold on
+        // to them and downgrade when possible?
+        let read_holds = self
+            .acquire_read_holds(mz_repr::Timestamp::MIN, &id_bundle, false)
+            .expect("can acquire read holds");
         let as_of = self.least_valid_read(&id_bundle);
 
         let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
@@ -1032,7 +1050,7 @@ impl Coordinator {
             from_storage_metadata: (),
         };
 
-        Ok(self
+        let res = self
             .controller
             .storage
             .create_exports(vec![(
@@ -1042,7 +1060,13 @@ impl Coordinator {
                     instance_id: sink.cluster_id,
                 },
             )])
-            .await?)
+            .await;
+
+        // Drop read holds after the export has been created, at which point
+        // storage will have put in its own read holds.
+        drop(read_holds);
+
+        Ok(res?)
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is
@@ -1236,6 +1260,7 @@ impl Coordinator {
                     | CatalogItem::Func(_) => {}
                 },
                 Op::AlterRole { .. }
+                | Op::AlterRetainHistory { .. }
                 | Op::AlterSetCluster { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }

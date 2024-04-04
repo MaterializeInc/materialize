@@ -375,7 +375,6 @@ impl SessionVars {
             &AUTO_ROUTE_INTROSPECTION_QUERIES,
             &ENABLE_SESSION_RBAC_CHECKS,
             &ENABLE_SESSION_CARDINALITY_ESTIMATES,
-            &MAX_QUERY_RESULT_SIZE,
             &MAX_IDENTIFIER_LENGTH,
             &STATEMENT_LOGGING_SAMPLE_RATE,
             &EMIT_INTROSPECTION_QUERY_NOTICE,
@@ -1070,6 +1069,7 @@ impl SystemVars {
                 &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
                 &TIMEZONE,
                 &TRANSACTION_ISOLATION,
+                &MAX_QUERY_RESULT_SIZE,
             ]
             .into_iter()
             .map(|var| (UncasedStr::new(var.name()), var))
@@ -1192,7 +1192,6 @@ impl SystemVars {
             &PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE,
             &WEBHOOK_CONCURRENT_REQUEST_LIMIT,
             &ENABLE_DEPENDENCY_READ_HOLD_ASSERTS,
-            &TIMESTAMP_ORACLE_IMPL,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL,
@@ -1204,42 +1203,24 @@ impl SystemVars {
         let dyncfg_vars: Vec<_> = dyncfgs
             .entries()
             .map(|cfg| match cfg.default() {
-                ConfigVal::Bool(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <bool as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
-                ConfigVal::U32(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <u32 as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
-                ConfigVal::Usize(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <usize as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
-                ConfigVal::OptUsize(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <Option<usize> as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
-                ConfigVal::String(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <String as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
-                ConfigVal::Duration(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <Duration as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
+                ConfigVal::Bool(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                }
+                ConfigVal::U32(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                }
+                ConfigVal::Usize(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                }
+                ConfigVal::OptUsize(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                }
+                ConfigVal::String(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
+                }
+                ConfigVal::Duration(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
+                }
             })
             .collect();
 
@@ -1857,29 +1838,23 @@ impl SystemVars {
         let mut updates = ConfigUpdates::default();
         for entry in self.dyncfgs.entries() {
             let name = UncasedStr::new(entry.name());
-            match entry.val() {
-                ConfigVal::Bool(x) => {
-                    <bool as ConfigType>::set(x, *self.expect_config_value::<bool>(name))
+            let val = match entry.val() {
+                ConfigVal::Bool(_) => ConfigVal::from(*self.expect_config_value::<bool>(name)),
+                ConfigVal::U32(_) => ConfigVal::from(*self.expect_config_value::<u32>(name)),
+                ConfigVal::Usize(_) => ConfigVal::from(*self.expect_config_value::<usize>(name)),
+                ConfigVal::OptUsize(_) => {
+                    ConfigVal::from(*self.expect_config_value::<Option<usize>>(name))
                 }
-                ConfigVal::U32(x) => {
-                    <u32 as ConfigType>::set(x, *self.expect_config_value::<u32>(name))
+                ConfigVal::String(_) => {
+                    ConfigVal::from(self.expect_config_value::<String>(name).clone())
                 }
-                ConfigVal::Usize(x) => {
-                    <usize as ConfigType>::set(x, *self.expect_config_value::<usize>(name))
-                }
-                ConfigVal::OptUsize(x) => <Option<usize> as ConfigType>::set(
-                    x,
-                    *self.expect_config_value::<Option<usize>>(name),
-                ),
-                ConfigVal::String(x) => {
-                    <String as ConfigType>::set(x, self.expect_config_value::<String>(name).clone())
-                }
-                ConfigVal::Duration(x) => {
-                    <Duration as ConfigType>::set(x, *self.expect_config_value::<Duration>(name))
+                ConfigVal::Duration(_) => {
+                    ConfigVal::from(*self.expect_config_value::<Duration>(name))
                 }
             };
-            updates.add(entry);
+            updates.add_dynamic(entry.name(), val);
         }
+        updates.apply(&self.dyncfgs);
         updates
     }
 
@@ -2074,11 +2049,6 @@ impl SystemVars {
     /// Returns the `webhook_concurrent_request_limit` configuration parameter.
     pub fn webhook_concurrent_request_limit(&self) -> usize {
         *self.expect_value(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
-    }
-
-    /// Returns the `timestamp_oracle` configuration parameter.
-    pub fn timestamp_oracle_impl(&self) -> TimestampOracleImpl {
-        *self.expect_value(&TIMESTAMP_ORACLE_IMPL)
     }
 
     /// Returns the `pg_timestamp_oracle_connection_pool_max_size` configuration parameter.

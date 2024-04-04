@@ -19,6 +19,7 @@ use std::sync::Arc;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_sql::ast::Value;
 use mz_sql::session::metadata::SessionMetadata;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
@@ -34,9 +35,7 @@ use mz_catalog::builtin::{
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
 use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
-use mz_catalog::durable::{
-    test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, Transaction,
-};
+use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, Transaction};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
@@ -50,7 +49,6 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -83,8 +81,10 @@ use mz_sql::session::vars::{
 };
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::QualifiedReplica;
+use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
@@ -158,6 +158,84 @@ pub struct CatalogPlans {
 }
 
 impl Catalog {
+    /// Initializess the `storage_controller` to understand all shards that
+    /// `self` expects to exist.
+    ///
+    /// Note that this must be done before creating/rendering collections
+    /// because the storage controller might not be aware of new system
+    /// collections created between versions.
+    async fn initialize_storage_controller_state(
+        &mut self,
+        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
+        builtin_migration_metadata: BuiltinMigrationMetadata,
+    ) -> Result<(), mz_catalog::durable::CatalogError> {
+        let collections = self
+            .entries()
+            .filter(|entry| entry.item().is_storage_collection())
+            .map(|entry| entry.id())
+            .collect();
+
+        // Clone the state so that any errors that occur do not leak any
+        // transformations on error.
+        let mut state = self.state.clone();
+
+        let mut storage = self.storage().await;
+        let mut txn = storage.transaction().await?;
+
+        storage_controller
+            .initialize_state(
+                &mut txn,
+                collections,
+                builtin_migration_metadata.previous_storage_collection_ids,
+            )
+            .await
+            .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+
+        // Ensure the state changes from initialization are visible in the
+        // state.
+        state.update_storage_metadata(&txn);
+        txn.commit().await?;
+        drop(storage);
+
+        // Save updated state.
+        self.state = state;
+        Ok(())
+    }
+
+    /// [`mz_controller::Controller`] depends on durable catalog state to boot,
+    /// so make it available and initialize the controller.
+    pub async fn initialize_controller(
+        &mut self,
+        config: mz_controller::ControllerConfig,
+        envd_epoch: core::num::NonZeroI64,
+        builtin_migration_metadata: BuiltinMigrationMetadata,
+        // Whether to use the new persist-txn tables implementation or the
+        // legacy one.
+        persist_txn_tables: PersistTxnTablesImpl,
+    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
+    {
+        let mut controller = {
+            let mut storage = self.storage().await;
+            let mut tx = storage.transaction().await?;
+            mz_controller::prepare_initialization(&mut tx)
+                .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+            tx.commit().await?;
+
+            let read_only_tx = storage.transaction().await?;
+
+            mz_controller::Controller::new(config, envd_epoch, persist_txn_tables, &read_only_tx)
+                .await
+        };
+
+        self.initialize_storage_controller_state(
+            &mut *controller.storage,
+            builtin_migration_metadata,
+        )
+        .await?;
+
+        Ok(controller)
+    }
+
     /// Set the optimized plan for the item identified by `id`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_optimized_plan(
@@ -519,10 +597,9 @@ impl Catalog {
         now: NowFn,
         environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(
+        let openable_storage =
             mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
-                .await,
-        );
+                .await;
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None, None)
             .await?;
@@ -541,13 +618,11 @@ impl Catalog {
         environment_id: EnvironmentId,
         system_parameter_defaults: BTreeMap<String, String>,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(
-            mz_catalog::durable::test_persist_backed_catalog_state(
-                persist_client,
-                environment_id.organization_id(),
-            )
-            .await,
-        );
+        let openable_storage = mz_catalog::durable::test_persist_backed_catalog_state(
+            persist_client,
+            environment_id.organization_id(),
+        )
+        .await;
         let storage = openable_storage
             .open_read_only(&test_bootstrap_args())
             .await?;
@@ -584,6 +659,7 @@ impl Catalog {
                     build_info: &DUMMY_BUILD_INFO,
                     environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
                     now,
+                    boot_ts: previous_ts,
                     skip_migrations: true,
                     cluster_replica_sizes: Default::default(),
                     builtin_system_cluster_replica_size: "1".into(),
@@ -653,13 +729,13 @@ impl Catalog {
             .err_into()
     }
 
-    pub async fn allocate_user_replica_id(&self) -> Result<ReplicaId, Error> {
-        self.storage()
-            .await
-            .allocate_user_replica_id()
-            .await
-            .maybe_terminate("allocating user replica ids")
-            .err_into()
+    pub async fn allocate_replica_id(&self, cluster_id: &ClusterId) -> Result<ReplicaId, Error> {
+        let mut storage = self.storage().await;
+        let id = match cluster_id {
+            ClusterId::User(_) => storage.allocate_user_replica_id().await,
+            ClusterId::System(_) => storage.allocate_system_replica_id().await,
+        };
+        id.maybe_terminate("allocating replica ids").err_into()
     }
 
     /// Get the next system replica id without allocating it.
@@ -1052,6 +1128,9 @@ impl Catalog {
     #[instrument(name = "catalog::transact")]
     pub async fn transact(
         &mut self,
+        // n.b. this is an option to prevent us from needing to build out a
+        // dummy impl of `StorageController` for tests.
+        storage_controller: Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
@@ -1092,6 +1171,7 @@ impl Catalog {
         let mut state = self.state.clone();
 
         Self::transact_inner(
+            storage_controller,
             oracle_write_ts,
             session,
             ops,
@@ -1100,7 +1180,8 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &mut state,
-        )?;
+        )
+        .await?;
 
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
@@ -1140,7 +1221,8 @@ impl Catalog {
     ///   final element.
     /// - If the only element of `ops` is [`Op::TransactionDryRun`].
     #[instrument(name = "catalog::transact_inner")]
-    fn transact_inner(
+    async fn transact_inner(
+        storage_controller: Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         mut ops: Vec<Op>,
@@ -1161,10 +1243,66 @@ impl Catalog {
             None => return Ok(()),
         };
 
+        let mut storage_collections_to_create = BTreeSet::new();
+        let mut storage_collections_to_drop = BTreeSet::new();
+
         for op in ops {
             match op {
                 Op::TransactionDryRun => {
                     unreachable!("TransactionDryRun can only be used a final element of ops")
+                }
+                Op::AlterRetainHistory { id, value, window } => {
+                    let entry = state.get_entry(&id);
+                    if id.is_system() {
+                        let name = entry.name();
+                        let full_name =
+                            state.resolve_full_name(name, session.map(|session| session.conn_id()));
+                        return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                            full_name.to_string(),
+                        ))));
+                    }
+
+                    let mut new_entry = entry.clone();
+                    let previous = new_entry
+                        .item
+                        .update_retain_history(value.clone(), window)
+                        .map_err(|_| {
+                            AdapterError::Catalog(Error::new(ErrorKind::Internal(
+                            "planner should have rejected invalid alter retain history item type"
+                                .to_string(),
+                        )))
+                        })?;
+
+                    builtin_table_updates.extend(state.pack_item_update(id, -1));
+
+                    if Self::should_audit_log_item(new_entry.item()) {
+                        let details = EventDetails::AlterRetainHistoryV1(
+                            mz_audit_log::AlterRetainHistoryV1 {
+                                id: id.to_string(),
+                                old_history: previous.map(|previous| previous.to_string()),
+                                new_history: value.map(|v| v.to_string()),
+                            },
+                        );
+                        state.add_to_audit_log(
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Alter,
+                            catalog_type_to_audit_object_type(new_entry.item().typ()),
+                            details,
+                        )?;
+                    }
+
+                    Self::update_item(
+                        state,
+                        builtin_table_updates,
+                        id,
+                        new_entry.name.clone(),
+                        new_entry.item().clone(),
+                    )?;
+                    tx.update_item(id, new_entry.into())?;
                 }
                 Op::AlterRole {
                     id,
@@ -1579,6 +1717,10 @@ impl Catalog {
                 } => {
                     state.check_unstable_dependencies(&item)?;
 
+                    if item.is_storage_collection() {
+                        storage_collections_to_create.insert(id);
+                    }
+
                     if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
                         let cluster_name = state.clusters_by_id[&id].name.clone();
                         return Err(AdapterError::Catalog(Error::new(
@@ -1972,6 +2114,10 @@ impl Catalog {
                             }
                             if !entry.item().is_temporary() {
                                 tx.remove_item(id)?;
+                            }
+
+                            if entry.item().is_storage_collection() {
+                                storage_collections_to_drop.insert(id);
                             }
 
                             builtin_table_updates.extend(state.pack_item_update(id, -1));
@@ -2478,10 +2624,10 @@ impl Catalog {
                     let database_name = &database.name;
 
                     let mut updates = Vec::new();
-                    let mut already_updated = HashSet::new();
+                    let mut items_to_update = BTreeMap::new();
 
                     let mut update_item = |id| {
-                        if already_updated.contains(id) {
+                        if items_to_update.contains_key(id) {
                             return Ok(());
                         }
 
@@ -2502,15 +2648,12 @@ impl Catalog {
                                 }))
                             })?;
 
-                        // Update the catalog storage and Builtin Tables.
+                        // Queue updates for Catalog storage and Builtin Tables.
                         if !new_entry.item().is_temporary() {
-                            tx.update_item(*id, new_entry.clone().into())?;
+                            items_to_update.insert(*id, new_entry.clone().into());
                         }
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
                         updates.push((id.clone(), entry.name().clone(), new_entry.item));
-
-                        // Track which IDs we update.
-                        already_updated.insert(id);
 
                         Ok::<_, AdapterError>(())
                     };
@@ -2525,6 +2668,9 @@ impl Catalog {
                             update_item(id)?;
                         }
                     }
+                    // Note: When updating the transaction it's very important that we update the
+                    // items as a whole group, otherwise we exhibit quadratic behavior.
+                    tx.update_items(items_to_update)?;
 
                     // Renaming temporary schemas is not supported.
                     let SchemaSpecifier::Id(schema_id) = *schema.id() else {
@@ -2887,6 +3033,17 @@ impl Catalog {
         }
 
         if dry_run_ops.is_empty() {
+            if let Some(c) = storage_controller {
+                c.prepare_state(
+                    tx,
+                    storage_collections_to_create,
+                    storage_collections_to_drop,
+                )
+                .await?;
+            }
+
+            state.update_storage_metadata(tx);
+
             Ok(())
         } else {
             Err(AdapterError::TransactionDryRun {
@@ -3131,7 +3288,7 @@ impl Catalog {
     fn parse_item(
         &self,
         id: GlobalId,
-        create_sql: String,
+        create_sql: &str,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -3423,6 +3580,11 @@ impl From<UpdatePrivilegeVariant> for EventType {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    AlterRetainHistory {
+        id: GlobalId,
+        value: Option<Value>,
+        window: CompactionWindow,
+    },
     AlterSetCluster {
         id: GlobalId,
         cluster: ClusterId,
@@ -4134,7 +4296,6 @@ impl SessionCatalog for ConnCatalog<'_> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
     use std::{env, iter};
 
     use itertools::Itertools;
@@ -4270,6 +4431,7 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
+                    None,
                     mz_repr::Timestamp::MIN,
                     None,
                     vec![Op::CreateDatabase {
@@ -4505,6 +4667,7 @@ mod tests {
                 .expect("unable to parse view");
             catalog
                 .transact(
+                    None,
                     SYSTEM_TIME().into(),
                     None,
                     vec![Op::CreateItem {
@@ -5247,7 +5410,6 @@ mod tests {
 
         // Execute the function as much as possible, ensuring no panics occur, but
         // otherwise ignoring eval errors. We also do various other checks.
-        let start = Instant::now();
         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
         if let Ok(hir) = res {
             if let Ok(mut mir) = hir.lower_uncorrelated() {

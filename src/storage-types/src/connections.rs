@@ -22,6 +22,7 @@ use mz_kafka_util::client::{
     BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
 use mz_ore::error::ErrorExt;
+use mz_ore::future::{InTask, OreFutureExt};
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -46,12 +47,56 @@ use url::Url;
 
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{AwsConnection, AwsConnectionValidationError};
+use crate::controller::AlterError;
 use crate::errors::{ContextCreationError, CsrConnectError};
+use crate::AlterCompatible;
 
 pub mod aws;
 pub mod inline;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.connections.rs"));
+
+/// An extension trait for [`SecretsReader`]
+#[async_trait::async_trait]
+trait SecretsReaderExt {
+    /// `SecretsReader::read`, but optionally run in a task.
+    async fn read_in_task_if(
+        &self,
+        in_task: InTask,
+        id: GlobalId,
+    ) -> Result<Vec<u8>, anyhow::Error>;
+
+    /// `SecretsReader::read_string`, but optionally run in a task.
+    async fn read_string_in_task_if(
+        &self,
+        in_task: InTask,
+        id: GlobalId,
+    ) -> Result<String, anyhow::Error>;
+}
+
+#[async_trait::async_trait]
+impl SecretsReaderExt for Arc<dyn SecretsReader> {
+    async fn read_in_task_if(
+        &self,
+        in_task: InTask,
+        id: GlobalId,
+    ) -> Result<Vec<u8>, anyhow::Error> {
+        let sr = Arc::clone(self);
+        async move { sr.read(id).await }
+            .run_in_task_if(in_task, || "secrets_reader_read".to_string())
+            .await
+    }
+    async fn read_string_in_task_if(
+        &self,
+        in_task: InTask,
+        id: GlobalId,
+    ) -> Result<String, anyhow::Error> {
+        let sr = Arc::clone(self);
+        async move { sr.read_string(id).await }
+            .run_in_task_if(in_task, || "secrets_reader_read".to_string())
+            .await
+    }
+}
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum StringOrSecret {
@@ -61,10 +106,14 @@ pub enum StringOrSecret {
 
 impl StringOrSecret {
     /// Gets the value as a string, reading the secret if necessary.
-    pub async fn get_string(&self, secrets_reader: &dyn SecretsReader) -> anyhow::Result<String> {
+    pub async fn get_string(
+        &self,
+        in_task: InTask,
+        secrets_reader: &Arc<dyn SecretsReader>,
+    ) -> anyhow::Result<String> {
         match self {
             StringOrSecret::String(s) => Ok(s.clone()),
-            StringOrSecret::Secret(id) => secrets_reader.read_string(*id).await,
+            StringOrSecret::Secret(id) => secrets_reader.read_string_in_task_if(in_task, *id).await,
         }
     }
 
@@ -311,10 +360,39 @@ impl ConnectionValidationError {
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
+    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+        match (self, other) {
+            (Self::Aws(s), Self::Aws(o)) => s.alter_compatible(id, o),
+            (Self::AwsPrivatelink(s), Self::AwsPrivatelink(o)) => s.alter_compatible(id, o),
+            (Self::Ssh(s), Self::Ssh(o)) => s.alter_compatible(id, o),
+            (Self::Csr(s), Self::Csr(o)) => s.alter_compatible(id, o),
+            (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
+            (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
+            (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            _ => {
+                tracing::warn!(
+                    "Connection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+                Err(AlterError { id })
+            }
+        }
+    }
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelinkConnection {
     pub service_name: String,
     pub availability_zones: Vec<String>,
+}
+
+impl AlterCompatible for AwsPrivatelinkConnection {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+        // Every element of the AwsPrivatelinkConnection connection is configurable.
+        Ok(())
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -443,6 +521,7 @@ impl KafkaConnection {
         storage_configuration: &StorageConfiguration,
         context: C,
         extra_options: &BTreeMap<&str, String>,
+        in_task: InTask,
     ) -> Result<T, ContextCreationError>
     where
         C: ClientContext,
@@ -507,9 +586,12 @@ impl KafkaConnection {
         for (k, v) in options {
             config.set(
                 k,
-                v.get_string(&*storage_configuration.connection_context.secrets_reader)
-                    .await
-                    .context("reading kafka secret")?,
+                v.get_string(
+                    in_task,
+                    &storage_configuration.connection_context.secrets_reader,
+                )
+                .await
+                .context("reading kafka secret")?,
             );
         }
         for (k, v) in extra_options {
@@ -524,6 +606,7 @@ impl KafkaConnection {
                 .ssh_tunnel_manager
                 .clone(),
             storage_configuration.parameters.ssh_timeout_config,
+            in_task,
         );
 
         match &self.default_tunnel {
@@ -540,7 +623,7 @@ impl KafkaConnection {
                 let secret = storage_configuration
                     .connection_context
                     .secrets_reader
-                    .read(ssh_tunnel.connection_id)
+                    .read_in_task_if(in_task, ssh_tunnel.connection_id)
                     .await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
 
@@ -600,7 +683,7 @@ impl KafkaConnection {
                                     &storage_configuration
                                         .connection_context
                                         .secrets_reader
-                                        .read(ssh_tunnel.connection_id)
+                                        .read_in_task_if(in_task, ssh_tunnel.connection_id)
                                         .await?,
                                 )?,
                             },
@@ -621,7 +704,13 @@ impl KafkaConnection {
     ) -> Result<(), anyhow::Error> {
         let (context, error_rx) = MzClientContext::with_errors();
         let consumer: BaseConsumer<_> = self
-            .create_with_context(storage_configuration, context, &BTreeMap::new())
+            .create_with_context(
+                storage_configuration,
+                context,
+                &BTreeMap::new(),
+                // We are in a normal tokio context during validation, already.
+                InTask::No,
+            )
             .await?;
         let consumer = Arc::new(consumer);
 
@@ -671,6 +760,35 @@ impl KafkaConnection {
                 }
             }
         }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for KafkaConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let KafkaConnection {
+            brokers: _,
+            default_tunnel: _,
+            progress_topic,
+            options: _,
+            tls: _,
+            sasl: _,
+        } = self;
+
+        let compatibility_checks = [(progress_topic == &other.progress_topic, "progress_topic")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "KafkaConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -795,11 +913,15 @@ impl CsrConnection {
     pub async fn connect(
         &self,
         storage_configuration: &StorageConfiguration,
+        in_task: InTask,
     ) -> Result<mz_ccsr::Client, CsrConnectError> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
             let root_cert = root_cert
-                .get_string(&*storage_configuration.connection_context.secrets_reader)
+                .get_string(
+                    in_task,
+                    &storage_configuration.connection_context.secrets_reader,
+                )
                 .await?;
             let root_cert = Certificate::from_pem(root_cert.as_bytes())?;
             client_config = client_config.add_root_certificate(root_cert);
@@ -809,11 +931,14 @@ impl CsrConnection {
             let key = &storage_configuration
                 .connection_context
                 .secrets_reader
-                .read_string(tls_identity.key)
+                .read_string_in_task_if(in_task, tls_identity.key)
                 .await?;
             let cert = tls_identity
                 .cert
-                .get_string(&*storage_configuration.connection_context.secrets_reader)
+                .get_string(
+                    in_task,
+                    &storage_configuration.connection_context.secrets_reader,
+                )
                 .await?;
             let ident = Identity::from_pem(key.as_bytes(), cert.as_bytes())?;
             client_config = client_config.identity(ident);
@@ -822,7 +947,10 @@ impl CsrConnection {
         if let Some(http_auth) = &self.http_auth {
             let username = http_auth
                 .username
-                .get_string(&*storage_configuration.connection_context.secrets_reader)
+                .get_string(
+                    in_task,
+                    &storage_configuration.connection_context.secrets_reader,
+                )
                 .await?;
             let password = match http_auth.password {
                 None => None,
@@ -830,7 +958,7 @@ impl CsrConnection {
                     storage_configuration
                         .connection_context
                         .secrets_reader
-                        .read_string(password)
+                        .read_string_in_task_if(in_task, password)
                         .await?,
                 ),
             };
@@ -859,6 +987,7 @@ impl CsrConnection {
                         // Default to the default http port, but this
                         // could default to 8081...
                         self.url.port().unwrap_or(80),
+                        in_task,
                     )
                     .await
                     .map_err(CsrConnectError::Ssh)?;
@@ -926,7 +1055,13 @@ impl CsrConnection {
         _id: GlobalId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
-        let client = self.connect(storage_configuration).await?;
+        let client = self
+            .connect(
+                storage_configuration,
+                // We are in a normal tokio context during validation, already.
+                InTask::No,
+            )
+            .await?;
         client.list_subjects().await?;
         Ok(())
     }
@@ -953,6 +1088,34 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
                 .tunnel
                 .into_rust_if_some("ProtoCsrConnection::tunnel")?,
         })
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let CsrConnection {
+            tunnel,
+            // All non-tunnel fields may change
+            url: _,
+            tls_root_cert: _,
+            tls_identity: _,
+            http_auth: _,
+        } = self;
+
+        let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "CsrConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1073,27 +1236,35 @@ impl<C: ConnectionAccess> PostgresConnection<C> {
 impl PostgresConnection<InlinedConnection> {
     pub async fn config(
         &self,
-        secrets_reader: &dyn mz_secrets::SecretsReader,
+        secrets_reader: &Arc<dyn mz_secrets::SecretsReader>,
         storage_configuration: &StorageConfiguration,
+        in_task: InTask,
     ) -> Result<mz_postgres_util::Config, anyhow::Error> {
         let mut config = tokio_postgres::Config::new();
         config
             .host(&self.host)
             .port(self.port)
             .dbname(&self.database)
-            .user(&self.user.get_string(secrets_reader).await?)
+            .user(&self.user.get_string(in_task, secrets_reader).await?)
             .ssl_mode(self.tls_mode);
         if let Some(password) = self.password {
-            let password = secrets_reader.read_string(password).await?;
+            let password = secrets_reader
+                .read_string_in_task_if(in_task, password)
+                .await?;
             config.password(password);
         }
         if let Some(tls_root_cert) = &self.tls_root_cert {
-            let tls_root_cert = tls_root_cert.get_string(secrets_reader).await?;
+            let tls_root_cert = tls_root_cert.get_string(in_task, secrets_reader).await?;
             config.ssl_root_cert(tls_root_cert.as_bytes());
         }
         if let Some(tls_identity) = &self.tls_identity {
-            let cert = tls_identity.cert.get_string(secrets_reader).await?;
-            let key = secrets_reader.read_string(tls_identity.key).await?;
+            let cert = tls_identity
+                .cert
+                .get_string(in_task, secrets_reader)
+                .await?;
+            let key = secrets_reader
+                .read_string_in_task_if(in_task, tls_identity.key)
+                .await?;
             config.ssl_cert(cert.as_bytes()).ssl_key(key.as_bytes());
         }
 
@@ -1103,7 +1274,9 @@ impl PostgresConnection<InlinedConnection> {
                 connection_id,
                 connection,
             }) => {
-                let secret = secrets_reader.read(*connection_id).await?;
+                let secret = secrets_reader
+                    .read_in_task_if(in_task, *connection_id)
+                    .await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
                 mz_postgres_util::TunnelConfig::Ssh {
                     config: SshTunnelConfig {
@@ -1130,6 +1303,7 @@ impl PostgresConnection<InlinedConnection> {
                 .pg_source_tcp_timeouts
                 .clone(),
             storage_configuration.parameters.ssh_timeout_config,
+            in_task,
         )?)
     }
 
@@ -1140,8 +1314,10 @@ impl PostgresConnection<InlinedConnection> {
     ) -> Result<(), anyhow::Error> {
         let config = self
             .config(
-                &*storage_configuration.connection_context.secrets_reader,
+                &storage_configuration.connection_context.secrets_reader,
                 storage_configuration,
+                // We are in a normal tokio context during validation, already.
+                InTask::No,
             )
             .await?;
         config
@@ -1150,6 +1326,38 @@ impl PostgresConnection<InlinedConnection> {
                 &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
+        Ok(())
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let PostgresConnection {
+            tunnel,
+            // All non-tunnel options may change arbitrarily
+            host: _,
+            port: _,
+            database: _,
+            user: _,
+            password: _,
+            tls_mode: _,
+            tls_root_cert: _,
+            tls_identity: _,
+        } = self;
+
+        let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "PostgresConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
         Ok(())
     }
 }
@@ -1231,6 +1439,27 @@ impl RustType<ProtoTunnel> for Tunnel<InlinedConnection> {
             Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh(ssh.into_rust()?),
             Some(ProtoTunnelField::AwsPrivatelink(aws)) => Tunnel::AwsPrivatelink(aws.into_rust()?),
         })
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for Tunnel<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let compatible = match (self, other) {
+            (Self::Ssh(s), Self::Ssh(o)) => s.alter_compatible(id, o).is_ok(),
+            (s, o) => s == o,
+        };
+
+        if !compatible {
+            tracing::warn!(
+                "Tunnel incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+
+            return Err(AlterError { id });
+        }
+
+        Ok(())
     }
 }
 
@@ -1339,17 +1568,20 @@ impl<C: ConnectionAccess> MySqlConnection<C> {
 impl MySqlConnection<InlinedConnection> {
     pub async fn config(
         &self,
-        secrets_reader: &dyn mz_secrets::SecretsReader,
+        secrets_reader: &Arc<dyn mz_secrets::SecretsReader>,
         storage_configuration: &StorageConfiguration,
+        in_task: InTask,
     ) -> Result<mz_mysql_util::Config, anyhow::Error> {
         // TODO(roshan): Set appropriate connection timeouts
         let mut opts = mysql_async::OptsBuilder::default()
             .ip_or_hostname(&self.host)
             .tcp_port(self.port)
-            .user(Some(&self.user.get_string(secrets_reader).await?));
+            .user(Some(&self.user.get_string(in_task, secrets_reader).await?));
 
         if let Some(password) = self.password {
-            let password = secrets_reader.read_string(password).await?;
+            let password = secrets_reader
+                .read_string_in_task_if(in_task, password)
+                .await?;
             opts = opts.pass(Some(password));
         }
 
@@ -1375,7 +1607,7 @@ impl MySqlConnection<InlinedConnection> {
             MySqlSslMode::VerifyCa | MySqlSslMode::VerifyIdentity
         ) {
             if let Some(tls_root_cert) = &self.tls_root_cert {
-                let tls_root_cert = tls_root_cert.get_string(secrets_reader).await?;
+                let tls_root_cert = tls_root_cert.get_string(in_task, secrets_reader).await?;
                 ssl_opts = ssl_opts.map(|opts| {
                     opts.with_root_certs(vec![tls_root_cert.as_bytes().to_vec().into()])
                 });
@@ -1383,8 +1615,10 @@ impl MySqlConnection<InlinedConnection> {
         }
 
         if let Some(identity) = &self.tls_identity {
-            let key = secrets_reader.read_string(identity.key).await?;
-            let cert = identity.cert.get_string(secrets_reader).await?;
+            let key = secrets_reader
+                .read_string_in_task_if(in_task, identity.key)
+                .await?;
+            let cert = identity.cert.get_string(in_task, secrets_reader).await?;
             let Pkcs12Archive { der, pass } =
                 mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?;
 
@@ -1404,7 +1638,9 @@ impl MySqlConnection<InlinedConnection> {
                 connection_id,
                 connection,
             }) => {
-                let secret = secrets_reader.read(*connection_id).await?;
+                let secret = secrets_reader
+                    .read_in_task_if(in_task, *connection_id)
+                    .await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
                 mz_mysql_util::TunnelConfig::Ssh {
                     config: SshTunnelConfig {
@@ -1432,6 +1668,7 @@ impl MySqlConnection<InlinedConnection> {
             opts.into(),
             tunnel,
             storage_configuration.parameters.ssh_timeout_config,
+            in_task,
         ))
     }
 
@@ -1442,8 +1679,10 @@ impl MySqlConnection<InlinedConnection> {
     ) -> Result<(), anyhow::Error> {
         let config = self
             .config(
-                &*storage_configuration.connection_context.secrets_reader,
+                &storage_configuration.connection_context.secrets_reader,
                 storage_configuration,
+                // We are in a normal tokio context during validation, already.
+                InTask::No,
             )
             .await?;
         let conn = config
@@ -1484,6 +1723,37 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
             tls_root_cert: proto.tls_root_cert.into_rust()?,
             tls_identity: proto.tls_identity.into_rust()?,
         })
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let MySqlConnection {
+            tunnel,
+            // All non-tunnel options may change arbitrarily
+            host: _,
+            port: _,
+            user: _,
+            password: _,
+            tls_mode: _,
+            tls_root_cert: _,
+            tls_identity: _,
+        } = self;
+
+        let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "MySqlConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1536,6 +1806,13 @@ impl RustType<ProtoSshConnection> for SshConnection {
     }
 }
 
+impl AlterCompatible for SshConnection {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+        // Every element of the SSH connection is configurable.
+        Ok(())
+    }
+}
+
 /// Specifies an AWS PrivateLink service for a [`Tunnel`].
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelink {
@@ -1565,6 +1842,32 @@ impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
             availability_zone: proto.availability_zone.into_rust()?,
             port: proto.port.into_rust()?,
         })
+    }
+}
+
+impl AlterCompatible for AwsPrivatelink {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let AwsPrivatelink {
+            connection_id,
+            availability_zone: _,
+            port: _,
+        } = self;
+
+        let compatibility_checks = [(connection_id == &other.connection_id, "connection_id")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "AwsPrivatelink incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1619,6 +1922,7 @@ impl SshTunnel<InlinedConnection> {
         storage_configuration: &StorageConfiguration,
         remote_host: &str,
         remote_port: u16,
+        in_task: InTask,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
         storage_configuration
             .connection_context
@@ -1632,17 +1936,50 @@ impl SshTunnel<InlinedConnection> {
                         &storage_configuration
                             .connection_context
                             .secrets_reader
-                            .read(self.connection_id)
+                            .read_in_task_if(in_task, self.connection_id)
                             .await?,
                     )?,
                 },
                 remote_host,
                 remote_port,
                 storage_configuration.parameters.ssh_timeout_config,
+                in_task,
             )
             .await
     }
 }
+
+impl<C: ConnectionAccess> AlterCompatible for SshTunnel<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let SshTunnel {
+            connection_id,
+            connection,
+        } = self;
+
+        let compatibility_checks = [
+            (connection_id == &other.connection_id, "connection_id"),
+            (
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
+            ),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "SshTunnel incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl SshConnection {
     #[allow(clippy::unused_async)]
     async fn validate(
@@ -1653,7 +1990,11 @@ impl SshConnection {
         let secret = storage_configuration
             .connection_context
             .secrets_reader
-            .read(id)
+            .read_in_task_if(
+                // We are in a normal tokio context during validation, already.
+                InTask::No,
+                id,
+            )
             .await?;
         let key_pair = SshKeyPair::from_bytes(&secret)?;
         let config = SshTunnelConfig {
@@ -1688,6 +2029,7 @@ impl AwsPrivatelinkConnection {
             return Err(anyhow!("AWS PrivateLink connections are unsupported"));
         };
 
+        // No need to optionally run this in a task, as we are just validating from envd.
         let status = cloud_resource_reader.read(id).await?;
 
         let availability = status

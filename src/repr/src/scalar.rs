@@ -550,6 +550,31 @@ impl TryFrom<Datum<'_>> for Option<Interval> {
     }
 }
 
+impl TryFrom<Datum<'_>> for NaiveTime {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Time(t) => Ok(t),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<NaiveTime> {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Time(t) => Ok(Some(t)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {
@@ -3084,8 +3109,9 @@ impl ScalarType {
         static TIMESTAMP: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
                 Datum::Timestamp(
-                    NaiveDateTime::from_timestamp_opt(0, 0)
+                    DateTime::from_timestamp(0, 0)
                         .unwrap()
+                        .naive_utc()
                         .try_into()
                         .unwrap(),
                 ),
@@ -3105,8 +3131,9 @@ impl ScalarType {
                 ),
                 // nano seconds
                 Datum::Timestamp(
-                    NaiveDateTime::from_timestamp_opt(0, 123456789)
+                    DateTime::from_timestamp(0, 123456789)
                         .unwrap()
+                        .naive_utc()
                         .try_into()
                         .unwrap(),
                 ),
@@ -3115,7 +3142,7 @@ impl ScalarType {
                     CheckedTimestamp::from_timestamplike(
                         NaiveDate::from_isoywd_opt(2019, 30, chrono::Weekday::Wed)
                             .unwrap()
-                            .and_hms_milli_opt(14, 32, 11, 1234)
+                            .and_hms_milli_opt(23, 59, 59, 1234)
                             .unwrap(),
                     )
                     .unwrap(),
@@ -3124,13 +3151,9 @@ impl ScalarType {
         });
         static TIMESTAMPTZ: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
+                Datum::TimestampTz(DateTime::from_timestamp(0, 0).unwrap().try_into().unwrap()),
                 Datum::TimestampTz(
-                    DateTime::from_utc(NaiveDateTime::from_timestamp_opt(0, 0).unwrap(), Utc)
-                        .try_into()
-                        .unwrap(),
-                ),
-                Datum::TimestampTz(
-                    DateTime::from_utc(
+                    DateTime::from_naive_utc_and_offset(
                         crate::adt::timestamp::LOW_DATE
                             .and_hms_opt(0, 0, 0)
                             .unwrap(),
@@ -3140,7 +3163,7 @@ impl ScalarType {
                     .unwrap(),
                 ),
                 Datum::TimestampTz(
-                    DateTime::from_utc(
+                    DateTime::from_naive_utc_and_offset(
                         crate::adt::timestamp::HIGH_DATE
                             .and_hms_opt(23, 59, 59)
                             .unwrap(),
@@ -3151,12 +3174,10 @@ impl ScalarType {
                 ),
                 // nano seconds
                 Datum::TimestampTz(
-                    DateTime::from_utc(
-                        NaiveDateTime::from_timestamp_opt(0, 123456789).unwrap(),
-                        Utc,
-                    )
-                    .try_into()
-                    .unwrap(),
+                    DateTime::from_timestamp(0, 123456789)
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
                 ),
             ])
         });
@@ -3655,7 +3676,7 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
 
 /// Generates an arbitrary [`NaiveDateTime`].
 pub fn arb_naive_date_time() -> impl Strategy<Value = NaiveDateTime> {
-    add_arb_duration(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
+    add_arb_duration(chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc())
 }
 
 /// Generates an arbitrary [`DateTime`] in [`Utc`].

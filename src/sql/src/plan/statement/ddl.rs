@@ -68,7 +68,7 @@ use mz_sql_parser::ast::{
     RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
     TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -120,13 +120,12 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalDuration, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
-    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan,
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
-    AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
-    AlterSecretPlan, AlterSetClusterPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
+    AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan,
+    AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan,
+    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
+    CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
@@ -3502,7 +3501,6 @@ generate_extracted_config!(
     ClusterOption,
     (AvailabilityZones, Vec<String>),
     (Disk, bool),
-    (IdleArrangementMergeEffort, u32),
     (IntrospectionDebugging, bool),
     (IntrospectionInterval, OptionalDuration),
     (Managed, bool),
@@ -3535,7 +3533,6 @@ pub fn plan_create_cluster(
 ) -> Result<Plan, PlanError> {
     let ClusterOptionExtracted {
         availability_zones,
-        idle_arrangement_merge_effort,
         introspection_debugging,
         introspection_interval,
         managed,
@@ -3569,7 +3566,6 @@ pub fn plan_create_cluster(
         let compute = plan_compute_replica_config(
             introspection_interval,
             introspection_debugging.unwrap_or(false),
-            idle_arrangement_merge_effort,
         )?;
 
         let replication_factor = replication_factor.unwrap_or(1);
@@ -3635,9 +3631,6 @@ pub fn plan_create_cluster(
         if replication_factor.is_some() {
             sql_bail!("REPLICATION FACTOR not supported for unmanaged clusters");
         }
-        if idle_arrangement_merge_effort.is_some() {
-            sql_bail!("IDLE ARRANGEMENT MERGE EFFORT not supported for unmanaged clusters");
-        }
         if introspection_debugging.is_some() {
             sql_bail!("INTROSPECTION DEBUGGING not supported for unmanaged clusters");
         }
@@ -3678,7 +3671,6 @@ generate_extracted_config!(
     (ComputeAddresses, Vec<String>),
     (ComputectlAddresses, Vec<String>),
     (Disk, bool),
-    (IdleArrangementMergeEffort, u32),
     (Internal, bool, Default(false)),
     (IntrospectionDebugging, bool, Default(false)),
     (IntrospectionInterval, OptionalDuration),
@@ -3698,7 +3690,6 @@ fn plan_replica_config(
         compute_addresses,
         computectl_addresses,
         disk: disk_in,
-        idle_arrangement_merge_effort,
         internal,
         introspection_debugging,
         introspection_interval,
@@ -3709,11 +3700,7 @@ fn plan_replica_config(
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
-    let compute = plan_compute_replica_config(
-        introspection_interval,
-        introspection_debugging,
-        idle_arrangement_merge_effort,
-    )?;
+    let compute = plan_compute_replica_config(introspection_interval, introspection_debugging)?;
 
     if disk_in.is_some() {
         scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
@@ -3832,7 +3819,6 @@ fn plan_replica_config(
 fn plan_compute_replica_config(
     introspection_interval: Option<OptionalDuration>,
     introspection_debugging: bool,
-    idle_arrangement_merge_effort: Option<u32>,
 ) -> Result<ComputeReplicaConfig, PlanError> {
     let introspection_interval = introspection_interval
         .map(|OptionalDuration(i)| i)
@@ -3847,10 +3833,7 @@ fn plan_compute_replica_config(
         }
         None => None,
     };
-    let compute = ComputeReplicaConfig {
-        introspection,
-        idle_arrangement_merge_effort,
-    };
+    let compute = ComputeReplicaConfig { introspection };
     Ok(compute)
 }
 
@@ -4585,14 +4568,35 @@ fn plan_retain_history_option(
     retain_history: Option<OptionalDuration>,
 ) -> Result<Option<CompactionWindow>, PlanError> {
     if let Some(OptionalDuration(lcw)) = retain_history {
-        scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-        let cw = match lcw {
-            Some(duration) => duration.try_into()?,
-            None => CompactionWindow::DisableCompaction,
-        };
-        Ok(Some(cw))
+        Ok(Some(plan_retain_history(scx, lcw)?))
     } else {
         Ok(None)
+    }
+}
+
+// Convert a specified RETAIN HISTORY option into a compaction window. `None` corresponds to
+// `DisableCompaction`. A zero duration will error. This is because the `OptionalDuration` type
+// already converts the zero duration into `None`. This function must not be called in the `RESET
+// (RETAIN HISTORY)` path, which should be handled by the outer `Option<OptionalDuration>` being
+// `None`.
+fn plan_retain_history(
+    scx: &StatementContext,
+    lcw: Option<Duration>,
+) -> Result<CompactionWindow, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
+    match lcw {
+        // A zero duration has already been converted to `None` by `OptionalDuration` (and means
+        // disable compaction), and should never occur here. Furthermore, some things actually do
+        // break when this is set to real zero:
+        // https://github.com/MaterializeInc/materialize/issues/13221.
+        Some(Duration::ZERO) => Err(PlanError::InvalidOptionValue {
+            option_name: "RETAIN HISTORY".to_string(),
+            err: Box::new(PlanError::Unstructured(
+                "internal error: unexpectedly zero".to_string(),
+            )),
+        }),
+        Some(duration) => Ok(duration.try_into()?),
+        None => Ok(CompactionWindow::DisableCompaction),
     }
 }
 
@@ -4648,34 +4652,50 @@ pub fn plan_alter_index_options(
     AlterIndexStatement {
         index_name,
         if_exists,
-        action: actions,
+        action,
     }: AlterIndexStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let object_type = ObjectType::Index;
-    let id = match resolve_item_or_type(scx, object_type, index_name.clone(), if_exists)? {
-        Some(entry) => entry.id(),
-        None => {
-            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: index_name.to_string(),
-                object_type,
-            });
-
-            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
-        }
-    };
-
-    match actions {
+    match action {
         AlterIndexAction::ResetOptions(options) => {
-            Ok(Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan {
-                id,
-                options: options.into_iter().collect(),
-            }))
+            let mut options = options.into_iter();
+            if let Some(opt) = options.next() {
+                match opt {
+                    IndexOptionName::RetainHistory => {
+                        if options.next().is_some() {
+                            sql_bail!("RETAIN HISTORY must be only option");
+                        }
+                        return alter_retain_history(
+                            scx,
+                            object_type,
+                            if_exists,
+                            UnresolvedObjectName::Item(index_name),
+                            None,
+                        );
+                    }
+                }
+            }
+            sql_bail!("expected option");
         }
         AlterIndexAction::SetOptions(options) => {
-            Ok(Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan {
-                id,
-                options: plan_index_options(scx, options)?,
-            }))
+            let mut options = options.into_iter();
+            if let Some(opt) = options.next() {
+                match opt.name {
+                    IndexOptionName::RetainHistory => {
+                        if options.next().is_some() {
+                            sql_bail!("RETAIN HISTORY must be only option");
+                        }
+                        return alter_retain_history(
+                            scx,
+                            object_type,
+                            if_exists,
+                            UnresolvedObjectName::Item(index_name),
+                            opt.value,
+                        );
+                    }
+                }
+            }
+            sql_bail!("expected option");
         }
     }
 }
@@ -4715,7 +4735,6 @@ pub fn plan_alter_cluster(
         AlterClusterAction::SetOptions(set_options) => {
             let ClusterOptionExtracted {
                 availability_zones,
-                idle_arrangement_merge_effort,
                 introspection_debugging,
                 introspection_interval,
                 managed,
@@ -4757,11 +4776,6 @@ pub fn plan_alter_cluster(
                     }
                     if replication_factor.is_some() {
                         sql_bail!("REPLICATION FACTOR not supported for unmanaged clusters");
-                    }
-                    if idle_arrangement_merge_effort.is_some() {
-                        sql_bail!(
-                            "IDLE ARRANGEMENT MERGE EFFORT not supported for unmanaged clusters"
-                        );
                     }
                     if introspection_debugging.is_some() {
                         sql_bail!("INTROSPECTION DEBUGGING not supported for unmanaged clusters");
@@ -4814,10 +4828,6 @@ pub fn plan_alter_cluster(
             if let Some(availability_zones) = availability_zones {
                 options.availability_zones = AlterOptionParameter::Set(availability_zones);
             }
-            if let Some(idle_arrangement_merge_effort) = idle_arrangement_merge_effort {
-                options.idle_arrangement_merge_effort =
-                    AlterOptionParameter::Set(idle_arrangement_merge_effort);
-            }
             if let Some(introspection_debugging) = introspection_debugging {
                 options.introspection_debugging =
                     AlterOptionParameter::Set(introspection_debugging);
@@ -4859,7 +4869,6 @@ pub fn plan_alter_cluster(
                     Disk => options.disk = Reset,
                     IntrospectionInterval => options.introspection_interval = Reset,
                     IntrospectionDebugging => options.introspection_debugging = Reset,
-                    IdleArrangementMergeEffort => options.idle_arrangement_merge_effort = Reset,
                     Managed => options.managed = Reset,
                     Replicas => options.replicas = Reset,
                     ReplicationFactor => options.replication_factor = Reset,
@@ -5286,10 +5295,86 @@ pub fn describe_alter_retain_history(
 }
 
 pub fn plan_alter_retain_history(
-    _: &StatementContext,
-    _: AlterRetainHistoryStatement<Aug>,
+    scx: &StatementContext,
+    AlterRetainHistoryStatement {
+        object_type,
+        if_exists,
+        name,
+        history,
+    }: AlterRetainHistoryStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    bail_unsupported!("ALTER RETAIN HISTORY");
+    alter_retain_history(scx, object_type.into(), if_exists, name, history)
+}
+
+fn alter_retain_history(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: UnresolvedObjectName,
+    history: Option<WithOptionValue<Aug>>,
+) -> Result<Plan, PlanError> {
+    let name = match (object_type, name) {
+        (
+            // View gets a special error below.
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Table
+            | ObjectType::Source
+            | ObjectType::Index,
+            UnresolvedObjectName::Item(name),
+        ) => name,
+        (object_type, _) => {
+            sql_bail!("{object_type} does not support RETAIN HISTORY")
+        }
+    };
+    match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
+        Some(entry) => {
+            let full_name = scx.catalog.resolve_full_name(entry.name());
+            let item_type = entry.item_type();
+
+            // Return a more helpful error on `ALTER VIEW <materialized-view>`.
+            if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
+                return Err(PlanError::AlterViewOnMaterializedView(
+                    full_name.to_string(),
+                ));
+            } else if object_type == ObjectType::View {
+                sql_bail!("{object_type} does not support RETAIN HISTORY")
+            } else if object_type != item_type {
+                sql_bail!(
+                    "\"{}\" is a {} not a {}",
+                    full_name,
+                    entry.item_type(),
+                    format!("{object_type}").to_lowercase()
+                )
+            }
+
+            // Save the original value so we can write it back down in the create_sql catalog item.
+            let (value, lcw) = match &history {
+                Some(WithOptionValue::RetainHistoryFor(value)) => {
+                    let window = OptionalDuration::try_from_value(value.clone())?;
+                    (Some(value.clone()), window.0)
+                }
+                None => (None, None),
+                _ => sql_bail!("unexpected value type for RETAIN HISTORY"),
+            };
+            let window = plan_retain_history(scx, lcw)?;
+
+            Ok(Plan::AlterRetainHistory(AlterRetainHistoryPlan {
+                id: entry.id(),
+                value,
+                window,
+                object_type,
+            }))
+        }
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
+    }
 }
 
 pub fn describe_alter_secret_options(
@@ -5593,14 +5678,40 @@ pub fn plan_alter_source(
 
     let action = match action {
         AlterSourceAction::SetOptions(options) => {
-            let option = options.into_iter().next().unwrap();
+            let mut options = options.into_iter();
+            let option = options.next().unwrap();
+            if option.name == CreateSourceOptionName::RetainHistory {
+                if options.next().is_some() {
+                    sql_bail!("RETAIN HISTORY must be only option");
+                }
+                return alter_retain_history(
+                    scx,
+                    object_type,
+                    if_exists,
+                    UnresolvedObjectName::Item(source_name),
+                    option.value,
+                );
+            }
             sql_bail!(
                 "Cannot modify the {} of a SOURCE.",
                 option.name.to_ast_string()
             );
         }
         AlterSourceAction::ResetOptions(reset) => {
-            let option = reset.into_iter().next().unwrap();
+            let mut options = reset.into_iter();
+            let option = options.next().unwrap();
+            if option == CreateSourceOptionName::RetainHistory {
+                if options.next().is_some() {
+                    sql_bail!("RETAIN HISTORY must be only option");
+                }
+                return alter_retain_history(
+                    scx,
+                    object_type,
+                    if_exists,
+                    UnresolvedObjectName::Item(source_name),
+                    None,
+                );
+            }
             sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
         }
         AlterSourceAction::DropSubsources {

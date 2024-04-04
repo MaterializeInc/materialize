@@ -34,8 +34,8 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
-    Role, Schema, Source, Table, Type,
+    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, DefaultPrivileges, Func, Log, Source,
+    Table, Type,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -58,11 +58,11 @@ use mz_sql::catalog::{
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
-    ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
-    SchemaId, SchemaSpecifier,
+    ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
+    SchemaSpecifier,
 };
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{OwnedVarInput, SystemVars, VarError, VarInput};
+use mz_sql::session::vars::{SystemVars, VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::Expr;
@@ -78,9 +78,7 @@ use crate::AdapterError;
 #[derive(Debug)]
 pub struct BuiltinMigrationMetadata {
     // Used to drop objects on STORAGE nodes
-    pub previous_sink_ids: Vec<GlobalId>,
-    pub previous_materialized_view_ids: Vec<GlobalId>,
-    pub previous_source_ids: Vec<GlobalId>,
+    pub previous_storage_collection_ids: BTreeSet<GlobalId>,
     // Used to update in memory catalog state
     pub all_drop_ops: Vec<GlobalId>,
     pub all_create_ops: Vec<(
@@ -104,9 +102,7 @@ pub struct BuiltinMigrationMetadata {
 impl BuiltinMigrationMetadata {
     fn new() -> BuiltinMigrationMetadata {
         BuiltinMigrationMetadata {
-            previous_sink_ids: Vec::new(),
-            previous_materialized_view_ids: Vec::new(),
-            previous_source_ids: Vec::new(),
+            previous_storage_collection_ids: BTreeSet::new(),
             all_drop_ops: Vec::new(),
             all_create_ops: Vec::new(),
             introspection_source_index_updates: BTreeMap::new(),
@@ -172,7 +168,7 @@ impl CatalogItemRebuilder {
             } => state
                 .parse_item(
                     id,
-                    sql.clone(),
+                    &sql,
                     None,
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
@@ -251,145 +247,60 @@ impl Catalog {
                 default_privileges: DefaultPrivileges::default(),
                 system_privileges: PrivilegeMap::default(),
                 comments: CommentsMap::default(),
+                storage_metadata: Default::default(),
             };
 
             let is_read_only = storage.is_read_only();
             let mut txn = storage.transaction().await?;
 
-            state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
-
-            let databases = txn.get_databases();
-            for mz_catalog::durable::Database {
-                id,
-                oid,
-                name,
-                owner_id,
-                privileges,
-            } in databases
+            // Migrate/update durable data before we start loading the in-memory catalog.
             {
-                state.database_by_id.insert(
-                    id.clone(),
-                    Database {
-                        name: name.clone(),
-                        id,
-                        oid,
-                        schemas_by_id: BTreeMap::new(),
-                        schemas_by_name: BTreeMap::new(),
-                        owner_id,
-                        privileges: PrivilegeMap::from_mz_acl_items(privileges),
-                    },
-                );
-                state.database_by_name.insert(name.clone(), id.clone());
-            }
-
-            let schemas = txn.get_schemas();
-            for mz_catalog::durable::Schema {
-                id,
-                oid,
-                name,
-                database_id,
-                owner_id,
-                privileges,
-            } in schemas
-            {
-                let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
-                    Some(database_id) => {
-                        let db = state
-                            .database_by_id
-                            .get_mut(database_id)
-                            .expect("catalog out of sync");
-                        (
-                            &mut db.schemas_by_id,
-                            &mut db.schemas_by_name,
-                            ResolvedDatabaseSpecifier::Id(*database_id),
-                        )
+                migrate::durable_migrate(&mut txn, config.boot_ts)?;
+                // Overwrite and persist selected parameter values in `remote_system_parameters` that
+                // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
+                if let Some(remote_system_parameters) = config.remote_system_parameters {
+                    for (name, value) in remote_system_parameters {
+                        txn.upsert_system_config(&name, value)?;
                     }
-                    None => (
-                        &mut state.ambient_schemas_by_id,
-                        &mut state.ambient_schemas_by_name,
-                        ResolvedDatabaseSpecifier::Ambient,
-                    ),
-                };
-                schemas_by_id.insert(
-                    id.clone(),
-                    Schema {
-                        name: QualifiedSchemaName {
-                            database: database_spec,
-                            schema: name.clone(),
-                        },
-                        id: SchemaSpecifier::Id(id.clone()),
-                        oid,
-                        items: BTreeMap::new(),
-                        functions: BTreeMap::new(),
-                        types: BTreeMap::new(),
-                        owner_id,
-                        privileges: PrivilegeMap::from_mz_acl_items(privileges),
-                    },
-                );
-                schemas_by_name.insert(name.clone(), id);
+                    txn.set_system_config_synced_once()?;
+                }
+                // Add any new builtin Clusters, Cluster Replicas, or Roles that may be newly defined.
+                if !is_read_only {
+                    let cluster_sizes = BuiltinBootstrapClusterSizes {
+                        system_cluster: config.builtin_system_cluster_replica_size,
+                        introspection_cluster: config.builtin_introspection_cluster_replica_size,
+                    };
+                    add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
+                    add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
+                    add_new_builtin_roles_migration(&mut txn)?;
+                }
             }
 
-            let default_privileges = txn.get_default_privileges();
-            for mz_catalog::durable::DefaultPrivilege { object, acl_item } in default_privileges {
-                state.default_privileges.grant(object, acl_item);
-            }
-
-            let system_privileges = txn.get_system_privileges();
-            state.system_privileges.grant_all(system_privileges);
-
-            Catalog::load_system_configuration(
-                &mut state,
-                &mut txn,
-                &config.system_parameter_defaults,
-                config.remote_system_parameters.as_ref(),
-            )?;
-
-            // Add any new builtin Clusters, Cluster Replicas, or Roles that may be newly defined.
-            if !is_read_only {
-                let cluster_sizes = BuiltinBootstrapClusterSizes {
-                    system_cluster: config.builtin_system_cluster_replica_size,
-                    introspection_cluster: config.builtin_introspection_cluster_replica_size,
-                };
-                add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
-                add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
-                add_new_builtin_roles_migration(&mut txn)?;
-            }
-
-            let roles = txn.get_roles();
-            for mz_catalog::durable::Role {
-                id,
-                oid,
-                name,
-                attributes,
-                membership,
-                vars,
-            } in roles
+            // Seed the in-memory catalog with values that don't come from the durable catalog.
             {
-                state.roles_by_name.insert(name.clone(), id);
-                state.roles_by_id.insert(
-                    id,
-                    Role {
-                        name,
-                        id,
-                        oid,
-                        attributes,
-                        membership,
-                        vars,
-                    },
-                );
+                // Set defaults from configuration passed in the provided `system_parameter_defaults`
+                // map.
+                for (name, value) in config.system_parameter_defaults {
+                    match state.set_system_configuration_default(&name, VarInput::Flat(&value)) {
+                        Ok(_) => (),
+                        Err(Error {
+                                kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
+                            }) => {
+                            warn!(%name, "cannot load unknown system parameter from catalog storage to set default parameter");
+                        }
+                        Err(e) => return Err(e.into()),
+                    };
+                }
+                state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
             }
 
-            let comments = txn.get_comments();
-            for mz_catalog::durable::Comment {
-                object_id,
-                sub_component,
-                comment,
-            } in comments
-            {
-                state
-                    .comments
-                    .update_comment(object_id, sub_component, Some(comment));
-            }
+            let updates = txn.get_updates().collect();
+            state.apply_updates_for_bootstrap(updates);
+
+            // This mirrors the `persist_txn_tables` "system var" into the catalog
+            // storage "config" collection so that we can toggle the flag with
+            // Launch Darkly, but use it in boot before Launch Darkly is available.
+            txn.set_persist_txn_tables(state.system_config().persist_txn_tables())?;
 
             Catalog::load_builtin_types(&mut state, &mut txn)?;
 
@@ -490,7 +401,7 @@ impl Catalog {
                             let item = state
                                 .parse_item(
                                     id,
-                                    view.create_sql(),
+                                    &view.create_sql(),
                                     None,
                                     false,
                                     None,
@@ -650,7 +561,6 @@ impl Catalog {
                     )?,
                     compute: ComputeReplicaConfig {
                         logging,
-                        idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
                     },
                 };
 
@@ -680,7 +590,7 @@ impl Catalog {
                         let mut item = state
                             .parse_item(
                                 id,
-                                index.create_sql(),
+                                &index.create_sql(),
                                 None,
                                 index.is_retained_metrics_object,
                                 if index.is_retained_metrics_object { Some(state.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
@@ -740,7 +650,7 @@ impl Catalog {
                 .unwrap_or_else(|| "new".to_string());
 
             if !config.skip_migrations {
-                migrate::migrate(&state, &mut txn, config.now, &state.config.connection_context)
+                migrate::migrate(&state, &mut txn, config.now, config.boot_ts, &state.config.connection_context)
                     .await
                     .map_err(|e| {
                         Error::new(ErrorKind::FailedMigration {
@@ -752,14 +662,6 @@ impl Catalog {
 
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
             }
-
-            // Re-load the system configuration in case it changed after the migrations.
-            Catalog::load_system_configuration(
-                &mut state,
-                &mut txn,
-                &config.system_parameter_defaults,
-                config.remote_system_parameters.as_ref(),
-            )?;
 
             let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
 
@@ -779,6 +681,8 @@ impl Catalog {
                 &mut builtin_migration_metadata,
             )?;
 
+            state.update_storage_metadata(&txn);
+
             txn.commit().await?;
             Ok((
                 state,
@@ -792,11 +696,6 @@ impl Catalog {
 
     /// Opens or creates a catalog that stores data at `path`.
     ///
-    /// The passed in `boot_ts_not_linearizable` is _not_ linearizable, we do
-    /// not persist this timestamp before using it. Think hard about this fact
-    /// if you ever feel the need to use this for something that needs to be
-    /// linearizable.
-    ///
     /// Returns the catalog, metadata about builtin objects that have changed
     /// schemas since last restart, a list of updates to builtin tables that
     /// describe the initial state of the catalog, and the version of the
@@ -808,7 +707,7 @@ impl Catalog {
     #[instrument(name = "catalog::open")]
     pub fn open(
         config: Config<'_>,
-        boot_ts_not_linearizable: mz_repr::Timestamp,
+        boot_ts: mz_repr::Timestamp,
     ) -> BoxFuture<
         'static,
         Result<
@@ -974,7 +873,7 @@ impl Catalog {
                 .await
                 .get_and_prune_storage_usage(
                     config.storage_usage_retention_period,
-                    boot_ts_not_linearizable,
+                    boot_ts,
                     wait_for_consolidation,
                 )
                 .await?;
@@ -995,63 +894,6 @@ impl Catalog {
         }
         .instrument(tracing::info_span!("catalog::open"))
         .boxed()
-    }
-
-    /// Loads the system configuration from the various locations in which its
-    /// values and value overrides can reside.
-    ///
-    /// This method should _always_ be called during catalog creation _before_
-    /// any other operations that depend on system configuration values.
-    ///
-    /// Configuration is loaded in the following order:
-    ///
-    /// 1. Load parameters from the configuration persisted in the catalog
-    ///    storage backend.
-    /// 2. Set defaults from configuration passed in the provided
-    ///    `system_parameter_defaults` map.
-    /// 3. Overwrite and persist selected parameter values in
-    ///    `remote_system_parameters` that was pulled from a remote frontend
-    ///    (if present).
-    ///
-    /// # Errors
-    #[mz_ore::instrument]
-    fn load_system_configuration(
-        state: &mut CatalogState,
-        txn: &mut Transaction<'_>,
-        system_parameter_defaults: &BTreeMap<String, String>,
-        remote_system_parameters: Option<&BTreeMap<String, OwnedVarInput>>,
-    ) -> Result<(), AdapterError> {
-        let system_config = txn.get_system_configurations();
-
-        for (name, value) in system_parameter_defaults {
-            match state.set_system_configuration_default(name, VarInput::Flat(value)) {
-                Ok(_) => (),
-                Err(Error {
-                    kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
-                }) => {
-                    warn!(%name, "cannot load unknown system parameter from catalog storage to set default parameter");
-                }
-                Err(e) => return Err(e.into()),
-            };
-        }
-        for mz_catalog::durable::SystemConfiguration { name, value } in system_config {
-            match state.insert_system_configuration(&name, VarInput::Flat(&value)) {
-                Ok(_) => (),
-                Err(Error {
-                    kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
-                }) => {
-                    warn!(%name, "cannot load unknown system parameter from catalog storage to set configured parameter");
-                }
-                Err(e) => return Err(e.into()),
-            };
-        }
-        if let Some(remote_system_parameters) = remote_system_parameters {
-            for (name, value) in remote_system_parameters {
-                Catalog::update_system_configuration(state, txn, name, value.borrow())?;
-            }
-            txn.set_system_config_synced_once()?;
-        }
-        Ok(())
     }
 
     /// Loads built-in system types into the catalog.
@@ -1241,15 +1083,14 @@ impl Catalog {
 
             ancestor_ids.insert(id, new_id);
 
+            if entry.item().is_storage_collection() {
+                migration_metadata
+                    .previous_storage_collection_ids
+                    .insert(id);
+            }
+
             // Push drop commands.
             match entry.item() {
-                CatalogItem::Table(_) | CatalogItem::Source(_) => {
-                    migration_metadata.previous_source_ids.push(id)
-                }
-                CatalogItem::Sink(_) => migration_metadata.previous_sink_ids.push(id),
-                CatalogItem::MaterializedView(_) => {
-                    migration_metadata.previous_materialized_view_ids.push(id)
-                }
                 CatalogItem::Log(log) => {
                     migrated_log_ids.insert(id, log.variant.clone());
                 }
@@ -1271,6 +1112,16 @@ impl Catalog {
                                 ));
                         }
                     }
+                }
+                CatalogItem::Table(_)
+                | CatalogItem::Source(_)
+                | CatalogItem::MaterializedView(_) => {
+                    // Storage objects don't have any external objects to drop.
+                }
+                CatalogItem::Sink(_) => {
+                    // Sinks don't have any external objects to drop--however,
+                    // this would change if we add a collections for sinks
+                    // #17672.
                 }
                 CatalogItem::View(_) => {
                     // Views don't have any external objects to drop.
@@ -1311,9 +1162,6 @@ impl Catalog {
         }
 
         // Reverse drop commands.
-        migration_metadata.previous_sink_ids.reverse();
-        migration_metadata.previous_materialized_view_ids.reverse();
-        migration_metadata.previous_source_ids.reverse();
         migration_metadata.all_drop_ops.reverse();
         migration_metadata.user_drop_ops.reverse();
 
@@ -1331,6 +1179,12 @@ impl Catalog {
             .map(|system_item| system_item.description)
             .collect();
 
+        // If you are 100% positive that it is safe to delete a system object outside the
+        // `mz_internal` schema, then add it to this set. Make sure that no prod environments are
+        // using this object and that the upgrade checker does not show any issues.
+        //
+        // Objects can be removed from this set after one release.
+        let delete_exceptions: HashSet<SystemObjectDescription> = [].into();
         // TODO(jkosh44) Technically we could support changing the type of a builtin object outside
         // of `mz_internal` (i.e. from a table to a view). However, these migrations don't
         // currently handle that scenario correctly.
@@ -1338,7 +1192,10 @@ impl Catalog {
             migration_metadata
                 .deleted_system_objects
                 .iter()
-                .all(|deleted_object| deleted_object.schema_name == MZ_INTERNAL_SCHEMA),
+                .all(
+                    |deleted_object| deleted_object.schema_name == MZ_INTERNAL_SCHEMA
+                        || delete_exceptions.contains(deleted_object)
+                ),
             "only mz_internal objects can be deleted, deleted objects: {:?}",
             migration_metadata.deleted_system_objects
         );
@@ -1460,7 +1317,6 @@ impl Catalog {
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
         while let Some(item) = items.pop_front() {
-            let d_c = item.create_sql.clone();
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
             // the only goal is to produce a nicer error message; we'll bail out
@@ -1468,7 +1324,7 @@ impl Catalog {
             static LOGGING_ERROR: Lazy<Regex> =
                 Lazy::new(|| Regex::new("mz_catalog.[^']*").expect("valid regex"));
 
-            let catalog_item = match state.deserialize_item(item.id, d_c) {
+            let catalog_item = match state.deserialize_item(item.id, &item.create_sql) {
                 Ok(item) => item,
                 Err(AdapterError::Catalog(Error {
                     kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(name)),
@@ -1700,7 +1556,6 @@ fn add_new_builtin_clusters_migration(
                         replication_factor: 1,
                         disk: is_cluster_size_v2(&cluster_size),
                         logging: default_logging_config(),
-                        idle_arrangement_merge_effort: None,
                         optimizer_feature_overrides: Default::default(),
                         schedule: Default::default(),
                     }),
@@ -1791,7 +1646,6 @@ pub(crate) fn builtin_cluster_replica_config(
             size: replica_size,
         },
         logging: default_logging_config(),
-        idle_arrangement_merge_effort: None,
     }
 }
 
@@ -1886,7 +1740,7 @@ mod builtin_migration_tests {
                 }),
                 SimplifiedItem::MaterializedView { referenced_names } => {
                     let table_list = referenced_names.iter().join(",");
-                    let resolved_ids = convert_name_vec_to_id_vec(referenced_names, id_mapping);
+                    let resolved_ids = convert_names_to_ids(referenced_names, id_mapping);
                     CatalogItem::MaterializedView(MaterializedView {
                         create_sql: format!(
                             "CREATE MATERIALIZED VIEW mv AS SELECT * FROM {table_list}"
@@ -1908,7 +1762,7 @@ mod builtin_migration_tests {
                         desc: RelationDesc::empty()
                             .with_column("a", ScalarType::Int32.nullable(true))
                             .with_key(vec![0]),
-                        resolved_ids: ResolvedIds(BTreeSet::from_iter(resolved_ids)),
+                        resolved_ids: ResolvedIds(resolved_ids),
                         cluster_id: ClusterId::User(1),
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
@@ -1938,9 +1792,7 @@ mod builtin_migration_tests {
         test_name: &'static str,
         initial_state: Vec<SimplifiedCatalogEntry>,
         migrated_names: Vec<String>,
-        expected_previous_sink_names: Vec<String>,
-        expected_previous_materialized_view_names: Vec<String>,
-        expected_previous_source_names: Vec<String>,
+        expected_previous_storage_collection_names: Vec<String>,
         expected_all_drop_ops: Vec<String>,
         expected_user_drop_ops: Vec<String>,
         expected_all_create_ops: Vec<String>,
@@ -1976,6 +1828,7 @@ mod builtin_migration_tests {
             .clone();
         catalog
             .transact(
+                None,
                 mz_repr::Timestamp::MIN,
                 None,
                 vec![Op::CreateItem {
@@ -1996,21 +1849,18 @@ mod builtin_migration_tests {
         id
     }
 
-    fn convert_name_vec_to_id_vec(
+    fn convert_names_to_ids(
         name_vec: Vec<String>,
         id_lookup: &BTreeMap<String, GlobalId>,
-    ) -> Vec<GlobalId> {
+    ) -> BTreeSet<GlobalId> {
         name_vec.into_iter().map(|name| id_lookup[&name]).collect()
     }
 
-    fn convert_id_vec_to_name_vec(
-        id_vec: Vec<GlobalId>,
+    fn convert_ids_to_names<I: IntoIterator<Item = GlobalId>>(
+        ids: I,
         name_lookup: &BTreeMap<GlobalId, String>,
-    ) -> Vec<String> {
-        id_vec
-            .into_iter()
-            .map(|id| name_lookup[&id].clone())
-            .collect()
+    ) -> BTreeSet<String> {
+        ids.into_iter().map(|id| name_lookup[&id].clone()).collect()
     }
 
     async fn run_test_case(test_case: BuiltinMigrationTestCase) {
@@ -2056,35 +1906,26 @@ mod builtin_migration_tests {
             };
 
             assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
-                test_case.expected_previous_sink_names,
-                "{} test failed with wrong previous sink ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(
-                    migration_metadata.previous_materialized_view_ids,
-                    &name_mapping,
+                convert_ids_to_names(
+                    migration_metadata.previous_storage_collection_ids,
+                    &name_mapping
                 ),
-                test_case.expected_previous_materialized_view_names,
-                "{} test failed with wrong previous materialized view ids",
+                test_case
+                    .expected_previous_storage_collection_names
+                    .into_iter()
+                    .collect(),
+                "{} test failed with wrong previous collection_names",
                 test_case.test_name
             );
             assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_source_ids, &name_mapping),
-                test_case.expected_previous_source_names,
-                "{} test failed with wrong previous source ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
-                test_case.expected_all_drop_ops,
+                convert_ids_to_names(migration_metadata.all_drop_ops, &name_mapping),
+                test_case.expected_all_drop_ops.into_iter().collect(),
                 "{} test failed with wrong all drop ops",
                 test_case.test_name
             );
             assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
-                test_case.expected_user_drop_ops,
+                convert_ids_to_names(migration_metadata.user_drop_ops, &name_mapping),
+                test_case.expected_user_drop_ops.into_iter().collect(),
                 "{} test failed with wrong user drop ops",
                 test_case.test_name
             );
@@ -2093,8 +1934,8 @@ mod builtin_migration_tests {
                     .all_create_ops
                     .into_iter()
                     .map(|(_, _, name, _, _, _)| name.item)
-                    .collect::<Vec<_>>(),
-                test_case.expected_all_create_ops,
+                    .collect::<BTreeSet<_>>(),
+                test_case.expected_all_create_ops.into_iter().collect(),
                 "{} test failed with wrong all create ops",
                 test_case.test_name
             );
@@ -2103,8 +1944,8 @@ mod builtin_migration_tests {
                     .user_create_ops
                     .into_iter()
                     .map(|(_, _, _, name)| name)
-                    .collect::<Vec<_>>(),
-                test_case.expected_user_create_ops,
+                    .collect::<BTreeSet<_>>(),
+                test_case.expected_user_create_ops.into_iter().collect(),
                 "{} test failed with wrong user create ops",
                 test_case.test_name
             );
@@ -2117,7 +1958,7 @@ mod builtin_migration_tests {
                 test_case
                     .expected_migrated_system_object_mappings
                     .into_iter()
-                    .collect::<BTreeSet<_>>(),
+                    .collect(),
                 "{} test failed with wrong migrated system object mappings",
                 test_case.test_name
             );
@@ -2137,9 +1978,7 @@ mod builtin_migration_tests {
                 item: SimplifiedItem::Table,
             }],
             migrated_names: vec![],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec![],
-            expected_previous_source_names: vec![],
+            expected_previous_storage_collection_names: vec![],
             expected_all_drop_ops: vec![],
             expected_user_drop_ops: vec![],
             expected_all_create_ops: vec![],
@@ -2160,9 +1999,7 @@ mod builtin_migration_tests {
                 item: SimplifiedItem::Table,
             }],
             migrated_names: vec!["s1".to_string()],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec![],
-            expected_previous_source_names: vec!["s1".to_string()],
+            expected_previous_storage_collection_names: vec!["s1".to_string()],
             expected_all_drop_ops: vec!["s1".to_string()],
             expected_user_drop_ops: vec![],
             expected_all_create_ops: vec!["s1".to_string()],
@@ -2192,9 +2029,7 @@ mod builtin_migration_tests {
                 },
             ],
             migrated_names: vec!["s1".to_string()],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec!["u1".to_string()],
-            expected_previous_source_names: vec!["s1".to_string()],
+            expected_previous_storage_collection_names: vec!["u1".to_string(), "s1".to_string()],
             expected_all_drop_ops: vec!["u1".to_string(), "s1".to_string()],
             expected_user_drop_ops: vec!["u1".to_string()],
             expected_all_create_ops: vec!["s1".to_string(), "u1".to_string()],
@@ -2231,9 +2066,11 @@ mod builtin_migration_tests {
                 },
             ],
             migrated_names: vec!["s1".to_string()],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec!["u1".to_string(), "u2".to_string()],
-            expected_previous_source_names: vec!["s1".to_string()],
+            expected_previous_storage_collection_names: vec![
+                "u1".to_string(),
+                "u2".to_string(),
+                "s1".to_string(),
+            ],
             expected_all_drop_ops: vec!["u1".to_string(), "u2".to_string(), "s1".to_string()],
             expected_user_drop_ops: vec!["u1".to_string(), "u2".to_string()],
             expected_all_create_ops: vec!["s1".to_string(), "u2".to_string(), "u1".to_string()],
@@ -2275,9 +2112,12 @@ mod builtin_migration_tests {
                 },
             ],
             migrated_names: vec!["s1".to_string(), "s2".to_string()],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec!["u2".to_string(), "u1".to_string()],
-            expected_previous_source_names: vec!["s1".to_string(), "s2".to_string()],
+            expected_previous_storage_collection_names: vec![
+                "u2".to_string(),
+                "u1".to_string(),
+                "s1".to_string(),
+                "s2".to_string(),
+            ],
             expected_all_drop_ops: vec![
                 "u2".to_string(),
                 "s1".to_string(),
@@ -2436,8 +2276,7 @@ mod builtin_migration_tests {
                 "s339".to_string(),
                 "s340".to_string(),
             ],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec![
+            expected_previous_storage_collection_names: vec![
                 "s349".to_string(),
                 "s421".to_string(),
                 "s355".to_string(),
@@ -2453,8 +2292,6 @@ mod builtin_migration_tests {
                 "s318".to_string(),
                 "s323".to_string(),
                 "s295".to_string(),
-            ],
-            expected_previous_source_names: vec![
                 "s273".to_string(),
                 "s317".to_string(),
                 "s322".to_string(),
@@ -2545,9 +2382,7 @@ mod builtin_migration_tests {
                 },
             ],
             migrated_names: vec!["s1".to_string()],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec![],
-            expected_previous_source_names: vec!["s1".to_string()],
+            expected_previous_storage_collection_names: vec!["s1".to_string()],
             expected_all_drop_ops: vec!["s2".to_string(), "s1".to_string()],
             expected_user_drop_ops: vec![],
             expected_all_create_ops: vec!["s1".to_string(), "s2".to_string()],

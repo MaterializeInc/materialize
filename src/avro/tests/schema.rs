@@ -27,7 +27,7 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use chrono::NaiveDateTime;
+use chrono::DateTime;
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
 use once_cell::sync::Lazy;
@@ -344,12 +344,12 @@ static VALID_LOGICAL_TYPES: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
         // Timestamp millis logical type
         (
             r#"{"type": "long", "logicalType": "timestamp-millis"}"#,
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(0, 0).unwrap()),
+            Value::Timestamp(DateTime::from_timestamp(0, 0).unwrap().naive_utc()),
         ),
         // Timestamp micros logical type
         (
             r#"{"type": "long", "logicalType": "timestamp-micros"}"#,
-            Value::Timestamp(NaiveDateTime::from_timestamp_opt(0, 0).unwrap()),
+            Value::Timestamp(DateTime::from_timestamp(0, 0).unwrap().naive_utc()),
         ),
     ]
 });

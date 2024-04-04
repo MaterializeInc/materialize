@@ -19,7 +19,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = on;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE, found EOF
+statement error db error: ERROR: Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE, found EOF
 CREATE CLUSTER foo
 
 statement ok
@@ -833,5 +833,20 @@ simple conn=mz_system,user=mz_system
 DROP CLUSTER t1
 ----
 COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER mz_system SET (SIZE = '2')
+----
+COMPLETE 0
+
+query I
+SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'mz_system') AND id LIKE 's%';
+----
+1
+
+query I
+SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'mz_system') AND id LIKE 'u%';
+----
+0
 
 reset-server

@@ -21,7 +21,7 @@ pre-installed.
 
 ### `quickstart` cluster
 
-A cluster named `quickstart` with a size of `xsmall` and a replication factor of
+A cluster named `quickstart` with a size of `100cc` and a replication factor of
 `1` will be pre-installed in every environment. You can modify or drop this
 cluster at any time.
 
@@ -79,10 +79,10 @@ SHOW CLUSTERS;
 ```nofmt
        name                  replicas
 --------------------- | ------------------
- default              |  r1 (3xsmall)
- auction_house        |  r1 (3xsmall)
- mz_introspection     |  r1 (2xsmall)
- mz_system            |  r1 (2xsmall)
+ default              |  r1 (25cc)
+ auction_house        |  r1 (25cc)
+ mz_introspection     |  r1 (50cc)
+ mz_system            |  r1 (50cc)
 ```
 
 ```sql
@@ -92,7 +92,7 @@ SHOW CLUSTERS LIKE 'auction_%';
 ```nofmt
       name                  replicas
 --------------------- | ------------------
- auction_house        |  r1 (3xsmall)
+ auction_house        |  r1 (25cc)
 ```
 
 

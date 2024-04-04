@@ -651,4 +651,4 @@ impl GroupCommitWaiter {
 /// Note: We sometimes want to throttle how many group commits are running at once, which this
 /// permit allows us to do.
 #[derive(Debug)]
-pub struct GroupCommitPermit(OwnedSemaphorePermit);
+pub struct GroupCommitPermit(#[allow(dead_code)] OwnedSemaphorePermit);

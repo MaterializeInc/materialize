@@ -71,51 +71,8 @@ example, you could place your development workloads in a cluster named
 
 ### Size
 
-The `SIZE` option determines the amount of compute resources (CPU and memory)
-available to the cluster. Valid sizes are:
-
-* `3xsmall`
-* `2xsmall`
-* `xsmall`
-* `small`
-* `medium`
-* `large`
-* `xlarge`
-* `2xlarge`
-* `3xlarge`
-* `4xlarge`
-* `5xlarge`
-* `6xlarge`
-
-Clusters of larger sizes can process data faster and handle larger data volumes.
-You can use [`ALTER CLUSTER`] to resize the cluster in order to respond to
-changes in the resource requirements of your workload.
-
-The resource allocations for a given size are twice the resource allocations of
-the previous size. To determine the specific resource allocations for a size,
-query the [`mz_internal.mz_cluster_replica_sizes`] table.
-
-{{< warning >}}
-The values in the `mz_internal.mz_cluster_replica_sizes` table may change at any
-time. You should not rely on them for any kind of capacity planning.
-{{< /warning >}}
-
-#### Disk-enabled sizes
-
-{{< private-preview />}}
-
-Disk-enabled sizes allow clusters to spill data to a scratch disk when a the
-data does not fit in memory.
-
-Using a disk-enabled size allows you to trade off performance for cost. A
-cluster of a given disk-enabled size can process data sets that are larger than
-would be possible with access to memory alone. Operations on a disk, however,
-are slower than operations in memory, and so a workload that spills to disk will
-perform more slowly than a workload that does not. Note that exact storage
-medium for the attached disk is not specified, and its performance
-characteristics are subject to change.
-
-The following cluster sizes have disk attached:
+The `SIZE` option determines the amount of compute resources (CPU, memory, and
+disk) available to the cluster. Valid sizes are:
 
 * `25cc`
 * `50cc`
@@ -136,10 +93,59 @@ The following cluster sizes have disk attached:
 The resource allocations are proportional to the number in the size name. For
 example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
 cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
-size `400cc`.
+size `400cc`. To determine the specific resource allocations for a size,
+query the [`mz_internal.mz_cluster_replica_sizes`] table.
 
-The correspondence between disk-enabled sizes and traditional sizes is shown
-in the [credit usage table](#credit-usage).
+
+Clusters of larger sizes can process data faster and handle larger data volumes.
+You can use [`ALTER CLUSTER`] to resize the cluster in order to respond to
+changes in the resource requirements of your workload.
+
+
+{{< warning >}}
+The values in the `mz_internal.mz_cluster_replica_sizes` table may change at any
+time. You should not rely on them for any kind of capacity planning.
+{{< /warning >}}
+
+#### Legacy sizes
+
+Materialize also offers some legacy sizes. Clusters using legacy sizes run on
+older hardware without local disks attached.
+
+In most cases, you **should not** use legacy sizes. [Standard sizes](#size)
+offer better performance per credit for nearly all workloads. We recommend using
+standard sizes for all new clusters, and recommend migrating existing
+legacy-sized clusters to standard sizes. In many cases, migrating from
+legacy to standard sizes will result in a 25-50% cost reduction.
+
+However, certain rare workloads exhibit better performance per credit on legacy
+sizes. Materialize is committed to supporting these workloads on legacy sizes
+until they have equivalent or better performance per credit on standard sizes.
+
+{{< if-past "2024-04-15" >}}
+{{< warning >}}
+Materialize regions that were enabled after 15 April 2024 do not have access
+to legacy sizes.
+{{< /warning >}}
+{{< /if-past >}}
+
+When legacy sizes are enabled for a region, the following sizes are available:
+
+* `3xsmall`
+* `2xsmall`
+* `xsmall`
+* `small`
+* `medium`
+* `large`
+* `xlarge`
+* `2xlarge`
+* `3xlarge`
+* `4xlarge`
+* `5xlarge`
+* `6xlarge`
+
+The correspondence between non-legacy sizes and legacy sizes is shown in the [credit
+usage table](#credit-usage).
 
 ### Replication factor
 
@@ -186,23 +192,23 @@ To increase a cluster's capacity, you should instead increase the cluster's
 Each [replica](#replication-factor) of the cluster consumes credits at a rate
 determined by the cluster's size:
 
-Size      | Disk-enabled size  | Credits per replica per hour
-----------|--------------------|---------
-`3xsmall` | `25cc`             | 0.25
-`2xsmall` | `50cc`             | 0.5
-`xsmall`  | `100cc`            | 1
-`small`   | `200cc`            | 2
-&nbsp;    | `300cc`            | 3
-`medium`  | `400cc`            | 4
-&nbsp;    | `600cc`            | 6
-`large`   | `800cc`            | 8
-&nbsp;    | `1200cc`           | 12
-`xlarge`  | `1600cc`           | 16
-`2xlarge` | `3200cc`           | 32
-`3xlarge` | `6400cc`           | 64
-`4xlarge` | `128C`             | 128
-`5xlarge` | `256C`             | 256
-`6xlarge` | `512C`             | 512
+Size      | Legacy size  | Credits per replica per hour
+----------|--------------|-----------------------------
+`25cc`    | `3xsmall`    | 0.25
+`50cc`    | `2xsmall`    | 0.5
+`100cc`   | `xsmall`     | 1
+`200cc`   | `small`      | 2
+`300cc`   | &nbsp;       | 3
+`400cc`   | `medium`     | 4
+`600cc`   | &nbsp;       | 6
+`800cc`   | `large`      | 8
+`1200cc`  | &nbsp;       | 12
+`1600cc`  | `xlarge`     | 16
+`3200cc`  | `2xlarge`    | 32
+`6400cc`  | `3xlarge`    | 64
+`128C`    | `4xlarge`    | 128
+`256C`    | `5xlarge`    | 256
+`512C`    | `6xlarge`    | 512
 
 Credit usage is measured at a one second granularity. For a given replica,
 credit usage begins when a `CREATE CLUSTER` or [`ALTER CLUSTER`] statement
@@ -216,7 +222,7 @@ As an example, consider the following sequence of events:
 
 Time                | Event
 --------------------|---------------------------------------------------------
-2023-08-29 3:45:00  | `CREATE CLUSTER c (SIZE 'medium', REPLICATION FACTOR 2`)
+2023-08-29 3:45:00  | `CREATE CLUSTER c (SIZE '400cc', REPLICATION FACTOR 2`)
 2023-08-29 3:45:45  | `ALTER CLUSTER c SET (REPLICATION FACTOR 1)`
 2023-08-29 3:47:15  | `DROP CLUSTER c`
 
@@ -234,7 +240,7 @@ Clusters have several known limitations:
 * Clusters containing sources and sinks can only have a replication factor of
   `0` or `1`.
 
-* When a cluster of size `2xlarge` or larger uses multiple replicas, those
+* When a cluster of size `3200cc` or larger uses multiple replicas, those
   replicas are not guaranteed to be spread evenly across the underlying
   cloud provider's availability zones.
 
@@ -244,10 +250,10 @@ We plan to remove these restrictions in future versions of Materialize.
 
 ### Basic
 
-Create a cluster with two `medium` replicas:
+Create a cluster with two `400cc` replicas:
 
 ```sql
-CREATE CLUSTER c1 (SIZE = 'medium', REPLICATION FACTOR = 2);
+CREATE CLUSTER c1 (SIZE = '400cc', REPLICATION FACTOR = 2);
 ```
 
 ### Introspection disabled
@@ -255,7 +261,7 @@ CREATE CLUSTER c1 (SIZE = 'medium', REPLICATION FACTOR = 2);
 Create a cluster with a single replica and introspection disabled:
 
 ```sql
-CREATE CLUSTER c (SIZE = 'xsmall', INTROSPECTION INTERVAL = 0);
+CREATE CLUSTER c (SIZE = '100cc', INTROSPECTION INTERVAL = 0);
 ```
 
 Disabling introspection can yield a small performance improvement, but you lose
@@ -267,7 +273,7 @@ that cluster replica.
 Create a cluster with no replicas:
 
 ```sql
-CREATE CLUSTER c1 (SIZE 'xsmall', REPLICATION FACTOR = 0);
+CREATE CLUSTER c1 (SIZE '100cc', REPLICATION FACTOR = 0);
 ```
 
 You can later add replicas to this cluster with [`ALTER CLUSTER`].

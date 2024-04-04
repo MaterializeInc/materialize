@@ -21,7 +21,7 @@ use num::Zero;
 
 /// Generic Error type returned from methods on [`DurationExt`].
 #[derive(Copy, Clone, Debug)]
-pub struct DurationError(&'static str);
+pub struct DurationError(#[allow(dead_code)] &'static str);
 
 /// Extensions for [`std::time::Duration`].
 pub trait DurationExt {

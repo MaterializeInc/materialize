@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt::Debug;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -19,6 +20,7 @@ use anyhow::bail;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::durable::Transaction;
 use mz_sql::session::metadata::SessionMetadata;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -37,7 +39,7 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
     CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
-    Role, Schema, Secret, Sink, Source, Table, Type, View,
+    Role, Schema, Secret, Sink, Source, StateUpdate, StateUpdateKind, Table, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -49,8 +51,8 @@ use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
-use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
+use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
@@ -58,7 +60,7 @@ use mz_repr::namespaces::{
     PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
@@ -78,8 +80,9 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{SystemVars, Var, VarInput, DEFAULT_DATABASE_NAME};
+use mz_sql::session::vars::{SystemVars, Var, VarError, VarInput, DEFAULT_DATABASE_NAME};
 use mz_sql_parser::ast::QualifiedReplica;
+use mz_storage_client::controller::StorageMetadata;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
@@ -131,6 +134,7 @@ pub struct CatalogState {
     pub(super) default_privileges: DefaultPrivileges,
     pub(super) system_privileges: PrivilegeMap,
     pub(super) comments: CommentsMap,
+    pub(super) storage_metadata: StorageMetadata,
 }
 
 fn skip_temp_items<S>(
@@ -182,6 +186,7 @@ impl CatalogState {
             default_privileges: Default::default(),
             system_privileges: Default::default(),
             comments: Default::default(),
+            storage_metadata: Default::default(),
         }
     }
 
@@ -807,7 +812,7 @@ impl CatalogState {
     pub(crate) fn deserialize_plan(
         &self,
         id: GlobalId,
-        create_sql: String,
+        create_sql: &str,
         force_if_exists_skip: bool,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         // TODO - The `None` needs to be changed if we ever allow custom
@@ -823,7 +828,7 @@ impl CatalogState {
     #[mz_ore::instrument]
     pub(crate) fn parse_plan(
         &self,
-        create_sql: String,
+        create_sql: &str,
         pcx: Option<&PlanContext>,
         catalog: &mut ConnCatalog,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
@@ -839,7 +844,7 @@ impl CatalogState {
         //    overridden.
         catalog.system_vars_mut().enable_for_item_parsing();
 
-        let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
+        let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
         let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
 
@@ -849,7 +854,7 @@ impl CatalogState {
     pub(crate) fn deserialize_item(
         &self,
         id: GlobalId,
-        create_sql: String,
+        create_sql: &str,
     ) -> Result<CatalogItem, AdapterError> {
         // TODO - The `None` needs to be changed if we ever allow custom
         // logical compaction windows in user-defined objects.
@@ -862,7 +867,7 @@ impl CatalogState {
     pub(crate) fn parse_item(
         &self,
         id: GlobalId,
-        create_sql: String,
+        create_sql: &str,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -2198,8 +2203,7 @@ impl CatalogState {
             Some(ts) => ts.into(),
             _ => oracle_write_ts.into(),
         };
-        let id =
-            tx.get_and_increment_id(mz_catalog::durable::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+        let id = tx.allocate_audit_log_id()?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
         audit_events.push(event.clone());
@@ -2262,6 +2266,230 @@ impl CatalogState {
             }
             SystemObjectId::System => SystemObjectType::System,
         }
+    }
+
+    /// Update in-memory catalog state from a list of updates made to the durable catalog state.
+    ///
+    /// This is meant specifically for bootstrapping because it does not produce builtin table
+    /// updates. The builtin tables need to be loaded before we can produce builtin table updates
+    /// which creates a bootstrapping problem.
+    // TODO(jkosh44) It is very IMPORTANT that per timestamp, the updates are sorted retractions
+    // then additions. Within the retractions the objects should be sorted in reverse dependency
+    // order (objects->schema->database, replica->cluster, etc.). Within the additions the objects
+    // should be sorted in dependency order (database->schema->objects, cluster->replica, etc.).
+    // Objects themselves also need to be sorted by dependency order, this will be tricky but we can
+    // look at the existing bootstrap code for ways of doing this. For now we rely on the caller
+    // providing objects in dependency order.
+    #[instrument]
+    pub(crate) fn apply_updates_for_bootstrap(&mut self, updates: Vec<StateUpdate>) {
+        for StateUpdate { kind, diff } in updates {
+            assert_eq!(
+                diff, 1,
+                "initial catalog updates should be consolidated: ({kind:?}, {diff:?})"
+            );
+            self.apply_update(kind, diff);
+        }
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_update(&mut self, kind: StateUpdateKind, diff: Diff) {
+        fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: impl FnOnce() -> V, diff: Diff)
+        where
+            K: Ord + Debug,
+            V: PartialEq + Eq + Debug,
+        {
+            if diff == 1 {
+                let prev = map.insert(key, value());
+                assert_eq!(
+                    prev, None,
+                    "values must be explicitly retracted before inserting a new value"
+                );
+            } else if diff == -1 {
+                let prev = map.remove(&key);
+                // We can't assert the exact contents of the previous value, since we don't know
+                // what it should look like.
+                assert!(
+                    prev.is_some(),
+                    "retraction does not match existing value: {key:?}"
+                );
+            }
+        }
+
+        assert!(
+            diff == 1 || diff == -1,
+            "invalid update in catalog updates: ({kind:?}, {diff:?})"
+        );
+        match kind {
+            StateUpdateKind::Role(role) => {
+                apply(
+                    &mut self.roles_by_id,
+                    role.id,
+                    || Role {
+                        name: role.name.clone(),
+                        id: role.id,
+                        oid: role.oid,
+                        attributes: role.attributes,
+                        membership: role.membership,
+                        vars: role.vars,
+                    },
+                    diff,
+                );
+                apply(&mut self.roles_by_name, role.name, || role.id, diff);
+            }
+            StateUpdateKind::Database(database) => {
+                apply(
+                    &mut self.database_by_id,
+                    database.id.clone(),
+                    || Database {
+                        name: database.name.clone(),
+                        id: database.id.clone(),
+                        oid: database.oid,
+                        schemas_by_id: BTreeMap::new(),
+                        schemas_by_name: BTreeMap::new(),
+                        owner_id: database.owner_id,
+                        privileges: PrivilegeMap::from_mz_acl_items(database.privileges),
+                    },
+                    diff,
+                );
+                apply(
+                    &mut self.database_by_name,
+                    database.name,
+                    || database.id.clone(),
+                    diff,
+                );
+            }
+            StateUpdateKind::Schema(schema) => {
+                let (schemas_by_id, schemas_by_name, database_spec) = match &schema.database_id {
+                    Some(database_id) => {
+                        let db = self
+                            .database_by_id
+                            .get_mut(database_id)
+                            .expect("catalog out of sync");
+                        (
+                            &mut db.schemas_by_id,
+                            &mut db.schemas_by_name,
+                            ResolvedDatabaseSpecifier::Id(*database_id),
+                        )
+                    }
+                    None => (
+                        &mut self.ambient_schemas_by_id,
+                        &mut self.ambient_schemas_by_name,
+                        ResolvedDatabaseSpecifier::Ambient,
+                    ),
+                };
+                apply(
+                    schemas_by_id,
+                    schema.id.clone(),
+                    || Schema {
+                        name: QualifiedSchemaName {
+                            database: database_spec,
+                            schema: schema.name.clone(),
+                        },
+                        id: SchemaSpecifier::Id(schema.id.clone()),
+                        oid: schema.oid,
+                        items: BTreeMap::new(),
+                        functions: BTreeMap::new(),
+                        types: BTreeMap::new(),
+                        owner_id: schema.owner_id,
+                        privileges: PrivilegeMap::from_mz_acl_items(schema.privileges),
+                    },
+                    diff,
+                );
+                apply(schemas_by_name, schema.name.clone(), || schema.id, diff);
+            }
+            StateUpdateKind::DefaultPrivilege(default_privilege) => match diff {
+                1 => self
+                    .default_privileges
+                    .grant(default_privilege.object, default_privilege.acl_item),
+                -1 => self
+                    .default_privileges
+                    .revoke(&default_privilege.object, &default_privilege.acl_item),
+                _ => unreachable!("invalid diff: {diff}"),
+            },
+            StateUpdateKind::SystemPrivilege(system_privilege) => match diff {
+                1 => self.system_privileges.grant(system_privilege),
+                -1 => self.system_privileges.revoke(&system_privilege),
+                _ => unreachable!("invalid diff: {diff}"),
+            },
+            StateUpdateKind::SystemConfiguration(system_configuration) => {
+                let res = match diff {
+                    1 => self.insert_system_configuration(
+                        &system_configuration.name,
+                        VarInput::Flat(&system_configuration.value),
+                    ),
+                    -1 => self.remove_system_configuration(&system_configuration.name),
+                    _ => unreachable!("invalid diff: {diff}"),
+                };
+                match res {
+                    Ok(_) => (),
+                    // When system variables are deleted, nothing deletes them from the underlying
+                    // durable catalog, which isn't great. Still, we need to be able to ignore
+                    // unknown variables.
+                    Err(Error {
+                        kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
+                    }) => {
+                        warn!(%name, "unknown system parameter from catalog storage");
+                    }
+                    Err(e) => panic!("unable to update system variable: {e:?}"),
+                }
+            }
+            StateUpdateKind::Comment(comment) => match diff {
+                1 => {
+                    let prev = self.comments.update_comment(
+                        comment.object_id,
+                        comment.sub_component,
+                        Some(comment.comment),
+                    );
+                    assert_eq!(
+                        prev, None,
+                        "values must be explicitly retracted before inserting a new value"
+                    );
+                }
+                -1 => {
+                    let prev = self.comments.update_comment(
+                        comment.object_id,
+                        comment.sub_component,
+                        None,
+                    );
+                    assert_eq!(
+                        prev,
+                        Some(comment.comment),
+                        "retraction does not match existing value: ({:?}, {:?})",
+                        comment.object_id,
+                        comment.sub_component,
+                    );
+                }
+                _ => unreachable!("invalid diff: {diff}"),
+            },
+        }
+    }
+
+    /// Synchronizes the local view of the [`StorageMetadata`] with the
+    /// [`Transaction`]'s.
+    ///
+    /// This must be called after any `Transaction` is given to the storage
+    /// controller, otherwise subsequent storage operations will have
+    /// inconsistent metadata.
+    pub(super) fn update_storage_metadata(&mut self, tx: &Transaction<'_>) {
+        use mz_storage_client::controller::StorageTxn;
+        self.storage_metadata.collection_metadata = tx.get_collection_metadata();
+        // If we will not perform shard finalization in storage, there's no
+        // benefit in exerting memory pressure on `envd` to cache all of these
+        // unused values.
+        if self
+            .system_configuration
+            .enable_storage_shard_finalization()
+        {
+            self.storage_metadata.unfinalized_shards = tx.get_unfinalized_shards();
+        }
+    }
+
+    /// Returns a read-only view of the current [`StorageMetadata`].
+    ///
+    /// To write to this struct, you must use a [`Transaction`], followed by a
+    /// call to `update_storage_metadata`.
+    pub fn storage_metadata(&self) -> &StorageMetadata {
+        &self.storage_metadata
     }
 }
 

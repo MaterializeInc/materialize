@@ -26,7 +26,8 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ScalarType, Timestamp};
 use mz_sql::ast::{
-    ConstantVisitor, CopyRelation, CopyStatement, Raw, Statement, SubscribeStatement,
+    AlterSourceAction, ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw,
+    Statement, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -633,11 +634,8 @@ impl Coordinator {
         // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
         // occurs.
         let (stmt, resolved_ids) = match stmt {
-            // `CREATE SOURCE` statements must be purified off the main
-            // coordinator thread of control.
-            stmt @ (Statement::CreateSource(_)
-            | Statement::AlterSource(_)
-            | Statement::CreateSink(_)) => {
+            // Various statements must be purified off the main coordinator thread of control.
+            stmt if Self::must_spawn_purification(&stmt) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
                 let catalog = self.owned_catalog();
@@ -792,6 +790,38 @@ impl Coordinator {
         }
     }
 
+    /// Whether the statement must be purified off of the Coordinator thread.
+    fn must_spawn_purification(stmt: &Statement<Aug>) -> bool {
+        // `CREATE` and `ALTER` `SOURCE` and `SINK` statements must be purified off the main
+        // coordinator thread.
+        if !matches!(
+            stmt,
+            Statement::CreateSource(_) | Statement::AlterSource(_) | Statement::CreateSink(_)
+        ) {
+            return false;
+        }
+
+        // However `ALTER SOURCE RETAIN HISTORY` should be excluded from off-thread purification.
+        if let Statement::AlterSource(stmt) = stmt {
+            let names: Vec<CreateSourceOptionName> = match &stmt.action {
+                AlterSourceAction::SetOptions(options) => {
+                    options.iter().map(|o| o.name.clone()).collect()
+                }
+                AlterSourceAction::ResetOptions(names) => names.clone(),
+                _ => vec![],
+            };
+            if !names.is_empty()
+                && names
+                    .iter()
+                    .all(|n| matches!(n, CreateSourceOptionName::RetainHistory))
+            {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Chooses a timestamp for `mz_now()`, if `mz_now()` occurs in the `with_options` of the materialized view.
     /// If `acquire_read_holds` is true, it also grabs read holds on input collections that might possibly be involved
     /// in the MV.
@@ -844,14 +874,19 @@ impl Coordinator {
                 .index_oracle(cluster)
                 .sufficient_collections(resolved_ids.0.iter());
             let oracle_timestamp = timestamp;
-            timestamp.advance_by(self.least_valid_read(&ids).borrow());
-            if oracle_timestamp != timestamp {
-                warn!(%cmvs.name, %oracle_timestamp, %timestamp, "REFRESH MV's inputs are not readable at the oracle read ts");
-            }
 
+            // Acquire read holds _before_ we determine the least valid read.
+            // Otherwise, we're not guaranteed that the since frontier doesn't
+            // advance forward from underneath us.
             if acquire_read_holds {
                 self.acquire_read_holds_auto_cleanup(session, timestamp, &ids, false)
                     .expect("precise==false, so acquiring read holds always succeeds");
+            }
+
+            timestamp.advance_by(self.least_valid_read(&ids).borrow());
+
+            if oracle_timestamp != timestamp {
+                warn!(%cmvs.name, %oracle_timestamp, %timestamp, "REFRESH MV's inputs are not readable at the oracle read ts");
             }
 
             Ok(Some(timestamp))

@@ -27,9 +27,10 @@ use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
+    IdAllocatorCollection, ItemCollection, PersistTxnShardCollection, RoleCollection,
+    SchemaCollection, SettingCollection, StorageCollectionMetadataCollection,
     StorageUsageCollection, SystemConfigurationCollection, SystemItemMappingCollection,
-    SystemPrivilegeCollection, Trace,
+    SystemPrivilegeCollection, Trace, UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
@@ -179,15 +180,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let persist_client = persist_clients.open(persist_location).await?;
     let organization_id = args.organization_id;
     let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
-    let openable_state: Box<dyn OpenableDurableCatalogState> = Box::new(
-        persist_backed_catalog_state(
-            persist_client,
-            organization_id,
-            BUILD_INFO.semver_version(),
-            metrics,
-        )
-        .await?,
-    );
+    let openable_state = persist_backed_catalog_state(
+        persist_client,
+        organization_id,
+        BUILD_INFO.semver_version(),
+        metrics,
+    )
+    .await?;
 
     match args.action {
         Action::Dump {
@@ -261,6 +260,9 @@ macro_rules! for_collection {
             CollectionType::SystemConfiguration => $fn::<SystemConfigurationCollection>($($arg),*).await?,
             CollectionType::SystemGidMapping => $fn::<SystemItemMappingCollection>($($arg),*).await?,
             CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
+            CollectionType::StorageCollectionMetadata => $fn::<StorageCollectionMetadataCollection>($($arg),*).await?,
+            CollectionType::UnfinalizedShard => $fn::<UnfinalizedShardsCollection>($($arg),*).await?,
+            CollectionType::PersistTxnShard => $fn::<PersistTxnShardCollection>($($arg),*).await?,
         }
     };
 }
@@ -394,6 +396,9 @@ async fn dump(
         system_object_mappings,
         system_configurations,
         system_privileges,
+        storage_collection_metadata,
+        unfinalized_shards,
+        persist_txn_shard,
     } = if consolidate {
         openable_state.trace_consolidated().await?
     } else {
@@ -457,6 +462,27 @@ async fn dump(
         stats_only,
         consolidate,
     );
+    dump_col(
+        &mut data,
+        storage_collection_metadata,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        unfinalized_shards,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        persist_txn_shard,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())
@@ -499,6 +525,7 @@ async fn upgrade_check(
         .0
         .clone();
 
+    let boot_ts = now().into();
     let (_catalog, _, last_catalog_version) = Catalog::initialize_state(
         StateConfig {
             unsafe_mode: true,
@@ -506,6 +533,7 @@ async fn upgrade_check(
             build_info: &BUILD_INFO,
             environment_id: EnvironmentId::for_tests(),
             now,
+            boot_ts,
             skip_migrations: false,
             cluster_replica_sizes,
             builtin_system_cluster_replica_size: builtin_clusters_replica_size.clone(),

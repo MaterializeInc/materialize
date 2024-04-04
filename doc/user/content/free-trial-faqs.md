@@ -19,9 +19,9 @@ For example, let's say you have 3 clusters in a region:
 
 Cluster     | Size      | Replication factor | Credits per hour
 ------------|-----------|--------------------|-----------------
-`ingest`    | `2xsmall` | 1                  | 0.5
-`compute`   | `2xsmall` | 2                  | 1 (0.5 each)
-`quickstart`| `2xsmall` | 1                  | 0.5
+`ingest`    | `50cc`    | 1                  | 0.5
+`compute`   | `50cc`    | 2                  | 1 (0.5 each)
+`quickstart`| `50cc`    | 1                  | 0.5
 
 In this case, your credit consumption rate would be 2 credits per hour, which is under the rate limit of 4 credits per hour.
 

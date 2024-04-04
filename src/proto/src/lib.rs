@@ -14,6 +14,7 @@ use std::char::CharTryFromError;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::{NonZeroU64, TryFromIntError};
+use std::sync::Arc;
 
 use mz_ore::cast::CastFrom;
 use mz_ore::num::{NonNeg, NonNegError};
@@ -357,6 +358,19 @@ where
 
     fn from_proto(proto: Box<P>) -> Result<Self, TryFromProtoError> {
         (*proto).into_rust().map(Box::new)
+    }
+}
+
+impl<R, P> RustType<P> for Arc<R>
+where
+    R: RustType<P>,
+{
+    fn into_proto(&self) -> P {
+        (**self).into_proto()
+    }
+
+    fn from_proto(proto: P) -> Result<Self, TryFromProtoError> {
+        proto.into_rust().map(Arc::new)
     }
 }
 

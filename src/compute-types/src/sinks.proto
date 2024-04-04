@@ -50,4 +50,5 @@ message ProtoCopyToS3OneshotSinkConnection {
     mz_storage_types.sinks.ProtoS3UploadInfo upload_info = 1;
     mz_storage_types.connections.aws.ProtoAwsConnection aws_connection = 2;
     mz_repr.global_id.ProtoGlobalId connection_id = 3;
+    uint64 output_batch_count = 4;
 }

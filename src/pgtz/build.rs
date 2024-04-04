@@ -34,6 +34,7 @@ fn main() -> Result<()> {
 
     // Build protobufs.
     {
+        #[cfg(feature = "protobuf-src")]
         env::set_var("PROTOC", protobuf_src::protoc());
 
         prost_build::Config::new()

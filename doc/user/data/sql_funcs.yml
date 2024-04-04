@@ -842,10 +842,10 @@
       If `missing_ok` is true, return NULL if it does not exist.
     unmaterializable: true
   - signature: 'obj_description(oid: oid, catalog: text) -> text'
-    description: Returns the comment for a database object specified by its OID and the
+    description: Returns the comment for a database object specified by its `oid` and the
       name of the containing system catalog.
   - signature: 'col_description(oid: oid, column: int) -> text'
-    description: Returns the comment for a table column, which is specified by the OID of
+    description: Returns the comment for a table column, which is specified by the `oid` of
       its table and its column number.
   - signature: 'pg_backend_pid() -> int'
     description: Returns the internal connection ID.

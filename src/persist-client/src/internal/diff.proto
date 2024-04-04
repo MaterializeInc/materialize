@@ -20,7 +20,10 @@ enum ProtoStateField {
     CRITICAL_READERS = 6;
     WRITERS = 3;
     SINCE = 4;
-    SPINE = 5;
+    LEGACY_BATCHES = 5;
+    HOLLOW_BATCHES = 9;
+    SPINE_BATCHES = 10;
+    SPINE_MERGES = 11;
 }
 
 enum ProtoStateFieldDiffType {

@@ -22,6 +22,7 @@ use anyhow::{anyhow, Context};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
+use mz_ore::future::InTask;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
@@ -314,6 +315,7 @@ pub struct TunnelingClientContext<C> {
     inner: C,
     rewrites: Arc<Mutex<BTreeMap<BrokerAddr, BrokerRewriteHandle>>>,
     default_tunnel: TunnelConfig,
+    in_task: InTask,
     ssh_tunnel_manager: SshTunnelManager,
     ssh_timeout_config: SshTimeoutConfig,
     runtime: Handle,
@@ -326,11 +328,13 @@ impl<C> TunnelingClientContext<C> {
         runtime: Handle,
         ssh_tunnel_manager: SshTunnelManager,
         ssh_timeout_config: SshTimeoutConfig,
+        in_task: InTask,
     ) -> TunnelingClientContext<C> {
         TunnelingClientContext {
             inner,
             rewrites: Arc::new(Mutex::new(BTreeMap::new())),
             default_tunnel: TunnelConfig::None,
+            in_task,
             ssh_tunnel_manager,
             ssh_timeout_config,
             runtime,
@@ -363,6 +367,7 @@ impl<C> TunnelingClientContext<C> {
                 &broker.host,
                 broker.port.parse().context("parsing broker port")?,
                 self.ssh_timeout_config,
+                self.in_task,
             )
             .await
             .context("creating ssh tunnel")?;
@@ -472,6 +477,7 @@ where
                                     &addr.host,
                                     addr.port.parse().unwrap(),
                                     self.ssh_timeout_config,
+                                    self.in_task,
                                 )
                                 .await
                         });

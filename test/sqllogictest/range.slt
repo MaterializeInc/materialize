@@ -2410,7 +2410,7 @@ NULL
 
 # Test incrementing max date
 query error date out of range
-SELECT daterange(('0001-01-01'::date + '262142years 11months 30days'::interval)::date, null, '()');
+SELECT daterange(('0001-01-01'::date + '262141years 11months 30days'::interval)::date, null, '()');
 
 #parameterized input
 

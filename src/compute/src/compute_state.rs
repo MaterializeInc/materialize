@@ -300,7 +300,7 @@ pub(crate) struct ActiveComputeState<'a, A: Allocate> {
 }
 
 /// A token that keeps a sink alive.
-pub struct SinkToken(Box<dyn Any>);
+pub struct SinkToken(#[allow(dead_code)] Box<dyn Any>);
 
 impl SinkToken {
     /// Create a new `SinkToken`.
@@ -357,7 +357,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         tracing.apply(self.compute_state.tracing_handle.as_ref());
 
         dyncfg_updates.apply(&self.compute_state.worker_config);
-        dyncfg_updates.apply(&self.compute_state.persist_clients.cfg().configs);
+        self.compute_state
+            .persist_clients
+            .cfg()
+            .apply_from(&dyncfg_updates);
 
         self.compute_state.apply_worker_config();
     }

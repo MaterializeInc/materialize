@@ -76,7 +76,7 @@ Your `dev_role` has the default system-level permissions and needs object-level 
     resource "materialize_cluster_replica" "cluster_replica" {
       name         = "devr1"
       cluster_name = materialize_cluster.cluster.name
-      size         = "3xsmall"
+      size         = "25cc"
     }
 
     resource "materialize_database" "database" {

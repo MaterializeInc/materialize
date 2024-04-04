@@ -1723,8 +1723,6 @@ pub enum ClusterOptionName {
     IntrospectionInterval,
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
     IntrospectionDebugging,
-    /// The `IDLE ARRANGEMENT MERGE EFFORT [=] <value>` option.
-    IdleArrangementMergeEffort,
     /// The `MANAGED` option.
     Managed,
     /// The `REPLICAS` option.
@@ -1742,9 +1740,6 @@ impl AstDisplay for ClusterOptionName {
         match self {
             ClusterOptionName::AvailabilityZones => f.write_str("AVAILABILITY ZONES"),
             ClusterOptionName::Disk => f.write_str("DISK"),
-            ClusterOptionName::IdleArrangementMergeEffort => {
-                f.write_str("IDLE ARRANGEMENT MERGE EFFORT")
-            }
             ClusterOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
             ClusterOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
             ClusterOptionName::Managed => f.write_str("MANAGED"),
@@ -1766,7 +1761,6 @@ impl WithOptionName for ClusterOptionName {
         match self {
             ClusterOptionName::AvailabilityZones
             | ClusterOptionName::Disk
-            | ClusterOptionName::IdleArrangementMergeEffort
             | ClusterOptionName::IntrospectionDebugging
             | ClusterOptionName::IntrospectionInterval
             | ClusterOptionName::Managed
@@ -1957,8 +1951,6 @@ pub enum ReplicaOptionName {
     IntrospectionInterval,
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
     IntrospectionDebugging,
-    /// The `IDLE ARRANGEMENT MERGE EFFORT [=] <value>` option.
-    IdleArrangementMergeEffort,
     /// The `DISK [[=] <enabled>]` option.
     Disk,
 }
@@ -1977,9 +1969,6 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::Internal => f.write_str("INTERNAL"),
             ReplicaOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
             ReplicaOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
-            ReplicaOptionName::IdleArrangementMergeEffort => {
-                f.write_str("IDLE ARRANGEMENT MERGE EFFORT")
-            }
             ReplicaOptionName::Disk => f.write_str("DISK"),
         }
     }
@@ -2004,7 +1993,6 @@ impl WithOptionName for ReplicaOptionName {
             | ReplicaOptionName::Internal
             | ReplicaOptionName::IntrospectionInterval
             | ReplicaOptionName::IntrospectionDebugging
-            | ReplicaOptionName::IdleArrangementMergeEffort
             | ReplicaOptionName::Disk => false,
         }
     }

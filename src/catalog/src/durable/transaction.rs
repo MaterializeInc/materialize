@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::anyhow;
 use derivative::Derivative;
 use itertools::Itertools;
-
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
@@ -23,7 +22,7 @@ use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
@@ -31,7 +30,8 @@ use mz_sql::catalog::{
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_client::controller::StorageTxn;
+use mz_storage_types::controller::{PersistTxnTablesImpl, StorageError};
 
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY};
@@ -42,16 +42,19 @@ use crate::durable::objects::{
     ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
     Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
-    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, StorageUsageKey, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, PersistTxnShardValue, ReplicaConfig, Role,
+    RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, StorageCollectionMetadataKey,
+    StorageCollectionMetadataValue, StorageUsageKey, SystemObjectDescription, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
-    SystemConfiguration, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
+use crate::memory::objects::{StateUpdate, StateUpdateKind};
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
 #[derive(Derivative)]
@@ -76,6 +79,10 @@ pub struct Transaction<'a> {
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
+    storage_collection_metadata:
+        TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
+    unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
+    persist_txn_shard: TableTransaction<(), PersistTxnShardValue>,
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -101,6 +108,9 @@ impl<'a> Transaction<'a> {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_collection_metadata,
+            unfinalized_shards,
+            persist_txn_shard,
         }: Snapshot,
     ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
@@ -133,6 +143,15 @@ impl<'a> Transaction<'a> {
             system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
             default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
             system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
+            storage_collection_metadata: TableTransaction::new(
+                storage_collection_metadata,
+                |a: &StorageCollectionMetadataValue, b| a.shard == b.shard,
+            )?,
+            unfinalized_shards: TableTransaction::new(unfinalized_shards, |_a, _b| false)?,
+            // Uniqueness violations for this value occur at the key rather than
+            // the value (the key is the unit struct `()` so this is a singleton
+            // value).
+            persist_txn_shard: TableTransaction::new(persist_txn_shard, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
         })
@@ -603,6 +622,15 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(GlobalId::User)
             .collect())
+    }
+
+    pub fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
+        let id = self.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
+        Ok(ReplicaId::System(id))
+    }
+
+    pub fn allocate_audit_log_id(&mut self) -> Result<u64, CatalogError> {
+        self.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())
     }
 
     /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any
@@ -1347,22 +1375,6 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
-    pub fn get_databases(&self) -> impl Iterator<Item = Database> {
-        self.databases
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
-    pub fn get_schemas(&self) -> impl Iterator<Item = Schema> {
-        self.schemas
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
     pub fn get_roles(&self) -> impl Iterator<Item = Role> {
         self.roles
             .items()
@@ -1371,32 +1383,8 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
-    pub fn get_default_privileges(&self) -> impl Iterator<Item = DefaultPrivilege> {
-        self.default_privileges
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
-    pub fn get_system_privileges(&self) -> impl Iterator<Item = MzAclItem> {
-        self.system_privileges
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
     pub fn get_comments(&self) -> impl Iterator<Item = Comment> {
         self.comments
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
-    pub fn get_system_configurations(&self) -> impl Iterator<Item = SystemConfiguration> {
-        self.system_configurations
             .items()
             .clone()
             .into_iter()
@@ -1431,27 +1419,50 @@ impl<'a> Transaction<'a> {
             .map(|value| value.value.clone())
     }
 
-    // TODO(jkosh44) Can be removed after v0.92.X
-    pub fn clean_up_stash_catalog(&mut self) -> Result<(), CatalogError> {
-        self.configs.set(
-            ConfigKey {
-                key: "tombstone".to_string(),
-            },
-            None,
-        )?;
-        self.configs.set(
-            ConfigKey {
-                key: "catalog_kind".to_string(),
-            },
-            None,
-        )?;
-        self.system_configurations.set(
-            ServerConfigurationKey {
-                name: "catalog_kind".to_string(),
-            },
-            None,
-        )?;
-        Ok(())
+    pub fn get_updates(&self) -> impl Iterator<Item = StateUpdate> {
+        fn get_collection_updates<K, V, T>(
+            table_txn: &TableTransaction<K, V>,
+            kind_fn: impl FnMut(T) -> StateUpdateKind,
+        ) -> impl Iterator<Item = StateUpdateKind>
+        where
+            K: Ord + Eq + Clone,
+            V: Ord + Clone,
+            T: DurableType<K, V>,
+        {
+            table_txn
+                .items()
+                .into_iter()
+                .map(|(k, v)| DurableType::from_key_value(k, v))
+                .map(kind_fn)
+        }
+
+        std::iter::empty()
+            .chain(get_collection_updates(&self.roles, StateUpdateKind::Role))
+            .chain(get_collection_updates(
+                &self.databases,
+                StateUpdateKind::Database,
+            ))
+            .chain(get_collection_updates(
+                &self.schemas,
+                StateUpdateKind::Schema,
+            ))
+            .chain(get_collection_updates(
+                &self.default_privileges,
+                StateUpdateKind::DefaultPrivilege,
+            ))
+            .chain(get_collection_updates(
+                &self.system_privileges,
+                StateUpdateKind::SystemPrivilege,
+            ))
+            .chain(get_collection_updates(
+                &self.system_configurations,
+                StateUpdateKind::SystemConfiguration,
+            ))
+            .chain(get_collection_updates(
+                &self.comments,
+                StateUpdateKind::Comment,
+            ))
+            .map(|kind| StateUpdate { kind, diff: 1 })
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
@@ -1471,6 +1482,9 @@ impl<'a> Transaction<'a> {
             system_configurations: self.system_configurations.pending(),
             default_privileges: self.default_privileges.pending(),
             system_privileges: self.system_privileges.pending(),
+            storage_collection_metadata: self.storage_collection_metadata.pending(),
+            unfinalized_shards: self.unfinalized_shards.pending(),
+            persist_txn_shard: self.persist_txn_shard.pending(),
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
         };
@@ -1500,6 +1514,9 @@ impl<'a> Transaction<'a> {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_collection_metadata,
+            unfinalized_shards,
+            persist_txn_shard,
             audit_log_updates,
             storage_usage_updates,
         } = &mut txn_batch;
@@ -1520,14 +1537,121 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(system_configurations);
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
+        differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
+        differential_dataflow::consolidation::consolidate_updates(unfinalized_shards);
+        differential_dataflow::consolidation::consolidate_updates(persist_txn_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
     }
 }
 
+use crate::durable::async_trait;
+
+#[async_trait]
+impl StorageTxn<Timestamp> for Transaction<'_> {
+    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, String> {
+        self.storage_collection_metadata
+            .items()
+            .into_iter()
+            .map(
+                |(
+                    StorageCollectionMetadataKey { id },
+                    StorageCollectionMetadataValue { shard },
+                )| { (id, shard.clone()) },
+            )
+            .collect()
+    }
+
+    fn insert_collection_metadata(
+        &mut self,
+        metadata: BTreeMap<GlobalId, String>,
+    ) -> Result<(), StorageError<Timestamp>> {
+        for (id, shard) in metadata {
+            self.storage_collection_metadata
+                .insert(
+                    StorageCollectionMetadataKey { id },
+                    StorageCollectionMetadataValue {
+                        shard: shard.clone(),
+                    },
+                )
+                .map_err(|err| match err {
+                    DurableCatalogError::DuplicateKey => {
+                        StorageError::CollectionMetadataAlreadyExists(id)
+                    }
+                    DurableCatalogError::UniquenessViolation => {
+                        StorageError::PersistShardAlreadyInUse(shard)
+                    }
+                    err => StorageError::Generic(anyhow::anyhow!(err)),
+                })?;
+        }
+        Ok(())
+    }
+
+    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)> {
+        self.storage_collection_metadata
+            .delete(|StorageCollectionMetadataKey { id }, _| ids.contains(id))
+            .into_iter()
+            .map(
+                |(
+                    StorageCollectionMetadataKey { id },
+                    StorageCollectionMetadataValue { shard },
+                )| (id, shard),
+            )
+            .collect()
+    }
+
+    fn get_unfinalized_shards(&self) -> BTreeSet<String> {
+        self.unfinalized_shards
+            .items()
+            .into_iter()
+            .map(|(UnfinalizedShardKey { shard }, ())| shard)
+            .collect()
+    }
+
+    fn insert_unfinalized_shards(
+        &mut self,
+        s: BTreeSet<String>,
+    ) -> Result<(), StorageError<Timestamp>> {
+        for shard in s {
+            match self
+                .unfinalized_shards
+                .insert(UnfinalizedShardKey { shard }, ())
+            {
+                // Inserting duplicate keys has no effect.
+                Ok(()) | Err(DurableCatalogError::DuplicateKey) => {}
+                Err(e) => Err(StorageError::Generic(anyhow::anyhow!(e)))?,
+            };
+        }
+        Ok(())
+    }
+
+    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>) {
+        let _ = self
+            .unfinalized_shards
+            .delete(|UnfinalizedShardKey { shard }, _| shards.contains(shard.as_str()));
+    }
+
+    fn get_persist_txn_shard(&self) -> Option<String> {
+        let items = self.persist_txn_shard.items();
+        items
+            .into_values()
+            .next()
+            .map(|PersistTxnShardValue { shard }| shard)
+    }
+
+    fn write_persist_txn_shard(&mut self, shard: String) -> Result<(), StorageError<Timestamp>> {
+        self.persist_txn_shard
+            .insert((), PersistTxnShardValue { shard })
+            .map_err(|err| match err {
+                DurableCatalogError::DuplicateKey => StorageError::PersistTxnShardAlreadyExists,
+                err => StorageError::Generic(anyhow::anyhow!(err)),
+            })
+    }
+}
+
 /// Describes a set of changes to apply as the result of a catalog transaction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TransactionBatch {
     pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
     pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
@@ -1560,49 +1684,20 @@ pub struct TransactionBatch {
         proto::SystemPrivilegesValue,
         Diff,
     )>,
+    pub(crate) storage_collection_metadata: Vec<(
+        proto::StorageCollectionMetadataKey,
+        proto::StorageCollectionMetadataValue,
+        Diff,
+    )>,
+    pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
+    pub(crate) persist_txn_shard: Vec<((), proto::PersistTxnShardValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
 }
 
 impl TransactionBatch {
     pub fn is_empty(&self) -> bool {
-        let TransactionBatch {
-            databases,
-            schemas,
-            items,
-            comments,
-            roles,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            id_allocator,
-            configs,
-            settings,
-            system_gid_mapping,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-            audit_log_updates,
-            storage_usage_updates,
-        } = self;
-
-        databases.is_empty()
-            && schemas.is_empty()
-            && items.is_empty()
-            && comments.is_empty()
-            && roles.is_empty()
-            && clusters.is_empty()
-            && cluster_replicas.is_empty()
-            && introspection_sources.is_empty()
-            && id_allocator.is_empty()
-            && configs.is_empty()
-            && settings.is_empty()
-            && system_gid_mapping.is_empty()
-            && system_configurations.is_empty()
-            && default_privileges.is_empty()
-            && system_privileges.is_empty()
-            && audit_log_updates.is_empty()
-            && storage_usage_updates.is_empty()
+        self == &Self::default()
     }
 }
 

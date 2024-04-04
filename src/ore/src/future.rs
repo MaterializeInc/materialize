@@ -38,6 +38,15 @@ use tokio::time::{self, Duration, Instant};
 use crate::panic::CATCHING_UNWIND_ASYNC;
 use crate::task::{self, JoinHandleExt};
 
+/// Whether or not to run the future in `run_in_task_if` in a task.
+#[derive(Clone, Copy, Debug)]
+pub enum InTask {
+    /// Run it in a task.
+    Yes,
+    /// Poll it normally.
+    No,
+}
+
 /// Extension methods for futures.
 #[async_trait::async_trait]
 pub trait OreFutureExt {
@@ -55,7 +64,25 @@ pub trait OreFutureExt {
 
     /// Run a `'static` future in a Tokio task, naming that task, using a convenient
     /// postfix call notation.
+    ///
+    /// Useful in contexts where futures may be starved and cause inadvertent
+    /// failures in I/O-sensitive operations, such as when called within timely
+    /// operators.
     async fn run_in_task<Name, NameClosure>(self, nc: NameClosure) -> Self::Output
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name + Unpin + Send,
+        Self: Future + Send + 'static,
+        Self::Output: Send + 'static;
+
+    /// The same as `run_in_task`, but allows the callee to dynamically choose whether or
+    /// not the future is polled into a Tokio task.
+    // This is not currently a provided method because rust-analyzer fails inference if it is :(.
+    async fn run_in_task_if<Name, NameClosure>(
+        self,
+        in_task: InTask,
+        nc: NameClosure,
+    ) -> Self::Output
     where
         Name: AsRef<str>,
         NameClosure: FnOnce() -> Name + Unpin + Send,
@@ -100,6 +127,20 @@ where
         T::Output: Send + 'static,
     {
         task::spawn(nc, self).wait_and_assert_finished().await
+    }
+
+    async fn run_in_task_if<Name, NameClosure>(self, in_task: InTask, nc: NameClosure) -> T::Output
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name + Unpin + Send,
+        Self: Future + Send + 'static,
+        T::Output: Send + 'static,
+    {
+        if let InTask::Yes = in_task {
+            self.run_in_task(nc).await
+        } else {
+            self.await
+        }
     }
 
     fn ore_catch_unwind(self) -> OreCatchUnwind<Self>

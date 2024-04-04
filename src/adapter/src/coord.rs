@@ -119,7 +119,7 @@ use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{self, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
-use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
+use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
@@ -142,13 +142,14 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::ActiveComputeSink;
-use crate::catalog::{BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog};
+use crate::catalog::{BuiltinTableUpdate, Catalog};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
+use crate::coord::read_policy::InternalReadHolds;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
@@ -163,7 +164,7 @@ use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
-use crate::{flags, AdapterNotice, TimestampProvider};
+use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_ore::future::TimeoutError;
@@ -188,7 +189,7 @@ mod indexes;
 mod introspection;
 mod message_handler;
 mod privatelink_status;
-mod read_policy;
+pub mod read_policy;
 mod sequencer;
 mod sql;
 
@@ -214,6 +215,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         Option<GroupCommitPermit>,
     ),
     AdvanceTimelines,
+    DropReadHolds(Vec<InternalReadHolds<Timestamp>>),
     ClusterEvent(ClusterEvent),
     CancelPendingPeeks {
         conn_id: ConnectionId,
@@ -296,6 +298,7 @@ impl Message {
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApply(..) => "group_commit_apply",
             Message::AdvanceTimelines => "advance_timelines",
+            Message::DropReadHolds(_) => "drop_read_holds",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
@@ -433,6 +436,11 @@ pub struct CopyToContext {
     pub format_params: CopyFormatParams<'static>,
     /// Approximate max file size of each uploaded file.
     pub max_file_size: u64,
+    /// Number of batches the output of the COPY TO will be partitioned into
+    /// to distribute the load across workers deterministically.
+    /// This is only an option since it's not set when CopyToContext is instantiated
+    /// but immediately after in the PeekStageValidate stage.
+    pub output_batch_count: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -858,7 +866,7 @@ pub struct Config {
     pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
-    pub remote_system_parameters: Option<BTreeMap<String, OwnedVarInput>>,
+    pub remote_system_parameters: Option<BTreeMap<String, String>>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub connection_context: ConnectionContext,
@@ -1261,6 +1269,14 @@ pub struct Coordinator {
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
 
+    /// Channel for returning/releasing [InternalReadHolds](InternalReadHolds).
+    ///
+    /// We're using a special purpose channel rather than using
+    /// `internal_cmd_tx` so that we can control the priority of working off
+    /// dropped read holds. If we sent them as [Message] on the internal cmd
+    /// channel, these would always get top priority, which is not necessary.
+    dropped_read_holds_tx: mpsc::UnboundedSender<InternalReadHolds<Timestamp>>,
+
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
@@ -1373,11 +1389,6 @@ pub struct Coordinator {
     /// Limit for how many conncurrent webhook requests we allow.
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
 
-    /// Implementation of
-    /// [`TimestampOracle`](mz_timestamp_oracle::TimestampOracle) to
-    /// use.
-    timestamp_oracle_impl: vars::TimestampOracleImpl,
-
     /// Optional config for the Postgres-backed timestamp oracle. This is
     /// _required_ when `postgres` is configured using the `timestamp_oracle`
     /// system variable.
@@ -1391,7 +1402,6 @@ impl Coordinator {
     #[instrument(name = "coord::bootstrap")]
     pub(crate) async fn bootstrap(
         &mut self,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         info!("coordinator init: beginning bootstrap");
@@ -1439,19 +1449,6 @@ impl Coordinator {
         self.controller
             .create_replicas(replicas_to_start, enable_worker_core_affinity)
             .await?;
-
-        debug!("coordinator init: migrating builtin objects");
-        // Migrate builtin objects.
-        self.controller
-            .storage
-            .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids);
-
-        self.controller
-            .storage
-            .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids);
-        self.controller
-            .storage
-            .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
         debug!("coordinator init: initializing storage collections");
         self.bootstrap_storage_collections().await;
@@ -1644,7 +1641,7 @@ impl Coordinator {
                             idx.custom_logical_compaction_window.unwrap_or_default()
                         };
 
-                        let as_of = self.bootstrap_dataflow_as_of(
+                        let (as_of, read_holds) = self.bootstrap_dataflow_as_of(
                             &df_desc,
                             idx.cluster_id,
                             storage_constraints,
@@ -1678,6 +1675,10 @@ impl Coordinator {
                             .active_compute()
                             .create_dataflow(idx.cluster_id, df_desc)
                             .unwrap_or_terminate("cannot fail to create dataflows");
+
+                        // Drop read holds after the dataflow has been shipped, at which
+                        // point compute will have put in its own read holds.
+                        drop(read_holds);
                     }
                 }
                 CatalogItem::View(_) => (),
@@ -1699,7 +1700,7 @@ impl Coordinator {
                         .remove(&entry.id())
                         .expect("all dataflow storage constraints were collected");
 
-                    let as_of = self.bootstrap_dataflow_as_of(
+                    let (as_of, read_holds) = self.bootstrap_dataflow_as_of(
                         &df_desc,
                         mview.cluster_id,
                         storage_constraints,
@@ -1732,6 +1733,10 @@ impl Coordinator {
                     }
 
                     self.ship_dataflow(df_desc, mview.cluster_id).await;
+
+                    // Drop read holds after the dataflow has been shipped, at which
+                    // point compute will have put in its own read holds.
+                    drop(read_holds);
                 }
                 CatalogItem::Sink(sink) => {
                     let id = entry.id();
@@ -1853,15 +1858,10 @@ impl Coordinator {
 
         // Destructure Self so we can do some concurrent work.
         let Self {
-            controller,
             secrets_controller,
             catalog,
             ..
         } = self;
-
-        // Signal to the storage controller that it is now free to reconcile its
-        // state with what it has learned from the adapter.
-        let storage_reconcile_fut = controller.storage.reconcile_state();
 
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
@@ -1891,13 +1891,9 @@ impl Coordinator {
         };
 
         // Run all of our final steps concurrently.
-        futures::future::join_all([
-            storage_reconcile_fut,
-            builtin_updates_fut,
-            Box::pin(secrets_cleanup_fut),
-        ])
-        .instrument(info_span!("coord::bootstrap::final"))
-        .await;
+        futures::future::join_all([builtin_updates_fut, Box::pin(secrets_cleanup_fut)])
+            .instrument(info_span!("coord::bootstrap::final"))
+            .await;
 
         info!("coordinator init: bootstrap complete");
         Ok(())
@@ -1990,17 +1986,13 @@ impl Coordinator {
             })
             .collect();
 
-        self.controller
-            .storage
-            .migrate_collections(collections.clone())
-            .await
-            .unwrap_or_terminate("cannot fail to migrate collections");
-
         let register_ts = self.get_local_write_ts().await.timestamp;
 
+        let storage_metadata = self.catalog.state().storage_metadata();
+
         self.controller
             .storage
-            .create_collections(Some(register_ts), collections)
+            .create_collections(storage_metadata, Some(register_ts), collections)
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
@@ -2223,18 +2215,19 @@ impl Coordinator {
     }
 
     /// Returns an `as_of` suitable for bootstrapping the given index or materialized view
-    /// dataflow.
+    /// dataflow, along with a [ReadHolds] that ensures the sinces of involved collections
+    /// stay in place.
     ///
     /// # Panics
     ///
     /// Panics if the given dataflow exports neither an index nor a materialized view.
     fn bootstrap_dataflow_as_of(
-        &self,
+        &mut self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
         storage_constraints: StorageConstraints,
         compaction_window: CompactionWindow,
-    ) -> Antichain<Timestamp> {
+    ) -> (Antichain<Timestamp>, ReadHolds<Timestamp>) {
         // Supporting multi-export dataflows is not impossible but complicates the logic, so we
         // punt on it until we actually want to create such dataflows.
         assert!(
@@ -2245,6 +2238,14 @@ impl Coordinator {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let direct_dependencies = dataflow_import_id_bundle(dataflow, cluster_id);
+
+        // We're putting in place read holds, to prevent the since of
+        // dependencies moving along concurrently, pulling the rug from under
+        // us!
+        let read_holds = self
+            .acquire_read_holds(mz_repr::Timestamp::minimum(), &direct_dependencies, false)
+            .expect("can acquire un-precise read holds");
+
         let min_as_of = self.least_valid_read(&direct_dependencies);
 
         // We must not select an `as_of` that is beyond any times that have not yet been written to
@@ -2370,7 +2371,7 @@ impl Coordinator {
             "bootstrapping dataflow `as_of`",
         );
 
-        as_of
+        (as_of, read_holds)
     }
 
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
@@ -2385,6 +2386,7 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
+        mut dropped_read_holds_rx: mpsc::UnboundedReceiver<InternalReadHolds<Timestamp>>,
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
@@ -2529,6 +2531,15 @@ impl Coordinator {
                         }
                         Message::LinearizeReads
                     }
+                    // `recv()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    Some(dropped_read_hold) = dropped_read_holds_rx.recv() => {
+                        let mut dropped_read_holds = vec![dropped_read_hold];
+                        while let Ok(dropped_read_hold) = dropped_read_holds_rx.try_recv() {
+                            dropped_read_holds.push(dropped_read_hold);
+                        }
+                        Message::DropReadHolds(dropped_read_holds)
+                    }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     _ = self.advance_timelines_interval.tick() => {
@@ -2644,9 +2655,9 @@ impl Coordinator {
         self.controller.connection_context()
     }
 
-    /// Obtain a reference to the coordinator's secret reader.
-    fn secrets_reader(&self) -> &dyn SecretsReader {
-        &*self.connection_context().secrets_reader
+    /// Obtain a reference to the coordinator's secret reader, in an `Arc`.
+    fn secrets_reader(&self) -> &Arc<dyn SecretsReader> {
+        &self.connection_context().secrets_reader
     }
 
     /// Publishes a notice message to all sessions.
@@ -2913,6 +2924,7 @@ pub fn serve(
         let (group_commit_tx, group_commit_rx) = appends::notifier();
         let (strict_serializable_reads_tx, strict_serializable_reads_rx) =
             mpsc::unbounded_channel();
+        let (dropped_read_holds_tx, dropped_read_holds_rx) = mpsc::unbounded_channel();
 
         // Validate and process availability zones.
         if !availability_zones.iter().all_unique() {
@@ -2938,42 +2950,36 @@ pub fn serve(
         let mut initial_timestamps =
             get_initial_oracle_timestamps(&pg_timestamp_oracle_config).await?;
 
-        // A candidate for the boot_ts. Catalog::open will further advance this,
-        // based on the "now" timestamp, if/when needed.
-        let previous_ts = initial_timestamps
-            .get(&Timeline::EpochMilliseconds)
-            .cloned()
-            .unwrap_or_else(mz_repr::Timestamp::minimum);
-
+        // Insert an entry for the `EpochMilliseconds` timeline if one doesn't exist,
+        // which will ensure that the timeline is initialized since it's required
+        // by the system.
+        initial_timestamps
+            .entry(Timeline::EpochMilliseconds)
+            .or_insert_with(mz_repr::Timestamp::minimum);
+        let mut timestamp_oracles = BTreeMap::new();
+        for (timeline, initial_timestamp) in initial_timestamps {
+            Coordinator::ensure_timeline_state_with_initial_time(
+                &timeline,
+                initial_timestamp,
+                now.clone(),
+                pg_timestamp_oracle_config.clone(),
+                &mut timestamp_oracles,
+            )
+            .await;
+        }
         // Choose a time at which to boot. This is used, for example, to prune
-        // old storage usage data. Crucially, it is _not_ linearizable, we do
-        // not persist this timestamp before using it. Think hard about this
-        // fact if you ever feel the need to use this for something that needs
-        // to be linearizable.
+        // old storage usage data or migrate audit log entries.
         //
         // This time is usually the current system time, but with protection
         // against backwards time jumps, even across restarts.
-        let boot_ts_not_linearizable = {
-            let now_ts: Timestamp = now().into();
-            let boot_ts = std::cmp::max(now_ts, previous_ts);
-            info!(%previous_ts, %now_ts, %boot_ts, "determining boot_ts");
-
-            boot_ts
-        };
-
-        // We need to patch up the EpochMilliseconds timestamp, which will in
-        // turn make sure that we initialize timestamp oracles at the `boot_ts`,
-        // which in turn will make sure that the next `boot_ts` is beyond the
-        // current boot_ts.
-        initial_timestamps
-            .entry(Timeline::EpochMilliseconds)
-            .and_modify(|ts| {
-                *ts = std::cmp::max(*ts, boot_ts_not_linearizable);
-            })
-            .or_insert(boot_ts_not_linearizable);
+        let epoch_millis_oracle = &timestamp_oracles
+            .get(&Timeline::EpochMilliseconds)
+            .expect("inserted above")
+            .oracle;
+        let boot_ts = epoch_millis_oracle.write_ts().await.timestamp;
 
         info!("coordinator init: opening catalog");
-        let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
+        let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
             Catalog::open(
                 mz_catalog::config::Config {
                     storage,
@@ -2985,6 +2991,7 @@ pub fn serve(
                         build_info,
                         environment_id: environment_id.clone(),
                         now: now.clone(),
+                        boot_ts: boot_ts.clone(),
                         skip_migrations: false,
                         cluster_replica_sizes,
                         builtin_system_cluster_replica_size,
@@ -3000,9 +3007,10 @@ pub fn serve(
                         http_host_name,
                     },
                 },
-                boot_ts_not_linearizable,
+                boot_ts,
             )
             .await?;
+        epoch_millis_oracle.apply_write(boot_ts).await;
         let session_id = catalog.config().session_id;
         let start_instant = catalog.config().start_instant;
 
@@ -3018,11 +3026,6 @@ pub fn serve(
         let segment_client_clone = segment_client.clone();
         let coord_now = now.clone();
         let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
-
-        // We get the timestamp oracle impl once on startup, to ensure that it
-        // doesn't change in between when the system var changes: all oracles must
-        // use the same impl!
-        let timestamp_oracle_impl = catalog.system_config().timestamp_oracle_impl();
 
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
             // Apply settings from system vars as early as possible because some
@@ -3041,28 +3044,19 @@ pub fn serve(
             .name("coordinator".to_string())
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
+
+                let controller = handle
+                    .block_on({
+                        catalog.initialize_controller(
+                            controller_config,
+                            controller_envd_epoch,
+                            builtin_migration_metadata,
+                            controller_persist_txn_tables,
+                        )
+                    })
+                    .expect("failed to initialize storage_controller");
+
                 let catalog = Arc::new(catalog);
-
-                let mut timestamp_oracles = BTreeMap::new();
-                for (timeline, initial_timestamp) in initial_timestamps {
-                    handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
-                        &timeline,
-                        initial_timestamp,
-                        coord_now.clone(),
-                        timestamp_oracle_impl,
-                        pg_timestamp_oracle_config.clone(),
-                        &mut timestamp_oracles,
-                    ));
-                }
-
-                let controller = handle.block_on(
-                    mz_controller::Controller::new(
-                        controller_config,
-                        controller_envd_epoch,
-                        controller_persist_txn_tables,
-                    )
-                    .boxed(),
-                );
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let mut coord = Coordinator {
@@ -3071,6 +3065,7 @@ pub fn serve(
                     internal_cmd_tx,
                     group_commit_tx,
                     strict_serializable_reads_tx,
+                    dropped_read_holds_tx,
                     global_timelines: timestamp_oracles,
                     transient_id_counter: 1,
                     active_conns: BTreeMap::new(),
@@ -3099,12 +3094,11 @@ pub fn serve(
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
-                    timestamp_oracle_impl,
                     pg_timestamp_oracle_config,
                 };
                 let bootstrap = handle.block_on(async {
                     coord
-                        .bootstrap(builtin_migration_metadata, builtin_table_updates)
+                        .bootstrap(builtin_table_updates)
                         .await?;
                     coord
                         .controller
@@ -3125,6 +3119,7 @@ pub fn serve(
                     handle.block_on(coord.serve(
                         internal_cmd_rx,
                         strict_serializable_reads_rx,
+                        dropped_read_holds_rx,
                         cmd_rx,
                         group_commit_rx,
                     ));
@@ -3220,7 +3215,7 @@ pub async fn load_remote_system_parameters(
     storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     system_parameter_sync_timeout: Duration,
-) -> Result<Option<BTreeMap<String, OwnedVarInput>>, AdapterError> {
+) -> Result<Option<BTreeMap<String, String>>, AdapterError> {
     if let Some(system_parameter_sync_config) = system_parameter_sync_config {
         tracing::info!("parameter sync on boot: start sync");
 
@@ -3274,7 +3269,7 @@ pub async fn load_remote_system_parameters(
                     let name = param.name;
                     let value = param.value;
                     tracing::info!(name, value, initial = true, "sync parameter");
-                    (name, OwnedVarInput::Flat(value))
+                    (name, value)
                 })
                 .collect();
             tracing::info!("parameter sync on boot: end sync");

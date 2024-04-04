@@ -63,6 +63,9 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_collection_metadata,
+            unfinalized_shards,
+            persist_txn_shard,
         } = self.0;
         let mut configs: BTreeMap<proto::ConfigKey, proto::ConfigValue> = configs.clone();
         configs.remove(&Self::user_version_key());
@@ -82,6 +85,9 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             .field("system_configurations", system_configurations)
             .field("default_privileges", default_privileges)
             .field("system_privileges", system_privileges)
+            .field("storage_collection_metadata", storage_collection_metadata)
+            .field("unfinalized_shards", unfinalized_shards)
+            .field("persist_txn_shard", persist_txn_shard)
             .finish()
     }
 }
@@ -99,15 +105,15 @@ async fn test_persist_is_initialized() {
 }
 
 async fn test_is_initialized(
-    mut openable_state1: impl OpenableDurableCatalogState,
-    openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
+    mut openable_state1: Box<dyn OpenableDurableCatalogState>,
+    openable_state2: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
 ) {
     assert!(
         !openable_state1.is_initialized().await.unwrap(),
         "catalog has not been opened yet"
     );
 
-    let state = Box::new(openable_state1)
+    let state = openable_state1
         .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
@@ -138,8 +144,8 @@ async fn test_persist_get_deployment_generation() {
 }
 
 async fn test_get_deployment_generation(
-    mut openable_state1: impl OpenableDurableCatalogState,
-    openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
+    mut openable_state1: Box<dyn OpenableDurableCatalogState>,
+    openable_state2: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
 ) {
     assert_eq!(
         openable_state1.get_deployment_generation().await.unwrap(),
@@ -147,7 +153,7 @@ async fn test_get_deployment_generation(
         "deployment generation has not been set"
     );
 
-    let state = Box::new(openable_state1)
+    let state = openable_state1
         .open(SYSTEM_TIME(), &test_bootstrap_args(), Some(42), None)
         .await
         .unwrap();
@@ -190,14 +196,14 @@ async fn test_persist_open_savepoint() {
 }
 
 async fn test_open_savepoint(
-    openable_state1: impl OpenableDurableCatalogState,
-    openable_state2: impl OpenableDurableCatalogState,
-    openable_state3: impl OpenableDurableCatalogState,
-    openable_state4: impl OpenableDurableCatalogState,
+    openable_state1: Box<dyn OpenableDurableCatalogState>,
+    openable_state2: Box<dyn OpenableDurableCatalogState>,
+    openable_state3: Box<dyn OpenableDurableCatalogState>,
+    openable_state4: Box<dyn OpenableDurableCatalogState>,
 ) {
     {
         // Can't open a savepoint catalog until it's been initialized.
-        let err = Box::new(openable_state1)
+        let err = openable_state1
             .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap_err();
@@ -209,7 +215,7 @@ async fn test_open_savepoint(
 
     // Initialize the catalog.
     {
-        let state = Box::new(openable_state2)
+        let state = openable_state2
             .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
@@ -219,7 +225,7 @@ async fn test_open_savepoint(
 
     {
         // Open catalog in savepoint mode.
-        let mut state = Box::new(openable_state3)
+        let mut state = openable_state3
             .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
@@ -299,7 +305,7 @@ async fn test_open_savepoint(
 
     {
         // Open catalog normally.
-        let mut state = Box::new(openable_state4)
+        let mut state = openable_state4
             .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
@@ -336,12 +342,12 @@ async fn test_persist_open_read_only() {
 }
 
 async fn test_open_read_only(
-    openable_state1: impl OpenableDurableCatalogState,
-    openable_state2: impl OpenableDurableCatalogState,
-    openable_state3: impl OpenableDurableCatalogState,
+    openable_state1: Box<dyn OpenableDurableCatalogState>,
+    openable_state2: Box<dyn OpenableDurableCatalogState>,
+    openable_state3: Box<dyn OpenableDurableCatalogState>,
 ) {
     // Can't open a read-only catalog until it's been initialized.
-    let err = Box::new(openable_state1)
+    let err = openable_state1
         .open_read_only(&test_bootstrap_args())
         .await
         .unwrap_err();
@@ -351,13 +357,13 @@ async fn test_open_read_only(
     }
 
     // Initialize the catalog.
-    let mut state = Box::new(openable_state2)
+    let mut state = openable_state2
         .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
     assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
 
-    let mut read_only_state = Box::new(openable_state3)
+    let mut read_only_state = openable_state3
         .open_read_only(&test_bootstrap_args())
         .await
         .unwrap();
@@ -414,12 +420,12 @@ async fn test_persist_open() {
 }
 
 async fn test_open(
-    openable_state1: impl OpenableDurableCatalogState,
-    openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
-    openable_state3: BoxFuture<'_, impl OpenableDurableCatalogState>,
+    openable_state1: Box<dyn OpenableDurableCatalogState>,
+    openable_state2: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
+    openable_state3: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
 ) {
     let (snapshot, audit_log) = {
-        let mut state = Box::new(openable_state1)
+        let mut state = openable_state1
             // Use `NOW_ZERO` for consistent timestamps in the snapshots.
             .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
@@ -441,7 +447,8 @@ async fn test_open(
     };
     // Reopening the catalog will increment the epoch, but shouldn't change the initial snapshot.
     {
-        let mut state = Box::new(openable_state2.await)
+        let mut state = openable_state2
+            .await
             .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
@@ -453,7 +460,8 @@ async fn test_open(
     }
     // Reopen the catalog a third time for good measure.
     {
-        let mut state = Box::new(openable_state3.await)
+        let mut state = openable_state3
+            .await
             .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
@@ -485,15 +493,15 @@ async fn test_persist_unopened_fencing() {
 }
 
 async fn test_unopened_fencing(
-    openable_state1: impl OpenableDurableCatalogState,
-    openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
-    openable_state3: impl OpenableDurableCatalogState,
+    openable_state1: Box<dyn OpenableDurableCatalogState>,
+    openable_state2: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
+    openable_state3: Box<dyn OpenableDurableCatalogState>,
 ) {
     let deployment_generation = 42;
 
     // Initialize catalog.
     {
-        let _ = Box::new(openable_state1)
+        let _ = openable_state1
             // Use `NOW_ZERO` for consistent timestamps in the snapshots.
             .open(
                 NOW_ZERO(),
@@ -513,7 +521,7 @@ async fn test_unopened_fencing(
     );
 
     // Open catalog, which should bump the epoch.
-    let _state = Box::new(openable_state3)
+    let _state = openable_state3
         // Use `NOW_ZERO` for consistent timestamps in the snapshots.
         .open(
             NOW_ZERO(),
@@ -562,7 +570,7 @@ async fn test_persist_fencing() {
         )
         .await
         .unwrap();
-        let _persist_state = Box::new(persist_openable_state)
+        let _persist_state = persist_openable_state
             .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();

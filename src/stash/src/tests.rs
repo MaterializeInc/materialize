@@ -752,14 +752,3 @@ async fn append(stash: &mut Stash, batches: Vec<AppendBatch>) -> Result<(), Stas
         })
         .await
 }
-
-async fn get<K, V>(
-    typed_collection: &TypedCollection<K, V>,
-    stash: &mut Stash,
-) -> Result<StashCollection<K, V>, StashError>
-where
-    K: Data,
-    V: Data,
-{
-    collection(stash, typed_collection.name()).await
-}
