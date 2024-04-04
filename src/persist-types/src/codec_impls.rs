@@ -25,13 +25,13 @@ use bytes::BufMut;
 
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{
-    ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder,
-    Schema,
+    ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData, PartDecoder,
+    PartEncoder, Schema,
 };
 use crate::dyn_struct::{
     ColumnsMut, ColumnsRef, DynStruct, DynStructCfg, DynStructCol, DynStructMut, DynStructRef,
 };
-use crate::stats::{BytesStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
+use crate::stats::{BytesStats, NoneStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
 use crate::{Codec, Codec64, Opaque, ShardId};
 
 /// An implementation of [Schema] for [()].
@@ -522,6 +522,40 @@ impl ColumnCfg<Option<DynStruct>> for DynStructCfg {
     }
 }
 
+impl Data for OpaqueData {
+    type Cfg = ();
+    type Ref<'a> = &'a [u8];
+    type Col = BinaryArray<i32>;
+    type Mut = MutableBinaryArray<i32>;
+    type Stats = NoneStats;
+}
+
+impl ColumnCfg<OpaqueData> for () {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: false,
+            format: ColumnFormat::OpaqueData,
+        }
+    }
+}
+
+impl Data for Option<OpaqueData> {
+    type Cfg = ();
+    type Ref<'a> = Option<&'a [u8]>;
+    type Col = BinaryArray<i32>;
+    type Mut = MutableBinaryArray<i32>;
+    type Stats = OptionStats<NoneStats>;
+}
+
+impl ColumnCfg<Option<OpaqueData>> for () {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: true,
+            format: ColumnFormat::OpaqueData,
+        }
+    }
+}
+
 impl ColumnRef<()> for Bitmap {
     fn cfg(&self) -> &() {
         &()
@@ -787,6 +821,36 @@ impl ColumnPush<String> for MutableUtf8Array<i32> {
 impl ColumnPush<Option<String>> for MutableUtf8Array<i32> {
     fn push<'a>(&mut self, val: Option<&'a str>) {
         <MutableUtf8Array<i32>>::push(self, val)
+    }
+}
+
+impl ColumnGet<OpaqueData> for BinaryArray<i32> {
+    fn get<'a>(&'a self, idx: usize) -> <OpaqueData as Data>::Ref<'a> {
+        assert!(self.validity().is_none());
+        self.value(idx)
+    }
+}
+
+impl ColumnGet<Option<OpaqueData>> for BinaryArray<i32> {
+    fn get<'a>(&'a self, idx: usize) -> <Option<OpaqueData> as Data>::Ref<'a> {
+        if self.validity().map_or(true, |x| x.get_bit(idx)) {
+            Some(self.value(idx))
+        } else {
+            None
+        }
+    }
+}
+
+impl ColumnPush<OpaqueData> for MutableBinaryArray<i32> {
+    fn push<'a>(&mut self, val: <OpaqueData as Data>::Ref<'a>) {
+        assert!(self.validity().is_none());
+        <MutableBinaryArray<i32>>::push(self, Some(val))
+    }
+}
+
+impl ColumnPush<Option<OpaqueData>> for MutableBinaryArray<i32> {
+    fn push<'a>(&mut self, val: <Option<OpaqueData> as Data>::Ref<'a>) {
+        <MutableBinaryArray<i32>>::push(self, val)
     }
 }
 

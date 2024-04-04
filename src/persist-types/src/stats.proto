@@ -29,6 +29,7 @@ message ProtoDynStats {
         ProtoStructStats struct = 2;
         ProtoPrimitiveStats primitive = 3;
         ProtoBytesStats bytes = 4;
+        google.protobuf.Empty none = 5;
     }
 }
 

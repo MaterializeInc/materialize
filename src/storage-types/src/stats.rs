@@ -247,14 +247,16 @@ impl RelationPartStats<'_> {
             .col::<Option<DynStruct>>("ok")
             .expect("ok column should be a struct")?;
         let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColValues(
+        let spec = typ.to_persist(ColValues(
             self.metrics,
             self.name,
             name.as_str(),
             stats.as_ref(),
             arena,
             self.len(),
-        ))?
+        ))?;
+
+        Some(spec)
     }
 }
 
@@ -266,8 +268,8 @@ mod tests {
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::PartStats;
     use mz_repr::{
-        is_no_stats_type, ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row,
-        RowArena, ScalarType,
+        ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena,
+        ScalarType,
     };
     use proptest::prelude::*;
 
@@ -275,11 +277,6 @@ mod tests {
     use crate::sources::SourceData;
 
     fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
-        // Skip types that we don't keep stats for (yet).
-        if is_no_stats_type(&scalar_type) {
-            return;
-        }
-
         struct ValidateStats<'a>(RelationPartStats<'a>, &'a RowArena, Datum<'a>);
         impl<'a> DatumToPersistFn<()> for ValidateStats<'a> {
             fn call<T: DatumToPersist>(self) -> () {
