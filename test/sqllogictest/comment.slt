@@ -12,12 +12,6 @@ mode cockroach
 # Start from a pristine server
 reset-server
 
-# Enable comments.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_comment TO true;
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE a ( x int8, y text, z jsonb );
 

@@ -5867,8 +5867,6 @@ pub fn plan_comment(
 ) -> Result<Plan, PlanError> {
     const MAX_COMMENT_LENGTH: usize = 1024;
 
-    scx.require_feature_flag(&vars::ENABLE_COMMENT)?;
-
     let CommentStatement { object, comment } = stmt;
 
     // TODO(parkmycar): Make max comment length configurable.
