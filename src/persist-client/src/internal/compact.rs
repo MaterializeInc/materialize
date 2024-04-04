@@ -28,7 +28,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
-use tracing::{debug, debug_span, trace, warn, Instrument, Span};
+use tracing::{debug, debug_span, error, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, PartDeletes};
@@ -79,12 +79,18 @@ pub struct CompactConfig {
 impl CompactConfig {
     /// Initialize the compaction config from Persist configuration.
     pub fn new(value: &PersistConfig, writer_id: &WriterId) -> Self {
-        CompactConfig {
+        let mut ret = CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, writer_id),
-        }
+        };
+        // Use compaction as a method of getting inline writes out of state, to
+        // make room for more inline writes. We could instead do this at the end
+        // of compaction by flushing out the batch, but doing it here based on
+        // the config allows BatchBuilder to do its normal pipelining of writes.
+        ret.batch.inline_update_threshold_bytes = 0;
+        ret
     }
 }
 
@@ -737,21 +743,30 @@ where
             tokio::task::yield_now().await;
         }
         let mut batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
-        // Use compaction as a method of getting inline writes out of state, to
-        // make room for more inline writes.
-        let () = batch
-            .flush_to_blob(
-                &cfg.batch,
-                &metrics.compaction.batch,
-                &isolated_runtime,
-                &real_schemas,
-            )
-            .await;
-        let hollow_batch = batch.into_hollow_batch();
+
+        // We use compaction as a method of getting inline writes out of state,
+        // to make room for more inline writes. This happens in
+        // `CompactConfig::new` by overriding the inline writes threshold
+        // config. This is a bit action-at-a-distance, so defensively detect if
+        // this breaks here and log and correct it if so.
+        let has_inline_parts = batch.batch.parts.iter().any(|x| match x {
+            BatchPart::Hollow(_) => false,
+            BatchPart::Inline { .. } => true,
+        });
+        if has_inline_parts {
+            error!(%shard_id, ?cfg, "compaction result unexpectedly had inline writes");
+            let () = batch
+                .flush_to_blob(
+                    &cfg.batch,
+                    &metrics.compaction.batch,
+                    &isolated_runtime,
+                    &real_schemas,
+                )
+                .await;
+        }
 
         timings.record(&metrics);
-
-        Ok(hollow_batch)
+        Ok(batch.into_hollow_batch())
     }
 
     fn validate_req(req: &CompactReq<T>) -> Result<(), anyhow::Error> {
