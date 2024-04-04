@@ -105,9 +105,19 @@ $ fivetran-destination action=write_batch
 
 > CREATE TABLE foo.large (a int, b text, c text, d int)
 
-# Repeating this line 1,400,000 times should get us close to 100MiB
-$ file-append container=fivetran path=c.csv compression=gzip header=a,b,c,d repeat=1400000
+# Set the max copy from size to 100MiB.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET max_copy_from_size = 104857600;
+
+# Repeating this line 1,300,000 times should get us close to 100MiB.
+$ file-append container=fivetran path=c.csv compression=gzip header=a,b,c,d repeat=1300000
 5000,"I am a large log line, <- can this comma mess us up?",foo_bar_baz,10
+
+$ file-append container=fivetran path=d.csv compression=gzip header=a,b,c,d repeat=1300000
+5000,"I am a large log line, <- can this comma mess us up?",foo_bar_baz,10
+
+# Note: Both 'c.csv' and 'd.csv' are individually under the 'max_copy_from_size', but together
+# they exceed it. We want to make sure the write_batch still succeeds in this case.
 
 $ fivetran-destination action=write_batch
 {
@@ -139,7 +149,10 @@ $ fivetran-destination action=write_batch
         ]
     },
     "keys": {},
-    "replace_files": ["${testdrive.fivetran-destination-files-path}/c.csv"],
+    "replace_files": [
+        "${testdrive.fivetran-destination-files-path}/c.csv",
+        "${testdrive.fivetran-destination-files-path}/d.csv"
+    ],
     "update_files": [],
     "delete_files": [],
     "file_params": {
@@ -154,7 +167,7 @@ $ fivetran-destination action=write_batch
 {}
 
 > SELECT COUNT(*) FROM foo.large;
-1400000
+2600000
 
 > SELECT * FROM foo.large LIMIT 1;
 5000 "I am a large log line, <- can this comma mess us up?" foo_bar_baz 10
@@ -165,3 +178,4 @@ $ fivetran-destination action=write_batch
 $ file-delete container=fivetran path=a.csv
 $ file-delete container=fivetran path=b.csv
 $ file-delete container=fivetran path=c.csv
+$ file-delete container=fivetran path=d.csv
