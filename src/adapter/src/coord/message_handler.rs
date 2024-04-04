@@ -72,11 +72,14 @@ impl Coordinator {
                     self.message_command(cmd).instrument(span).await
                 }
                 Message::ControllerReady => {
-                    // TODO(jkosh44) Avoid clone.
-                    let storage_metadata = self.catalog().state().storage_metadata().clone();
-                    if let Some(m) = self
-                        .controller
-                        .process(&storage_metadata)
+                    let Coordinator {
+                        controller,
+                        catalog,
+                        ..
+                    } = self;
+                    let storage_metadata = catalog.state().storage_metadata();
+                    if let Some(m) = controller
+                        .process(storage_metadata)
                         .await
                         .expect("`process` never returns an error")
                     {
