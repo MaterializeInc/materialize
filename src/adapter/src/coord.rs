@@ -161,7 +161,9 @@ use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
+use crate::util::{
+    ClientTransmitter, CompletedClientTransmitter, ResultExt, TracedUnboundedSender,
+};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
@@ -194,14 +196,14 @@ mod sql;
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
-    Command(OpenTelemetryContext, Command),
+    Command(Command),
     ControllerReady,
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
-    GroupCommitInitiate(Span, Option<GroupCommitPermit>),
+    GroupCommitInitiate(Option<GroupCommitPermit>),
     /// Makes a group commit visible to all clients.
     GroupCommitApply(
         /// Timestamp of the writes in the group commit.
@@ -274,7 +276,7 @@ impl Message {
     /// Returns a string to identify the kind of [`Message`], useful for logging.
     pub const fn kind(&self) -> &'static str {
         match self {
-            Message::Command(_, msg) => match msg {
+            Message::Command(msg) => match msg {
                 Command::CatalogSnapshot { .. } => "command-catalog_snapshot",
                 Command::Startup { .. } => "command-startup",
                 Command::Execute { .. } => "command-execute",
@@ -1146,7 +1148,7 @@ impl Drop for ExecuteContextExtra {
 #[derive(Debug)]
 pub struct ExecuteContext {
     tx: ClientTransmitter<ExecuteResponse>,
-    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    internal_cmd_tx: TracedUnboundedSender<Message>,
     session: Session,
     extra: ExecuteContextExtra,
 }
@@ -1170,7 +1172,7 @@ impl ExecuteContext {
 
     pub fn from_parts(
         tx: ClientTransmitter<ExecuteResponse>,
-        internal_cmd_tx: mpsc::UnboundedSender<Message>,
+        internal_cmd_tx: TracedUnboundedSender<Message>,
         session: Session,
         extra: ExecuteContextExtra,
     ) -> Self {
@@ -1194,7 +1196,7 @@ impl ExecuteContext {
         self,
     ) -> (
         ClientTransmitter<ExecuteResponse>,
-        mpsc::UnboundedSender<Message>,
+        TracedUnboundedSender<Message>,
         Session,
         ExecuteContextExtra,
     ) {
@@ -1259,7 +1261,7 @@ pub struct Coordinator {
     catalog: Arc<Catalog>,
 
     /// Channel to manage internal commands from the coordinator to itself.
-    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    internal_cmd_tx: TracedUnboundedSender<Message>,
     /// Notification that triggers a group commit.
     group_commit_tx: appends::GroupCommitNotifier,
 
@@ -2356,9 +2358,9 @@ impl Coordinator {
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
     fn serve(
         mut self,
-        mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
+        mut internal_cmd_rx: mpsc::UnboundedReceiver<(Option<Span>, Message)>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
-        mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
+        mut cmd_rx: mpsc::UnboundedReceiver<(Span, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
         async move {
@@ -2438,21 +2440,21 @@ impl Coordinator {
                 // Before adding a branch to this select loop, please ensure that the branch is
                 // cancellation safe and add a comment explaining why. You can refer here for more
                 // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
-                let msg = select! {
+                let (span, msg) = select! {
                     // Order matters here. Some correctness properties rely on us processing
                     // internal commands before processing external commands.
                     biased;
 
                     // `recv()` on `UnboundedReceiver` is cancel-safe:
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
-                    Some(m) = internal_cmd_rx.recv() => m,
+                    Some(span_msg) = internal_cmd_rx.recv() => span_msg,
                     // `next()` on any stream is cancel-safe:
                     // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
-                    Some(event) = cluster_events.next() => Message::ClusterEvent(event),
+                    Some(event) = cluster_events.next() => (None, Message::ClusterEvent(event)),
                     // See [`mz_controller::Controller::Controller::ready`] for notes
                     // on why this is cancel-safe.
                     () = self.controller.ready() => {
-                        Message::ControllerReady
+                        (None, Message::ControllerReady)
                     }
                     // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
                     permit = group_commit_rx.ready() => {
@@ -2475,16 +2477,13 @@ impl Coordinator {
                                 span
                             }
                         };
-                        Message::GroupCommitInitiate(span, Some(permit))
+                        (Some(span), Message::GroupCommitInitiate(Some(permit)))
                     },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                     m = cmd_rx.recv() => match m {
                         None => break,
-                        Some((otel_ctx, m)) => {
-                            Message::Command(otel_ctx, m)
-
-                        }
+                        Some((span, m)) => (Some(span), Message::Command(m)),
                     },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
@@ -2500,14 +2499,14 @@ impl Coordinator {
                                 "connections can not have multiple concurrent reads, prev: {prev:?}"
                             )
                         }
-                        Message::LinearizeReads
+                        (None, Message::LinearizeReads)
                     }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     _ = self.advance_timelines_interval.tick() => {
                         let span = info_span!(parent: None, "coord::advance_timelines_interval");
                         span.follows_from(Span::current());
-                        Message::GroupCommitInitiate(span, None)
+                        (Some(span), Message::GroupCommitInitiate(None))
                     },
 
                     // Process the idle metric at the lowest priority to sample queue non-idle time.
@@ -2526,12 +2525,17 @@ impl Coordinator {
                 // All message processing functions trace. Start a parent span
                 // for them to make it easy to find slow messages.
                 let msg_kind = msg.kind();
-                let span = span!(
-                    target: "mz_adapter::coord::handle_message_loop",
-                    Level::INFO,
-                    "coord::handle_message",
-                    kind = msg_kind
-                );
+                let span = match span {
+                    Some(span) if !span.is_none() => span,
+                    // TODO: Finish plumbing a real span for every message above
+                    // and remove this fallback.
+                    Some(_) | None => span!(
+                        target: "mz_adapter::coord::handle_message_loop",
+                        Level::INFO,
+                        "coord::handle_message",
+                        kind = msg_kind
+                    )
+                };
                 let otel_context = span.context().span().span_context().clone();
 
                 // Record the last kind of message in case we get stuck. For
@@ -2541,7 +2545,6 @@ impl Coordinator {
                     kind: msg_kind,
                     stmt: match &msg {
                         Message::Command(
-                            _,
                             Command::Execute {
                                 portal_name,
                                 session,
@@ -2555,7 +2558,7 @@ impl Coordinator {
                 };
 
                 let start = Instant::now();
-                self.handle_message(span, msg).await;
+                self.handle_message(msg).instrument(span).await;
                 let duration = start.elapsed();
 
                 self.metrics
@@ -3023,7 +3026,7 @@ pub fn serve(
                 let mut coord = Coordinator {
                     controller,
                     catalog,
-                    internal_cmd_tx,
+                    internal_cmd_tx: internal_cmd_tx.into(),
                     group_commit_tx,
                     strict_serializable_reads_tx,
                     global_timelines: timestamp_oracles,

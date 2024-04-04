@@ -27,10 +27,8 @@ use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_types::controller::CollectionMetadata;
-use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, info_span, warn, Instrument, Level};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::command::Command;
@@ -50,25 +48,11 @@ impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    ///
-    /// We pass in a span from the outside, rather than instrumenting this
-    /// method using `#instrument[...]` or calling `.instrument()` at the
-    /// callsite so that we can correctly instrument the boxed future here _and_
-    /// so that we can stitch up the OpenTelemetryContext when we're processing
-    /// a `Message::Command` or other commands that pass around a context.
-    pub(crate) fn handle_message<'a>(
-        &'a mut self,
-        span: tracing::Span,
-        msg: Message,
-    ) -> LocalBoxFuture<'a, ()> {
+    pub(crate) fn handle_message<'a>(&'a mut self, msg: Message) -> LocalBoxFuture<'a, ()> {
         async move {
             match msg {
-                Message::Command(otel_ctx, cmd) => {
-                    // TODO: We need a Span that is not none for the otel_ctx to attach the parent
-                    // relationship to. If we swap the otel_ctx in `Command::Message` for a Span, we
-                    // can downgrade this to a debug_span.
-                    let span = tracing::info_span!("message_command").or_current();
-                    span.in_scope(|| otel_ctx.attach_as_parent());
+                Message::Command(cmd) => {
+                    let span = tracing::info_span!("message_command");
                     self.message_command(cmd).instrument(span).await
                 }
                 Message::ControllerReady => {
@@ -93,10 +77,8 @@ impl Coordinator {
                 Message::WriteLockGrant(write_lock_guard) => {
                     self.message_write_lock_grant(write_lock_guard).await;
                 }
-                Message::GroupCommitInitiate(span, permit) => {
-                    // Add an OpenTelemetry link to our current span.
-                    tracing::Span::current().add_link(span.context().span().span_context().clone());
-                    self.try_group_commit(permit).instrument(span).await
+                Message::GroupCommitInitiate(permit) => {
+                    self.try_group_commit(permit).await
                 }
                 Message::GroupCommitApply(timestamp, responses, write_lock_guard, permit) => {
                     self.group_commit_apply(timestamp, responses, write_lock_guard, permit)
@@ -204,7 +186,6 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(span)
         .boxed_local()
     }
 
