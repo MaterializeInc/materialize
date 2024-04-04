@@ -19,7 +19,8 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::consolidate_pact;
-use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
@@ -66,8 +67,10 @@ where
         // files based on the user provided `MAX_FILE_SIZE`.
         let batch_count = self.output_batch_count;
 
-        // TODO(#25835): Note, even though we do get deterministic output currently
-        // after the exchange below, it's not explicitly supported and we should change it.
+        // This relies on an assumption the output order after the Exchange is deterministic, which
+        // is necessary to ensure the files written from each compute replica are identical.
+        // While this is not technically guaranteed, the current implementation uses a FIFO channel.
+        // In the storage copy_to operator we assert the ordering of rows to detect any regressions.
         let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
             &sinked_collection.map(move |row| {
                 let batch = row.hashed() % batch_count;
@@ -77,18 +80,40 @@ where
             "Consolidated COPY TO S3 input",
         );
 
+        // We need to consolidate the error collection to ensure we don't act on retracted errors.
         let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
             &err_collection.map(move |row| {
                 let batch = row.hashed() % batch_count;
                 ((row, batch), ())
             }),
             Exchange::new(move |(((_, batch), _), _, _)| *batch),
-            "Consolidated COPY TO S3 error",
+            "Consolidated COPY TO S3 errors",
         );
+        // We can only propagate the one error back to the client, so filter the error
+        // collection to the first error that is before the sink 'up_to' to avoid
+        // sending the full error collection to the next operator. We ensure we find the
+        // first error before the 'up_to' to avoid accidentally sending an irrelevant error.
+        let error_stream =
+            error
+                .inner
+                .unary_frontier(Pipeline, "COPY TO S3 error filtering", |_cap, _info| {
+                    let up_to = sink.up_to.clone();
+                    let mut vector = Vec::new();
+                    let mut received_one = false;
+                    move |input, output| {
+                        while let Some((time, data)) = input.next() {
+                            if !up_to.less_equal(time.time()) && !received_one {
+                                received_one = true;
+                                data.swap(&mut vector);
+                                output.session(&time).give_iterator(vector.drain(..1));
+                            }
+                        }
+                    }
+                });
 
         mz_storage_operators::s3_oneshot_sink::copy_to(
             input,
-            error,
+            error_stream,
             sink.up_to.clone(),
             self.upload_info.clone(),
             connection_context,
