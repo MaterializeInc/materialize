@@ -185,10 +185,10 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     ///
     /// A replica that receives an `AllowCompaction` command with the empty frontier must
     /// eventually respond with a [`FrontierUpper`] response reporting the empty frontier for the
-    /// same collection. ([#16275])
+    /// same collection. ([#16271])
     ///
     /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
-    /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
+    /// [#16271]: https://github.com/MaterializeInc/materialize/issues/16271
     AllowCompaction {
         /// TODO(#25239): Add documentation.
         id: GlobalId,

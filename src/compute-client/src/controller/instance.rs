@@ -1715,6 +1715,7 @@ where
             ComputeResponse::FrontierUpper { id, upper } => {
                 self.handle_frontier_upper(id, upper, replica_id)
             }
+            ComputeResponse::ReadCapability { id, frontier } => None, // TODO
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
             }

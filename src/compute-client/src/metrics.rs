@@ -515,6 +515,7 @@ impl<M> CommandMetrics<M> {
 #[derive(Debug)]
 struct ResponseMetrics<M> {
     frontier_upper: M,
+    read_capability: M,
     peek_response: M,
     subscribe_response: M,
     copy_to_response: M,
@@ -528,6 +529,7 @@ impl<M> ResponseMetrics<M> {
     {
         Self {
             frontier_upper: build_metric("frontier_upper"),
+            read_capability: build_metric("read_capability"),
             peek_response: build_metric("peek_response"),
             subscribe_response: build_metric("subscribe_response"),
             copy_to_response: build_metric("copy_to_response"),
@@ -540,6 +542,7 @@ impl<M> ResponseMetrics<M> {
 
         match proto.kind.as_ref().unwrap() {
             FrontierUpper(_) => &self.frontier_upper,
+            ReadCapability(_) => &self.read_capability,
             PeekResponse(_) => &self.peek_response,
             SubscribeResponse(_) => &self.subscribe_response,
             CopyToResponse(_) => &self.copy_to_response,

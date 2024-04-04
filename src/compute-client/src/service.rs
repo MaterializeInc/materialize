@@ -326,6 +326,7 @@ where
 
                 result
             }
+            ComputeResponse::ReadCapability { id, frontier } => None, // TODO
             ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
                 // Incorporate new peek responses; awaiting all responses.
                 let entry = self

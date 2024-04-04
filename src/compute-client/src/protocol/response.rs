@@ -61,26 +61,59 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///   * The collection has advanced to the empty frontier (e.g. because its inputs have advanced
     ///     to the empty frontier).
     ///   * The collection was dropped in response to an [`AllowCompaction` command] that advanced
-    ///     its read frontier to the empty frontier. ([#16275])
+    ///     its read frontier to the empty frontier. ([#16271])
     ///
-    /// Once a collection was reported to have been advanced to the empty upper frontier:
+    /// The replica must not send `FrontierUpper` responses for collections that:
     ///
-    ///   * It must no longer read from its inputs.
-    ///   * The replica must not send further `FrontierUpper` responses for that collection.
-    ///
-    /// The replica must not send `FrontierUpper` responses for collections that have not
-    /// been created previously by a [`CreateDataflow` command] or by a [`CreateInstance`
-    /// command].
+    ///   * have not been created previously by a [`CreateDataflow` command] or by a
+    ///     [`CreateInstance` command].
+    ///   * have previously been reported as advanced to the empty frontier by a `FrontierUpper`
+    ///     response.
     ///
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
-    /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
+    /// [#16271]: https://github.com/MaterializeInc/materialize/issues/16271
     FrontierUpper {
-        /// TODO(#25239): Add documentation.
+        /// The ID of a compute collection.
         id: GlobalId,
-        /// TODO(#25239): Add documentation.
+        /// The compute collection's new upper frontier.
         upper: Antichain<T>,
+    },
+
+    /// `ReadCapability` announces the current frontier of times the specified compute collection
+    /// requires to be readable from its inputs.
+    ///
+    /// Upon receiving a `ReadCapability` response, the controller may assume that the replica has
+    /// finished reading from the collection's inputs up to at least the given frontier.
+    ///
+    /// Replicas must send `ReadCapability` responses for all compute collections.
+    ///
+    /// Replicas must never report regressing read capabilities. Specifically:
+    ///
+    ///   * The first read capability reported for a collection must not be less than that
+    ///     collection's initial `as_of` frontier.
+    ///   * Subsequent reported read capabilities for a collection must not be less than any
+    ///     capability reported previously for the same collection.
+    ///
+    /// Replicas must send a `ReadCapability` response reporting advancement to the empty frontier
+    /// for a collection when it has finished reading from the collection's inputs, because the
+    /// input data was exhausted or because the collection was dropped.
+    ///
+    /// Once a collection's read capability was reported to have been advanced to the empty
+    /// frontier it must no longer read from its inputs.
+    ///
+    /// The replica must not send `ReadCapability` responses for collections that:
+    ///
+    ///   * have not been created previously by a [`CreateDataflow` command] or by a
+    ///     [`CreateInstance` command].
+    ///   * have previously downgraded their read capability to the empty frontier by a
+    ///     `ReadCapability` response.
+    ReadCapability {
+        /// The ID of a compute collection.
+        id: GlobalId,
+        /// The compute collection's new read capability.
+        frontier: Antichain<T>,
     },
 
     /// `PeekResponse` reports the result of a previous [`Peek` command]. The peek is identified by
@@ -171,6 +204,12 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                     id: Some(id.into_proto()),
                     upper: Some(upper.into_proto()),
                 }),
+                ComputeResponse::ReadCapability { id, frontier } => {
+                    ReadCapability(ProtoReadCapabilityKind {
+                        id: Some(id.into_proto()),
+                        frontier: Some(frontier.into_proto()),
+                    })
+                }
                 ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
                     PeekResponse(ProtoPeekResponseKind {
                         id: Some(id.into_proto()),
@@ -201,6 +240,12 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
             Some(FrontierUpper(trace)) => Ok(ComputeResponse::FrontierUpper {
                 id: trace.id.into_rust_if_some("ProtoTrace::id")?,
                 upper: trace.upper.into_rust_if_some("ProtoTrace::upper")?,
+            }),
+            Some(ReadCapability(resp)) => Ok(ComputeResponse::ReadCapability {
+                id: resp.id.into_rust_if_some("ProtoReadCapabilityKind::id")?,
+                frontier: resp
+                    .frontier
+                    .into_rust_if_some("ProtoReadCapabilityKind::resp")?,
             }),
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
                 resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
