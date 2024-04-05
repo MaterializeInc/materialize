@@ -3294,6 +3294,8 @@ impl Coordinator {
         }
 
         if !source_descs.is_empty() {
+            // TODO(#26767): provide an API to modify the connection without
+            // modifying the entire source desc, just like we offer for sinks.
             self.controller
                 .storage
                 .alter_ingestion_source_desc(source_descs)

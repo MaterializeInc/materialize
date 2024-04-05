@@ -1052,8 +1052,11 @@ pub fn plan_create_source(
 
             for (index, table) in details.tables.iter().enumerate() {
                 let name = FullItemName {
-                    // In MySQL we use 'mysql' as the default database name since there is
-                    // no concept of a 'database' in MySQL (schemas and databases are the same thing)
+                    // In MySQL we use 'mysql' as the default database name
+                    // since there is no concept of a 'database' in MySQL
+                    // (schemas and databases are the same thing)
+                    //
+                    //TODO(#26764, #26772): remove this.
                     database: RawDatabaseSpecifier::Name("mysql".to_string()),
                     schema: table.schema_name.clone(),
                     item: table.name.clone(),

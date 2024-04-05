@@ -47,7 +47,7 @@ enum GeneratorKind {
         // Load generators cannot be rendered until all of their exports are
         // present.
         //
-        // TODO: can this limitation be removed?
+        // TODO(#26765): can this limitation be removed?
         required_exports: usize,
     },
     KeyValue(KeyValueLoadGenerator),
@@ -189,10 +189,10 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
     let button = builder.build(move |caps| async move {
         // Do not run the load generator until we have all of our source
-        // exports. Waiting here is fine because we know that their creation
-        // and scheduling of this dataflow is imminent.
+        // exports. Waiting here is fine because we know that their creation and
+        // scheduling of this dataflow is imminent.
         //
-        // TODO: can this limitation be removed?
+        // TODO(#26765): can this limitation be removed?
         if required_exports != config.source_exports.len() {
             std::future::pending().await
         }

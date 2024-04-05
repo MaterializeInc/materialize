@@ -619,6 +619,7 @@ pub trait CatalogItem {
     fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName)>;
 
     /// Returns the mapping of `GloablIds` to output indices for this source.
+    // TODO(#26764, #26769): this should no longer be used.
     fn source_exports(&self) -> BTreeMap<GlobalId, usize>;
 
     /// Reports whether this catalog item is a progress source.

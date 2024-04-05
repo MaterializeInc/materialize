@@ -100,6 +100,12 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     ///   in its own field.
     /// - This field should not be populated by the storage controller in
     ///   response to collections being created.
+    // TODO(#26764, #26769): after implementing subsource dependency inversion,
+    // we should consider creating a version of this struct in planning without
+    // `source_exports`; right now that field is always empty in the catalog's
+    // version of the source and it misleadingly looks like it might have the
+    // actual exports in it. However, this cannot be removed until after the
+    // migration.
     #[proptest(
         strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 0..4)"
     )]

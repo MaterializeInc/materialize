@@ -1066,7 +1066,7 @@ where
 
                 // Get the updated output indices for each source export.
                 //
-                // light thinking: this could be simpler if the output indices
+                // TODO(#26766): this could be simpler if the output indices
                 // were determined in rendering, e.g. `SourceExport` had an
                 // `Option<UnresolvedItemName>` instead of a `usize` and we
                 // looked up its output index when we were aligning the
@@ -2086,7 +2086,7 @@ where
                         // do not yet track the cluster on pending compaction
                         // commands.
                         //
-                        // TODO: place the cluster ID in the pending compaction
+                        // TODO(#24235): place the cluster ID in the pending compaction
                         // commands of IngestionExports.
                         pending_source_drops.push(id);
                         None
@@ -3659,10 +3659,9 @@ impl<T: Timestamp> CollectionState<T> {
             DataSource::Webhook
             | DataSource::Introspection(_)
             | DataSource::Other(_)
-            // This isn't quite right because a source export runs on the
+            // TODO(#24235) This isn't quite right because a source export runs on the
             // ingestion's cluster, but we don't have the ability to perform
-            // cross-referenced lookups here (at least not yet). TODO: fix in
-            // #24235.
+            // cross-referenced lookups here (at least not yet).
             | DataSource::IngestionExport { .. }
             | DataSource::Progress => None,
         }
