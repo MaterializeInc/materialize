@@ -15,6 +15,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import TextIO
 
+from materialize.mzexplore import sql
 from materialize.mzexplore.common import explain_diff, explain_file, info, warn
 
 
@@ -26,8 +27,9 @@ def changes(
     diff_suffix: str,
 ) -> None:
     """
-    Append sections to an `*.md` file with items corresponding to changes in
-    plans.
+    Append sections to an `*.md` file with items corresponding to changes pairs
+    of optimized plans for the same catalog item extracted with the given `base`
+    and `diff` suffix.
     """
 
     # Ensure that the target dir exists
@@ -59,9 +61,9 @@ def changes(
             continue
 
         item_type = base.item_type
-        database = base.database
-        schema = base.schema
-        name = base.name
+        database = sql.identifier(base.database)
+        schema = sql.identifier(base.schema)
+        name = sql.identifier(base.name)
 
         base_data = (target / base.path()).read_text(encoding="utf8")
         diff_data = (target / diff.path()).read_text(encoding="utf8")
@@ -72,12 +74,12 @@ def changes(
             out.write(
                 dedent(
                     f"""
-                    - TODO(REGRESSION|IMPROVEMENT) in {item_type} `{database}.{schema}.{name}`
+                    - TODO(REGRESSION|IMPROVEMENT) in {item_type.sql()} `{database}.{schema}.{name}`
 
                       ```bash
                       code --diff \\
-                          {str(base)} \\
-                          {str(diff)}
+                          {target / base.path()} \\
+                          {target / diff.path()}
                       ```
 
                     """
