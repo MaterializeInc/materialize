@@ -11,16 +11,17 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::ops::Bound;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Collection, Data, Hashable};
 use itertools::Itertools;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
+use mz_ore::iter::IteratorExt;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
@@ -544,36 +545,11 @@ enum BatchOrData {
     },
 }
 
-/// A type to wrap a `correction` buffer taking the difference between
-/// existing and desired contents for the sink while collecting metrics
-/// on its length and capacity dynamics.
-struct CorrectionBuffer<T, R>(Vec<(Result<Row, DataflowError>, T, R)>);
-
-impl<T, R> CorrectionBuffer<T, R> {
-    fn with_correction_buffer<F: FnMut(&mut Vec<(Result<Row, DataflowError>, T, R)>) -> O, O>(
-        &mut self,
-        sink_metrics: &SinkMetrics,
-        sink_worker_metrics: &SinkWorkerMetrics,
-        mut f: F,
-    ) -> O {
-        let (old_len, old_capacity) = (self.0.len(), self.0.capacity());
-        let output = f(&mut self.0);
-        let (new_len, new_capacity) = (self.0.len(), self.0.capacity());
-        let (len_delta, capacity_delta) = (
-            UpdateDelta::new(new_len, old_len),
-            UpdateDelta::new(new_capacity, old_capacity),
-        );
-        sink_worker_metrics.report_correction_update_totals(new_len, new_capacity);
-        sink_metrics.report_correction_update_deltas(len_delta, capacity_delta);
-        output
-    }
-}
-
-/// A stash for storing future updates by time.
+/// A stash for storing updates by time.
 #[derive(Default)]
 struct UpdateStash<D>(BTreeMap<Timestamp, ConsolidatingVec<D>>);
 
-impl<D: Ord> UpdateStash<D> {
+impl<D: Data> UpdateStash<D> {
     fn new() -> Self {
         Self(Default::default())
     }
@@ -601,19 +577,66 @@ impl<D: Ord> UpdateStash<D> {
         }
     }
 
-    /// Remove all updates before the given frontier and return an iterator over them.
-    fn seal(
+    /// Consolidate and return updates within the given bounds.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `lower` is not less than or equal to `upper`.
+    fn updates_within(
         &mut self,
-        frontier: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> {
-        let retain = match frontier.as_option() {
-            Some(time) => self.0.split_off(time),
-            None => BTreeMap::new(),
+        lower: &Antichain<Timestamp>,
+        upper: &Antichain<Timestamp>,
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + '_ {
+        assert!(PartialOrder::less_equal(lower, upper));
+
+        let start = match lower.as_option() {
+            Some(ts) => Bound::Included(*ts),
+            None => Bound::Excluded(Timestamp::MAX),
         };
-        let drain = std::mem::replace(&mut self.0, retain);
-        drain
-            .into_iter()
-            .flat_map(|(t, data)| data.into_iter().map(move |(d, r)| (d, t, r)))
+        let end = match upper.as_option() {
+            Some(ts) => Bound::Excluded(*ts),
+            None => Bound::Unbounded,
+        };
+
+        // Consolidate relevant times and compute the total number of updates.
+        let range = self.0.range_mut((start, end));
+        let update_count = range.fold(0, |acc, (_, data)| {
+            data.consolidate();
+            acc + data.len()
+        });
+
+        let range = self.0.range((start, end));
+        range
+            .flat_map(|(t, data)| data.iter().map(|(d, r)| (d.clone(), *t, *r)))
+            .exact_size(update_count)
+    }
+
+    /// Advance all contained updates by the given frontier.
+    ///
+    /// If the given frontier is empty, all remaining updates are discarded.
+    fn advance_by(&mut self, frontier: &Antichain<Timestamp>) {
+        let Some(target_ts) = frontier.as_option() else {
+            self.0.clear();
+            return;
+        };
+
+        while let Some((ts, data)) = self.0.pop_first() {
+            if frontier.less_equal(&ts) {
+                // We have advanced all updates that can advance.
+                self.0.insert(ts, data);
+                break;
+            }
+
+            use std::collections::btree_map::Entry;
+            match self.0.entry(*target_ts) {
+                Entry::Vacant(entry) => {
+                    entry.insert(data);
+                }
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().extend(data);
+                }
+            }
+        }
     }
 }
 
@@ -625,6 +648,11 @@ impl<D: Ord> UpdateStash<D> {
 struct ConsolidatingVec<D>(Vec<(D, Diff)>);
 
 impl<D: Ord> ConsolidatingVec<D> {
+    /// Return the length of the vector.
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
     // Pushes `item` into the vector.
     //
     // If the vector does not have sufficient capacity, we try to consolidate and/or double its
@@ -636,7 +664,7 @@ impl<D: Ord> ConsolidatingVec<D> {
         let capacity = self.0.capacity();
         if self.0.len() == capacity {
             // The vector is full. First, consolidate to try to recover some space.
-            consolidate(&mut self.0);
+            self.consolidate();
 
             // If consolidation didn't free at least half the available capacity, double the
             // capacity. This ensures we won't consolidate over and over again with small gains.
@@ -646,6 +674,16 @@ impl<D: Ord> ConsolidatingVec<D> {
         }
 
         self.0.push(item);
+    }
+
+    /// Consolidate the contents.
+    fn consolidate(&mut self) {
+        consolidate(&mut self.0);
+    }
+
+    /// Return an iterator over the borrowed items.
+    fn iter(&self) -> impl Iterator<Item = &(D, Diff)> {
+        self.0.iter()
     }
 }
 
@@ -735,12 +773,7 @@ where
         // Contains `desired - persist`, reflecting the updates we would like to commit
         // to `persist` in order to "correct" it to track `desired`. This collection is
         // only modified by updates received from either the `desired` or `persist` inputs.
-        let mut correction = CorrectionBuffer(Vec::new());
-
-        // Contains updates from `desired` at times beyond `desired`'s frontier, by time. The idea
-        // is to only move updates into `correction` that have a chance of being emitted shortly,
-        // to keep the amount of updates we need to consolidate small.
-        let mut desired_stash = UpdateStash::new();
+        let mut correction = UpdateStash::new();
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -825,8 +858,7 @@ where
                 Some(event) = desired_input.next() => {
                     match event {
                         Event::Data(_cap, data) => {
-                            // Extract desired rows into the stash. They are moved into
-                            // `correction` in response to frontier advancements.
+                            // Extract desired rows as positive contributions to `correction`.
                             if sink_id.is_user() && !data.is_empty() {
                                 trace!(
                                     "persist_sink {sink_id}/{shard_id}: \
@@ -843,18 +875,11 @@ where
                                 );
                             }
 
-                            desired_stash.insert(data);
+                            correction.insert(data);
 
                             continue;
                         }
                         Event::Progress(frontier) => {
-                            // Extract desired rows as positive contributions to `correction`.
-                            correction.with_correction_buffer(
-                                sink_metrics,
-                                sink_worker_metrics,
-                                |buffer| buffer.extend(desired_stash.seal(&frontier)),
-                            );
-
                             desired_frontier = frontier;
                         }
                     }
@@ -863,11 +888,8 @@ where
                     match event {
                         Event::Data(_cap, mut data) => {
                             // Extract persist rows as negative contributions to `correction`.
-                            correction.with_correction_buffer(
-                                sink_metrics,
-                                sink_worker_metrics,
-                                |buffer| buffer.extend(data.drain(..).map(|(d, t, r)| (d, t, -r))),
-                            );
+                            let updates = data.drain(..).map(|(d, t, r)| (d, t, -r)).collect();
+                            correction.insert(updates);
 
                             continue;
                         }
@@ -895,20 +917,7 @@ where
             );
 
             // Advance all updates to `persist`'s frontier.
-            for (row, time, diff) in correction.0.iter_mut() {
-                let time_before = *time;
-                time.advance_by(persist_frontier.borrow());
-                if sink_id.is_user() && &time_before != time {
-                    trace!(
-                        "persist_sink {sink_id}/{shard_id}: \
-                            advanced {:?}, {}, {} to {}",
-                        row,
-                        time_before,
-                        diff,
-                        time
-                    );
-                }
-            }
+            correction.advance_by(&persist_frontier);
 
             // We can write updates for a given batch description when
             // a) the batch is not beyond `batch_descriptions_frontier`,
@@ -930,36 +939,6 @@ where
                 ready_batches,
             );
 
-            if !ready_batches.is_empty() {
-                // Consolidate updates only when they are required by an
-                // attempt to write out new updates. Otherwise, we might
-                // spend a lot of time "consolidating" the same updates
-                // over and over again, with no changes.
-                correction.with_correction_buffer(
-                    sink_metrics,
-                    sink_worker_metrics,
-                    consolidate_updates,
-                );
-
-                // `correction` starts large as it diffs the initial snapshots,
-                // but in steady state contains substantially fewer updates.
-                // We should regularly shrink it to an appropriate size.
-                // We use a 4x threshold here to ensure that we cannot enter
-                // a resizing cycle without a linear-in-`correction.len()`
-                // number of updates. E.g. a 2x threshold could result in
-                // an allocation that must soon after be re-doubled back to
-                // the current size, then halved, then doubled. We want that
-                // pattern to require a linear number of updates rather than
-                // a constant number.
-                if correction.0.len() < correction.0.capacity() / 4 {
-                    correction.with_correction_buffer(
-                        sink_metrics,
-                        sink_worker_metrics,
-                        Vec::shrink_to_fit,
-                    );
-                }
-            }
-
             for batch_description in ready_batches.into_iter() {
                 let cap = in_flight_batches.remove(&batch_description).unwrap();
 
@@ -973,28 +952,19 @@ where
                 }
 
                 let (batch_lower, batch_upper) = batch_description;
-
                 let mut to_append = correction
-                    .0
-                    .iter()
-                    .filter(|(_, time, _)| {
-                        batch_lower.less_equal(time) && !batch_upper.less_equal(time)
-                    })
+                    .updates_within(&batch_lower, &batch_upper)
                     .peekable();
 
                 if to_append.peek().is_some() {
-                    // We want to pass along the data directly if `to_append` is small, but to avoid
-                    // having to iterate through everything twice we'll check if `correction`
-                    // is small as a reasonable proxy.
                     let minimum_batch_updates = persist_clients.cfg().sink_minimum_batch_updates();
-                    let batch_or_data = if correction.0.len() >= minimum_batch_updates {
+                    let batch_or_data = if to_append.len() >= minimum_batch_updates {
                         let batch = write
                             .batch(
-                                to_append.map(|(data, time, diff)| {
-                                    ((SourceData(data.clone()), ()), time, diff)
-                                }),
-                                batch_lower.clone(),
-                                batch_upper.clone(),
+                                to_append
+                                    .map(|(data, time, diff)| ((SourceData(data), ()), time, diff)),
+                                batch_lower,
+                                batch_upper,
                             )
                             .await
                             .expect("invalid usage");
@@ -1011,9 +981,9 @@ where
                         BatchOrData::Batch(batch.into_transmittable_batch())
                     } else {
                         BatchOrData::Data {
-                            lower: batch_lower.clone(),
-                            upper: batch_upper.clone(),
-                            contents: to_append.cloned().collect(),
+                            lower: batch_lower,
+                            upper: batch_upper,
+                            contents: to_append.collect(),
                         }
                     };
 
