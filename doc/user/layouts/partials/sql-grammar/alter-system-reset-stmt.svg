@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="383" height="37">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="66" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="66"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">ALTER</text>
+   <rect x="117" y="3" width="78" height="32" rx="10"/>
+   <rect x="115"
+         y="1"
+         width="78"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="125" y="21">SYSTEM</text>
+   <rect x="215" y="3" width="64" height="32" rx="10"/>
+   <rect x="213"
+         y="1"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="223" y="21">RESET</text>
+   <rect x="299" y="3" width="56" height="32"/>
+   <rect x="297" y="1" width="56" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="307" y="21">name</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m66 0 h10 m0 0 h10 m78 0 h10 m0 0 h10 m64 0 h10 m0 0 h10 m56 0 h10 m3 0 h-3"/>
+   <polygon points="373 17 381 13 381 21"/>
+   <polygon points="373 17 365 13 365 21"/>
+</svg>

@@ -112,7 +112,7 @@ Indexes and dataflows are local to a cluster, so their introspection information
 will vary across clusters depending on the active cluster and replica. As a
 consequence, you should expect the results of the queries below to vary
 depending on the values set for the `cluster` and `cluster_replica`
-[session variables](/sql/set/#session-variables).
+[configuration parameters](/sql/set/#other-configuration-parameters).
 {{< /warning >}}
 
 <!--

@@ -44,7 +44,7 @@ To take advantage of these indexes, Materialize will automatically re-route
 `SHOW` commands and queries using system catalog objects to the
 `mz_introspection` system cluster. You can disable this behavior in
 your session via the `auto_route_introspection_queries`
-[session variable](/sql/show/#other-session-variables).
+[configuration parameter](/sql/show/#other-configuration-parameters).
 
 The following characteristics apply to the `mz_introspection` cluster:
 
