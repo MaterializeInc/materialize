@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
+use std::time::Duration;
 
 use dec::TryFromDecimalError;
 use itertools::Itertools;
@@ -213,6 +214,12 @@ pub enum AdapterError {
     /// A CREATE MATERIALIZED VIEW statement tried to acquire a read hold at a REFRESH AT time,
     /// but was unable to get a precise read hold.
     InputNotReadableAtRefreshAtTime(Timestamp, Antichain<Timestamp>),
+    /// A dependent index did not have a high enough retained history.
+    RequiredRetainHistory {
+        required: Duration,
+        found: Duration,
+        name: String,
+    },
 }
 
 impl AdapterError {
@@ -380,6 +387,9 @@ impl AdapterError {
             AdapterError::InvalidAlter(_, e) => e.hint(),
             AdapterError::Optimizer(e) => e.hint(),
             AdapterError::ConnectionValidation(e) => e.hint(),
+            AdapterError::RequiredRetainHistory { .. } => Some(format!(
+                "Use `ALTER INDEX <index-name> SET (RETAIN HISTORY FOR <duration>)` to change your index and re-run the statement."
+            )),
             AdapterError::InputNotReadableAtRefreshAtTime(_, _) => Some(
                 "You can use `REFRESH AT greatest(mz_now(), <explicit timestamp>)` to refresh \
                  either at the explicitly specified timestamp, or now if the given timestamp would \
@@ -506,6 +516,7 @@ impl AdapterError {
             // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
             AdapterError::MaterializedViewWouldNeverRefresh(_, _) => SqlState::DATA_EXCEPTION,
             AdapterError::InputNotReadableAtRefreshAtTime(_, _) => SqlState::DATA_EXCEPTION,
+            AdapterError::RequiredRetainHistory { .. } => SqlState::INTERNAL_ERROR,
         }
     }
 
@@ -719,6 +730,16 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "REFRESH AT requested for a time where not all the inputs are readable"
+                )
+            }
+            AdapterError::RequiredRetainHistory {
+                required,
+                found,
+                name,
+            } => {
+                write!(
+                    f,
+                    "dependent index {name} has a RETAIN HISTORY of {found:?}, but must be at least {required:?}"
                 )
             }
         }
