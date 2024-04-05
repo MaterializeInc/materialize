@@ -187,6 +187,9 @@ class BenchmarkExecutor:
                 init_operation, init_cursor, -1, -1, self.config.verbose
             )
 
+        print("sleeping 2 seconds to allow dataflows to be scheduled/hydrated")
+        time.sleep(2)
+
         print(
             f"Creating a cursor pool with {concurrency} entries against endpoint: {endpoint.url()}"
         )
