@@ -139,7 +139,7 @@ if __name__ == "__main__":
     parser.add_argument("--build-step-key", action="append", default=[], type=str)
     parser.add_argument(
         "--fetch",
-        type=lambda mode: FetchMode[mode],
+        type=lambda mode: FetchMode[mode.upper()],
         choices=FETCH_MODE_CHOICES,
         default=FetchMode.AUTO,
         help="Whether to fetch fresh builds from Buildkite.",
