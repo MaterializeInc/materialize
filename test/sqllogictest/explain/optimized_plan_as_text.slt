@@ -56,6 +56,42 @@ SELECT * FROM t WHERE a IS NOT NULL;
 
 mode cockroach
 
+# Test target cluster selection for mz_system tables without transactions.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS TEXT FOR
+SELECT * FROM mz_views;
+----
+Explained Query:
+  ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_show_views_ind (*** full scan ***)
+
+Target cluster: mz_introspection
+
+EOF
+
+# Test target cluster selection for mz_system tables inside a transaction.
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t;
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS TEXT FOR
+SELECT * FROM mz_views;
+----
+Explained Query:
+  ReadStorage mz_catalog.mz_views
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+ROLLBACK
+
 # Test constant error.
 query T multiline
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
@@ -63,6 +99,8 @@ SELECT 1 / 0
 ----
 Explained Query (fast path):
   Error "division by zero"
+
+Target cluster: quickstart
 
 EOF
 
@@ -75,6 +113,8 @@ Explained Query (fast path):
   Constant
     - ((1, 2) x 2)
     - (3, 4)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -105,6 +145,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test basic linear chains (slow path).
@@ -120,6 +162,8 @@ Explained Query:
 
 Source materialize.public.mv
   filter=((#0 > 0) AND (#1 < 0) AND ((#0 + #1) > 0))
+
+Target cluster: quickstart
 
 EOF
 
