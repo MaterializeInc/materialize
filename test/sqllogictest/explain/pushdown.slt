@@ -111,6 +111,16 @@ materialize.public.jsonb_fields  1859  0  2  0
 # Cleanup
 # ----------------------------------------
 
+# EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW is also supported
+
+statement ok
+CREATE MATERIALIZED VIEW big_numbers AS SELECT * FROM numbers WHERE value > 10000;
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW big_numbers
+----
+materialize.public.numbers  0  0  0  0
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = false
 ----

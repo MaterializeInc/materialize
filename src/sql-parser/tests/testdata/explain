@@ -298,3 +298,10 @@ EXPLAIN PLAN INSIGHTS FOR SELECT 1
 EXPLAIN PLAN INSIGHTS FOR SELECT 1
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(PlanInsights), with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+
+parse-statement
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW whatever
+----
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW whatever
+=>
+ExplainPushdown(ExplainPushdownStatement { explainee: MaterializedView(Name(UnresolvedItemName([Ident("whatever")]))) })
