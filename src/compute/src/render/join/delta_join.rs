@@ -22,8 +22,8 @@ use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_expr::MirScalarExpr;
-use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
-use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
+use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
@@ -329,7 +329,6 @@ where
         SpecializedArrangement::RowUnit(inner) => build_halfjoin::<_, RowAgent<_, _>, _>(
             updates,
             inner,
-            None,
             prev_key,
             prev_thinning,
             comparison,
@@ -339,7 +338,6 @@ where
         SpecializedArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, _>(
             updates,
             inner,
-            None,
             prev_key,
             prev_thinning,
             comparison,
@@ -372,7 +370,6 @@ where
         SpecializedArrangementImport::RowUnit(inner) => build_halfjoin::<_, RowEnter<_, _, _>, _>(
             updates,
             inner,
-            None,
             prev_key,
             prev_thinning,
             comparison,
@@ -383,7 +380,6 @@ where
             build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                 updates,
                 inner,
-                None,
                 prev_key,
                 prev_thinning,
                 comparison,
@@ -407,7 +403,6 @@ where
 fn build_halfjoin<G, Tr, CF>(
     updates: Collection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
-    trace_key_types: Option<Vec<ColumnType>>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
@@ -421,11 +416,10 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
     Tr: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-    Tr::KeyOwned: ExchangeData + Hashable + Default + FromRowByTypes + IntoRowByTypes,
-    for<'a> Tr::Val<'a>: IntoRowByTypes,
+    Tr::KeyOwned: ExchangeData + Hashable + Default + FromDatumIter + ToDatumIter,
+    for<'a> Tr::Val<'a>: ToDatumIter,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    let updates_key_types = trace_key_types.clone();
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -437,7 +431,6 @@ where
                 prev_key
                     .iter()
                     .map(|e| e.eval(&datums_local, &temp_storage)),
-                updates_key_types.as_deref(),
             )?;
             let binding = SharedRow::get();
             let mut row_builder = binding.borrow_mut();
@@ -473,9 +466,9 @@ where
                 let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
 
-                let key = key.into_datum_iter();
-                let stream_row = stream_row.into_datum_iter();
-                let lookup_row = lookup_row.into_datum_iter();
+                let key = key.to_datum_iter();
+                let stream_row = stream_row.to_datum_iter();
+                let lookup_row = lookup_row.to_datum_iter();
 
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key);
@@ -522,9 +515,9 @@ where
                 let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
 
-                let key = key.into_datum_iter();
-                let stream_row = stream_row.into_datum_iter();
-                let lookup_row = lookup_row.into_datum_iter();
+                let key = key.to_datum_iter();
+                let stream_row = stream_row.to_datum_iter();
+                let lookup_row = lookup_row.to_datum_iter();
 
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key);
@@ -614,8 +607,8 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
     Tr: for<'a> TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-    for<'a> Tr::Key<'a>: IntoRowByTypes,
-    for<'a> Tr::Val<'a>: IntoRowByTypes,
+    for<'a> Tr::Key<'a>: ToDatumIter,
+    for<'a> Tr::Val<'a>: ToDatumIter,
 {
     let mut inner_as_of = Antichain::new();
     for event_time in as_of.elements().iter() {
@@ -647,8 +640,8 @@ where
                                         {
                                             let temp_storage = RowArena::new();
 
-                                            let key = key.into_datum_iter();
-                                            let val = val.into_datum_iter();
+                                            let key = key.to_datum_iter();
+                                            let val = val.to_datum_iter();
 
                                             let mut datums_local = datums.borrow();
                                             datums_local.extend(key);

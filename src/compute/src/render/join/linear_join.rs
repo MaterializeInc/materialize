@@ -21,7 +21,7 @@ use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_dyncfg::ConfigSet;
-use mz_repr::fixed_length::IntoRowByTypes;
+use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -512,9 +512,9 @@ where
         Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
             + Clone
             + 'static,
-        for<'a> Tr1::Key<'a>: IntoRowByTypes,
-        for<'a> Tr1::Val<'a>: IntoRowByTypes,
-        for<'a> Tr2::Val<'a>: IntoRowByTypes,
+        for<'a> Tr1::Key<'a>: ToDatumIter,
+        for<'a> Tr1::Val<'a>: ToDatumIter,
+        for<'a> Tr2::Val<'a>: ToDatumIter,
     {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -531,9 +531,9 @@ where
                         let mut row_builder = binding.borrow_mut();
                         let temp_storage = RowArena::new();
 
-                        let key = key.into_datum_iter();
-                        let old = old.into_datum_iter();
-                        let new = new.into_datum_iter();
+                        let key = key.to_datum_iter();
+                        let old = old.to_datum_iter();
+                        let new = new.to_datum_iter();
 
                         let mut datums_local = datums.borrow();
                         datums_local.extend(key);
@@ -566,9 +566,9 @@ where
                     let mut row_builder = binding.borrow_mut();
                     let temp_storage = RowArena::new();
 
-                    let key = key.into_datum_iter();
-                    let old = old.into_datum_iter();
-                    let new = new.into_datum_iter();
+                    let key = key.to_datum_iter();
+                    let old = old.to_datum_iter();
+                    let new = new.to_datum_iter();
 
                     let mut datums_local = datums.borrow();
                     datums_local.extend(key);

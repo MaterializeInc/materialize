@@ -22,7 +22,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
-use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
+use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
 use mz_repr::{ColumnType, DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -303,14 +303,14 @@ where
         match self {
             SpecializedArrangement::RowUnit(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.into_datum_iter());
-                datums_borrow.extend(v.into_datum_iter());
+                datums_borrow.extend(k.to_datum_iter());
+                datums_borrow.extend(v.to_datum_iter());
                 logic(&datums_borrow)
             }),
             SpecializedArrangement::RowRow(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.into_datum_iter());
-                datums_borrow.extend(v.into_datum_iter());
+                datums_borrow.extend(k.to_datum_iter());
+                datums_borrow.extend(v.to_datum_iter());
                 logic(&datums_borrow)
             }),
         }
@@ -339,8 +339,8 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.into_datum_iter());
-                        datums_borrow.extend(v.into_datum_iter());
+                        datums_borrow.extend(k.to_datum_iter());
+                        datums_borrow.extend(v.to_datum_iter());
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -352,8 +352,8 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.into_datum_iter());
-                        datums_borrow.extend(v.into_datum_iter());
+                        datums_borrow.extend(k.to_datum_iter());
+                        datums_borrow.extend(v.to_datum_iter());
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -446,14 +446,14 @@ where
         match self {
             SpecializedArrangementImport::RowUnit(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.into_datum_iter());
-                datums_borrow.extend(v.into_datum_iter());
+                datums_borrow.extend(k.to_datum_iter());
+                datums_borrow.extend(v.to_datum_iter());
                 logic(&datums_borrow)
             }),
             SpecializedArrangementImport::RowRow(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.into_datum_iter());
-                datums_borrow.extend(v.into_datum_iter());
+                datums_borrow.extend(k.to_datum_iter());
+                datums_borrow.extend(v.to_datum_iter());
                 logic(&datums_borrow)
             }),
         }
@@ -479,8 +479,8 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.into_datum_iter());
-                        datums_borrow.extend(v.into_datum_iter());
+                        datums_borrow.extend(k.to_datum_iter());
+                        datums_borrow.extend(v.to_datum_iter());
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -492,8 +492,8 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.into_datum_iter());
-                        datums_borrow.extend(v.into_datum_iter());
+                        datums_borrow.extend(k.to_datum_iter());
+                        datums_borrow.extend(v.to_datum_iter());
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -864,8 +864,8 @@ where
         refuel: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
-        for<'a> Tr::Key<'a>: IntoRowByTypes,
-        for<'a> Tr::Val<'a>: IntoRowByTypes,
+        for<'a> Tr::Key<'a>: ToDatumIter,
+        for<'a> Tr::Val<'a>: ToDatumIter,
         Tr: TraceReader<Time = S::Timestamp, Diff = mz_repr::Diff> + Clone + 'static,
         I: IntoIterator,
         I::Item: Data,
@@ -1079,7 +1079,7 @@ where
                 // Emtpy value specialization.
                 let (oks, errs) = oks.map_fallible(
                     "FormArrangementKey [val: empty]",
-                    specialized_arrangement_key(key.clone(), thinning.clone(), None, Some(vec![])),
+                    specialized_arrangement_key(key.clone(), thinning.clone()),
                 );
                 let name = &format!("{} [val: empty]", name);
                 let oks = oks.mz_arrange::<RowSpine<_, _>>(name);
@@ -1094,7 +1094,7 @@ where
         // Catch-all: Just use RowRow.
         let (oks, errs) = oks.map_fallible(
             "FormArrangementKey",
-            specialized_arrangement_key(key.clone(), thinning.clone(), None, None),
+            specialized_arrangement_key(key.clone(), thinning.clone()),
         );
         let oks = oks.mz_arrange::<RowRowSpine<_, _>>(name);
         (SpecializedArrangement::RowRow(oks), errs)
@@ -1130,12 +1130,10 @@ fn derive_key_val_types(
 fn specialized_arrangement_key<K, V>(
     key: Vec<MirScalarExpr>,
     thinning: Vec<usize>,
-    key_types: Option<Vec<ColumnType>>,
-    val_types: Option<Vec<ColumnType>>,
 ) -> impl FnMut(Row) -> Result<(K, V), DataflowError>
 where
-    K: Columnation + Data + FromRowByTypes,
-    V: Columnation + Data + FromRowByTypes,
+    K: Columnation + Data + FromDatumIter,
+    V: Columnation + Data + FromDatumIter,
 {
     let mut key_buf = K::default();
     let mut val_buf = V::default();
@@ -1146,11 +1144,8 @@ where
         let temp_storage = RowArena::new();
         let val_datum_iter = thinning.iter().map(|c| datums[*c]);
         Ok::<(K, V), DataflowError>((
-            key_buf.try_from_datum_iter(
-                key.iter().map(|k| k.eval(&datums, &temp_storage)),
-                key_types.as_deref(),
-            )?,
-            val_buf.from_datum_iter(val_datum_iter, val_types.as_deref()),
+            key_buf.try_from_datum_iter(key.iter().map(|k| k.eval(&datums, &temp_storage)))?,
+            val_buf.from_datum_iter(val_datum_iter),
         ))
     }
 }
