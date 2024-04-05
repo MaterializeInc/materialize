@@ -832,8 +832,8 @@ class CTEs(Generator):
 
 class NestedCTEsIndependent(Generator):
     COUNT = min(
-        Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8600
+        Generator.COUNT, 9
+    )  # https://github.com/MaterializeInc/materialize/issues/8600 and https://github.com/MaterializeInc/materialize/issues/26404
 
     @classmethod
     def body(cls) -> None:
