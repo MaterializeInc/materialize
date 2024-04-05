@@ -32,7 +32,6 @@ use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, Versione
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
-    GRANTABLE_BUILTIN_ROLE_IDS,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -2115,7 +2114,7 @@ impl CatalogState {
     }
 
     pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
-        if role_id.is_system() || role_id.is_public() {
+        if role_id.is_builtin() {
             let role = self.get_role(role_id);
             Err(Error::new(ErrorKind::ReservedRoleName(
                 role.name().to_string(),
@@ -2126,8 +2125,7 @@ impl CatalogState {
     }
 
     pub fn ensure_grantable_role(&self, role_id: &RoleId) -> Result<(), Error> {
-        let is_grantable = !role_id.is_public()
-            && ((!role_id.is_system()) || GRANTABLE_BUILTIN_ROLE_IDS.contains(role_id));
+        let is_grantable = !role_id.is_public() && !role_id.is_system();
         if is_grantable {
             Ok(())
         } else {
@@ -2140,6 +2138,17 @@ impl CatalogState {
 
     pub fn ensure_not_system_role(&self, role_id: &RoleId) -> Result<(), Error> {
         if role_id.is_system() {
+            let role = self.get_role(role_id);
+            Err(Error::new(ErrorKind::ReservedSystemRoleName(
+                role.name().to_string(),
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn ensure_not_predefined_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        if role_id.is_predefined() {
             let role = self.get_role(role_id);
             Err(Error::new(ErrorKind::ReservedSystemRoleName(
                 role.name().to_string(),

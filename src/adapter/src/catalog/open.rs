@@ -1574,7 +1574,7 @@ fn add_new_builtin_roles_migration(
     let role_names: BTreeSet<_> = txn.get_roles().map(|role| role.name).collect();
     for builtin_role in BUILTIN_ROLES {
         if !role_names.contains(builtin_role.name) {
-            txn.insert_system_role(
+            txn.insert_builtin_role(
                 builtin_role.id,
                 builtin_role.name.to_string(),
                 builtin_role.attributes.clone(),

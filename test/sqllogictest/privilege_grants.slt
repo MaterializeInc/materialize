@@ -11,12 +11,6 @@ mode cockroach
 
 reset-server
 
-# Enable rbac checks.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO true;
-----
-COMPLETE 0
-
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_connection_validation_syntax TO true;
 ----
@@ -4838,9 +4832,10 @@ SELECT COUNT(*) >= 304 FROM information_schema.role_table_grants WHERE grantee =
 t
 COMPLETE 1
 
-# Disable rbac checks.
+# Check that predefined roles can't be altered.
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO false;
+GRANT SELECT ON t TO mz_monitor
 ----
-COMPLETE 0
+db error: ERROR: role name "mz_monitor" is reserved
+DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.

@@ -270,7 +270,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn insert_system_role(
+    pub fn insert_builtin_role(
         &mut self,
         id: RoleId,
         name: String,
@@ -279,10 +279,7 @@ impl<'a> Transaction<'a> {
         vars: RoleVars,
         oid: u32,
     ) -> Result<RoleId, CatalogError> {
-        soft_assert_or_log!(
-            id.is_system() || id.is_public(),
-            "ID {id:?} is not system or public variant"
-        );
+        soft_assert_or_log!(id.is_builtin(), "ID {id:?} is not builtin");
         self.insert_role(id, name, attributes, membership, vars, oid)?;
         Ok(id)
     }

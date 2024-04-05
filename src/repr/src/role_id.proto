@@ -14,9 +14,10 @@ import "google/protobuf/empty.proto";
 package mz_repr.role_id;
 
 message ProtoRoleId {
-    oneof kind {
-        uint64 system = 1;
-        uint64 user = 2;
-        google.protobuf.Empty public = 3;
-    }
+  oneof kind {
+    uint64 system = 1;
+    uint64 user = 2;
+    google.protobuf.Empty public = 3;
+    uint64 predefined = 4;
+  }
 }
