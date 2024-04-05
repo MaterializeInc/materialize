@@ -912,6 +912,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             mz_ore::task::spawn(
                 || "batch::inline_part",
                 async move {
+                    // WIP Feels like this should have some metrics coverage.
                     let updates = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
                         desc: Some(desc.into_proto()),
                         index: index.into_proto(),
