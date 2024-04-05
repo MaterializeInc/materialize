@@ -366,7 +366,7 @@ impl CopyToS3Uploader {
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
         self.buf.clear();
         // encode the row and write to temp buffer.
-        encode_copy_format(self.format.clone(), row, self.desc.typ(), &mut self.buf)
+        encode_copy_format(&self.format, row, self.desc.typ(), &mut self.buf)
             .map_err(|_| anyhow!("error encoding row"))?;
 
         if self.current_file_uploader.is_none() {
