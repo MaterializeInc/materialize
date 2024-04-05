@@ -208,7 +208,7 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        prog="buildkite-failure-search",
+        prog="buildkite-annotation-search",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
