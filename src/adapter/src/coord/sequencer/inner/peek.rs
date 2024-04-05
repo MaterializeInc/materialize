@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use futures::stream::FuturesOrdered;
 use http::Uri;
 use itertools::Either;
 use maplit::btreemap;
@@ -22,16 +21,14 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, task};
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, RowArena, Timestamp};
+use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
 use mz_sql::ast::ExplainStage;
-use mz_sql::catalog::{CatalogCluster, SessionCatalog};
+use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
-use mz_persist_client::stats::SnapshotPartStats;
 use mz_sql::plan::QueryWhen;
 use mz_sql::plan::{self, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
-use mz_storage_types::stats::RelationPartStats;
 use mz_transform::EmptyStatisticsOracle;
 use tracing::Instrument;
 use tracing::{event, warn, Level};
@@ -1020,7 +1017,6 @@ impl Coordinator {
         ctx: ExecuteContext,
         stage: PeekStageExplainPushdown,
     ) {
-        let explain_timeout = *ctx.session().vars().statement_timeout();
         let as_of = stage.determination.timestamp_context.antichain();
         let mz_now = stage
             .determination
@@ -1029,88 +1025,8 @@ impl Coordinator {
             .map(|t| ResultSpec::value(Datum::MzTimestamp(*t)))
             .unwrap_or_else(ResultSpec::value_all);
 
-        let mut futures = FuturesOrdered::new();
-        for (gid, mfp) in stage.imports {
-            let catalog_entry = self.catalog.get_entry(&gid);
-            let full_name = self
-                .catalog
-                .for_session(&ctx.session)
-                .resolve_full_name(&catalog_entry.name);
-            let name = format!("{}", full_name);
-            let relation_desc = catalog_entry
-                .item
-                .desc_opt()
-                .expect("source should have a proper desc")
-                .into_owned();
-            let stats_future = self
-                .controller
-                .storage
-                .snapshot_parts_stats(gid, as_of.clone())
-                .await;
-
-            let mz_now = mz_now.clone();
-            // These futures may block if the source is not yet readable at the as-of;
-            // stash them in `futures` and only block on them in a separate task.
-            futures.push_back(async move {
-                let snapshot_stats = match stats_future.await {
-                    Ok(stats) => stats,
-                    Err(e) => return Err(e),
-                };
-                let mut total_bytes = 0;
-                let mut total_parts = 0;
-                let mut selected_bytes = 0;
-                let mut selected_parts = 0;
-                for SnapshotPartStats {
-                    encoded_size_bytes: bytes,
-                    stats,
-                } in &snapshot_stats.parts
-                {
-                    let bytes = u64::cast_from(*bytes);
-                    total_bytes += bytes;
-                    total_parts += 1u64;
-                    let selected = match stats {
-                        None => true,
-                        Some(stats) => {
-                            let stats = stats.decode();
-                            let stats = RelationPartStats::new(
-                                name.as_str(),
-                                &snapshot_stats.metrics.pushdown.part_stats,
-                                &relation_desc,
-                                &stats,
-                            );
-                            stats.may_match_mfp(mz_now.clone(), &mfp)
-                        }
-                    };
-
-                    if selected {
-                        selected_bytes += bytes;
-                        selected_parts += 1u64;
-                    }
-                }
-                Ok(Row::pack_slice(&[
-                    name.as_str().into(),
-                    total_bytes.into(),
-                    selected_bytes.into(),
-                    total_parts.into(),
-                    selected_parts.into(),
-                ]))
-            });
-        }
-
-        task::spawn(|| "explain filter pushdown", async move {
-            use futures::TryStreamExt;
-            let res = match tokio::time::timeout(explain_timeout, futures.try_collect::<Vec<_>>())
-                .await
-            {
-                Ok(Ok(rows)) => Ok(ExecuteResponse::SendingRowsImmediate {
-                    rows: Box::new(rows.into_row_iter()),
-                }),
-                Ok(Err(err)) => Err(err.into()),
-                Err(_) => Err(AdapterError::StatementTimeout),
-            };
-
-            ctx.retire(res);
-        });
+        self.render_explain_pushdown(ctx, as_of, mz_now, stage.imports)
+            .await
     }
 
     /// Determines the query timestamp and acquires read holds on dependent sources
