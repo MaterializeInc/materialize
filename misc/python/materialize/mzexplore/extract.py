@@ -108,7 +108,7 @@ def defs(
                 continue
 
             try:
-                info(f"Extracting {item['type']} def in `{create_file.path()}`")
+                info(f"Extracting DDL for {item_type.sql()} in `{create_file.path()}`")
                 create_sql = db.query_one(show_create_query)["create_sql"]
                 item["create_sql"] = sql.try_mzfmt(create_sql) if mzfmt else create_sql
 
@@ -119,7 +119,7 @@ def defs(
                 with (target / create_file.path()).open("w") as file:
                     file.write(output_template.substitute(item))
             except DatabaseError as e:
-                warn(f"Cannot export def {fqname}: {e}")
+                warn(f"Cannot extract DDL for {item_type.sql()} {fqname}: {e}")
 
 
 def plans(
