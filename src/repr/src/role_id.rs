@@ -48,7 +48,7 @@ pub enum RoleId {
     System(u64),
     /// Like system roles, these are roles built into the system. However, they are grantable to
     /// users and provide access to certain, commonly needed, privileged capabilities and
-    /// information (modelled after https://www.postgresql.org/docs/16/predefined-roles.html).
+    /// information (modelled after <https://www.postgresql.org/docs/16/predefined-roles.html>).
     Predefined(u64),
     User(u64),
     Public,
