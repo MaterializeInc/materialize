@@ -79,7 +79,7 @@ impl ReadPolicy<mz_repr::Timestamp> {
     pub fn lag_writes_by(lag: mz_repr::Timestamp, max_granularity: mz_repr::Timestamp) -> Self {
         Self::LagWriteFrontier(Arc::new(move |upper| {
             if upper.is_empty() {
-                Antichain::from_elem(Timestamp::minimum())
+                Antichain::new()
             } else {
                 // Subtract the lag from the time, and then round down to a multiple of `granularity` to cut chatter.
                 let mut time = upper[0];
