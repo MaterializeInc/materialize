@@ -388,6 +388,8 @@ pub enum DataSourceDesc {
     /// Receives data from an external system
     Ingestion(IngestionDescription<(), ReferencedConnection>),
     /// Receives data from some other source
+    // TODO: we can remove this after the subsource dependency structure
+    // migration in v0.96 (i.e. v0.97+).
     Source,
     /// Receives data from some other source
     SourceExport { id: GlobalId, output_index: usize },
@@ -1468,8 +1470,8 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Source(_))
     }
 
-    /// Reports whether this catalog entry is a subsource, and if it is the item
-    /// it is a subsource of, as well as its output index.
+    /// If this entry is a subsource of another source, it returns the primary
+    /// source's `GlobalId` and output index.
     pub fn subsource_details(&self) -> Option<(GlobalId, usize)> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {

@@ -2595,7 +2595,8 @@ impl<'a> Parser<'a> {
 
         let (columns, constraints) = self.parse_columns(Mandatory)?;
 
-        // TODO: after migration, this will always be expected.
+        // TODO: after migration the subsource dependency inversion migration in
+        // v0.96, this will always be expected.
         let of_source = if self.parse_keyword(OF) {
             self.expect_keyword(SOURCE)?;
             Some(self.parse_raw_name()?)
