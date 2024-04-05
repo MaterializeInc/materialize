@@ -141,9 +141,41 @@ def _extract_build_step_data_from_build(
             retry_count=retry_count,
             web_url_to_job=f"{build_data['web_url']}#{job['id']}",
         )
-        collected_steps.append(step_data)
+
+        if retry_count == 0:
+            collected_steps.append(step_data)
+        else:
+            # latest retry before other retries and original execution
+            insertion_index = find_index_of_first_step_instance(
+                collected_steps, build_number, build_step_key, parallel_job_index
+            )
+            collected_steps.insert(insertion_index, step_data)
 
     return collected_steps
+
+
+def find_index_of_first_step_instance(
+    steps: list[BuildStepOutcome],
+    build_number: int,
+    build_step_key: str,
+    parallel_job_index: int | None,
+) -> int:
+    index = len(steps)
+
+    while index > 0:
+        prev_index = index - 1
+        prev_step = steps[prev_index]
+
+        if (
+            prev_step.build_number == build_number
+            and prev_step.step_key == build_step_key
+            and prev_step.parallel_job_index == parallel_job_index
+        ):
+            index = prev_index
+        else:
+            break
+
+    return index
 
 
 def _shall_include_build_step(
