@@ -1069,7 +1069,7 @@ mod tests {
                 let params = CopyFormatParams::Csv(csv_params);
 
                 // Roundtrip the Row through our CSV format.
-                encode_copy_format(params.clone(), &row, &typ, &mut buf)?;
+                encode_copy_format(&params, &row, &typ, &mut buf)?;
                 let column_types = typ
                     .column_types
                     .iter()
