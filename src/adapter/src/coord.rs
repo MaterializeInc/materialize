@@ -538,6 +538,7 @@ pub struct PeekStageExplainPlan {
     validity: PlanValidity,
     select_id: GlobalId,
     finishing: RowSetFinishing,
+    target_cluster_id: ComputeInstanceId,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
 }

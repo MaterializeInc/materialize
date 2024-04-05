@@ -103,6 +103,7 @@ impl OptimizerTrace {
         config: &ExplainConfig,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
+        target_cluster: Option<&str>,
         dataflow_metainfo: DataflowMetainfo,
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
@@ -112,6 +113,7 @@ impl OptimizerTrace {
             config,
             humanizer,
             row_set_finishing,
+            target_cluster,
             dataflow_metainfo,
         )?;
 
@@ -183,6 +185,7 @@ impl OptimizerTrace {
         config: &ExplainConfig,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
+        target_cluster: Option<&str>,
         dataflow_metainfo: DataflowMetainfo,
     ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
         let mut results = vec![];
@@ -195,6 +198,7 @@ impl OptimizerTrace {
             used_indexes: Default::default(),
             finishing: row_set_finishing.clone(),
             duration: Default::default(),
+            target_cluster,
             optimizer_notices: RawOptimizerNotice::explain(
                 &dataflow_metainfo.optimizer_notices,
                 humanizer,
@@ -215,6 +219,7 @@ impl OptimizerTrace {
             used_indexes: Default::default(),
             finishing: row_set_finishing,
             duration: Default::default(),
+            target_cluster,
             optimizer_notices: RawOptimizerNotice::explain(
                 &dataflow_metainfo.optimizer_notices,
                 humanizer,

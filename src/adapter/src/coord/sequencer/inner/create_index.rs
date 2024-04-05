@@ -193,7 +193,7 @@ impl Coordinator {
         let plan::Explainee::Index(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let CatalogItem::Index(_) = self.catalog().get_entry(&id).item() else {
+        let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
@@ -203,6 +203,8 @@ impl Coordinator {
             }
             coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
         };
+
+        let target_cluster = Some(self.catalog().get_cluster(index.cluster_id).name.as_str());
 
         let explain = match stage {
             ExplainStage::GlobalPlan => {
@@ -215,6 +217,7 @@ impl Coordinator {
                     format,
                     &config,
                     &self.catalog().for_session(ctx.session()),
+                    target_cluster,
                     dataflow_metainfo,
                 )?
             }
@@ -228,6 +231,7 @@ impl Coordinator {
                     format,
                     &config,
                     &self.catalog().for_session(ctx.session()),
+                    target_cluster,
                     dataflow_metainfo,
                 )?
             }
@@ -559,11 +563,14 @@ impl Coordinator {
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
+        let target_cluster = Some(self.catalog().get_cluster(index.cluster_id).name.as_str());
+
         let rows = optimizer_trace.into_rows(
             format,
             &config,
             &expr_humanizer,
             None,
+            target_cluster,
             df_meta,
             stage,
             plan::ExplaineeStatementKind::CreateIndex,

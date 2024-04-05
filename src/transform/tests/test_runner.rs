@@ -152,7 +152,8 @@ mod tests {
                     used_indexes: Default::default(),
                     finishing: Default::default(),
                     duration: Default::default(),
-                    optimizer_notices: Vec::new(),
+                    target_cluster: Default::default(),
+                    optimizer_notices: Default::default(),
                 };
 
                 Explainable(&mut rel.clone())

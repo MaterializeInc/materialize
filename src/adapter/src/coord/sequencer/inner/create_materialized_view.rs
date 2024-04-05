@@ -232,18 +232,22 @@ impl Coordinator {
             );
         };
 
+        let target_cluster = Some(self.catalog().get_cluster(view.cluster_id).name.as_str());
+
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
                 view.raw_expr.clone(),
                 format,
                 &config,
                 &self.catalog().for_session(ctx.session()),
+                target_cluster,
             )?,
             ExplainStage::LocalPlan => explain_plan(
                 view.optimized_expr.as_inner().clone(),
                 format,
                 &config,
                 &self.catalog().for_session(ctx.session()),
+                target_cluster,
             )?,
             ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
@@ -255,6 +259,7 @@ impl Coordinator {
                     format,
                     &config,
                     &self.catalog().for_session(ctx.session()),
+                    target_cluster,
                     dataflow_metainfo,
                 )?
             }
@@ -268,6 +273,7 @@ impl Coordinator {
                     format,
                     &config,
                     &self.catalog().for_session(ctx.session()),
+                    target_cluster,
                     dataflow_metainfo,
                 )?
             }
@@ -776,7 +782,12 @@ impl Coordinator {
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
-                    materialized_view: plan::MaterializedView { column_names, .. },
+                    materialized_view:
+                        plan::MaterializedView {
+                            column_names,
+                            cluster_id,
+                            ..
+                        },
                     ..
                 },
             df_meta,
@@ -805,11 +816,14 @@ impl Coordinator {
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
+        let target_cluster = Some(self.catalog().get_cluster(cluster_id).name.as_str());
+
         let rows = optimizer_trace.into_rows(
             format,
             &config,
             &expr_humanizer,
             None,
+            target_cluster,
             df_meta,
             stage,
             plan::ExplaineeStatementKind::CreateMaterializedView,

@@ -44,6 +44,8 @@ pub struct ExplainContext<'a> {
     pub used_indexes: UsedIndexes,
     pub finishing: Option<RowSetFinishing>,
     pub duration: Duration,
+    // Cluster against which the explained plan is optimized.
+    pub target_cluster: Option<&'a str>,
     // This is a String so that we don't have to move `OptimizerNotice` to `mz-expr`. We can revisit
     // this decision if we want to every make this print in the json output in a machine readable
     // way.
