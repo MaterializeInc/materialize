@@ -131,7 +131,7 @@ pub(crate) async fn initialize(
     }
 
     for role in BUILTIN_ROLES {
-        tx.insert_system_role(
+        tx.insert_builtin_role(
             role.id,
             role.name.to_string(),
             role.attributes.clone(),
@@ -140,7 +140,7 @@ pub(crate) async fn initialize(
             role.oid,
         )?;
     }
-    tx.insert_system_role(
+    tx.insert_builtin_role(
         RoleId::Public,
         PUBLIC_ROLE_NAME.as_str().to_lowercase(),
         RoleAttributes::new(),

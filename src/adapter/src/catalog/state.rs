@@ -2144,7 +2144,7 @@ impl CatalogState {
     }
 
     pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
-        if role_id.is_system() || role_id.is_public() || role_id.is_group() {
+        if role_id.is_builtin() {
             let role = self.get_role(role_id);
             Err(Error::new(ErrorKind::ReservedRoleName(
                 role.name().to_string(),

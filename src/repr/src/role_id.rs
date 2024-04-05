@@ -70,6 +70,10 @@ impl RoleId {
         matches!(self, Self::Group(_))
     }
 
+    pub fn is_builtin(&self) -> bool {
+        self.is_public() || self.is_system() || self.is_group()
+    }
+
     pub fn encode_binary(&self) -> Vec<u8> {
         let mut res = Vec::with_capacity(Self::binary_size());
         match self {
