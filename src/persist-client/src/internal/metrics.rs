@@ -1215,6 +1215,7 @@ pub struct ShardsMetrics {
     rewrite_part_count: UIntGaugeVec,
     inline_part_count: UIntGaugeVec,
     inline_part_bytes: UIntGaugeVec,
+    inline_backpressure_count: IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1414,6 +1415,11 @@ impl ShardsMetrics {
                 help: "total size of parts inline in shard metadata",
                 var_labels: ["shard", "name"],
             )),
+            inline_backpressure_count: registry.register(metric!(
+                name: "mz_persist_shard_inline_backpressure_count",
+                help: "count of CaA attempts retried because of inline backpressure",
+                var_labels: ["shard", "name"],
+            )),
             shards,
         }
     }
@@ -1494,6 +1500,7 @@ pub struct ShardMetrics {
     pub rewrite_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub inline_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub inline_part_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub inline_backpressure_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1611,7 +1618,10 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             inline_part_bytes: shards_metrics
                 .inline_part_bytes
-                .get_delete_on_drop_gauge(vec![shard, name.to_string()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            inline_backpressure_count: shards_metrics
+                .inline_backpressure_count
+                .get_delete_on_drop_counter(vec![shard, name.to_string()]),
         }
     }
 
@@ -2239,6 +2249,8 @@ pub struct PushdownMetrics {
     pub(crate) parts_fetched_bytes: IntCounter,
     pub(crate) parts_audited_count: IntCounter,
     pub(crate) parts_audited_bytes: IntCounter,
+    pub(crate) parts_inline_count: IntCounter,
+    pub(crate) parts_inline_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
     pub part_stats: PartStatsMetrics,
@@ -2270,6 +2282,14 @@ impl PushdownMetrics {
             parts_audited_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_audited_bytes",
                 help: "total size of parts fetched only for pushdown audit",
+            )),
+            parts_inline_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_inline_count",
+                help: "count of parts not fetched because they were inline",
+            )),
+            parts_inline_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_inline_bytes",
+                help: "total size of parts not fetched because they were inline",
             )),
             parts_stats_trimmed_count: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_count",

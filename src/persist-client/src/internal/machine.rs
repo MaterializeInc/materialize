@@ -435,6 +435,8 @@ where
                     if !writer_was_present {
                         metrics.state.writer_added.inc();
                     }
+                    // WIP metrics coverage for how many inline bytes we just
+                    // linked in?
                     return CompareAndAppendRes::Success(seqno, writer_maintenance);
                 }
                 Err(CompareAndAppendBreak::AlreadyCommitted) => {
