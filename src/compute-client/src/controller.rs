@@ -134,10 +134,8 @@ pub struct ComputeController<T> {
     initialized: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
-    /// Default value for `idle_arrangement_merge_effort`.
-    default_idle_arrangement_merge_effort: u32,
-    /// Default value for `arrangement_exert_proportionality`.
-    default_arrangement_exert_proportionality: u32,
+    /// `arrangement_exert_proportionality` value passed to new replicas.
+    arrangement_exert_proportionality: u32,
     /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
     /// `ActiveComputeController::process`.
     stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
@@ -180,8 +178,7 @@ impl<T: Timestamp> ComputeController<T> {
             build_info,
             initialized: false,
             config: Default::default(),
-            default_idle_arrangement_merge_effort: 1000,
-            default_arrangement_exert_proportionality: 16,
+            arrangement_exert_proportionality: 16,
             stashed_replica_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
@@ -264,14 +261,9 @@ impl<T: Timestamp> ComputeController<T> {
             .collection_reverse_dependencies(id))
     }
 
-    /// TODO(#25239): Add documentation.
-    pub fn set_default_idle_arrangement_merge_effort(&mut self, value: u32) {
-        self.default_idle_arrangement_merge_effort = value;
-    }
-
-    /// TODO(#25239): Add documentation.
-    pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
-        self.default_arrangement_exert_proportionality = value;
+    /// Set the `arrangement_exert_proportionality` value to be passed to new replicas.
+    pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
+        self.arrangement_exert_proportionality = value;
     }
 
     /// Returns the read and write frontiers for each collection.
@@ -313,8 +305,7 @@ impl<T: Timestamp> ComputeController<T> {
             build_info: _,
             initialized,
             config: _,
-            default_idle_arrangement_merge_effort,
-            default_arrangement_exert_proportionality,
+            arrangement_exert_proportionality,
             stashed_replica_response,
             envd_epoch,
             metrics: _,
@@ -343,12 +334,8 @@ impl<T: Timestamp> ComputeController<T> {
             field("instances", instances)?,
             field("initialized", initialized)?,
             field(
-                "default_idle_arrangement_merge_effort",
-                default_idle_arrangement_merge_effort,
-            )?,
-            field(
-                "default_arrangement_exert_proportionality",
-                default_arrangement_exert_proportionality,
+                "arrangement_exert_proportionality",
+                arrangement_exert_proportionality,
             )?,
             field(
                 "stashed_replica_response",
@@ -546,11 +533,6 @@ where
             None => (false, Duration::from_secs(1)),
         };
 
-        let idle_arrangement_merge_effort = self.compute.default_idle_arrangement_merge_effort;
-
-        let arrangement_exert_proportionality =
-            self.compute.default_arrangement_exert_proportionality;
-
         let replica_config = ReplicaConfig {
             location,
             logging: LoggingConfig {
@@ -559,8 +541,7 @@ where
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
             },
-            idle_arrangement_merge_effort,
-            arrangement_exert_proportionality,
+            arrangement_exert_proportionality: self.compute.arrangement_exert_proportionality,
             grpc_client: self.compute.config.grpc_client.clone(),
         };
 

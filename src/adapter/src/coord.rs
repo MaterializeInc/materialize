@@ -1413,16 +1413,13 @@ impl Coordinator {
         let compute_config = flags::compute_config(system_config);
         let storage_config = flags::storage_config(system_config);
         let scheduling_config = flags::orchestrator_scheduling_config(system_config);
-        let merge_effort = system_config.default_idle_arrangement_merge_effort();
-        let exert_prop = system_config.default_arrangement_exert_proportionality();
+        let exert_prop = system_config.arrangement_exert_proportionality();
         self.controller.compute.update_configuration(compute_config);
         self.controller.storage.update_parameters(storage_config);
         self.controller
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller
-            .set_default_idle_arrangement_merge_effort(merge_effort);
-        self.controller
-            .set_default_arrangement_exert_proportionality(exert_prop);
+            .set_arrangement_exert_proportionality(exert_prop);
 
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();

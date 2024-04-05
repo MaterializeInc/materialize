@@ -206,7 +206,7 @@ impl Coordinator {
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
-        let mut update_default_arrangement_merge_options = false;
+        let mut update_arrangement_exert_proportionality = false;
         let mut update_http_config = false;
         let mut log_indexes_to_drop = Vec::new();
 
@@ -312,10 +312,8 @@ impl Coordinator {
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
-                    update_default_arrangement_merge_options |=
-                        name == vars::DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT.name();
-                    update_default_arrangement_merge_options |=
-                        name == vars::DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY.name();
+                    update_arrangement_exert_proportionality |=
+                        name == vars::ARRANGEMENT_EXERT_PROPORTIONALITY.name();
                     update_http_config |= vars::is_http_config_var(name);
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
@@ -329,7 +327,7 @@ impl Coordinator {
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
-                    update_default_arrangement_merge_options = true;
+                    update_arrangement_exert_proportionality = true;
                     update_http_config = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
@@ -618,8 +616,8 @@ impl Coordinator {
             if update_cluster_scheduling_config {
                 self.update_cluster_scheduling_config();
             }
-            if update_default_arrangement_merge_options {
-                self.update_default_arrangement_merge_options();
+            if update_arrangement_exert_proportionality {
+                self.update_arrangement_exert_proportionality();
             }
             if update_http_config {
                 self.update_http_config();
@@ -955,22 +953,14 @@ impl Coordinator {
         self.update_compute_base_read_policies(compute_policies);
     }
 
-    fn update_default_arrangement_merge_options(&mut self) {
-        let effort = self
-            .catalog()
-            .system_config()
-            .default_idle_arrangement_merge_effort();
-        self.controller
-            .compute
-            .set_default_idle_arrangement_merge_effort(effort);
-
+    fn update_arrangement_exert_proportionality(&mut self) {
         let prop = self
             .catalog()
             .system_config()
-            .default_arrangement_exert_proportionality();
+            .arrangement_exert_proportionality();
         self.controller
             .compute
-            .set_default_arrangement_exert_proportionality(prop);
+            .set_arrangement_exert_proportionality(prop);
     }
 
     fn update_http_config(&mut self) {

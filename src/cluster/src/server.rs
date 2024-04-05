@@ -17,7 +17,6 @@ use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
 use futures::future;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
-use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
@@ -171,23 +170,11 @@ where
 
         let mut worker_config = WorkerConfig::default();
 
-        let idle_merge_effort = config.idle_arrangement_merge_effort;
-        // We want a value of `0` to disable idle merging. DD will only disable idle merging if we
-        // configure the effort to `None`, not when we set it to `Some(0)`.
-        let idle_merge_effort = (idle_merge_effort > 0).then_some(idle_merge_effort);
-
-        // By default, only set the idle_merge_effort
-        differential_dataflow::configure(
-            &mut worker_config,
-            &differential_dataflow::Config {
-                idle_merge_effort: idle_merge_effort.map(CastFrom::cast_from),
-            },
-        );
-
-        // We set a custom exertion logic for idle_merge_effort of 0, and proportionality > 0.
-        // This avoids turning on proportionality for replicas with default idle merge effort.
-        if idle_merge_effort.is_none() && config.arrangement_exert_proportionality > 0 {
-            let idle_merge_effort = Some(1000);
+        // We set a custom exertion logic for proportionality > 0. A proportionality value of 0
+        // means that no arrangement merge effort is exerted and merging occurs only in response to
+        // updates.
+        if config.arrangement_exert_proportionality > 0 {
+            let merge_effort = Some(1000);
 
             // ExertionLogic defines a function to determine if a spine is sufficiently tidied.
             // Its arguments are an iterator over the index of a layer, the count of batches in the
@@ -208,13 +195,13 @@ where
                 for (_idx, count, len) in layers {
                     if count > 1 {
                         // Found an in-progress merge that we should continue.
-                        return idle_merge_effort;
+                        return merge_effort;
                     }
 
                     if !first && prop > 0 && len > 0 {
                         // Found a non-empty batch within `arrangement_exert_proportionality` of
                         // the largest one.
-                        return idle_merge_effort;
+                        return merge_effort;
                     }
 
                     first = false;
