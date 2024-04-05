@@ -62,6 +62,11 @@ where
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
         }
 
+        if let Some(target_cluster) = self.context.target_cluster {
+            writeln!(f)?;
+            writeln!(f, "Target cluster: {}", target_cluster)?;
+        }
+
         if !self.context.optimizer_notices.is_empty() {
             writeln!(f)?;
             writeln!(f, "Notices:")?;
@@ -71,7 +76,7 @@ where
         }
 
         if self.context.config.timing {
-            writeln!(f, "")?;
+            writeln!(f)?;
             writeln!(f, "Optimization time: {:?}", self.context.duration)?;
         }
 
@@ -151,6 +156,11 @@ where
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
         }
 
+        if let Some(target_cluster) = self.context.target_cluster {
+            writeln!(f)?;
+            writeln!(f, "Target cluster: {}", target_cluster)?;
+        }
+
         if !(self.context.config.no_notices || self.context.optimizer_notices.is_empty()) {
             writeln!(f)?;
             writeln!(f, "Notices:")?;
@@ -193,7 +203,7 @@ where
             let project = Indices(&self.expr.project);
             write!(f, " output=[{}]", project)?;
         }
-        writeln!(f, "")
+        writeln!(f)
     }
 }
 
