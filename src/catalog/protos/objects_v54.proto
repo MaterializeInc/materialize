@@ -192,25 +192,25 @@ message CommentValue {
 }
 
 message StorageCollectionMetadataKey {
-    GlobalId id = 1;
+  GlobalId id = 1;
 }
 
 // This value is stored transparently, however, it should only ever be
 // manipulated by the storage controller.
 message StorageCollectionMetadataValue {
-    string shard = 1;
+  string shard = 1;
 }
 
 // This value is stored transparently, however, it should only ever be
 // manipulated by the storage controller.
 message UnfinalizedShardKey {
-    string shard = 1;
+  string shard = 1;
 }
 
 // This value is stored transparently, however, it should only ever be
 // manipulated by the storage controller.
 message PersistTxnShardValue {
-    string shard = 1;
+  string shard = 1;
 }
 
 // ---- Common Types
@@ -388,7 +388,7 @@ message RoleId {
     uint64 system = 1;
     uint64 user = 2;
     Empty public = 3;
-    uint64 group = 4;
+    uint64 predefined = 4;
   }
 }
 
@@ -658,11 +658,11 @@ message AuditLogEventV1 {
     FullNameV1 name = 2;
   }
 
-    message AlterRetainHistoryV1 {
-        string id = 1;
-        optional string old_history = 2;
-        optional string new_history = 3;
-    }
+  message AlterRetainHistoryV1 {
+    string id = 1;
+    optional string old_history = 2;
+    optional string new_history = 3;
+  }
 
   uint64 id = 1;
   EventType event_type = 2;
@@ -695,7 +695,7 @@ message AuditLogEventV1 {
     RenameSchemaV1 rename_schema_v1 = 27;
     UpdateItemV1 update_item_v1 = 26;
     CreateSourceSinkV3 create_source_sink_v3 = 29;
-        AlterRetainHistoryV1 alter_retain_history_v1 = 30;
+    AlterRetainHistoryV1 alter_retain_history_v1 = 30;
   }
 }
 

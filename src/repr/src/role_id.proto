@@ -18,6 +18,6 @@ message ProtoRoleId {
     uint64 system = 1;
     uint64 user = 2;
     google.protobuf.Empty public = 3;
-    uint64 group = 4;
+    uint64 predefined = 4;
   }
 }

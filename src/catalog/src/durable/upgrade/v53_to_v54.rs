@@ -23,10 +23,10 @@ wire_compatible!(v53::AclMode with v54::AclMode);
 const MZ_MONITOR_SYSTEM_ID: u64 = 3;
 const MZ_MONITOR_REDACTED_SYSTEM_ID: u64 = 4;
 
-const MZ_MONITOR_GROUP_ID: u64 = 1;
-const MZ_MONITOR_REDACTED_GROUP_ID: u64 = 2;
+const MZ_MONITOR_PREDEFINED_ID: u64 = 1;
+const MZ_MONITOR_REDACTED_PREDEFINED_ID: u64 = 2;
 
-/// Migrate group role from system to group.
+/// Migrate predefined role from system to predefined.
 ///
 /// `RoleId`s show up in a lot of places but we know that `mz_monitor` and `mz_monitor` redacted
 /// can only show up in the following places:
@@ -114,10 +114,10 @@ pub fn upgrade(
 fn migrate_role_id(role_id: v53::RoleId) -> v54::RoleId {
     let value = match role_id.value.expect("missing value") {
         v53::role_id::Value::System(MZ_MONITOR_SYSTEM_ID) => {
-            v54::role_id::Value::Group(MZ_MONITOR_GROUP_ID)
+            v54::role_id::Value::Predefined(MZ_MONITOR_PREDEFINED_ID)
         }
         v53::role_id::Value::System(MZ_MONITOR_REDACTED_SYSTEM_ID) => {
-            v54::role_id::Value::Group(MZ_MONITOR_REDACTED_GROUP_ID)
+            v54::role_id::Value::Predefined(MZ_MONITOR_REDACTED_PREDEFINED_ID)
         }
         v53::role_id::Value::System(id) => v54::role_id::Value::System(id),
         v53::role_id::Value::User(id) => v54::role_id::Value::User(id),
@@ -216,10 +216,12 @@ mod tests {
         };
 
         let v54_mz_monitor_role_id = v54::RoleId {
-            value: Some(v54::role_id::Value::Group(MZ_MONITOR_GROUP_ID)),
+            value: Some(v54::role_id::Value::Predefined(MZ_MONITOR_PREDEFINED_ID)),
         };
         let v54_mz_monitor_redacted_role_id = v54::RoleId {
-            value: Some(v54::role_id::Value::Group(MZ_MONITOR_REDACTED_GROUP_ID)),
+            value: Some(v54::role_id::Value::Predefined(
+                MZ_MONITOR_REDACTED_PREDEFINED_ID,
+            )),
         };
         let v54_mz_monitor = v54::StateUpdateKind {
             kind: Some(v54::state_update_kind::Kind::Role(empty_role_v54(

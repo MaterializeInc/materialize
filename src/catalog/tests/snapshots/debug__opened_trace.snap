@@ -1165,7 +1165,7 @@ Trace {
                         id: Some(
                             RoleId {
                                 value: Some(
-                                    Group(
+                                    Predefined(
                                         1,
                                     ),
                                 ),
@@ -1201,7 +1201,7 @@ Trace {
                         id: Some(
                             RoleId {
                                 value: Some(
-                                    Group(
+                                    Predefined(
                                         2,
                                     ),
                                 ),

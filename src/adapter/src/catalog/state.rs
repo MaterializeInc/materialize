@@ -2147,8 +2147,8 @@ impl CatalogState {
         }
     }
 
-    pub fn ensure_not_group_role(&self, role_id: &RoleId) -> Result<(), Error> {
-        if role_id.is_group() {
+    pub fn ensure_not_predefined_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        if role_id.is_predefined() {
             let role = self.get_role(role_id);
             Err(Error::new(ErrorKind::ReservedSystemRoleName(
                 role.name().to_string(),

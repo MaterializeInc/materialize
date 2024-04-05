@@ -813,7 +813,7 @@ Snapshot {
             id: Some(
                 RoleId {
                     value: Some(
-                        Group(
+                        Predefined(
                             1,
                         ),
                     ),
@@ -842,7 +842,7 @@ Snapshot {
             id: Some(
                 RoleId {
                     value: Some(
-                        Group(
+                        Predefined(
                             2,
                         ),
                     ),
