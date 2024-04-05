@@ -7,12 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
-use mz_expr::CollectionPlan;
+use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::soft_panic_or_log;
@@ -20,8 +21,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::Datum;
-use mz_repr::Row;
+use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -864,5 +864,61 @@ impl Coordinator {
         )?;
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
+    }
+
+    pub(crate) async fn explain_pushdown_materialized_view(
+        &mut self,
+        ctx: ExecuteContext,
+        gid: GlobalId,
+    ) {
+        let CatalogItem::MaterializedView(mview) = self.catalog().get_entry(&gid).item() else {
+            unreachable!() // Asserted in `sequence_explain_pushdown`.
+        };
+        let mview = mview.clone();
+        let local_read_ts = self.get_local_read_ts().await;
+
+        let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
+            tracing::error!("cannot find plan for materialized view {gid} in catalog");
+            ctx.retire(Err(anyhow!(
+                "cannot find plan for materialized view {gid} in catalog"
+            )
+            .into()));
+            return;
+        };
+
+        let storage_constraints = self
+            .collect_dataflow_storage_constraints()
+            .remove(&gid)
+            .expect("all dataflow storage constraints were collected");
+        let (as_of, _read_holds) = self.bootstrap_dataflow_as_of(
+            &plan,
+            mview.cluster_id,
+            storage_constraints,
+            mview.custom_logical_compaction_window.unwrap_or_default(),
+            local_read_ts,
+        );
+
+        let until = mview
+            .refresh_schedule
+            .as_ref()
+            .and_then(|s| s.last_refresh())
+            .unwrap_or(mz_repr::Timestamp::MAX);
+
+        let mz_now = match as_of.as_option() {
+            None => ResultSpec::value_all(),
+            Some(as_of) => {
+                ResultSpec::value_between(Datum::MzTimestamp(*as_of), Datum::MzTimestamp(until))
+            }
+        };
+
+        self.render_explain_pushdown(
+            ctx,
+            as_of,
+            mz_now,
+            plan.source_imports
+                .into_iter()
+                .filter_map(|(id, (source, _))| source.arguments.operators.map(|mfp| (id, mfp))),
+        )
+        .await
     }
 }

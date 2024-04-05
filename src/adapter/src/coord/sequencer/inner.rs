@@ -2202,6 +2202,9 @@ impl Coordinator {
                 )
                 .await;
             }
+            Explainee::MaterializedView(gid) => {
+                self.explain_pushdown_materialized_view(ctx, gid).await;
+            }
             _ => {
                 ctx.retire(Err(AdapterError::Unsupported(
                     "EXPLAIN FILTER PUSHDOWN queries for this explainee type",
