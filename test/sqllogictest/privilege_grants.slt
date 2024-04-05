@@ -11,12 +11,6 @@ mode cockroach
 
 reset-server
 
-# Enable rbac checks.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO true;
-----
-COMPLETE 0
-
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_connection_validation_syntax TO true;
 ----
@@ -4838,9 +4832,7 @@ SELECT COUNT(*) >= 304 FROM information_schema.role_table_grants WHERE grantee =
 t
 COMPLETE 1
 
-# Disable rbac checks.
-
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO false;
+REVOKE SELECT ON mz_internal.mz_statement_execution_history FROM mz_monitor
 ----
-COMPLETE 0
+db error: system item 'mz_internal.mz_statement_execution_history' cannot be modified
