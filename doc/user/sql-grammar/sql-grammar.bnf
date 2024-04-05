@@ -295,16 +295,18 @@ execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain_plan ::=
   'EXPLAIN'
-  ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' )? 'PLAN' )?
+  ( ( 'RAW' | 'DECORRELATED' | 'LOCALLY'? 'OPTIMIZED' | 'PHYSICAL' )? 'PLAN' )?
   ( 'WITH (' ( output_modifier (',' output_modifier )* ) ')' )?
   ( 'AS' ( 'TEXT' | 'JSON' ) )?
   'FOR'?
   (
     select_stmt |
+    create_view |
     create_index |
     create_materialized_view |
-    'INDEX' index_name |
-    'MATERIALIZED VIEW' view_name
+    'VIEW' name |
+    'INDEX' name |
+    'MATERIALIZED VIEW' name
   )
 explain_timestamp ::=
   'EXPLAIN' 'TIMESTAMP'
