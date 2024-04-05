@@ -4838,4 +4838,4 @@ simple conn=mz_system,user=mz_system
 GRANT SELECT ON t TO mz_monitor
 ----
 db error: ERROR: role name "mz_monitor" is reserved
-DETAIL:  The role prefixes "mz_" and "pg_" are reserved for system roles.
+DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
