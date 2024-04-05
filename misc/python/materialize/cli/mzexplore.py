@@ -101,7 +101,7 @@ class Opt:
 
     explainee_type: dict[str, Any] = dict(
         type=click.Choice([v.name.lower() for v in list(api.ExplaineeType)]),
-        default="all",  # We should have at least arity for good measure.
+        default="catalog_item",
         callback=lambda ctx, param, v: api.ExplaineeType[v.upper()],  # type: ignore
         help="EXPLAIN mode.",
         metavar="MODE",

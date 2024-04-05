@@ -194,8 +194,21 @@ class CreateFile:
         return str(self.path())
 
     def skip(self) -> bool:
+        # Skip _progress sources (they don't have a DDL)
         if self.item_type == ItemType.SOURCE:
             return self.name.endswith("_progress")
+        # Skip items with database, schema, or item names that contain a `/`
+        # (not a valid UNIX folder character).
+        elif "/" in self.database:
+            warn(f"Skip processing of item with bad database name: `{self.database}`")
+            return True
+        elif "/" in self.schema:
+            warn(f"Skip processing of item with bad schema name: `{self.schema}`")
+            return True
+        elif "/" in self.name:
+            warn(f"Skip processing of item with bad item name: `{self.name}`")
+            return True
+        # All good!
         else:
             return False
 
@@ -232,6 +245,22 @@ class ExplainFile:
 
     def __str__(self) -> str:
         return str(self.path())
+
+    def skip(self) -> bool:
+        # Skip items with database, schema, or item names that contain a `/`
+        # (not a valid UNIX folder character).
+        if "/" in self.database:
+            warn(f"Skip processing of item with bad database name: `{self.database}`")
+            return True
+        elif "/" in self.schema:
+            warn(f"Skip processing of item with bad schema name: `{self.schema}`")
+            return True
+        elif "/" in self.name:
+            warn(f"Skip processing of item with bad item name: `{self.name}`")
+            return True
+        # All good!
+        else:
+            return False
 
 
 def explain_file(path: Path) -> ExplainFile | None:

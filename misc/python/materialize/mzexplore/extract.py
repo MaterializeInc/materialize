@@ -202,11 +202,16 @@ def plans(
                             stage=stage,
                             ext=explain_format.ext(),
                         )
-                        info(
-                            f"Explaining {stage} for {item_type.sql()} "
-                            f"in `{explain_file}`"
-                        )
+
+                        if explain_file.skip():
+                            continue
+
                         try:
+                            info(
+                                f"Explaining {stage} for {item_type.sql()} "
+                                f"in `{explain_file}`"
+                            )
+
                             plans[explain_file] = explain(
                                 db,
                                 stage,
@@ -231,18 +236,24 @@ def plans(
                     name=item["name"],
                     item_type=item_type,
                 )
-                if not (target / create_file.path()).is_file():
+
+                if create_file.skip():
+                    explainee = None
+                elif not (target / create_file.path()).is_file():
                     if set.intersection(supported_stages, explain_stages):
                         # No CREATE file, but a supported stage is requested
                         info(
                             f"WARNING: Skipping EXPLAIN CREATE for {fqname}: "
                             f"CREATE statement path `{target / create_file.path()}` does not exist."
                         )
-                    continue
-
-                explainee = (target / create_file.path()).read_text()
+                    explainee = None
+                else:
+                    explainee = (target / create_file.path()).read_text()
 
                 for stage in explain_stages:
+                    if explainee is None:
+                        continue
+
                     if stage not in supported_stages:
                         continue
 
@@ -256,11 +267,15 @@ def plans(
                         stage=stage,
                         ext=explain_format.ext(),
                     )
-                    info(
-                        f"Explaining {stage} for CREATE {item_type.sql()} "
-                        f"in `{explain_file}`"
-                    )
+
+                    if explain_file.skip():
+                        continue
+
                     try:
+                        info(
+                            f"Explaining {stage} for CREATE {item_type.sql()} "
+                            f"in `{explain_file}`"
+                        )
                         plans[explain_file] = explain(
                             db,
                             stage,
@@ -278,6 +293,7 @@ def plans(
             if ExplaineeType.REPLAN_ITEM.contains(explainee_type):
                 # If the item can be explained, explain the DDL
                 explainee = explain_item(item_type, fqname, True)
+
                 if explainee is not None:
                     supported_stages = supported_explain_stages(item_type, True)
                     for stage in explain_stages:
@@ -294,11 +310,15 @@ def plans(
                             stage=stage,
                             ext=explain_format.ext(),
                         )
-                        info(
-                            f"Explaining {stage} for REPLAN {item_type.sql()} "
-                            f"in `{explain_file}`"
-                        )
+
+                        if explain_file.skip():
+                            continue
+
                         try:
+                            info(
+                                f"Explaining {stage} for REPLAN {item_type.sql()} "
+                                f"in `{explain_file}`"
+                            )
                             plans[explain_file] = explain(
                                 db,
                                 stage,
