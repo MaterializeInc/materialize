@@ -48,8 +48,8 @@ use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION, VERSION_3,
 };
 use mz_server_core::{
-    listen, ConnectionStream, ListenerHandle, ReloadingSslContext, ReloadingTlsConfig,
-    TlsCertConfig, TlsMode,
+    listen, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
+    ReloadingTlsConfig, TlsCertConfig, TlsMode,
 };
 use openssl::ssl::{NameType, Ssl};
 use prometheus::{IntCounterVec, IntGaugeVec};
@@ -100,7 +100,7 @@ impl BalancerConfig {
         https_addr_template: String,
         tls: Option<TlsCertConfig>,
         metrics_registry: MetricsRegistry,
-        reload_certs: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
+        reload_certs: ReloadTrigger,
     ) -> Self {
         Self {
             build_version: build_info.semver_version(),

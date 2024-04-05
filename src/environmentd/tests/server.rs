@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::io::Write as _;
 use std::net::{IpAddr, Ipv4Addr};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -34,7 +35,7 @@ use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
-use mz_frontegg_mock::{FronteggMockServer, UserConfig};
+use mz_frontegg_mock::{FronteggMockServer, UserApiToken, UserConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
@@ -42,11 +43,13 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
+use mz_ore::task;
 use mz_ore::{assert_contains, task::RuntimeExt};
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql_parser::ast::display::AstDisplay;
-use openssl::ssl::SslVerifyMode;
+use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
+use openssl::x509::X509;
 use postgres::config::SslMode;
 use postgres_array::Array;
 use rand::RngCore;
@@ -57,6 +60,7 @@ use reqwest::blocking::Client;
 use reqwest::{header::CONTENT_TYPE, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
@@ -4274,4 +4278,201 @@ async fn test_double_encoded_json() {
         ],
     )
     "###);
+}
+
+// Tests cert reloading of environmentd.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_cert_reloading() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let email = "user@_.com".to_string();
+    let password = Uuid::new_v4().to_string();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let initial_api_tokens = vec![UserApiToken {
+        client_id: client_id.clone(),
+        secret: secret.clone(),
+    }];
+    let roles = Vec::new();
+    let users = BTreeMap::from([(
+        email.clone(),
+        UserConfig {
+            email,
+            password,
+            tenant_id,
+            initial_api_tokens,
+            roles,
+        },
+    )]);
+
+    let issuer = "frontegg-mock".to_owned();
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+
+    const EXPIRES_IN_SECS: i64 = 50;
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        issuer,
+        encoding_key,
+        decoding_key,
+        users,
+        None,
+        SYSTEM_TIME.clone(),
+        EXPIRES_IN_SECS,
+        // Add a bit of delay so we can test connection de-duplication.
+        Some(Duration::from_millis(100)),
+    )
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+    let frontegg_user = "user@_.com";
+    let frontegg_password = format!("mzp_{client_id}{secret}");
+
+    let (mut reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
+    let reload_certs = Box::pin(reload_rx);
+
+    let config = test_util::TestHarness::default()
+        // Enable SSL on the main port. There should be a balancerd port with no SSL.
+        .with_tls(server_cert.clone(), server_key.clone())
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry);
+    let envd_server = config.start_with_trigger(reload_certs).await;
+
+    let body = r#"{"query": "select 12234"}"#;
+    let ca_cert = reqwest::Certificate::from_pem(&ca.cert.to_pem().unwrap()).unwrap();
+    let client = reqwest::Client::builder()
+        .add_root_certificate(ca_cert)
+        // No pool so that connections are never re-used which can use old ssl certs.
+        .pool_max_idle_per_host(0)
+        .tls_info(true)
+        .build()
+        .unwrap();
+
+    let conn_str = Arc::new(format!(
+        "user={frontegg_user} password={frontegg_password} host={} port={} sslmode=require",
+        envd_server.inner.sql_local_addr().ip(),
+        envd_server.inner.sql_local_addr().port()
+    ));
+
+    /// Asserts that the postgres connection provides the expected server-side certificate.
+    async fn check_pgwire(conn_str: &str, ca_cert_path: &PathBuf, expected_cert: X509) {
+        let tls = make_pg_tls(Box::new(move |b: &mut SslConnectorBuilder| {
+            b.set_ca_file(ca_cert_path).unwrap();
+            b.set_verify_callback(SslVerifyMode::all(), move |verify_success, x509store| {
+                assert!(verify_success);
+                for cert in x509store.chain().unwrap() {
+                    // Expect exactly one cert to be the expected one.
+                    if *cert == expected_cert {
+                        return true;
+                    }
+                }
+                false
+            });
+            Ok(())
+        }));
+
+        let (pg_client, conn) = tokio_postgres::connect(conn_str, tls.clone())
+            .await
+            .unwrap();
+        task::spawn(|| "pg_client", async move {
+            let _ = conn.await;
+        });
+
+        assert_eq!(
+            pg_client
+                .query_one("SELECT 2", &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            2
+        );
+    }
+
+    // Various tests about reloading of certs.
+
+    // Assert the current certificate is as expected.
+    let https_url = format!(
+        "https://{addr}/api/sql",
+        addr = envd_server.inner.http_local_addr(),
+    );
+    let resp = client
+        .post(&https_url)
+        .header("Content-Type", "application/json")
+        .basic_auth(frontegg_user, Some(&frontegg_password))
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    let tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
+    let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
+    let server_x509 = X509::from_pem(&std::fs::read(&server_cert).unwrap()).unwrap();
+    assert_eq!(resp_x509, server_x509);
+    assert_contains!(resp.text().await.unwrap(), "12234");
+    check_pgwire(&conn_str, &ca.ca_cert_path(), server_x509.clone()).await;
+
+    // Generate new certs. Install only the key, reload, and make sure the old cert is still in
+    // use.
+    let (next_cert, next_key) = ca
+        .request_cert("next", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let next_x509 = X509::from_pem(&std::fs::read(&next_cert).unwrap()).unwrap();
+    assert_ne!(next_x509, server_x509);
+    std::fs::copy(next_key, &server_key).unwrap();
+    let (tx, rx) = oneshot::channel();
+    reload_tx.try_send(Some(tx)).unwrap();
+    let res = rx.await.unwrap();
+    assert!(res.is_err());
+
+    // We should still be on the old cert because now the cert and key mismatch.
+    let resp = client
+        .post(&https_url)
+        .header("Content-Type", "application/json")
+        .basic_auth(frontegg_user, Some(&frontegg_password))
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    let tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
+    let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
+    assert_eq!(resp_x509, server_x509);
+    check_pgwire(&conn_str, &ca.ca_cert_path(), server_x509.clone()).await;
+
+    // Now move the cert too. Reloading should succeed and the response should have the new
+    // cert.
+    std::fs::copy(next_cert, &server_cert).unwrap();
+    let (tx, rx) = oneshot::channel();
+    reload_tx.try_send(Some(tx)).unwrap();
+    let res = rx.await.unwrap();
+    assert!(res.is_ok());
+    let resp = client
+        .post(&https_url)
+        .header("Content-Type", "application/json")
+        .basic_auth(frontegg_user, Some(&frontegg_password))
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    let tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
+    let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
+    assert_eq!(resp_x509, next_x509);
+    check_pgwire(&conn_str, &ca.ca_cert_path(), next_x509.clone()).await;
 }

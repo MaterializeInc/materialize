@@ -18,7 +18,7 @@ from materialize.data_ingest.query_error import QueryError
 from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import Action, ActionList, ReconnectAction
 from materialize.parallel_workload.database import Database
-from materialize.parallel_workload.executor import Executor
+from materialize.parallel_workload.executor import ParallelWorkloadExecutor
 
 
 class Worker:
@@ -30,13 +30,14 @@ class Worker:
     num_queries: Counter[type[Action]]
     autocommit: bool
     system: bool
-    exe: Executor | None
+    exe: ParallelWorkloadExecutor | None
     ignored_errors: defaultdict[str, Counter[type[Action]]]
     composition: Composition | None
     failed_query_error: QueryError | None
 
     def __init__(
         self,
+        worker_id: int,
         rng: random.Random,
         actions: list[Action],
         weights: list[float],
@@ -46,6 +47,7 @@ class Worker:
         composition: Composition | None,
         action_list: ActionList | None = None,
     ):
+        self.worker_id = worker_id
         self.rng = rng
         self.action_list = action_list
         self.actions = actions
@@ -65,7 +67,7 @@ class Worker:
         )
         self.conn.autocommit = self.autocommit
         cur = self.conn.cursor()
-        self.exe = Executor(self.rng, cur, database)
+        self.exe = ParallelWorkloadExecutor(self.worker_id, self.rng, cur, database)
         self.exe.set_isolation("SERIALIZABLE")
         cur.execute("SET auto_route_introspection_queries TO false")
         cur.execute("SELECT pg_backend_pid()")

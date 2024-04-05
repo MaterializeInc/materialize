@@ -17,7 +17,7 @@ use timely::progress::Antichain;
 use tokio::sync::Mutex;
 
 use crate::internal::paths::PartialBatchKey;
-use crate::internal::state::{HollowBatch, HollowBatchPart};
+use crate::internal::state::{BatchPart, HollowBatch, HollowBatchPart};
 
 /// A [datadriven::TestCase] wrapper with helpers for parsing.
 #[derive(Debug)]
@@ -103,12 +103,14 @@ impl<'a> DirectiveArgs<'a> {
             len,
             parts: keys
                 .iter()
-                .map(|x| HollowBatchPart {
-                    key: PartialBatchKey((*x).to_owned()),
-                    encoded_size_bytes: 0,
-                    key_lower: vec![],
-                    stats: None,
-                    ts_rewrite: None,
+                .map(|x| {
+                    BatchPart::Hollow(HollowBatchPart {
+                        key: PartialBatchKey((*x).to_owned()),
+                        encoded_size_bytes: 0,
+                        key_lower: vec![],
+                        stats: None,
+                        ts_rewrite: None,
+                    })
                 })
                 .collect(),
             runs: vec![],
@@ -144,6 +146,8 @@ impl<'a> DirectiveArgs<'a> {
 }
 
 mod tests {
+    use mz_dyncfg::ConfigUpdates;
+
     use super::*;
 
     #[mz_ore::test]
@@ -176,13 +180,13 @@ mod tests {
         });
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
-    async fn machine() {
+    async fn machine(dyncfgs: ConfigUpdates) {
         use crate::internal::machine::datadriven as machine_dd;
 
         ::datadriven::walk_async("tests/machine", |mut f| {
-            let initial_state_fut = machine_dd::MachineState::new();
+            let initial_state_fut = machine_dd::MachineState::new(&dyncfgs);
             async move {
                 println!("running datadriven file: {}", f.filename);
                 let state = Arc::new(Mutex::new(initial_state_fut.await));
@@ -220,6 +224,7 @@ mod tests {
                             "downgrade-since" => {
                                 machine_dd::downgrade_since(&mut state, args).await
                             }
+                            "dyncfg" => machine_dd::dyncfg(&mut state, args).await,
                             "expire-critical-reader" => {
                                 machine_dd::expire_critical_reader(&mut state, args).await
                             }

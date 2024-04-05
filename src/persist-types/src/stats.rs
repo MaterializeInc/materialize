@@ -351,6 +351,11 @@ impl AtomicBytesStats {
     }
 }
 
+/// Empty set of statistics.
+#[derive(Debug)]
+#[cfg_attr(any(test), derive(Clone))]
+pub struct NoneStats;
+
 /// The length to truncate `Vec<u8>` and `String` stats to.
 //
 // Ideally, this would be in LaunchDarkly, but the plumbing is tough.
@@ -546,6 +551,7 @@ impl TrimStats for ProtoStructStats {
                 Some(Kind::Primitive(stats)) => stats.trim(),
                 Some(Kind::Bytes(stats)) => stats.trim(),
                 Some(Kind::Struct(stats)) => stats.trim(),
+                Some(Kind::None(())) => (),
                 None => {}
             }
         }
@@ -755,10 +761,10 @@ mod impls {
     use crate::stats::{
         proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
         truncate_bytes, truncate_string, AtomicBytesStats, BytesStats, ColumnStats, DynStats,
-        JsonMapElementStats, JsonStats, OptionStats, PrimitiveStats, ProtoAtomicBytesStats,
-        ProtoBytesStats, ProtoDynStats, ProtoJsonMapElementStats, ProtoJsonMapStats,
-        ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats,
-        ProtoStructStats, StatsFrom, StructStats, TruncateBound, TRUNCATE_LEN,
+        JsonMapElementStats, JsonStats, NoneStats, OptionStats, PrimitiveStats,
+        ProtoAtomicBytesStats, ProtoBytesStats, ProtoDynStats, ProtoJsonMapElementStats,
+        ProtoJsonMapStats, ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveBytesStats,
+        ProtoPrimitiveStats, ProtoStructStats, StatsFrom, StructStats, TruncateBound, TRUNCATE_LEN,
     };
 
     impl<T: Serialize> Debug for PrimitiveStats<T>
@@ -900,6 +906,23 @@ mod impls {
         }
     }
 
+    impl DynStats for NoneStats {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn into_proto(&self) -> ProtoDynStats {
+            ProtoDynStats {
+                option: None,
+                kind: Some(proto_dyn_stats::Kind::None(RustType::into_proto(self))),
+            }
+        }
+
+        fn debug_json(&self) -> serde_json::Value {
+            serde_json::Value::String(format!("{self:?}"))
+        }
+    }
+
     macro_rules! stats_primitive {
         ($data:ty, $ref:ident) => {
             impl ColumnStats<$data> for PrimitiveStats<$data> {
@@ -995,6 +1018,37 @@ mod impls {
         fn upper<'a>(&'a self) -> Option<<Option<DynStruct> as Data>::Ref<'a>> {
             self.some.upper().map(Some)
         }
+        fn none_count(&self) -> usize {
+            self.none
+        }
+    }
+
+    impl<T: Data> ColumnStats<T> for NoneStats {
+        fn lower<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+            None
+        }
+
+        fn upper<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+            None
+        }
+
+        fn none_count(&self) -> usize {
+            0
+        }
+    }
+
+    impl<T> ColumnStats<Option<T>> for OptionStats<NoneStats>
+    where
+        Option<T>: Data,
+    {
+        fn lower<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
+            None
+        }
+
+        fn upper<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
+            None
+        }
+
         fn none_count(&self) -> usize {
             self.none
         }
@@ -1162,6 +1216,24 @@ mod impls {
         }
     }
 
+    impl<T: arrow2::array::Array> StatsFrom<T> for NoneStats {
+        fn stats_from(col: &T, _validity: ValidityRef<'_>) -> Self {
+            assert!(col.validity().is_none());
+            NoneStats
+        }
+    }
+
+    impl<T: arrow2::array::Array> StatsFrom<T> for OptionStats<NoneStats> {
+        fn stats_from(col: &T, validity: ValidityRef<'_>) -> Self {
+            debug_assert!(validity.is_superset(col.validity()));
+            let none = col.validity().map_or(0, |x| x.unset_bits());
+            OptionStats {
+                none,
+                some: NoneStats,
+            }
+        }
+    }
+
     impl RustType<ProtoStructStats> for StructStats {
         fn into_proto(&self) -> ProtoStructStats {
             ProtoStructStats {
@@ -1285,6 +1357,16 @@ mod impls {
         }
     }
 
+    impl RustType<()> for NoneStats {
+        fn into_proto(&self) -> () {
+            ()
+        }
+
+        fn from_proto(_proto: ()) -> Result<Self, TryFromProtoError> {
+            Ok(NoneStats)
+        }
+    }
+
     impl RustType<ProtoDynStats> for Box<dyn DynStats> {
         fn into_proto(&self) -> ProtoDynStats {
             DynStats::into_proto(self.as_ref())
@@ -1376,6 +1458,7 @@ mod impls {
             },
             proto_dyn_stats::Kind::Struct(x) => f.call(StructStats::from_proto(x)?),
             proto_dyn_stats::Kind::Bytes(x) => f.call(BytesStats::from_proto(x)?),
+            proto_dyn_stats::Kind::None(x) => f.call(NoneStats::from_proto(x)?),
         }
     }
 

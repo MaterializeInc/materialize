@@ -427,10 +427,10 @@ impl MetricsVecs {
                 apply_unbatched_cmd_cas: self.retry_metrics("apply_unbatched_cmd::cas"),
             },
             external: RetryExternal {
-                batch_delete: self.retry_metrics("batch::delete"),
+                batch_delete: Arc::new(self.retry_metrics("batch::delete")),
                 batch_set: self.retry_metrics("batch::set"),
                 blob_open: self.retry_metrics("blob::open"),
-                compaction_noop_delete: self.retry_metrics("compaction_noop::delete"),
+                compaction_noop_delete: Arc::new(self.retry_metrics("compaction_noop::delete")),
                 consensus_open: self.retry_metrics("consensus::open"),
                 fetch_batch_get: self.retry_metrics("fetch_batch::get"),
                 fetch_state_scan: self.retry_metrics("fetch_state::scan"),
@@ -634,10 +634,10 @@ pub struct RetryDeterminate {
 
 #[derive(Debug)]
 pub struct RetryExternal {
-    pub(crate) batch_delete: RetryMetrics,
+    pub(crate) batch_delete: Arc<RetryMetrics>,
     pub(crate) batch_set: RetryMetrics,
     pub(crate) blob_open: RetryMetrics,
-    pub(crate) compaction_noop_delete: RetryMetrics,
+    pub(crate) compaction_noop_delete: Arc<RetryMetrics>,
     pub(crate) consensus_open: RetryMetrics,
     pub(crate) fetch_batch_get: RetryMetrics,
     pub(crate) fetch_state_scan: RetryMetrics,

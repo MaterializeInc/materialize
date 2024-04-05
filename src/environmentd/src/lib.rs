@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use derivative::Derivative;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::load_remote_system_parameters;
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
@@ -40,7 +41,7 @@ use mz_ore::{instrument, task};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
-use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
+use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{ConnectionCounter, Var, PERSIST_TXN_TABLES};
 use mz_storage_types::controller::PersistTxnTablesImpl;
@@ -61,7 +62,8 @@ pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 pub const BUILD_INFO: BuildInfo = build_info!();
 
 /// Configuration for an `environmentd` server.
-#[derive(Debug, Clone)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Config {
     // === Special modes. ===
     /// Whether to permit usage of unsafe features. This is never meant to run
@@ -152,6 +154,9 @@ pub struct Config {
     pub http_host_name: Option<String>,
     /// URL of the Web Console to proxy from the /internal-console endpoint on the InternalHTTPServer
     pub internal_console_redirect_url: Option<String>,
+    /// Trigger to attempt to reload TLS certififcates.
+    #[derivative(Debug = "ignore")]
+    pub reload_certs: ReloadTrigger,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -272,12 +277,12 @@ impl Listeners {
         let (pgwire_tls, http_tls) = match &config.tls {
             None => (None, None),
             Some(tls_config) => {
-                let context = tls_config.load_context()?;
-                let pgwire_tls = mz_server_core::TlsConfig {
+                let context = tls_config.reloading_context(config.reload_certs)?;
+                let pgwire_tls = mz_server_core::ReloadingTlsConfig {
                     context: context.clone(),
                     mode: mz_server_core::TlsMode::Require,
                 };
-                let http_tls = http::TlsConfig {
+                let http_tls = http::ReloadingTlsConfig {
                     context,
                     mode: http::TlsMode::Require,
                 };

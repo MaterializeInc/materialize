@@ -340,6 +340,28 @@ ws-text
 {"type":"CommandComplete","payload":"SELECT 1"}
 {"type":"ReadyForQuery","payload":"I"}
 
+# Enable debug notices for the next test...
+
+ws-text
+{"query":"SET client_min_messages = debug"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# This test ensures that notices are emitted as they are produced (i.e., before
+# the CommandComplete message). See #22739.
+
+ws-text
+{"query":"SELECT 1 FROM mz_sources LIMIT 1"}
+----
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
 ws-text rows=2 fixtimestamp=true
 {"query": "SUBSCRIBE t"}
 ----

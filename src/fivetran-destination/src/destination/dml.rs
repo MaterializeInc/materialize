@@ -636,24 +636,26 @@ async fn copy_files(
     table: &Table,
     temporary_table: &UnresolvedItemName,
 ) -> Result<u64, OpError> {
-    // Create a Sink which we can stream the CSV files into.
-    let copy_in_stmt = format!(
-        "COPY {temporary_table} FROM STDIN WITH (FORMAT CSV, HEADER false, NULL {null_value})",
-        null_value = escape::escape_literal(&file_config.null_string),
-    );
-    let sink = client.copy_in(&copy_in_stmt).await?;
-    let mut sink = std::pin::pin!(sink);
+    let mut total_row_count = 0;
 
-    {
-        // Create a CSV Writer that will serialize ByteRecords into the COPY FROM sink.
-        let sink_writer = utils::CopyIntoAsyncWrite::new(sink.as_mut());
-        let mut csv_sink = csv_async::AsyncWriterBuilder::new()
-            .has_headers(false)
-            .create_writer(sink_writer);
+    // Stream the files into the COPY FROM sink.
+    for path in files {
+        tracing::info!(?path, "starting copy");
 
-        // Stream the files into the COPY FROM sink.
-        for path in files {
-            tracing::info!(?path, "starting copy");
+        // Create a Sink which we can stream the CSV files into.
+        let copy_in_stmt = format!(
+            "COPY {temporary_table} FROM STDIN WITH (FORMAT CSV, HEADER false, NULL {null_value})",
+            null_value = escape::escape_literal(&file_config.null_string),
+        );
+        let sink = client.copy_in(&copy_in_stmt).await?;
+        let mut sink = std::pin::pin!(sink);
+
+        {
+            // Create a CSV Writer that will serialize ByteRecords into the COPY FROM sink.
+            let sink_writer = utils::CopyIntoAsyncWrite::new(sink.as_mut());
+            let mut csv_sink = csv_async::AsyncWriterBuilder::new()
+                .has_headers(false)
+                .create_writer(sink_writer);
 
             // Open the CSV file, returning an AsyncReader.
             let file = load_file(file_config, path)
@@ -674,15 +676,15 @@ async fn copy_files(
                     .context("writing record")?;
                 csv_sink.flush().await.context("flushing record")?;
             }
-
-            tracing::info!(?path, "finished copy");
         }
+
+        let row_count = sink.as_mut().finish().await.context("closing sink")?;
+        tracing::info!(?path, row_count, "copied rows into {temporary_table}");
+
+        total_row_count += row_count;
     }
 
-    let row_count = sink.as_mut().finish().await.context("closing sink")?;
-    tracing::info!(row_count, "copied rows into {temporary_table}");
-
-    Ok(row_count)
+    Ok(total_row_count)
 }
 
 #[derive(Debug)]

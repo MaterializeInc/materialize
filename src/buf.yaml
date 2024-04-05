@@ -49,8 +49,8 @@ breaking:
     - expr/src/relation.proto
     # reason: not yet released
     - mysql-util/src/desc.proto
-    # reason: still under active development
-    - persist-types/src/stats.proto
+    # reason: working around a false positive in buf's breaking change lint
+    - persist-client/src/internal/state.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
     # reason: does currently not require backward-compatibility

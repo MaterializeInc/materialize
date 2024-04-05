@@ -958,6 +958,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
                 persist_txn_tables_cli: args.persist_txn_tables,
+                reload_certs: mz_server_core::default_cert_reload_ticker(),
             })
             .await
     })?;

@@ -118,6 +118,7 @@
       "part_runs": [
         [
           {
+            "type": "Hollow",
             "key": "𝕏`𑜈Ⱥ5:<",
             "encoded_size_bytes": 16872256722443379164,
             "key_lower": "009abac79278769a8279207fb05f71d6fa9de6df3a3175e60606a6f4b7e471b019f49aaf03c0ca34281ee4c943fb5497062565268d24444fd890cab724176dca822cc29101aef59d92d9093e",
@@ -173,6 +174,7 @@
       "part_runs": [
         [
           {
+            "type": "Hollow",
             "key": "P'𞹇X",
             "encoded_size_bytes": 4013661555173142149,
             "key_lower": "35d1ee28deb0ea5a05c513d1b26ae687666abc8b8ea9a47627533da6db6fd9029cb6b1f6ef776782fd090908c30bfe5d179bfe733d77b4ce7845c54bbd961881",
