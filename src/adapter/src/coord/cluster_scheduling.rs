@@ -14,7 +14,7 @@ use mz_catalog::memory::objects::{CatalogItem, ClusterVariant, ClusterVariantMan
 use mz_controller_types::ClusterId;
 use mz_ore::soft_panic_or_log;
 use mz_sql::catalog::CatalogCluster;
-use mz_sql_parser::ast::ClusterScheduleOptionValue;
+use mz_sql::plan::ClusterSchedule;
 use std::time::Instant;
 use timely::progress::Antichain;
 use tracing::{debug, warn};
@@ -43,10 +43,12 @@ impl Coordinator {
         for cluster in self.catalog().clusters() {
             if let ClusterVariant::Managed(ref config) = cluster.config.variant {
                 match config.schedule {
-                    ClusterScheduleOptionValue::Manual => {
+                    ClusterSchedule::Manual => {
                         // Nothing to do, user manages this cluster manually.
                     }
-                    ClusterScheduleOptionValue::Refresh => {
+                    ClusterSchedule::Refresh {
+                        rehydration_time_estimate,
+                    } => {
                         let refresh_mv_write_frontiers = cluster
                             .bound_objects()
                             .iter()
@@ -72,6 +74,7 @@ impl Coordinator {
                         debug!(%cluster.id, ?refresh_mv_write_frontiers, "check_refresh_policy");
                         min_refresh_mv_write_frontiers.push((
                             cluster.id,
+                            rehydration_time_estimate,
                             refresh_mv_write_frontiers
                                 .into_iter()
                                 .fold(Antichain::new(), |ac1, ac2| Lattice::meet(&ac1, ac2)),
@@ -94,12 +97,20 @@ impl Coordinator {
             debug!(%local_read_ts, ?min_refresh_mv_write_frontiers, "check_refresh_policy background task");
             let decisions = min_refresh_mv_write_frontiers
                 .into_iter()
-                .map(|(cluster_id, min_refresh_mv_write_frontier)| {
-                    (
-                        cluster_id,
-                        min_refresh_mv_write_frontier.less_than(&local_read_ts),
-                    )
-                })
+                .map(
+                    |(cluster_id, rehydration_time_estimate, min_refresh_mv_write_frontier)| {
+                        // We are just checking that
+                        // write_frontier < local_read_ts + rehydration_time_estimate
+                        let rehydration_estimate = &rehydration_time_estimate
+                            .try_into()
+                            .expect("checked during planning");
+                        let local_read_ts_adjusted =
+                            local_read_ts.step_forward_by(rehydration_estimate);
+                        let should_schedule =
+                            min_refresh_mv_write_frontier.less_than(&local_read_ts_adjusted);
+                        (cluster_id, should_schedule)
+                    },
+                )
                 .collect();
             if let Err(e) = internal_cmd_tx.send(Message::SchedulingDecisions(vec![(
                 REFRESH_POLICY_NAME,
@@ -164,7 +175,7 @@ impl Coordinator {
                     self.cluster_scheduling_decisions.remove(&cluster_id);
                 }
                 Some(managed_config) => {
-                    if matches!(managed_config.schedule, ClusterScheduleOptionValue::Manual) {
+                    if matches!(managed_config.schedule, ClusterSchedule::Manual) {
                         debug!(
                             "handle_scheduling_decisions: \
                             Removing cluster {} from cluster_scheduling_decisions, \

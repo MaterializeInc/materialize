@@ -518,6 +518,28 @@ DROP CLUSTER REPLICA scheduled_cluster.unbilled;
 > SELECT * FROM mv11;
 3
 
+## REHYDRATION TIME ESTIMATE
+
+> CREATE CLUSTER c_schedule_6 (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+> CREATE CLUSTER c_schedule_7 (SIZE = '1');
+> ALTER CLUSTER c_schedule_7 SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+
+# Create MVs whose first refresh is 1000 seconds from now.
+> CREATE MATERIALIZED VIEW mv13
+  IN CLUSTER c_schedule_6
+  WITH (REFRESH AT mz_now()::string::int8 + 1000 * 1000)
+  AS SELECT count(*) FROM t2;
+> CREATE MATERIALIZED VIEW mv14
+  IN CLUSTER c_schedule_7
+  WITH (REFRESH AT mz_now()::string::int8 + 1000 * 1000)
+  AS SELECT count(*) FROM t2;
+
+# Should be turned on soon due to the REHYDRATION TIME ESTIMATE.
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+1
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_7';
+1
+
 # ----------------------------------------
 # Cleanup
 # ----------------------------------------
@@ -526,3 +548,5 @@ DROP CLUSTER REPLICA scheduled_cluster.unbilled;
 > DROP CLUSTER refresh_cluster;
 > DROP CLUSTER scheduled_cluster;
 > DROP CLUSTER scheduled_cluster_2;
+> DROP CLUSTER c_schedule_6;
+> DROP CLUSTER c_schedule_7;

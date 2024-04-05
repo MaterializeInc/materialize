@@ -141,6 +141,7 @@ Envelope
 Equivalence
 Error
 Escape
+Estimate
 Every
 Except
 Execute
@@ -333,6 +334,7 @@ Refresh
 Regex
 Region
 Registry
+Rehydration
 Rename
 Reoptimize
 Repeatable

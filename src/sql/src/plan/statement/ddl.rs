@@ -124,15 +124,15 @@ use crate::plan::{
     AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan,
     AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan,
     AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation,
+    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
+    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
+    ReplicaConfig, Secret, Sink, Source, Table, Type, VariableValue, View, WebhookBodyFormat,
+    WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 use crate::session::vars::ENABLE_CLUSTER_SCHEDULE_REFRESH;
@@ -3624,6 +3624,8 @@ pub fn plan_create_cluster(
             ..Default::default()
         };
 
+        let schedule = plan_cluster_schedule(schedule)?;
+
         Ok(Plan::CreateCluster(CreateClusterPlan {
             name: normalize::ident(name),
             variant: CreateClusterVariant::Managed(CreateClusterManagedPlan {
@@ -3850,6 +3852,45 @@ fn plan_compute_replica_config(
     };
     let compute = ComputeReplicaConfig { introspection };
     Ok(compute)
+}
+
+fn plan_cluster_schedule(
+    schedule: ClusterScheduleOptionValue,
+) -> Result<ClusterSchedule, PlanError> {
+    Ok(match schedule {
+        ClusterScheduleOptionValue::Manual => ClusterSchedule::Manual,
+        // If `REHYDRATION TIME ESTIMATE` is not explicitly given, we default to 0.
+        ClusterScheduleOptionValue::Refresh {
+            rehydration_time_estimate: None,
+        } => ClusterSchedule::Refresh {
+            rehydration_time_estimate: Duration::from_millis(0),
+        },
+        // Otherwise we convert the `IntervalValue` to a `Duration`.
+        ClusterScheduleOptionValue::Refresh {
+            rehydration_time_estimate: Some(interval_value),
+        } => {
+            let interval = Interval::try_from_value(Value::Interval(interval_value))?;
+            if interval.as_microseconds() < 0 {
+                sql_bail!(
+                    "REHYDRATION TIME ESTIMATE must be non-negative; got: {}",
+                    interval
+                );
+            }
+            if interval.months != 0 {
+                // This limitation is because we want this interval to be cleanly convertable
+                // to a unix epoch timestamp difference. When the interval involves months, then
+                // this is not true anymore, because months have variable lengths.
+                sql_bail!("REHYDRATION TIME ESTIMATE must not involve units larger than days");
+            }
+            let duration = interval.duration()?;
+            if u64::try_from(duration.as_millis()).is_err() {
+                sql_bail!("REHYDRATION TIME ESTIMATE too large");
+            }
+            ClusterSchedule::Refresh {
+                rehydration_time_estimate: duration,
+            }
+        }
+    })
 }
 
 pub fn describe_create_cluster_replica(
@@ -4779,7 +4820,7 @@ pub fn plan_alter_cluster(
                             sql_bail!("REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL");
                         }
                         if let Some(current_schedule) = cluster.schedule() {
-                            if !matches!(current_schedule, ClusterScheduleOptionValue::Manual) {
+                            if !matches!(current_schedule, ClusterSchedule::Manual) {
                                 sql_bail!("REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL");
                             }
                         }
@@ -4826,7 +4867,7 @@ pub fn plan_alter_cluster(
                         sql_bail!("cluster schedules other than MANUAL are not supported for unmanaged clusters");
                     }
                     if let Some(current_schedule) = cluster.schedule() {
-                        if !matches!(current_schedule, ClusterScheduleOptionValue::Manual)
+                        if !matches!(current_schedule, ClusterSchedule::Manual)
                             && schedule.is_none()
                         {
                             sql_bail!(
@@ -4903,7 +4944,7 @@ pub fn plan_alter_cluster(
                 options.replicas = AlterOptionParameter::Set(replicas);
             }
             if let Some(schedule) = schedule {
-                options.schedule = AlterOptionParameter::Set(schedule);
+                options.schedule = AlterOptionParameter::Set(plan_cluster_schedule(schedule)?);
             }
         }
         AlterClusterAction::ResetOptions(reset_options) => {

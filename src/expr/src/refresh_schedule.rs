@@ -78,6 +78,7 @@ impl RefreshEvery {
     /// # Panics
     /// - if the refresh interval converted to milliseconds cast to u64 overflows;
     /// - if the interval is 0.
+    /// (These should be checked in HIR planning.)
     pub fn round_up_timestamp(&self, timestamp: Timestamp) -> Timestamp {
         let RefreshEvery {
             interval,
