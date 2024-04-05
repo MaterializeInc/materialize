@@ -13,7 +13,6 @@ use std::fmt::Debug;
 
 use timely::progress::{Antichain, Timestamp};
 
-use crate::internal::paths::PartialBatchKey;
 use crate::ShardId;
 
 /// An error resulting from invalid usage of the API.
@@ -34,7 +33,7 @@ pub enum InvalidUsage<T> {
         /// The given upper bound
         upper: Antichain<T>,
         /// Set of keys containing updates.
-        keys: Vec<PartialBatchKey>,
+        keys: Vec<String>,
     },
     /// Bounds of a [crate::batch::Batch] are not valid for the attempted append call
     InvalidBatchBounds {

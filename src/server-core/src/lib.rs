@@ -26,7 +26,7 @@ use socket2::{SockRef, TcpKeepalive};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
-use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::wrappers::{IntervalStream, TcpListenerStream};
 use tracing::{debug, error, warn};
 
 /// TCP keepalive settings. The idle time and interval match CockroachDB [0].
@@ -238,7 +238,7 @@ impl TlsCertConfig {
     /// Err result will not change the current certificates.
     pub fn reloading_context(
         &self,
-        mut ticker: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
+        mut ticker: ReloadTrigger,
     ) -> Result<ReloadingSslContext, anyhow::Error> {
         let context = Arc::new(RwLock::new(self.load_context()?));
         let updater_context = Arc::clone(&context);
@@ -285,6 +285,23 @@ pub struct ReloadingTlsConfig {
     pub context: ReloadingSslContext,
     /// The TLS mode.
     pub mode: TlsMode,
+}
+
+pub type ReloadTrigger = BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>;
+
+/// Returns a ReloadTrigger that triggers once per hour.
+pub fn default_cert_reload_ticker() -> ReloadTrigger {
+    let ticker = IntervalStream::new(tokio::time::interval(Duration::from_secs(60 * 60)));
+    let ticker = ticker.map(|_| None);
+    let ticker = Box::pin(ticker);
+    ticker
+}
+
+/// Returns a ReloadTrigger that never triggers.
+pub fn cert_reload_never_reload() -> ReloadTrigger {
+    let ticker = futures::stream::empty();
+    let ticker = Box::pin(ticker);
+    ticker
 }
 
 /// Command line arguments for TLS.

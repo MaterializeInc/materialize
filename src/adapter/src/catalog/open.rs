@@ -1691,12 +1691,10 @@ mod builtin_migration_tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use itertools::Itertools;
-    use mz_catalog::memory::objects::Table;
-
+    use mz_catalog::memory::objects::{Index, MaterializedView, Table};
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
     use mz_ore::now::NOW_ZERO;
-
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names::{
@@ -1706,8 +1704,7 @@ mod builtin_migration_tests {
     use mz_sql_parser::ast::Expr;
 
     use crate::catalog::{
-        Catalog, CatalogItem, Index, MaterializedView, Op, OptimizedMirRelationExpr,
-        DEFAULT_SCHEMA, SYSTEM_CONN_ID,
+        Catalog, CatalogItem, Op, OptimizedMirRelationExpr, DEFAULT_SCHEMA, SYSTEM_CONN_ID,
     };
     use crate::session::DEFAULT_DATABASE_NAME;
 

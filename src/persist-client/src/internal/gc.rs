@@ -26,6 +26,7 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{debug, debug_span, error, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
+use crate::batch::PartDeletes;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_persist::location::{Blob, SeqNo};
@@ -34,8 +35,8 @@ use mz_persist_types::{Codec, Codec64};
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
-use crate::internal::paths::{BlobKey, PartialBatchKey, PartialBlobKey, PartialRollupKey};
-use crate::internal::state::HollowBlobRef;
+use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
+use crate::internal::state::{BatchPart, HollowBlobRef};
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
 use crate::ShardId;
 
@@ -407,7 +408,7 @@ where
     {
         assert_eq!(states.state().shard_id, machine.shard_id());
         let shard_id = states.state().shard_id;
-        let mut batch_parts_to_delete: BTreeSet<PartialBatchKey> = BTreeSet::new();
+        let mut batch_parts_to_delete = PartDeletes::default();
         let mut rollups_to_delete: BTreeSet<PartialRollupKey> = BTreeSet::new();
 
         for truncate_lt in gc_rollups.truncate_seqnos() {
@@ -466,7 +467,11 @@ where
             states.state().map_blobs(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     for live_part in &batch.parts {
-                        assert_eq!(batch_parts_to_delete.get(&live_part.key), None);
+                        match live_part {
+                            BatchPart::Hollow(x) => {
+                                assert_eq!(batch_parts_to_delete.get(&x.key), None)
+                            }
+                        }
                     }
                 }
                 HollowBlobRef::Rollup(live_rollup) => {
@@ -509,7 +514,7 @@ where
         truncate_lt: SeqNo,
         metrics: &GcStepTimings,
         timer: &mut F,
-        batch_parts_to_delete: &mut BTreeSet<PartialBatchKey>,
+        batch_parts_to_delete: &mut PartDeletes,
         rollups_to_delete: &mut BTreeSet<PartialRollupKey>,
     ) where
         F: FnMut(&Counter),
@@ -524,7 +529,7 @@ where
                             // we use BTreeSets for fast lookups elsewhere, but we should never
                             // see repeat blob insertions within a single GC run, otherwise we
                             // have a logic error or our diffs are incorrect (!)
-                            assert!(batch_parts_to_delete.insert(part.key.to_owned()));
+                            assert!(batch_parts_to_delete.add(part));
                         }
                     }
                     HollowBlobRef::Rollup(rollup) => {
@@ -544,7 +549,7 @@ where
     /// Truncates Consensus to `truncate_lt`.
     async fn delete_and_truncate<F>(
         truncate_lt: SeqNo,
-        batch_parts: &mut BTreeSet<PartialBatchKey>,
+        batch_parts: &mut PartDeletes,
         rollups: &mut BTreeSet<PartialRollupKey>,
         machine: &Machine<K, V, T, D>,
         timer: &mut F,
@@ -568,7 +573,7 @@ where
             &delete_semaphore,
         )
         .await;
-        batch_parts.clear();
+        *batch_parts = PartDeletes::default();
         timer(&machine.applier.metrics.gc.steps.delete_rollup_seconds);
 
         Self::delete_all(

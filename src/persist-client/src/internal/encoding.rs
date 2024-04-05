@@ -34,14 +34,14 @@ use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart, HollowRollup,
-    IdempotencyToken, LeasedReaderState, OpaqueState, ProtoCriticalReaderState, ProtoFuelingMerge,
-    ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
-    ProtoIdFuelingMerge, ProtoIdHollowBatch, ProtoIdSpineBatch, ProtoInlinedDiffs,
-    ProtoLeasedReaderState, ProtoRollup, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff,
-    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, State, StateCollections, TypedState,
-    WriterState,
+    proto_hollow_batch_part, BatchPart, CriticalReaderState, HandleDebugState, HollowBatch,
+    HollowBatchPart, HollowRollup, IdempotencyToken, LeasedReaderState, OpaqueState,
+    ProtoCriticalReaderState, ProtoFuelingMerge, ProtoHandleDebugState, ProtoHollowBatch,
+    ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdFuelingMerge, ProtoIdHollowBatch,
+    ProtoIdSpineBatch, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoRollup, ProtoSpineBatch,
+    ProtoSpineId, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
+    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData, ProtoWriterState,
+    State, StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -1209,21 +1209,18 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     }
 
     fn from_proto(proto: ProtoHollowBatch) -> Result<Self, TryFromProtoError> {
-        let mut parts: Vec<HollowBatchPart<T>> = proto.parts.into_rust()?;
+        let mut parts: Vec<BatchPart<T>> = proto.parts.into_rust()?;
         // MIGRATION: We used to just have the keys instead of a more structured
         // part.
-        parts.extend(
-            proto
-                .deprecated_keys
-                .into_iter()
-                .map(|key| HollowBatchPart {
-                    key: PartialBatchKey(key),
-                    encoded_size_bytes: 0,
-                    key_lower: vec![],
-                    stats: None,
-                    ts_rewrite: None,
-                }),
-        );
+        parts.extend(proto.deprecated_keys.into_iter().map(|key| {
+            BatchPart::Hollow(HollowBatchPart {
+                key: PartialBatchKey(key),
+                encoded_size_bytes: 0,
+                key_lower: vec![],
+                stats: None,
+                ts_rewrite: None,
+            })
+        }));
         Ok(HollowBatch {
             desc: proto.desc.into_rust_if_some("desc")?,
             parts,
@@ -1233,14 +1230,16 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowBatchPart<T> {
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
     fn into_proto(&self) -> ProtoHollowBatchPart {
-        ProtoHollowBatchPart {
-            key: self.key.into_proto(),
-            encoded_size_bytes: self.encoded_size_bytes.into_proto(),
-            key_lower: Bytes::copy_from_slice(&self.key_lower),
-            key_stats: self.stats.into_proto(),
-            ts_rewrite: self.ts_rewrite.as_ref().map(|x| x.into_proto()),
+        match self {
+            BatchPart::Hollow(x) => ProtoHollowBatchPart {
+                kind: Some(proto_hollow_batch_part::Kind::Key(x.key.into_proto())),
+                encoded_size_bytes: x.encoded_size_bytes.into_proto(),
+                key_lower: Bytes::copy_from_slice(&x.key_lower),
+                key_stats: x.stats.into_proto(),
+                ts_rewrite: x.ts_rewrite.as_ref().map(|x| x.into_proto()),
+            },
         }
     }
 
@@ -1249,13 +1248,21 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowBatchPart<
             Some(ts_rewrite) => Some(ts_rewrite.into_rust()?),
             None => None,
         };
-        Ok(HollowBatchPart {
-            key: proto.key.into_rust()?,
-            encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
-            key_lower: proto.key_lower.into(),
-            stats: proto.key_stats.into_rust()?,
-            ts_rewrite,
-        })
+        let encoded_size_bytes = proto.encoded_size_bytes.into_rust()?;
+        match proto.kind {
+            Some(proto_hollow_batch_part::Kind::Key(key)) => {
+                Ok(BatchPart::Hollow(HollowBatchPart {
+                    key: key.into_rust()?,
+                    encoded_size_bytes,
+                    key_lower: proto.key_lower.into(),
+                    stats: proto.key_stats.into_rust()?,
+                    ts_rewrite,
+                }))
+            }
+            None => Err(TryFromProtoError::unknown_enum_variant(
+                "ProtoHollowBatchPart::kind",
+            )),
+        }
     }
 }
 
@@ -1379,6 +1386,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
 mod tests {
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_dyncfg::ConfigUpdates;
     use mz_persist::location::SeqNo;
     use proptest::prelude::*;
 
@@ -1466,13 +1474,13 @@ mod tests {
                 Antichain::from_elem(3u64),
             ),
             len: 4,
-            parts: vec![HollowBatchPart {
+            parts: vec![BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
                 key_lower: vec![],
                 stats: None,
                 ts_rewrite: None,
-            }],
+            })],
             runs: vec![],
         };
         let mut old = x.into_proto();
@@ -1486,13 +1494,13 @@ mod tests {
         // will violate bounded memory usage compaction during the transition
         // (short-term issue), but that's better than creating unnecessary runs
         // (longer-term issue).
-        expected.parts.push(HollowBatchPart {
+        expected.parts.push(BatchPart::Hollow(HollowBatchPart {
             key: PartialBatchKey("b".into()),
             encoded_size_bytes: 0,
             key_lower: vec![],
             stats: None,
             ts_rewrite: None,
-        });
+        }));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
 
@@ -1583,9 +1591,9 @@ mod tests {
         );
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn state_diff_migration_rollups() {
+    async fn state_diff_migration_rollups(dyncfgs: ConfigUpdates) {
         let r1_rollup = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
             encoded_size_bytes: None,
@@ -1660,7 +1668,7 @@ mod tests {
         let state: Rollup<u64> = rollup.into_rust().unwrap();
         let state = state.state;
         let mut state = state.check_codecs::<(), (), i64>(&shard_id).unwrap();
-        let cache = new_test_client_cache();
+        let cache = new_test_client_cache(&dyncfgs);
         let encoded_diff = VersionedData {
             seqno: SeqNo(5),
             data: diff_proto.encode_to_vec().into(),

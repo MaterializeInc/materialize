@@ -135,10 +135,6 @@ pub struct TimelyConfig {
     pub process: usize,
     /// Addresses of all processes
     pub addresses: Vec<String>,
-    /// The amount of effort to be spent on arrangement compaction during idle times.
-    ///
-    /// See `differential_dataflow::Config::idle_merge_effort`.
-    pub idle_arrangement_merge_effort: u32,
     /// Proportionality value that decides whether to exert additional arrangement merge effort.
     ///
     /// Specifically, additional merge effort is exerted when the size of the second-largest batch
@@ -156,7 +152,6 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             workers: self.workers.into_proto(),
             addresses: self.addresses.into_proto(),
             process: self.process.into_proto(),
-            idle_arrangement_merge_effort: self.idle_arrangement_merge_effort,
             arrangement_exert_proportionality: self.arrangement_exert_proportionality,
         }
     }
@@ -166,7 +161,6 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             process: proto.process.into_rust()?,
             workers: proto.workers.into_rust()?,
             addresses: proto.addresses.into_rust()?,
-            idle_arrangement_merge_effort: proto.idle_arrangement_merge_effort,
             arrangement_exert_proportionality: proto.arrangement_exert_proportionality,
         })
     }

@@ -20,5 +20,5 @@ pub use mz_compute_types::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL as DEFAULT_RE
 /// Reports whether a given size name is a "v2" cluster size--i.e., a cluster
 /// size that ends in "cc" or "C".
 pub fn is_cluster_size_v2(size: &str) -> bool {
-    size.ends_with("cc") || size.ends_with('C')
+    size.ends_with("cc") || size.ends_with('C') || size == "mz_probe"
 }

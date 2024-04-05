@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -551,6 +552,8 @@ pub struct CommandStarting {
 /// message as they occur.
 #[async_trait]
 trait ResultSender: Send {
+    const SUPPORTS_STREAMING_NOTICES: bool = false;
+
     /// Adds a result to the client. The first component of the return value is
     /// Err if sending to the client
     /// produced an error and the server should disconnect. It is Ok(Err) if the statement
@@ -560,6 +563,7 @@ trait ResultSender: Send {
     /// needs to be retired for statement logging purposes.
     async fn add_result(
         &mut self,
+        client: &mut SessionClient,
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
@@ -571,14 +575,11 @@ trait ResultSender: Send {
     /// Reports whether the client supports streaming SUBSCRIBE results.
     fn allow_subscribe(&self) -> bool;
 
-    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, Error>
-    where
-        F: Future<Output = R> + Send,
-    {
-        tokio::select! {
-            e = self.connection_error() => Err(e),
-            r = f => Ok(r),
-        }
+    /// Emits a streaming notice if the sender supports it.
+    ///
+    /// Does nothing if `SUPPORTS_STREAMING_NOTICES` is false.
+    async fn emit_streaming_notice(&mut self, _: AdapterNotice) -> Result<(), Error> {
+        unreachable!("streaming notices marked as unsupported")
     }
 }
 
@@ -593,6 +594,7 @@ impl ResultSender for SqlResponse {
     // needs to be retired for statement logging purposes.
     async fn add_result(
         &mut self,
+        _client: &mut SessionClient,
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
@@ -636,6 +638,8 @@ impl ResultSender for SqlResponse {
 
 #[async_trait]
 impl ResultSender for WebSocket {
+    const SUPPORTS_STREAMING_NOTICES: bool = true;
+
     // The first component of the return value is
     // Err if sending to the client
     // produced an error and the server should disconnect. It is Ok(Err) if the statement
@@ -645,23 +649,19 @@ impl ResultSender for WebSocket {
     // needs to be retired for statement logging purposes.
     async fn add_result(
         &mut self,
+        client: &mut SessionClient,
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
         Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
     ) {
-        async fn send(ws: &mut WebSocket, msg: WebSocketResponse) -> Result<(), Error> {
-            let msg = serde_json::to_string(&msg).expect("must serialize");
-            Ok(ws.send(Message::Text(msg)).await?)
-        }
-
         let (has_rows, is_streaming) = match res {
             StatementResult::SqlResult(SqlResult::Err { .. }) => (false, false),
             StatementResult::SqlResult(SqlResult::Ok { .. }) => (false, false),
             StatementResult::SqlResult(SqlResult::Rows { .. }) => (true, false),
             StatementResult::Subscribe { .. } => (true, true),
         };
-        if let Err(e) = send(
+        if let Err(e) = send_ws_response(
             self,
             WebSocketResponse::CommandStarting(CommandStarting {
                 has_rows,
@@ -711,7 +711,7 @@ impl ResultSender for WebSocket {
                 mut rx,
                 ctx_extra,
             } => {
-                if let Err(e) = send(self, WebSocketResponse::Rows(desc.into())).await {
+                if let Err(e) = send_ws_response(self, WebSocketResponse::Rows(desc.into())).await {
                     // We consider the remote breaking the connection to be a cancellation,
                     // matching the behavior for pgwire
                     return (
@@ -723,7 +723,7 @@ impl ResultSender for WebSocket {
                 let mut datum_vec = mz_repr::DatumVec::new();
                 let mut rows_returned = 0;
                 loop {
-                    let res = match self.await_rows(rx.recv()).await {
+                    let res = match await_rows(self, client, rx.recv()).await {
                         Ok(res) => res,
                         Err(e) => {
                             // We consider the remote breaking the connection to be a cancellation,
@@ -740,7 +740,7 @@ impl ResultSender for WebSocket {
                             for row in rows {
                                 let datums = datum_vec.borrow_with(&row);
                                 let types = &desc.typ().column_types;
-                                if let Err(e) = send(
+                                if let Err(e) = send_ws_response(
                                     self,
                                     WebSocketResponse::Row(
                                         datums
@@ -800,7 +800,7 @@ impl ResultSender for WebSocket {
             }
         };
         for msg in msgs {
-            if let Err(e) = send(self, msg).await {
+            if let Err(e) = send_ws_response(self, msg).await {
                 return (
                     Err(e),
                     stmt_logging.map(|(_old_reason, ctx_extra)| {
@@ -830,6 +830,27 @@ impl ResultSender for WebSocket {
     fn allow_subscribe(&self) -> bool {
         true
     }
+
+    async fn emit_streaming_notice(&mut self, notice: AdapterNotice) -> Result<(), Error> {
+        forward_notices(self, [notice]).await
+    }
+}
+
+async fn await_rows<S, F, R>(sender: &mut S, client: &mut SessionClient, f: F) -> Result<R, Error>
+where
+    S: ResultSender,
+    F: Future<Output = R> + Send,
+{
+    let mut f = pin!(f);
+    loop {
+        tokio::select! {
+            notice = client.session().recv_notice(), if S::SUPPORTS_STREAMING_NOTICES => {
+                sender.emit_streaming_notice(notice).await?;
+            }
+            e = sender.connection_error() => return Err(e),
+            r = &mut f => return Ok(r),
+        }
+    }
 }
 
 async fn send_and_retire<S: ResultSender>(
@@ -837,7 +858,7 @@ async fn send_and_retire<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,
 ) -> Result<Result<(), ()>, Error> {
-    let (res, stmt_logging) = sender.add_result(res).await;
+    let (res, stmt_logging) = sender.add_result(client, res).await;
     if let Some((reason, ctx_extra)) = stmt_logging {
         client.retire_execute(ctx_extra, reason);
     }
@@ -1195,8 +1216,8 @@ async fn execute_stmt<S: ResultSender>(
             )
             .into()
         }
-        ExecuteResponse::SendingRows { future: rows } => {
-            let rows = match sender.await_rows(rows).await? {
+        ExecuteResponse::SendingRows { future: mut rows } => {
+            let rows = match await_rows(sender, client, &mut rows).await? {
                 PeekResponseUnary::Rows(rows) => {
                     RecordFirstRowStream::record(execute_started, client);
                     rows

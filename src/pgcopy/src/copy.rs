@@ -14,8 +14,7 @@ use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, RelationType, Row, RowArena};
-use proptest::prelude::any;
-use proptest::prelude::Arbitrary;
+use proptest::prelude::{any, Arbitrary, Just};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,7 +23,7 @@ static END_OF_COPY_MARKER: &[u8] = b"\\.";
 
 include!(concat!(env!("OUT_DIR"), "/mz_pgcopy.copy.rs"));
 
-pub fn encode_copy_row_binary(
+fn encode_copy_row_binary(
     row: &Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
@@ -68,8 +67,8 @@ pub fn encode_copy_row_binary(
     Ok(())
 }
 
-pub fn encode_copy_row_text(
-    CopyTextFormatParams { null, delimiter }: CopyTextFormatParams,
+fn encode_copy_row_text(
+    CopyTextFormatParams { null, delimiter }: &CopyTextFormatParams,
     row: &Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
@@ -78,7 +77,7 @@ pub fn encode_copy_row_text(
     let mut buf = BytesMut::new();
     for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
         if idx > 0 {
-            out.push(delimiter);
+            out.push(*delimiter);
         }
         match field {
             None => out.extend(null),
@@ -101,24 +100,24 @@ pub fn encode_copy_row_text(
     Ok(())
 }
 
-pub fn encode_copy_row_csv(
+fn encode_copy_row_csv(
     CopyCsvFormatParams {
         delimiter: delim,
         quote,
         escape,
         header: _,
         null,
-    }: CopyCsvFormatParams,
+    }: &CopyCsvFormatParams,
     row: &Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
     let null = null.as_bytes();
-    let is_special = |c: &u8| *c == delim || *c == quote || *c == b'\r' || *c == b'\n';
+    let is_special = |c: &u8| *c == *delim || *c == *quote || *c == b'\r' || *c == b'\n';
     let mut buf = BytesMut::new();
     for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
         if idx > 0 {
-            out.push(delim);
+            out.push(*delim);
         }
         match field {
             None => out.extend(null),
@@ -137,14 +136,14 @@ pub fn encode_copy_row_csv(
                     // Quote the value by wrapping it in the quote character and
                     // emitting the escape character before any quote or escape
                     // characters within.
-                    out.push(quote);
+                    out.push(*quote);
                     for b in &buf {
-                        if *b == quote || *b == escape {
-                            out.push(escape);
+                        if *b == *quote || *b == *escape {
+                            out.push(*escape);
                         }
                         out.push(*b);
                     }
-                    out.push(quote);
+                    out.push(*quote);
                 } else {
                     // The value does not need quoting and can be emitted
                     // directly.
@@ -436,6 +435,7 @@ impl<'a> RawIterator<'a> {
 pub enum CopyFormatParams<'a> {
     Text(CopyTextFormatParams<'a>),
     Csv(CopyCsvFormatParams<'a>),
+    Binary,
 }
 
 impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
@@ -445,6 +445,7 @@ impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
             kind: Some(match self {
                 Self::Text(f) => Kind::Text(f.into_proto()),
                 Self::Csv(f) => Kind::Csv(f.into_proto()),
+                Self::Binary => Kind::Binary(()),
             }),
         }
     }
@@ -454,6 +455,7 @@ impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
         match proto.kind {
             Some(Kind::Text(f)) => Ok(Self::Text(f.into_rust()?)),
             Some(Kind::Csv(f)) => Ok(Self::Csv(f.into_rust()?)),
+            Some(Kind::Binary(())) => Ok(Self::Binary),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoCopyFormatParams::kind",
             )),
@@ -469,6 +471,7 @@ impl Arbitrary for CopyFormatParams<'static> {
         Union::new(vec![
             any::<CopyTextFormatParams>().prop_map(Self::Text).boxed(),
             any::<CopyCsvFormatParams>().prop_map(Self::Csv).boxed(),
+            Just(Self::Binary).boxed(),
         ])
     }
 }
@@ -482,12 +485,16 @@ pub fn decode_copy_format<'a>(
     match params {
         CopyFormatParams::Text(params) => decode_copy_format_text(data, column_types, params),
         CopyFormatParams::Csv(params) => decode_copy_format_csv(data, column_types, params),
+        CopyFormatParams::Binary => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "cannot decode as binary format",
+        )),
     }
 }
 
 /// Encodes the given `Row` into bytes based on the given `CopyFormatParams`.
 pub fn encode_copy_format<'a>(
-    params: CopyFormatParams<'a>,
+    params: &CopyFormatParams<'a>,
     row: &Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
@@ -495,7 +502,7 @@ pub fn encode_copy_format<'a>(
     match params {
         CopyFormatParams::Text(params) => encode_copy_row_text(params, row, typ, out),
         CopyFormatParams::Csv(params) => encode_copy_row_csv(params, row, typ, out),
-        // TODO (mouli): Handle Binary format here as well?
+        CopyFormatParams::Binary => encode_copy_row_binary(row, typ, out),
     }
 }
 
@@ -1033,7 +1040,7 @@ mod tests {
         for TestCase { params, expected } in tests {
             out.clear();
             let params = CopyFormatParams::Csv(params);
-            let _ = encode_copy_format(params.clone(), &row, &typ, &mut out);
+            let _ = encode_copy_format(&params, &row, &typ, &mut out);
             let output = std::str::from_utf8(&out);
             assert_eq!(output, std::str::from_utf8(expected));
         }

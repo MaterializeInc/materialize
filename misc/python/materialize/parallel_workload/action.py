@@ -57,7 +57,7 @@ from materialize.parallel_workload.database import (
     View,
     WebhookSource,
 )
-from materialize.parallel_workload.executor import Executor
+from materialize.parallel_workload.executor import ParallelWorkloadExecutor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.sqlsmith import known_errors
 
@@ -73,14 +73,14 @@ class Action:
         self.rng = rng
         self.composition = composition
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         raise NotImplementedError
 
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = [
             "permission denied for",
             "must be owner of",
-            "network error",  # #21954, remove when fixed when fixed
+            "network error",  # #21954, remove when fixed
         ]
         if exe.db.complexity == Complexity.DDL:
             result.extend(
@@ -125,7 +125,7 @@ class Action:
 
 
 class FetchAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = super().errors_to_ignore(exe)
         if exe.db.complexity == Complexity.DDL:
             result.extend(
@@ -136,7 +136,7 @@ class FetchAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         # See https://github.com/MaterializeInc/materialize/issues/20474
         exe.rollback() if self.rng.choice([True, False]) else exe.commit()
@@ -155,14 +155,14 @@ class FetchAction(Action):
 
 
 class SelectOneAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         exe.execute("SELECT 1", explainable=True)
         exe.cur.fetchall()
         return True
 
 
 class SelectAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = super().errors_to_ignore(exe)
         result.extend(
             [
@@ -178,7 +178,7 @@ class SelectAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         column = self.rng.choice(obj.columns)
         obj2 = self.rng.choice(exe.db.db_objects_without_views())
@@ -238,7 +238,7 @@ class SQLsmithAction(Action):
         self.queries = []
         assert self.composition
 
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = super().errors_to_ignore(exe)
         result.extend(known_errors)
         result.extend(
@@ -255,7 +255,7 @@ class SQLsmithAction(Action):
             )
         return result
 
-    def refill_sqlsmith(self, exe: Executor) -> None:
+    def refill_sqlsmith(self, exe: ParallelWorkloadExecutor) -> None:
         self.composition.silent = True
         seed = self.rng.randrange(2**31)
         try:
@@ -296,7 +296,7 @@ class SQLsmithAction(Action):
         finally:
             self.composition.silent = False
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         if exe.db.fast_startup:
             return False
 
@@ -309,7 +309,7 @@ class SQLsmithAction(Action):
 
 
 class HttpSelectAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         column = self.rng.choice(obj.columns)
         obj2 = self.rng.choice(exe.db.db_objects_without_views())
@@ -382,7 +382,7 @@ class HttpSelectAction(Action):
 
 
 class CopyToS3Action(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = super().errors_to_ignore(exe)
         result.extend(
             [
@@ -399,22 +399,22 @@ class CopyToS3Action(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         obj_name = str(obj)
-        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{self.rng.randrange(100)}' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')"
+        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{exe.executor_id}_{exe.next_counter_value()}' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')"
 
         exe.execute(query, explainable=False)
         return True
 
 
 class InsertAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "cannot be run inside a transaction block",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         table = None
         if exe.insert_table is not None:
             for t in exe.db.tables:
@@ -460,7 +460,7 @@ class InsertAction(Action):
 
 
 class SourceInsertAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             sources = [
                 source
@@ -486,12 +486,12 @@ class SourceInsertAction(Action):
 
 
 class UpdateAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "canceling statement due to statement timeout",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         table = None
         if exe.insert_table is not None:
             for t in exe.db.tables:
@@ -514,12 +514,12 @@ class UpdateAction(Action):
 
 
 class DeleteAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "canceling statement due to statement timeout",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         table = self.rng.choice(exe.db.tables)
         query = f"DELETE FROM {table}"
         if self.rng.random() < 0.95:
@@ -540,7 +540,7 @@ class DeleteAction(Action):
 
 
 class CommentAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         table = self.rng.choice(exe.db.tables)
 
         if self.rng.choice([True, False]):
@@ -554,12 +554,12 @@ class CommentAction(Action):
 
 
 class CreateIndexAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "already exists",  # TODO: Investigate
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         if len(exe.db.indexes) >= MAX_INDEXES:
             return False
 
@@ -581,7 +581,7 @@ class CreateIndexAction(Action):
 
 
 class DropIndexAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.indexes:
                 return False
@@ -597,7 +597,7 @@ class DropIndexAction(Action):
 
 
 class CreateTableAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         if len(exe.db.tables) >= MAX_TABLES:
             return False
         table_id = exe.db.table_id
@@ -613,12 +613,12 @@ class CreateTableAction(Action):
 
 
 class DropTableAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.tables) <= 2:
                 return False
@@ -635,7 +635,7 @@ class DropTableAction(Action):
 
 
 class RenameTableAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
@@ -656,7 +656,7 @@ class RenameTableAction(Action):
 
 
 class RenameViewAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
@@ -680,7 +680,7 @@ class RenameViewAction(Action):
 
 
 class RenameSinkAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
@@ -704,7 +704,7 @@ class RenameSinkAction(Action):
 
 
 class CreateDatabaseAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.dbs) >= MAX_DBS:
                 return False
@@ -717,12 +717,12 @@ class CreateDatabaseAction(Action):
 
 
 class DropDatabaseAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "cannot be dropped with RESTRICT while it contains schemas",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.dbs) <= 1:
                 return False
@@ -739,7 +739,7 @@ class DropDatabaseAction(Action):
 
 
 class CreateSchemaAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.schemas) >= MAX_SCHEMAS:
                 return False
@@ -752,12 +752,12 @@ class CreateSchemaAction(Action):
 
 
 class DropSchemaAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "cannot be dropped without CASCADE while it contains objects",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.schemas) <= 1:
                 return False
@@ -774,12 +774,12 @@ class DropSchemaAction(Action):
 
 
 class RenameSchemaAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "ambiguous reference to schema named"  # see https://github.com/MaterializeInc/materialize/pull/22551#pullrequestreview-1691876923
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
@@ -800,12 +800,12 @@ class RenameSchemaAction(Action):
 
 
 class SwapSchemaAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "object state changed while transaction was in progress",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
@@ -844,14 +844,14 @@ class SwapSchemaAction(Action):
 
 
 class TransactionIsolationAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         level = self.rng.choice(["SERIALIZABLE", "STRICT SERIALIZABLE"])
         exe.set_isolation(level)
         return True
 
 
 class CommitRollbackAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         if not exe.action_run_since_last_commit_rollback:
             return False
 
@@ -864,7 +864,7 @@ class CommitRollbackAction(Action):
 
 
 class CreateViewAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
                 return False
@@ -895,12 +895,12 @@ class CreateViewAction(Action):
 
 
 class DropViewAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.views:
                 return False
@@ -920,7 +920,7 @@ class DropViewAction(Action):
 
 
 class CreateRoleAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.roles) >= MAX_ROLES:
                 return False
@@ -933,13 +933,13 @@ class CreateRoleAction(Action):
 
 
 class DropRoleAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "cannot be dropped because some objects depend on it",
             "current role cannot be dropped",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.roles:
                 return False
@@ -964,7 +964,7 @@ class DropRoleAction(Action):
 
 
 class CreateClusterAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.clusters) >= MAX_CLUSTERS:
                 return False
@@ -983,13 +983,13 @@ class CreateClusterAction(Action):
 
 
 class DropClusterAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             # cannot drop cluster "..." because other objects depend on it
             "because other objects depend on it",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.clusters) <= 1:
                 return False
@@ -1016,12 +1016,12 @@ class DropClusterAction(Action):
 
 
 class SwapClusterAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "object state changed while transaction was in progress",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
@@ -1060,12 +1060,12 @@ class SwapClusterAction(Action):
 
 
 class SetClusterAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "SET cluster cannot be called in an active transaction",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.clusters:
                 return False
@@ -1076,14 +1076,14 @@ class SetClusterAction(Action):
 
 
 class CreateClusterReplicaAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = [
             "cannot create more than one replica of a cluster containing sources or sinks",
         ] + super().errors_to_ignore(exe)
 
         return result
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
             unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
@@ -1108,7 +1108,7 @@ class CreateClusterReplicaAction(Action):
 
 
 class DropClusterReplicaAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
             unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
@@ -1145,7 +1145,7 @@ class DropClusterReplicaAction(Action):
 
 
 class GrantPrivilegesAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.roles:
                 return False
@@ -1174,7 +1174,7 @@ class GrantPrivilegesAction(Action):
 
 
 class RevokePrivilegesAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.roles:
                 return False
@@ -1213,7 +1213,7 @@ class ReconnectAction(Action):
         super().__init__(rng, composition)
         self.random_role = random_role
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         autocommit = exe.cur._c.autocommit
         host = exe.db.host
         port = exe.db.ports["materialized"]
@@ -1264,7 +1264,7 @@ class ReconnectAction(Action):
 class CancelAction(Action):
     workers: list["Worker"]
 
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "must be a member of",
         ] + super().errors_to_ignore(exe)
@@ -1278,7 +1278,7 @@ class CancelAction(Action):
         super().__init__(rng, composition)
         self.workers = workers
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         pid = self.rng.choice(
             [worker.exe.pg_pid for worker in self.workers if worker.exe and worker.exe.pg_pid != -1]  # type: ignore
         )
@@ -1310,7 +1310,7 @@ class KillAction(Action):
         self.system_parameters = {}
         self.sanity_restart = sanity_restart
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         assert self.composition
         self.composition.kill("materialized")
         # Otherwise getting failure on "up" locally
@@ -1345,7 +1345,7 @@ class BackupRestoreAction(Action):
         self.num = 0
         assert self.composition
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         self.num += 1
         time.sleep(self.rng.uniform(10, 240))
 
@@ -1392,7 +1392,7 @@ class BackupRestoreAction(Action):
 
 
 class CreateWebhookSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = super().errors_to_ignore(exe)
         if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
             result.extend(
@@ -1400,7 +1400,7 @@ class CreateWebhookSourceAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.webhook_sources) >= MAX_WEBHOOK_SOURCES:
                 return False
@@ -1422,12 +1422,12 @@ class CreateWebhookSourceAction(Action):
 
 
 class DropWebhookSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.webhook_sources:
                 return False
@@ -1444,7 +1444,7 @@ class DropWebhookSourceAction(Action):
 
 
 class CreateKafkaSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = super().errors_to_ignore(exe)
         if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
             result.extend(
@@ -1452,7 +1452,7 @@ class CreateKafkaSourceAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.kafka_sources) >= MAX_KAFKA_SOURCES:
                 return False
@@ -1484,12 +1484,12 @@ class CreateKafkaSourceAction(Action):
 
 
 class DropKafkaSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.kafka_sources:
                 return False
@@ -1507,7 +1507,7 @@ class DropKafkaSourceAction(Action):
 
 
 class CreateMySqlSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = super().errors_to_ignore(exe)
         if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
             result.extend(
@@ -1515,7 +1515,7 @@ class CreateMySqlSourceAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         # TODO: Reenable when #22770 is fixed
         if exe.db.scenario == Scenario.BackupRestore:
             return False
@@ -1551,12 +1551,12 @@ class CreateMySqlSourceAction(Action):
 
 
 class DropMySqlSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.mysql_sources:
                 return False
@@ -1574,7 +1574,7 @@ class DropMySqlSourceAction(Action):
 
 
 class CreatePostgresSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = super().errors_to_ignore(exe)
         if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
             result.extend(
@@ -1582,7 +1582,7 @@ class CreatePostgresSourceAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         # TODO: Reenable when #22770 is fixed
         if exe.db.scenario == Scenario.BackupRestore:
             return False
@@ -1618,12 +1618,12 @@ class CreatePostgresSourceAction(Action):
 
 
 class DropPostgresSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.postgres_sources:
                 return False
@@ -1641,13 +1641,13 @@ class DropPostgresSourceAction(Action):
 
 
 class CreateKafkaSinkAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             # Another replica can be created in parallel
             "cannot create sink in cluster with more than one replica",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if len(exe.db.kafka_sinks) >= MAX_KAFKA_SINKS:
                 return False
@@ -1675,12 +1675,12 @@ class CreateKafkaSinkAction(Action):
 
 
 class DropKafkaSinkAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         return [
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.kafka_sinks:
                 return False
@@ -1697,13 +1697,13 @@ class DropKafkaSinkAction(Action):
 
 
 class HttpPostAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
+    def errors_to_ignore(self, exe: ParallelWorkloadExecutor) -> list[str]:
         result = super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
             result.extend(["404: no object was found at the path"])
         return result
 
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         with exe.db.lock:
             if not exe.db.webhook_sources:
                 return False
@@ -1765,7 +1765,7 @@ class HttpPostAction(Action):
 
 
 class StatisticsAction(Action):
-    def run(self, exe: Executor) -> bool:
+    def run(self, exe: ParallelWorkloadExecutor) -> bool:
         for typ, objs in [
             ("tables", exe.db.tables),
             ("views", exe.db.views),

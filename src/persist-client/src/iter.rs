@@ -34,7 +34,7 @@ use tracing::{debug_span, Instrument};
 use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter, LeasedBatchPart};
 use crate::internal::metrics::{BatchPartReadMetrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
-use crate::internal::state::HollowBatchPart;
+use crate::internal::state::{BatchPart, HollowBatchPart};
 use crate::metrics::Metrics;
 use crate::read::SubscriptionLeaseReturner;
 use crate::ShardId;
@@ -77,12 +77,15 @@ pub(crate) enum FetchData<T> {
     },
     AlreadyFetched,
 }
+
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     fn maybe_unconsolidated(&self) -> bool {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
         match self {
             FetchData::Unleased { part, .. } => part.key.split().0 >= min_version,
-            FetchData::Leased { part, .. } => part.part.key.split().0 >= min_version,
+            FetchData::Leased { part, .. } => match &part.part {
+                BatchPart::Hollow(x) => x.key.split().0 >= min_version,
+            },
             FetchData::AlreadyFetched => false,
         }
     }
@@ -94,7 +97,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     fn key_lower(&self) -> &[u8] {
         match self {
             FetchData::Unleased { part, .. } => part.key_lower.as_slice(),
-            FetchData::Leased { part, .. } => part.part.key_lower.as_slice(),
+            FetchData::Leased { part, .. } => part.part.key_lower(),
             FetchData::AlreadyFetched => &[],
         }
     }
@@ -130,7 +133,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
             } => {
                 // We do not use fetch_leased_part, since that requires more type info
                 // than we have available here.
-                let fetched = fetch_batch_part(
+                let fetched = EncodedPart::fetch(
                     &part.shard_id,
                     &*blob,
                     &part.metrics,
@@ -286,23 +289,25 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: &Arc<ShardMetrics>,
         desc: &Description<T>,
-        parts: impl IntoIterator<Item = &'a HollowBatchPart<T>>,
+        parts: impl IntoIterator<Item = &'a BatchPart<T>>,
     ) {
         let run = parts
             .into_iter()
-            .map(|part: &HollowBatchPart<T>| {
-                let c_part = ConsolidationPart::Queued {
-                    data: FetchData::Unleased {
-                        shard_id,
-                        blob: Arc::clone(blob),
-                        metrics: Arc::clone(metrics),
-                        read_metrics,
-                        shard_metrics: Arc::clone(shard_metrics),
-                        part_desc: desc.clone(),
-                        part: part.clone(),
-                    },
-                };
-                (c_part, part.encoded_size_bytes)
+            .map(|part: &BatchPart<T>| match part {
+                BatchPart::Hollow(part) => {
+                    let c_part = ConsolidationPart::Queued {
+                        data: FetchData::Unleased {
+                            shard_id,
+                            blob: Arc::clone(blob),
+                            metrics: Arc::clone(metrics),
+                            read_metrics,
+                            shard_metrics: Arc::clone(shard_metrics),
+                            part_desc: desc.clone(),
+                            part: part.clone(),
+                        },
+                    };
+                    (c_part, part.encoded_size_bytes)
+                }
             })
             .collect();
         self.runs.push(run);
@@ -320,7 +325,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         let run = parts
             .into_iter()
             .map(|part: LeasedBatchPart<T>| {
-                let size = part.part.encoded_size_bytes;
+                let size = part.part.encoded_size_bytes();
                 let queued = ConsolidationPart::Queued {
                     data: FetchData::Leased {
                         blob: Arc::clone(blob),
@@ -964,14 +969,16 @@ mod tests {
             for run in runs {
                 let parts: Vec<_> = run
                     .into_iter()
-                    .map(|encoded_size_bytes| HollowBatchPart {
-                        key: PartialBatchKey(
-                            "n0000000/p00000000-0000-0000-0000-000000000000".into(),
-                        ),
-                        encoded_size_bytes,
-                        key_lower: vec![],
-                        stats: None,
-                        ts_rewrite: None,
+                    .map(|encoded_size_bytes| {
+                        BatchPart::Hollow(HollowBatchPart {
+                            key: PartialBatchKey(
+                                "n0000000/p00000000-0000-0000-0000-000000000000".into(),
+                            ),
+                            encoded_size_bytes,
+                            key_lower: vec![],
+                            stats: None,
+                            ts_rewrite: None,
+                        })
                     })
                     .collect();
                 consolidator.enqueue_run(

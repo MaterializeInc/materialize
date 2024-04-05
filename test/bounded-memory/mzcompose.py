@@ -306,6 +306,7 @@ SCENARIOS = [
             """
         ),
         materialized_memory="4.5Gb",
+        clusterd_memory="4.5Gb",
     ),
     MySqlCdcScenario(
         name="mysql-cdc-snapshot",
@@ -811,10 +812,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             continue
         if not accepted_by_shard(scenario.name):
             continue
-        else:
-            print(f"+++ Running scenario {scenario.name} ...")
 
         if args.find_minimal_memory:
+            print(f"+++ Starting memory search for scenario {scenario.name}")
+
             run_memory_search(
                 c,
                 scenario,
@@ -822,6 +823,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 args.clusterd_memory_search_step,
             )
         else:
+            print(
+                f"+++ Running scenario {scenario.name} with materialized_memory={scenario.materialized_memory} and clusterd_memory={scenario.clusterd_memory} ..."
+            )
+
             run_scenario(
                 c,
                 scenario,
@@ -889,8 +894,6 @@ def run_memory_search(
     assert materialized_search_step_in_gb > 0 or clusterd_search_step_in_gb > 0
     materialized_memory = scenario.materialized_memory
     clusterd_memory = scenario.clusterd_memory
-
-    print(f"Starting memory search for scenario {scenario.name}")
 
     if materialized_search_step_in_gb > 0:
         materialized_memory, clusterd_memory = find_minimal_memory(

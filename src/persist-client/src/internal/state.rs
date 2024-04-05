@@ -169,6 +169,63 @@ pub struct HandleDebugState {
     pub purpose: String,
 }
 
+/// Part of the updates in a Batch.
+///
+/// Either a pointer to ones stored in Blob or the updates themselves inlined.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type")]
+pub enum BatchPart<T> {
+    Hollow(HollowBatchPart<T>),
+}
+
+impl<T> BatchPart<T> {
+    pub fn encoded_size_bytes(&self) -> usize {
+        match self {
+            BatchPart::Hollow(x) => x.encoded_size_bytes,
+        }
+    }
+
+    // A user-interpretable identifier or description of the part (for logs and
+    // such).
+    pub fn printable_name(&self) -> &str {
+        match self {
+            BatchPart::Hollow(x) => x.key.0.as_str(),
+        }
+    }
+
+    pub fn stats(&self) -> Option<&LazyPartStats> {
+        match self {
+            BatchPart::Hollow(x) => x.stats.as_ref(),
+        }
+    }
+
+    pub fn key_lower(&self) -> &[u8] {
+        match self {
+            BatchPart::Hollow(x) => x.key_lower.as_slice(),
+        }
+    }
+
+    pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
+        match self {
+            BatchPart::Hollow(x) => x.ts_rewrite.as_ref(),
+        }
+    }
+}
+
+impl<T: Ord> PartialOrd for BatchPart<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Ord> Ord for BatchPart<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (BatchPart::Hollow(s), BatchPart::Hollow(o)) => s.cmp(o),
+        }
+    }
+}
+
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HollowBatchPart<T> {
@@ -201,7 +258,7 @@ pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
     /// Pointers usable to retrieve the updates.
-    pub parts: Vec<HollowBatchPart<T>>,
+    pub parts: Vec<BatchPart<T>>,
     /// The number of updates in the batch.
     pub len: usize,
     /// Runs of sequential sorted batch parts, stored as indices into `parts`.
@@ -315,7 +372,7 @@ pub(crate) struct HollowBatchRunIter<'a, T> {
 }
 
 impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
-    type Item = &'a [HollowBatchPart<T>];
+    type Item = &'a [BatchPart<T>];
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.batch.parts.is_empty() {
@@ -379,7 +436,7 @@ impl<T: Timestamp> HollowBatch<T> {
             ));
         }
         for part in self.parts.iter() {
-            let Some(ts_rewrite) = part.ts_rewrite.as_ref() else {
+            let Some(ts_rewrite) = part.ts_rewrite() else {
                 continue;
             };
             if PartialOrder::less_than(frontier, ts_rewrite) {
@@ -397,7 +454,9 @@ impl<T: Timestamp> HollowBatch<T> {
             self.desc.since().clone(),
         );
         for part in &mut self.parts {
-            part.ts_rewrite = Some(frontier.clone());
+            match part {
+                BatchPart::Hollow(part) => part.ts_rewrite = Some(frontier.clone()),
+            }
         }
         Ok(())
     }
@@ -684,7 +743,11 @@ where
                 InvalidUsage::InvalidEmptyTimeInterval {
                     lower: batch.desc.lower().clone(),
                     upper: batch.desc.upper().clone(),
-                    keys: batch.parts.iter().map(|x| x.key.clone()).collect(),
+                    keys: batch
+                        .parts
+                        .iter()
+                        .map(|x| x.printable_name().to_owned())
+                        .collect(),
                 },
             ));
         }
@@ -1324,8 +1387,8 @@ where
 
                 let mut batch_size = 0;
                 for x in x.parts.iter() {
-                    batch_size += x.encoded_size_bytes;
-                    if x.ts_rewrite.is_some() {
+                    batch_size += x.encoded_size_bytes();
+                    if x.ts_rewrite().is_some() {
                         ret.rewrite_part_count += 1;
                     }
                 }
@@ -1613,6 +1676,7 @@ pub(crate) mod tests {
     use std::ops::Range;
 
     use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_dyncfg::ConfigUpdates;
     use mz_ore::now::SYSTEM_TIME;
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
@@ -1652,6 +1716,7 @@ pub(crate) mod tests {
                     (Antichain::from_elem(t1), Antichain::from_elem(t0))
                 };
                 let since = Antichain::from_elem(since);
+                let parts = parts.into_iter().map(BatchPart::Hollow).collect::<Vec<_>>();
                 let runs = if runs { vec![parts.len()] } else { vec![] };
                 HollowBatch {
                     desc: Description::new(lower, upper, since),
@@ -1816,12 +1881,14 @@ pub(crate) mod tests {
             ),
             parts: keys
                 .iter()
-                .map(|x| HollowBatchPart {
-                    key: PartialBatchKey((*x).to_owned()),
-                    encoded_size_bytes: 0,
-                    key_lower: vec![],
-                    stats: None,
-                    ts_rewrite: None,
+                .map(|x| {
+                    BatchPart::Hollow(HollowBatchPart {
+                        key: PartialBatchKey((*x).to_owned()),
+                        encoded_size_bytes: 0,
+                        key_lower: vec![],
+                        stats: None,
+                        ts_rewrite: None,
+                    })
                 })
                 .collect(),
             len,
@@ -2055,7 +2122,7 @@ pub(crate) mod tests {
                 InvalidEmptyTimeInterval {
                     lower: Antichain::from_elem(5),
                     upper: Antichain::from_elem(5),
-                    keys: vec![PartialBatchKey("key1".to_owned())],
+                    keys: vec!["key1".to_owned()],
                 }
             ))
         );
@@ -2530,10 +2597,10 @@ pub(crate) mod tests {
         );
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
-    async fn sneaky_downgrades() {
-        let mut clients = new_test_client_cache();
+    async fn sneaky_downgrades(dyncfgs: ConfigUpdates) {
+        let mut clients = new_test_client_cache(&dyncfgs);
         let shard_id = ShardId::new();
 
         async fn open_and_write(

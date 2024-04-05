@@ -39,7 +39,7 @@ use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, Transaction}
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    DataSourceDesc, Database, Index, MaterializedView, Role, Schema, Sink, Source,
+    Database, Role, Schema,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -102,7 +102,6 @@ mod builtin_table_updates;
 pub(crate) mod consistency;
 mod migrate;
 
-mod inner;
 mod open;
 mod state;
 
@@ -1340,16 +1339,6 @@ impl Catalog {
 
                     info!("update role {name} ({id})");
                 }
-                Op::AlterSetCluster { id, cluster } => Self::transact_alter_set_cluster(
-                    state,
-                    tx,
-                    builtin_table_updates,
-                    oracle_write_ts,
-                    audit_events,
-                    session,
-                    id,
-                    cluster,
-                )?,
                 Op::CreateDatabase { name, owner_id } => {
                     let database_owner_privileges = vec![rbac::owner_privilege(
                         mz_sql::catalog::ObjectType::Database,
@@ -3590,10 +3579,6 @@ pub enum Op {
         id: GlobalId,
         value: Option<Value>,
         window: CompactionWindow,
-    },
-    AlterSetCluster {
-        id: GlobalId,
-        cluster: ClusterId,
     },
     AlterRole {
         id: RoleId,

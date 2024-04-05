@@ -57,3 +57,20 @@ CopyData "[255, 255]"
 CopyDone
 CommandComplete {"tag":"COPY 4"}
 ReadyForQuery {"status":"I"}
+
+# Verify CSV output.
+send
+Query {"query": "COPY (VALUES (1, '2'), (3, '4'), (5, '\\\t\n\rte,st\\N'), (6, NULL) ORDER BY column1) TO STDOUT WITH (FORMAT csv)"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text","text"]}
+CopyData "1,2\n"
+CopyData "3,4\n"
+CopyData "5,\"\\\t\n\rte,st\\N\"\n"
+CopyData "6,\n"
+CopyDone
+CommandComplete {"tag":"COPY 4"}
+ReadyForQuery {"status":"I"}

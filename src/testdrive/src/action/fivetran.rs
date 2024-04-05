@@ -111,14 +111,21 @@ pub async fn run_destination_command(
         "write_batch" => {
             let request: proto::fivetran::WriteBatchRequest =
                 serde_json::from_value(request).context("write batch request")?;
+            let expected_response: proto::fivetran::WriteBatchResponse =
+                serde_json::from_value(response).context("write batch response")?;
+
             let response = fivetran_client
                 .write_batch(request)
                 .await
                 .context("write batch")?;
+            let response = response.into_inner();
 
-            match response.into_inner().response {
-                Some(proto::fivetran::write_batch_response::Response::Success(true)) => (),
-                x => bail!("write_batch failed! {x:?}"),
+            if response != expected_response {
+                bail!(
+                    "Write Batch Response did not match expected\n
+                    response: {response:#?}\n
+                    expected: {expected_response:#?}"
+                );
             }
         }
         other => bail!("Unsupported command {other}"),

@@ -28,7 +28,7 @@ def initialize_logging() -> None:
     lock = threading.Lock()
 
 
-class Executor:
+class ParallelWorkloadExecutor:
     rng: random.Random
     cur: pg8000.Cursor
     pg_pid: int
@@ -40,7 +40,10 @@ class Executor:
     last_log: str
     action_run_since_last_commit_rollback: bool
 
-    def __init__(self, rng: random.Random, cur: pg8000.Cursor, db: "Database"):
+    def __init__(
+        self, executor_id: int, rng: random.Random, cur: pg8000.Cursor, db: "Database"
+    ):
+        self.executor_id = executor_id
         self.rng = rng
         self.cur = cur
         self.db = db
@@ -50,6 +53,7 @@ class Executor:
         self.rollback_next = True
         self.last_log = ""
         self.action_run_since_last_commit_rollback = False
+        self._atomic_counter = 0
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -82,6 +86,13 @@ class Executor:
         with lock:
             print(f"[{thread_name}] {msg}", file=logging)
             logging.flush()
+
+    def next_counter_value(self) -> int:
+        with self.db.lock:
+            value = self._atomic_counter
+            self._atomic_counter = self._atomic_counter + 1
+
+        return value
 
     def execute(
         self, query: str, extra_info: str = "", explainable: bool = False

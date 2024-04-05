@@ -1187,7 +1187,7 @@ impl Schema<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::{is_no_stats_type, ScalarType};
+    use mz_repr::ScalarType;
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
@@ -1209,8 +1209,6 @@ mod tests {
     }
 
     fn scalar_type_columnar_roundtrip(scalar_type: ScalarType) {
-        let skip_decode = is_no_stats_type(&scalar_type);
-
         use mz_persist_types::columnar::validate_roundtrip;
         let mut rows = Vec::new();
         for datum in scalar_type.interesting_datums() {
@@ -1221,14 +1219,14 @@ mod tests {
         // Non-nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
         for row in rows.iter() {
-            assert_eq!(validate_roundtrip(&schema, row, skip_decode), Ok(()));
+            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
         }
 
         // Nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
         rows.push(SourceData(Ok(Row::pack(std::iter::once(Datum::Null)))));
         for row in rows.iter() {
-            assert_eq!(validate_roundtrip(&schema, row, skip_decode), Ok(()));
+            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
         }
     }
 
