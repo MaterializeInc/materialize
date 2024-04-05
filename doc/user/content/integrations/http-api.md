@@ -34,7 +34,7 @@ The API:
     - `DECLARE`
     - `FETCH`
     - `SUBSCRIBE`
-- Supports specifying run-time configuration parameters ([session variables](https://www.postgresql.org/docs/current/sql-set.html))
+- Supports specifying run-time [configuration parameters](/sql/set)
   via URL query parameters.
 
 ### Transactional semantics
@@ -72,13 +72,13 @@ Accessing the endpoint requires [basic authentication](https://developer.mozilla
 
 #### Query parameters
 
-You can optionally specify session variables for each request, as a URL-encoded JSON object, with the `options` query parameter:
+You can optionally specify configuration parameters for each request, as a URL-encoded JSON object, with the `options` query parameter:
 
 ```
 https://<MZ host address>/api/sql?options=<object>
 ```
 
-For example, this is how you could specify the `application_name` session variable with JavaScript:
+For example, this is how you could specify the `application_name` configuration parameter with JavaScript:
 
 ```javascript
 // Create and encode our parameters object.

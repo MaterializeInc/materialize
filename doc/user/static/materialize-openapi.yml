@@ -12,13 +12,13 @@ paths:
           schema:
             type: string
           description: |-
-            A json object containing sessions parameters.
+            A JSON object containing configuration parameters.
 
             A simple example:
             {"application_name":"example_app","cluster":"quickstart"}
 
-            Refer to the documentation for all available session variables:
-            https://materialize.com/docs/sql/show/#session-variables
+            Refer to the documentation for all available configuration parameters:
+            https://materialize.com/docs/sql/show/#other-configuration-parameters
 
       requestBody:
         content:

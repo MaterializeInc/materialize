@@ -1,34 +1,35 @@
 ---
 title: "SET"
-description: "Modify the value of a session variable."
+description: "Modify the value of a configuration parameter in the current session."
 menu:
   main:
     parent: 'commands'
 
 ---
 
-`SET` modifies the value of a session variable. By default, values are set for
-the duration of the current session.
+`SET` modifies the value of a configuration parameter for the current session.
+By default, values are set for the duration of the current session.
 
-To see the current value of a session variable, use [`SHOW`](../show).
+To see the current value of a configuration parameter, use [`SHOW`](../show).
 
 ## Syntax
 
-{{< diagram "set-session-variable.svg" >}}
+{{< diagram "set-stmt.svg" >}}
 
 Field                   | Use
 ------------------------|-----
-_variable&lowbar;name_  | The name of the session variable to modify.
-_variable&lowbar;value_ | The value to assign to the session variable.
+_name_                  | The name of the configuration parameter to modify.
+_value_                 | The value to assign to the parameter.
 **SESSION**             | **_(Default)_** Set the value for the duration of the current session.
 **LOCAL**               | Set the value for the duration of a single transaction.
-**DEFAULT**             | Reset the session variable's default value. Equivalent to [`RESET`](../reset).
+**DEFAULT**             | Use the parameter's default value. Equivalent to [`RESET`](../reset).
 
-{{% session-variables %}}
+{{% configuration-parameters %}}
 
-### Alias session variables
+### Aliased configuration parameters
 
-There are a few session variables that act as aliases for other session variables.
+There are a few configuration parameters that act as aliases for other
+configuration parameters.
 
 - `schema`: `schema` is an alias for `search_path`. Only one schema can be specified using this syntax. The `TO` and `=` syntax are optional.
 - `names`: `names` is an alias for `client_encoding`. The `TO` and `=` syntax must be omitted.

@@ -40,7 +40,7 @@ user. This password is auto-generated, and prefixed with `mzp_`.
 {{< warning >}}
 Parameters set in the connection string work for the **lifetime of the
 session**, but do not affect other sessions. To permanently change the default
-value of a session variable for a specific user (i.e. role), use the
+value of a configuration parameter for a specific user (i.e. role), use the
 [`ALTER ROLE...SET`](/sql/alter-role) command.
 {{< /warning >}}
 
@@ -117,9 +117,9 @@ sets the active cluster for the connection:
     SET cluster = other_cluster;
     ```
 
-Alternatively, you can change the default value of the `cluster` session
-variable for a specific user (i.e. role) using the [`ALTER ROLE...SET`](/sql/alter-role)
-command.
+Alternatively, you can change the default value of the `cluster` configuration
+parameter for a specific user (i.e. role) using the [`ALTER
+ROLE...SET`](/sql/alter-role) command.
 
 ### PopSQL
 
