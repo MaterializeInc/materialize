@@ -4833,6 +4833,7 @@ t
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
-REVOKE SELECT ON mz_internal.mz_statement_execution_history FROM mz_monitor
+GRANT SELECT ON database_privileges TO mz_monitor
 ----
-db error: system item 'mz_internal.mz_statement_execution_history' cannot be modified
+ERROR:  role name "mz_monitor" is reserved
+DETAIL:  The role prefixes "mz_" and "pg_" are reserved for system roles.
