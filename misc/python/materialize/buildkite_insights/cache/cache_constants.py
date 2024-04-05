@@ -12,12 +12,15 @@ from enum import Enum
 
 
 class FetchMode(Enum):
-    AUTO = 1
+    AUTO = "auto"
     """Fetch fresh data if existing data does not exist or is outdated"""
-    ALWAYS = 2
+    ALWAYS = "always"
     """Always fetch fresh data"""
-    NEVER = 3
+    NEVER = "never"
     """Never fetch fresh data"""
 
+    def __str__(self):
+        return str(self.value).lower()
 
-FETCH_MODE_CHOICES = [entry.name.lower() for entry in list(FetchMode)]
+
+FETCH_MODE_CHOICES = list(FetchMode)
