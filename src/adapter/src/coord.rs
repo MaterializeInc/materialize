@@ -107,7 +107,6 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
-use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
@@ -127,6 +126,7 @@ use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConn
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -444,7 +444,7 @@ pub struct CopyToContext {
     /// The ID of the CONNECTION object to be used for copying the data.
     pub connection_id: GlobalId,
     /// Format params to format the data.
-    pub format_params: CopyFormatParams<'static>,
+    pub format: S3SinkFormat,
     /// Approximate max file size of each uploaded file.
     pub max_file_size: u64,
     /// Number of batches the output of the COPY TO will be partitioned into

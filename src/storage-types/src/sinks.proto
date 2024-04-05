@@ -108,9 +108,16 @@ message ProtoPersistSinkConnection {
     mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
 }
 
+message ProtoS3SinkFormat {
+    oneof kind {
+        mz_pgcopy.copy.ProtoCopyFormatParams pg_copy = 1;
+        google.protobuf.Empty parquet = 2;
+    }
+}
+
 message ProtoS3UploadInfo {
     string uri = 1;
     uint64 max_file_size = 2;
     mz_repr.relation_and_scalar.ProtoRelationDesc desc = 3;
-    mz_pgcopy.copy.ProtoCopyFormatParams format = 4;
+    ProtoS3SinkFormat format = 4;
 }

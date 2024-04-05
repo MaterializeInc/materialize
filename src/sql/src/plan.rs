@@ -49,7 +49,7 @@ use mz_sql_parser::ast::{
     TransactionIsolationLevel, TransactionMode, Value, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{SourceDesc, Timeline};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -810,7 +810,7 @@ pub struct CopyToPlan {
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
     /// The ID of the connection.
     pub connection_id: GlobalId,
-    pub format_params: CopyFormatParams<'static>,
+    pub format: S3SinkFormat,
     pub max_file_size: u64,
 }
 

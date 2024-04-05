@@ -23,16 +23,15 @@ use mz_aws_util::s3_uploader::{
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::task::JoinHandleExt;
-use mz_pgcopy::{encode_copy_format, CopyFormatParams};
+use mz_pgcopy::encode_copy_format;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sinks::S3UploadInfo;
+use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::Scope;
-use timely::dataflow::Stream;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::{debug, info};
@@ -475,7 +474,7 @@ struct CopyToS3Uploader {
     /// The output description.
     desc: RelationDesc,
     /// Params to format the data.
-    format: CopyFormatParams<'static>,
+    format: S3SinkFormat,
     /// The index of the current file within the batch.
     file_index: usize,
     /// Provides the appropriate bucket and object keys to use for uploads
@@ -524,9 +523,14 @@ impl CopyToS3Uploader {
         assert!(self.current_file_uploader.is_none());
 
         self.file_index += 1;
-        let object_key =
-            self.key_manager
-                .data_key(self.batch, self.file_index, self.format.file_extension());
+        let object_key = self.key_manager.data_key(
+            self.batch,
+            self.file_index,
+            match &self.format {
+                S3SinkFormat::PgCopy(params) => params.file_extension(),
+                S3SinkFormat::Parquet => "parquet",
+            },
+        );
         let bucket = self.key_manager.bucket.clone();
         info!("starting upload: bucket {}, key {}", &bucket, &object_key);
         let sdk_config = self
@@ -557,21 +561,18 @@ impl CopyToS3Uploader {
     /// Finishes any remaining in-progress upload.
     async fn flush(&mut self) -> Result<(), anyhow::Error> {
         if let Some(uploader) = self.current_file_uploader.take() {
-            let object_key = self.key_manager.data_key(
-                self.batch,
-                self.file_index,
-                self.format.file_extension(),
-            );
             // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
             let handle =
                 mz_ore::task::spawn(|| "s3_uploader::finish", async { uploader.finish().await });
             let CompletedUpload {
                 part_count,
                 total_bytes_uploaded,
+                bucket,
+                key,
             } = handle.wait_and_assert_finished().await?;
             info!(
                 "finished upload: bucket {}, key {}, bytes_uploaded {}, parts_uploaded {}",
-                &self.key_manager.bucket, object_key, total_bytes_uploaded, part_count
+                bucket, key, total_bytes_uploaded, part_count
             );
         }
         Ok(())
@@ -603,9 +604,14 @@ impl CopyToS3Uploader {
     /// be created and the row data will be appended there.
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
         self.buf.clear();
-        // encode the row and write to temp buffer.
-        encode_copy_format(&self.format, row, self.desc.typ(), &mut self.buf)
-            .map_err(|_| anyhow!("error encoding row"))?;
+        match &self.format {
+            S3SinkFormat::PgCopy(fmt_params) => {
+                // encode the row and write to temp buffer.
+                encode_copy_format(fmt_params, row, self.desc.typ(), &mut self.buf)
+                    .map_err(|_| anyhow!("error encoding row"))?;
+            }
+            S3SinkFormat::Parquet => unimplemented!("Parquet format not supported yet"),
+        }
 
         if self.current_file_uploader.is_none() {
             self.start_new_file_upload().await?;
@@ -644,6 +650,7 @@ impl CopyToS3Uploader {
 #[cfg(test)]
 mod tests {
     use bytesize::ByteSize;
+    use mz_pgcopy::CopyFormatParams;
     use mz_repr::{ColumnName, ColumnType, Datum, RelationType};
     use uuid::Uuid;
 
@@ -689,7 +696,7 @@ mod tests {
                 // this is only for testing, users will not be able to set value smaller than 16MB.
                 max_file_size: ByteSize::b(6).as_u64(),
                 desc,
-                format: CopyFormatParams::Csv(Default::default()),
+                format: S3SinkFormat::PgCopy(CopyFormatParams::Csv(Default::default())),
             },
             &sink_id,
             batch,

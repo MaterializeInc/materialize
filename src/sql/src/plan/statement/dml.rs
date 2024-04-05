@@ -32,7 +32,9 @@ use mz_sql_parser::ast::{
     IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
-use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection};
+use mz_storage_types::sinks::{
+    KafkaSinkConnection, KafkaSinkFormat, S3SinkFormat, StorageSinkConnection,
+};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -964,7 +966,7 @@ pub fn describe_copy(
     .with_is_copy())
 }
 
-fn plan_copy_to(
+fn plan_copy_to_expr(
     scx: &StatementContext,
     select_plan: SelectPlan,
     desc: RelationDesc,
@@ -983,15 +985,14 @@ fn plan_copy_to(
         _ => sql_bail!("only AWS CONNECTION is supported for COPY ... TO <expr>"),
     }
 
-    if format != CopyFormat::Csv {
-        sql_bail!("only CSV format is supported for COPY ... TO <expr>");
-    }
-
-    // TODO(mouli): Get these from sql options
-    let format_params = CopyFormatParams::Csv(
-        CopyCsvFormatParams::try_new(None, None, None, None, None)
-            .map_err(|e| sql_err!("{}", e))?,
-    );
+    let format = match format {
+        CopyFormat::Csv => S3SinkFormat::PgCopy(CopyFormatParams::Csv(
+            // TODO(mouli): Get these from sql options
+            CopyCsvFormatParams::try_new(None, None, None, None, None)
+                .map_err(|e| sql_err!("{}", e))?,
+        )),
+        _ => sql_bail!("only CSV format is supported for COPY ... TO <expr>"),
+    };
 
     // Converting the to expr to a HirScalarExpr
     let mut to_expr = to.clone();
@@ -1020,7 +1021,7 @@ fn plan_copy_to(
         to,
         connection: connection.to_owned(),
         connection_id: conn_id,
-        format_params,
+        format,
         max_file_size: options.max_file_size.as_bytes(),
     }))
 }
@@ -1170,7 +1171,7 @@ pub fn plan_copy(
             };
 
             let (plan, desc) = plan_select_inner(scx, stmt, &Params::empty(), None)?;
-            plan_copy_to(scx, plan, desc, to_expr, format, options)
+            plan_copy_to_expr(scx, plan, desc, to_expr, format, options)
         }
         _ => sql_bail!("COPY {} {} not supported", direction, target),
     }
