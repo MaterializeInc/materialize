@@ -183,6 +183,16 @@ pub struct Cluster {
     pub config: ClusterConfig,
 }
 
+impl Cluster {
+    /// Returns the availability zones of this cluster, if they exist.
+    pub fn availability_zones(&self) -> Option<&[String]> {
+        match &self.config.variant {
+            ClusterVariant::Managed(managed) => Some(&managed.availability_zones),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+}
+
 impl DurableType<ClusterKey, ClusterValue> for Cluster {
     fn into_key_value(self) -> (ClusterKey, ClusterValue) {
         (

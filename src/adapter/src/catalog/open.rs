@@ -31,13 +31,12 @@ use mz_catalog::durable::{
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, DefaultPrivileges, Func, Log, Source,
-    Table, Type,
+    StateUpdateKind, Table, Type,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
-use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
-use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
+use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{is_cluster_size_v2, ClusterId};
 use mz_ore::cast::{usize_to_u64, CastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -277,7 +276,7 @@ impl Catalog {
                     };
                     add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
                     add_new_builtin_introspection_source_migration(&mut txn)?;
-                    add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
+                    add_new_builtin_cluster_replicas_migration(&state, &mut txn, &cluster_sizes)?;
                     add_new_builtin_roles_migration(&mut txn)?;
                 }
                 builtin_item_ids
@@ -301,9 +300,22 @@ impl Catalog {
                 state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
             }
 
-            // Apply updates from the durable catalog.
-            let updates = txn.get_updates().collect();
-            state.apply_updates_for_bootstrap(updates);
+            // Durable catalog updates must be partitioned so that we can weave the loading of
+            // builtin objects into the right spots.
+            let (non_cluster_updates, cluster_updates) = txn.get_updates().partition(|update| match update.kind {
+                StateUpdateKind::Role(_)
+                | StateUpdateKind::Database(_)
+                | StateUpdateKind::Schema(_)
+                | StateUpdateKind::DefaultPrivilege(_)
+                | StateUpdateKind::SystemPrivilege(_)
+                | StateUpdateKind::SystemConfiguration(_)
+                | StateUpdateKind::Comment(_) => true,
+                StateUpdateKind::Cluster(_)
+                | StateUpdateKind::IntrospectionSourceIndex(_)
+                | StateUpdateKind::ClusterReplica(_) => false,
+            });
+
+            state.apply_updates_for_bootstrap(non_cluster_updates);
 
             // Load all builtin types.
             let (builtin_types, builtin_non_types): (Vec<_>, Vec<_>) = builtin_item_ids
@@ -468,77 +480,7 @@ impl Catalog {
                 }
             }
 
-            let clusters = txn.get_clusters();
-            let mut cluster_azs = BTreeMap::new();
-            let builtin_log_lookup: BTreeMap<_, _> = BUILTINS::logs().map(|log| (log.name, log)).collect();
-            for mz_catalog::durable::Cluster {
-                id,
-                name,
-                owner_id,
-                privileges,
-                config,
-            } in clusters
-            {
-                let introspection_source_index_ids = txn.get_introspection_source_indexes(id);
-                let all_indexes: Vec<_> = introspection_source_index_ids.into_iter()
-                    // TODO(jkosh44) There may be some old deleted logs stored durably that no longer
-                    // exists. For now we ignore them, but we should clean them up.
-                    .filter_map(|(log_name, (id, oid))| {
-                        let log = builtin_log_lookup.get(log_name.as_str());
-                        log.map(|log| (*log, id, oid))
-                    })
-                    .collect();
-
-                if let mz_catalog::durable::ClusterVariant::Managed(managed) = &config.variant {
-                    cluster_azs.insert(id, managed.availability_zones.clone());
-                }
-
-                state.insert_cluster(
-                    id,
-                    name,
-                    all_indexes,
-                    owner_id,
-                    PrivilegeMap::from_mz_acl_items(privileges),
-                    config.into(),
-                );
-            }
-
-            let replicas = txn.get_cluster_replicas();
-            let mut allocated_replicas = Vec::new();
-            for mz_catalog::durable::ClusterReplica {
-                cluster_id,
-                replica_id,
-                name,
-                config,
-                owner_id,
-            } in replicas
-            {
-                let logging = ReplicaLogging {
-                    log_logging: config.logging.log_logging,
-                    interval: config.logging.interval,
-                };
-                let config = ReplicaConfig {
-                    location: state.concretize_replica_location(
-                        config.location,
-                        &vec![],
-                        cluster_azs.get(&cluster_id).map(|zones| &**zones),
-                    )?,
-                    compute: ComputeReplicaConfig {
-                        logging,
-                    },
-                };
-
-                allocated_replicas.push(mz_catalog::durable::ClusterReplica {
-                    cluster_id,
-                    replica_id,
-                    name: name.clone(),
-                    config: config.clone().into(),
-                    owner_id: owner_id.clone(),
-                });
-
-                state.insert_cluster_replica(cluster_id, name, replica_id, config, owner_id);
-            }
-            txn.set_replicas(allocated_replicas)?;
+            state.apply_updates_for_bootstrap(cluster_updates);
 
             // Load all builtin indexes.
             for (builtin, id) in builtin_indexes {
@@ -1545,9 +1487,10 @@ fn add_new_builtin_roles_migration(
 }
 
 fn add_new_builtin_cluster_replicas_migration(
+    state: &CatalogState,
     txn: &mut Transaction<'_>,
     builtin_cluster_sizes: &BuiltinBootstrapClusterSizes,
-) -> Result<(), mz_catalog::durable::CatalogError> {
+) -> Result<(), AdapterError> {
     let cluster_lookup: BTreeMap<_, _> = txn
         .get_clusters()
         .map(|cluster| (cluster.name.clone(), cluster.clone()))
@@ -1579,11 +1522,15 @@ fn add_new_builtin_cluster_replicas_migration(
 
             let replica_id = txn.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
             let replica_id = ReplicaId::System(replica_id);
+            let mut config = builtin_cluster_replica_config(replica_size);
+            let azs = cluster.availability_zones();
+            let location = state.concretize_replica_location(config.location, &Vec::new(), azs)?;
+            config.location = location.into();
             txn.insert_cluster_replica(
                 cluster.id,
                 replica_id,
                 builtin_replica.name,
-                builtin_cluster_replica_config(replica_size),
+                config,
                 MZ_SYSTEM_ROLE_ID,
             )?;
         }
