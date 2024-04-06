@@ -1162,11 +1162,6 @@ impl IndexPeek {
         let peek = &mut self.peek;
         let oks = self.trace_bundle.oks_mut();
         match oks {
-            SpecializedTraceHandle::RowUnit(oks_handle) => {
-                // Explicit types required due to Rust type inference limitations.
-                use crate::typedefs::RowSpine;
-                Self::collect_ok_finished_data::<RowSpine<_, _>>(peek, oks_handle, max_result_size)
-            }
             SpecializedTraceHandle::RowRow(oks_handle) => {
                 // Explicit types required due to Rust type inference limitations.
                 use crate::typedefs::RowRowSpine;

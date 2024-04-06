@@ -34,11 +34,10 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
-    SpecializedArrangementImport,
+    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
 use crate::render::RenderTimestamp;
-use crate::typedefs::{RowAgent, RowEnter, RowRowAgent, RowRowEnter};
+use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<G> Context<G>
 where
@@ -310,7 +309,7 @@ where
 /// Dispatches half-join construction according to arrangement type specialization.
 fn dispatch_build_halfjoin_local<G, CF>(
     updates: Collection<G, (Row, G::Timestamp), Diff>,
-    trace: SpecializedArrangement<G>,
+    trace: MzArrangement<G>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
@@ -326,16 +325,7 @@ where
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
-        SpecializedArrangement::RowUnit(inner) => build_halfjoin::<_, RowAgent<_, _>, _>(
-            updates,
-            inner,
-            prev_key,
-            prev_thinning,
-            comparison,
-            closure,
-            shutdown_token,
-        ),
-        SpecializedArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, _>(
+        MzArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, _>(
             updates,
             inner,
             prev_key,
@@ -350,7 +340,7 @@ where
 /// Dispatches half-join construction according to trace type specialization.
 fn dispatch_build_halfjoin_trace<G, T, CF>(
     updates: Collection<G, (Row, G::Timestamp), Diff>,
-    trace: SpecializedArrangementImport<G, T>,
+    trace: MzArrangementImport<G, T>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
@@ -367,7 +357,7 @@ where
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
-        SpecializedArrangementImport::RowUnit(inner) => build_halfjoin::<_, RowEnter<_, _, _>, _>(
+        MzArrangementImport::RowRow(inner) => build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
             updates,
             inner,
             prev_key,
@@ -376,17 +366,6 @@ where
             closure,
             shutdown_token,
         ),
-        SpecializedArrangementImport::RowRow(inner) => {
-            build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
-                updates,
-                inner,
-                prev_key,
-                prev_thinning,
-                comparison,
-                closure,
-                shutdown_token,
-            )
-        }
     }
 }
 
@@ -538,7 +517,7 @@ where
 
 /// Dispatches building of a delta path update stream by to arrangement type specialization.
 fn dispatch_build_update_stream_local<G>(
-    trace: SpecializedArrangement<G>,
+    trace: MzArrangement<G>,
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
@@ -548,10 +527,7 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
 {
     match trace {
-        SpecializedArrangement::RowUnit(inner) => {
-            build_update_stream::<_, RowAgent<_, _>>(inner, as_of, source_relation, initial_closure)
-        }
-        SpecializedArrangement::RowRow(inner) => build_update_stream::<_, RowRowAgent<_, _>>(
+        MzArrangement::RowRow(inner) => build_update_stream::<_, RowRowAgent<_, _>>(
             inner,
             as_of,
             source_relation,
@@ -562,7 +538,7 @@ where
 
 /// Dispatches building of a delta path update stream by to trace type specialization.
 fn dispatch_build_update_stream_trace<G, T>(
-    trace: SpecializedArrangementImport<G, T>,
+    trace: MzArrangementImport<G, T>,
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
@@ -573,22 +549,12 @@ where
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
 {
     match trace {
-        SpecializedArrangementImport::RowUnit(inner) => {
-            build_update_stream::<_, RowEnter<_, _, _>>(
-                inner,
-                as_of,
-                source_relation,
-                initial_closure,
-            )
-        }
-        SpecializedArrangementImport::RowRow(inner) => {
-            build_update_stream::<_, RowRowEnter<_, _, _>>(
-                inner,
-                as_of,
-                source_relation,
-                initial_closure,
-            )
-        }
+        MzArrangementImport::RowRow(inner) => build_update_stream::<_, RowRowEnter<_, _, _>>(
+            inner,
+            as_of,
+            source_relation,
+            initial_closure,
+        ),
     }
 }
 

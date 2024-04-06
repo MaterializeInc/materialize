@@ -32,12 +32,11 @@ use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
-    SpecializedArrangementImport,
+    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::RowRowSpine;
-use crate::typedefs::{RowAgent, RowEnter, RowRowAgent, RowRowEnter};
+use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
 ///
@@ -194,9 +193,9 @@ where
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(SpecializedArrangement<G>),
+    Local(MzArrangement<G>),
     /// An imported arrangement.
-    Trace(SpecializedArrangementImport<G, T>),
+    Trace(MzArrangementImport<G, T>),
 }
 
 impl<G, T> Context<G, T>
@@ -367,7 +366,7 @@ where
             // By knowing how types propagate through joins we could specialize intermediate
             // arrangements as well, either in values or eventually in keys.
             let arranged = keyed.mz_arrange::<RowRowSpine<_, _>>("JoinStage");
-            joined = JoinedFlavor::Local(SpecializedArrangement::RowRow(arranged));
+            joined = JoinedFlavor::Local(MzArrangement::RowRow(arranged));
         }
 
         // Demultiplex the four different cross products of arrangement types we might have.
@@ -375,8 +374,8 @@ where
             .arrangement(&lookup_key[..])
             .expect("Arrangement absent despite explicit construction");
 
-        use SpecializedArrangement as A;
-        use SpecializedArrangementImport as I;
+        use MzArrangement as A;
+        use MzArrangementImport as I;
 
         match joined {
             JoinedFlavor::Collection(_) => {
@@ -385,18 +384,6 @@ where
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = match (local, oks) {
-                        (A::RowUnit(prev_keyed), A::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowAgent<_, _>, RowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (A::RowUnit(prev_keyed), A::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowAgent<_, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (A::RowRow(prev_keyed), A::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowRowAgent<_, _>, RowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
                         (A::RowRow(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
                                 prev_keyed, next_input, closure,
@@ -409,18 +396,6 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = match (local, oks) {
-                        (A::RowUnit(prev_keyed), I::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowAgent<_, _>, RowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (A::RowUnit(prev_keyed), I::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowAgent<_, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (A::RowRow(prev_keyed), I::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowRowAgent<_, _>, RowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
                         (A::RowRow(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
                                 prev_keyed, next_input, closure,
@@ -435,18 +410,6 @@ where
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = match (trace, oks) {
-                        (I::RowUnit(prev_keyed), A::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowEnter<_, _, _>, RowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (I::RowUnit(prev_keyed), A::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowEnter<_, _, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (I::RowRow(prev_keyed), A::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowRowEnter<_, _, _>, RowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
                         (I::RowRow(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
                                 prev_keyed, next_input, closure,
@@ -459,24 +422,6 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = match (trace, oks) {
-                        (I::RowUnit(prev_keyed), I::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowEnter<_, _, _>, RowEnter<_, _, _>>(
-                                prev_keyed,
-                                next_input,
-                                closure,
-                            ),
-                        (I::RowUnit(prev_keyed), I::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowEnter<_, _, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed,
-                                next_input,
-                                closure,
-                            ),
-                        (I::RowRow(prev_keyed), I::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowRowEnter<_, _, _>, RowEnter<_, _, _>>(
-                                prev_keyed,
-                                next_input,
-                                closure,
-                            ),
                         (I::RowRow(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
                                 prev_keyed, next_input, closure,
