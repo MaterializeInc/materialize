@@ -11,7 +11,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::ops::Bound;
+use std::ops::{AddAssign, Bound, SubAssign};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -546,19 +546,51 @@ enum BatchOrData {
 }
 
 /// A stash for storing updates by time.
-#[derive(Default)]
-struct UpdateStash<D>(BTreeMap<Timestamp, ConsolidatingVec<D>>);
+struct UpdateStash<D> {
+    /// Stashed updates by time.
+    updates: BTreeMap<Timestamp, ConsolidatingVec<D>>,
 
-impl<D: Data> UpdateStash<D> {
-    fn new() -> Self {
-        Self(Default::default())
+    /// Total length and capacity of vectors in `updates`.
+    ///
+    /// Tracked to maintain metrics.
+    total_size: LengthAndCapacity,
+    /// Global persist sink metrics.
+    metrics: SinkMetrics,
+    /// Per-worker persist sink metrics.
+    worker_metrics: SinkWorkerMetrics,
+}
+
+impl<D> UpdateStash<D> {
+    fn new(metrics: SinkMetrics, worker_metrics: SinkWorkerMetrics) -> Self {
+        Self {
+            updates: Default::default(),
+            total_size: Default::default(),
+            metrics,
+            worker_metrics,
+        }
     }
 
+    /// Update persist sink metrics to the given new length and capacity.
+    fn update_metrics(&mut self, new_size: LengthAndCapacity) {
+        let old_size = self.total_size;
+        let len_delta = UpdateDelta::new(new_size.length, old_size.length);
+        let cap_delta = UpdateDelta::new(new_size.capacity, old_size.capacity);
+        self.metrics
+            .report_correction_update_deltas(len_delta, cap_delta);
+        self.worker_metrics
+            .report_correction_update_totals(new_size.length, new_size.capacity);
+
+        self.total_size = new_size;
+    }
+}
+
+impl<D: Data> UpdateStash<D> {
     /// Insert a batch of updates into the stash.
     fn insert(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
         consolidate_updates(&mut updates);
         updates.sort_unstable_by_key(|(_, time, _)| *time);
 
+        let mut new_size = self.total_size;
         let mut updates = updates.into_iter().peekable();
         while let Some(&(_, time, _)) = updates.peek() {
             let data = updates
@@ -566,15 +598,22 @@ impl<D: Data> UpdateStash<D> {
                 .map(|(d, _, r)| (d, r));
 
             use std::collections::btree_map::Entry;
-            match self.0.entry(time) {
+            match self.updates.entry(time) {
                 Entry::Vacant(entry) => {
-                    entry.insert(data.collect());
+                    let vec: ConsolidatingVec<_> = data.collect();
+                    new_size += (vec.len(), vec.capacity());
+                    entry.insert(vec);
                 }
                 Entry::Occupied(mut entry) => {
-                    entry.get_mut().extend(data);
+                    let vec = entry.get_mut();
+                    new_size -= (vec.len(), vec.capacity());
+                    vec.extend(data);
+                    new_size += (vec.len(), vec.capacity());
                 }
             }
         }
+
+        self.update_metrics(new_size);
     }
 
     /// Consolidate and return updates within the given bounds.
@@ -599,13 +638,13 @@ impl<D: Data> UpdateStash<D> {
         };
 
         // Consolidate relevant times and compute the total number of updates.
-        let range = self.0.range_mut((start, end));
+        let range = self.updates.range_mut((start, end));
         let update_count = range.fold(0, |acc, (_, data)| {
             data.consolidate();
             acc + data.len()
         });
 
-        let range = self.0.range((start, end));
+        let range = self.updates.range((start, end));
         range
             .flat_map(|(t, data)| data.iter().map(|(d, r)| (d.clone(), *t, *r)))
             .exact_size(update_count)
@@ -616,27 +655,62 @@ impl<D: Data> UpdateStash<D> {
     /// If the given frontier is empty, all remaining updates are discarded.
     fn advance_by(&mut self, frontier: &Antichain<Timestamp>) {
         let Some(target_ts) = frontier.as_option() else {
-            self.0.clear();
+            self.updates.clear();
+            self.update_metrics(Default::default());
             return;
         };
 
-        while let Some((ts, data)) = self.0.pop_first() {
+        let mut new_size = self.total_size;
+        while let Some((ts, data)) = self.updates.pop_first() {
             if frontier.less_equal(&ts) {
                 // We have advanced all updates that can advance.
-                self.0.insert(ts, data);
+                self.updates.insert(ts, data);
                 break;
             }
 
             use std::collections::btree_map::Entry;
-            match self.0.entry(*target_ts) {
+            match self.updates.entry(*target_ts) {
                 Entry::Vacant(entry) => {
                     entry.insert(data);
                 }
                 Entry::Occupied(mut entry) => {
-                    entry.get_mut().extend(data);
+                    let vec = entry.get_mut();
+                    new_size -= (data.len(), data.capacity());
+                    new_size -= (vec.len(), vec.capacity());
+                    vec.extend(data);
+                    new_size += (vec.len(), vec.capacity());
                 }
             }
         }
+
+        self.update_metrics(new_size);
+    }
+}
+
+impl<D> Drop for UpdateStash<D> {
+    fn drop(&mut self) {
+        self.update_metrics(Default::default());
+    }
+}
+
+/// Helper type for convenient tracking of length and capacity together.
+#[derive(Clone, Copy, Default)]
+struct LengthAndCapacity {
+    length: usize,
+    capacity: usize,
+}
+
+impl AddAssign<(usize, usize)> for LengthAndCapacity {
+    fn add_assign(&mut self, (len, cap): (usize, usize)) {
+        self.length += len;
+        self.capacity += cap;
+    }
+}
+
+impl SubAssign<(usize, usize)> for LengthAndCapacity {
+    fn sub_assign(&mut self, (len, cap): (usize, usize)) {
+        self.length -= len;
+        self.capacity -= cap;
     }
 }
 
@@ -651,6 +725,11 @@ impl<D: Ord> ConsolidatingVec<D> {
     /// Return the length of the vector.
     fn len(&self) -> usize {
         self.0.len()
+    }
+
+    /// Return the capacity of the vector.
+    fn capacity(&self) -> usize {
+        self.0.capacity()
     }
 
     // Pushes `item` into the vector.
@@ -778,10 +857,18 @@ where
     // will cause the changes of desired to be committed to persist.
 
     let shutdown_button = write_op.build(move |_capabilities| async move {
+        // TODO(aljoscha): We need to figure out what to do with error results from these calls.
+        let persist_client = persist_clients
+            .open(persist_location)
+            .await
+            .expect("could not open persist client");
+        let sink_metrics = persist_client.metrics().sink.clone();
+        let sink_worker_metrics = sink_metrics.for_worker(worker_index);
+
         // Contains `desired - persist`, reflecting the updates we would like to commit
         // to `persist` in order to "correct" it to track `desired`. This collection is
         // only modified by updates received from either the `desired` or `persist` inputs.
-        let mut correction = UpdateStash::new();
+        let mut correction = UpdateStash::new(sink_metrics, sink_worker_metrics);
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -794,14 +881,6 @@ where
             (Antichain<Timestamp>, Antichain<Timestamp>),
             Capability<Timestamp>,
         >::new();
-
-        // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-        let persist_client = persist_clients
-            .open(persist_location)
-            .await
-            .expect("could not open persist client");
-        let sink_metrics = &persist_client.metrics().sink;
-        let sink_worker_metrics = &sink_metrics.for_worker(worker_index);
 
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(

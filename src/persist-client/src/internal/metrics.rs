@@ -1687,7 +1687,7 @@ impl UpdateDelta {
 
 /// Metrics for the persist sink. (While this lies slightly outside the usual
 /// abstraction boundary of the client, it's convenient to manage them together.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SinkMetrics {
     /// Number of small batches that were forwarded to the central append operator
     pub forwarded_batches: Counter,
