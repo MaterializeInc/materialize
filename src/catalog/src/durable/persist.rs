@@ -39,7 +39,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{RustType, TryFromProtoError};
-use mz_repr::{Diff, RelationDesc, ScalarType};
+use mz_repr::Diff;
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -62,9 +62,9 @@ use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
-    initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, ReadOnlyDurableCatalogState, Transaction,
-    CATALOG_CONTENT_VERSION_KEY,
+    initialize, persist_desc, BootstrapArgs, CatalogError, DurableCatalogError,
+    DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
+    Transaction, CATALOG_CONTENT_VERSION_KEY,
 };
 use crate::memory;
 
@@ -703,7 +703,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         self.persist_client
             .open_leased_reader(
                 self.shard_id,
-                Arc::new(desc()),
+                Arc::new(persist_desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
@@ -977,9 +977,7 @@ impl UnopenedPersistCatalogState {
         let since_handle = persist_client
             .open_critical_since(
                 catalog_shard_id,
-                // TODO: We may need to use a different critical reader
-                // id for this if we want to be able to introspect it via SQL.
-                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                PersistClient::CATALOG_CRITICAL_SINCE,
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state critical since".to_string(),
@@ -990,7 +988,7 @@ impl UnopenedPersistCatalogState {
         let (mut write_handle, mut read_handle) = persist_client
             .open(
                 catalog_shard_id,
-                Arc::new(desc()),
+                Arc::new(persist_desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
@@ -1227,7 +1225,7 @@ impl UnopenedPersistCatalogState {
                 .persist_client
                 .open_writer::<SourceData, (), Timestamp, i64>(
                     catalog.write_handle.shard_id(),
-                    Arc::new(desc()),
+                    Arc::new(persist_desc()),
                     Arc::new(UnitSchema::default()),
                     Diagnostics {
                         shard_name: CATALOG_SHARD_NAME.to_string(),
@@ -1694,6 +1692,10 @@ impl DurableCatalogState for PersistCatalogState {
         self.sync_to_current_upper().await?;
         Ok(())
     }
+
+    fn shard_id(&self) -> ShardId {
+        self.shard_id
+    }
 }
 
 /// Deterministically generate a builtin table migration shard ID for the given
@@ -1708,14 +1710,6 @@ fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
     soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
     let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
     ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
-}
-
-/// Returns the schema of the `Row`s/`SourceData`s stored in the persist
-/// shard backing the catalog.
-fn desc() -> RelationDesc {
-    RelationDesc::builder()
-        .with_column("data", ScalarType::Jsonb.nullable(false))
-        .finish()
 }
 
 /// Generates a timestamp for reading from `read_handle` that is as fresh as possible, given

@@ -411,6 +411,19 @@ impl PersistClient {
         Ok(fetcher)
     }
 
+    /// A convenience [CriticalReaderId] for the catalog shard.
+    ///
+    /// ```rust
+    /// // This prints as something that is not 0 but is visually recognizable.
+    /// assert_eq!(
+    ///     mz_persist_client::PersistClient::CATALOG_CRITICAL_SINCE.to_string(),
+    ///     "c55555555-6666-7777-8888-999999999999",
+    /// )
+    /// ```
+    pub const CATALOG_CRITICAL_SINCE: CriticalReaderId = CriticalReaderId([
+        85, 85, 85, 85, 102, 102, 119, 119, 136, 136, 153, 153, 153, 153, 153, 153,
+    ]);
+
     /// A convenience [CriticalReaderId] for Materialize controllers.
     ///
     /// For most (soon to be all?) shards in Materialize, a centralized

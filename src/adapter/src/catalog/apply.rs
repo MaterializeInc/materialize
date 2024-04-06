@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use futures::future;
 use itertools::Itertools;
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinView, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP,
@@ -28,9 +29,9 @@ use mz_catalog::durable::objects::{
 use mz_catalog::durable::{CatalogError, DurableCatalogError};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
-    Role, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table, TableDataSource,
-    TemporaryItem, Type, UpdateFrom,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc,
+    DataSourceIntrospectionDesc, Database, Func, Index, Log, Role, Schema, Source, StateDiff,
+    StateUpdate, StateUpdateKind, Table, TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::controller::ComputeReplicaConfig;
@@ -710,24 +711,44 @@ impl CatalogState {
                 )];
                 acl_items.extend_from_slice(&coll.access);
 
+                let mut custom_logical_compaction_window =
+                    coll.is_retained_metrics_object.then(|| {
+                        self.system_config()
+                            .metrics_retention()
+                            .try_into()
+                            .expect("invalid metrics retention")
+                    });
+                let mut timeline = Timeline::EpochMilliseconds;
+
+                // The catalog builtin source does not use the epoch
+                // milliseconds timeline, but instead uses its own timeline that
+                // starts at time 0 and advances by 1 on each catalog change. So
+                // we need a custom compaction policy that lags by 1 rather than
+                // the default 1000. We also set the timeline to
+                // `External("mz_catalog")`, which ensures we don't use the
+                // timestamp oracle when selecting a timestamp for queries
+                // involving the catalog builtin source, and errors obviously if
+                // the catalog builtin source is joined with collections in the
+                // EpochMillis timeline.
+                //
+                // TODO: move the catalog shard to the EpochMillis timeline.
+                if matches!(coll.data_source, DataSourceIntrospectionDesc::Catalog) {
+                    custom_logical_compaction_window =
+                        Some(CompactionWindow::Duration(Timestamp::new(1)));
+                    timeline = Timeline::External("mz_catalog".into());
+                }
+
                 self.insert_item(
                     id,
                     coll.oid,
                     name.clone(),
                     CatalogItem::Source(Source {
                         create_sql: None,
-                        data_source: DataSourceDesc::Introspection(coll.data_source),
+                        data_source: DataSourceDesc::Introspection(coll.data_source.clone()),
                         desc: coll.desc.clone(),
-                        timeline: Timeline::EpochMilliseconds,
+                        timeline,
                         resolved_ids: ResolvedIds(BTreeSet::new()),
-                        custom_logical_compaction_window: coll.is_retained_metrics_object.then(
-                            || {
-                                self.system_config()
-                                    .metrics_retention()
-                                    .try_into()
-                                    .expect("invalid metrics retention")
-                            },
-                        ),
+                        custom_logical_compaction_window,
                         is_retained_metrics_object: coll.is_retained_metrics_object,
                         available_source_references: None,
                     }),

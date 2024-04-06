@@ -19,7 +19,7 @@ use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin::{
     Builtin, BuiltinTable, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
-    BUILTIN_PREFIXES, BUILTIN_ROLES, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
+    BUILTIN_PREFIXES, BUILTIN_ROLES, MZ_CATALOG_RAW, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
     RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::StateConfig;
@@ -59,6 +59,7 @@ use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::StorageController;
+use mz_storage_client::controller::StorageTxn;
 use timely::Container;
 use tracing::{error, info, warn, Instrument};
 use uuid::Uuid;
@@ -521,7 +522,29 @@ impl Catalog {
         let mut state = self.state.clone();
 
         let mut storage = self.storage().await;
+        let catalog_shard_id = storage.shard_id();
         let mut txn = storage.transaction().await?;
+
+        // The `mz_catalog_raw` builtin source requires special handling. This
+        // builtin source exposes the contents of the catalog shard itself. We
+        // need to install the collection ID -> shard ID mapping manually (i.e.,
+        // we can't let the storage controller to generate a shard ID for the
+        // collection) because the catalog shard has already been created with a
+        // deterministically chosen shard ID.
+        {
+            let collection_id = self.resolve_builtin_storage_collection(&MZ_CATALOG_RAW);
+            match txn.get_collection_metadata().get(&collection_id) {
+                None => {
+                    txn.insert_collection_metadata([(collection_id, catalog_shard_id)].into())
+                        .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+                }
+                Some(x) => {
+                    // A mapping for `mz_catalog_raw` already exists. Ensure it is
+                    // what we expect as a sanity check.
+                    assert_eq!(x, &catalog_shard_id)
+                }
+            }
+        }
 
         storage_controller
             .initialize_state(&mut txn, collections, storage_collections_to_drop)

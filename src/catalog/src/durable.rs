@@ -15,15 +15,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mz_audit_log::VersionedEvent;
 use uuid::Uuid;
 
+use mz_audit_log::VersionedEvent;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
-use mz_repr::GlobalId;
+use mz_persist_types::ShardId;
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError, FenceError};
@@ -329,6 +330,17 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     async fn allocate_storage_usage_ids(&mut self, amount: u64) -> Result<Vec<u64>, CatalogError> {
         self.allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, amount).await
     }
+
+    /// Returns the shard ID of the catalog itself.
+    fn shard_id(&self) -> ShardId;
+}
+
+/// Returns the schema of the `Row`s/`SourceData`s stored in the persist
+/// shard impl of the durable catalog.
+pub fn persist_desc() -> RelationDesc {
+    RelationDesc::builder()
+        .with_column("data", ScalarType::Jsonb.nullable(false))
+        .finish()
 }
 
 /// A builder to help create an [`OpenableDurableCatalogState`] for tests.
