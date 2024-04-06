@@ -22,7 +22,7 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
 );
 
 /// The yielding behavior with which linear joins should be rendered.
-pub const LINEAR_JOIN_YIELDING: Config<String> = Config::new(
+pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
     "linear_join_yielding",
     "work:1000000,time:100",
     "The yielding behavior compute rendering should apply for linear join operators. Either \

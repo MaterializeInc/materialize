@@ -67,38 +67,41 @@ pub(crate) const STATS_BUDGET_BYTES: Config<usize> = Config::new(
     "The budget (in bytes) of how many stats to maintain per batch part.",
 );
 
-pub(crate) const STATS_UNTRIMMABLE_COLUMNS_EQUALS: Config<String> = Config::new(
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_EQUALS: Config<fn() -> String> = Config::new(
     "persist_stats_untrimmable_columns_equals",
-    concat!(
-        // If we trim the "err" column, then we can't ever use pushdown on a
-        // part (because it could have >0 errors).
-        "err,",
-        "ts,",
-        "receivedat,",
-        "createdat,",
-        // Fivetran created tables track deleted rows by setting this column.
-        //
-        // See <https://fivetran.com/docs/using-fivetran/features#capturedeletes>.
-        "_fivetran_deleted,",
-    ),
+    || {
+        [
+            // If we trim the "err" column, then we can't ever use pushdown on a
+            // part (because it could have >0 errors).
+            "err",
+            "ts",
+            "receivedat",
+            "createdat",
+            // Fivetran created tables track deleted rows by setting this column.
+            //
+            // See <https://fivetran.com/docs/using-fivetran/features#capturedeletes>.
+            "_fivetran_deleted",
+        ]
+        .join(",")
+    },
     "\
     Which columns to always retain during persist stats trimming. Any column \
     with a name exactly equal (case-insensitive) to one of these will be kept. \
     Comma separated list.",
 );
 
-pub(crate) const STATS_UNTRIMMABLE_COLUMNS_PREFIX: Config<String> = Config::new(
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_PREFIX: Config<fn() -> String> = Config::new(
     "persist_stats_untrimmable_columns_prefix",
-    concat!("last_,",),
+    || ["last_"].join(","),
     "\
     Which columns to always retain during persist stats trimming. Any column \
     with a name starting with (case-insensitive) one of these will be kept. \
     Comma separated list.",
 );
 
-pub(crate) const STATS_UNTRIMMABLE_COLUMNS_SUFFIX: Config<String> = Config::new(
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_SUFFIX: Config<fn() -> String> = Config::new(
     "persist_stats_untrimmable_columns_suffix",
-    concat!("timestamp,", "time,", "_at,", "_tstamp,"),
+    || ["timestamp", "time", "_at", "_tstamp"].join(","),
     "\
     Which columns to always retain during persist stats trimming. Any column \
     with a name ending with (case-insensitive) one of these will be kept. \
