@@ -234,7 +234,11 @@ impl TransactionalProducer {
         metrics: Arc<KafkaSinkMetrics>,
         statistics: SinkStatistics,
     ) -> Result<Self, ContextCreationError> {
-        let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
+        let client_id = connection.client_id(
+            storage_configuration.config_set(),
+            &storage_configuration.connection_context,
+            sink_id,
+        );
         let transactional_id =
             connection.transactional_id(&storage_configuration.connection_context, sink_id);
 
@@ -753,7 +757,11 @@ async fn determine_sink_resume_upper(
         ..
     } = storage_configuration.parameters.kafka_timeout_config;
 
-    let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
+    let client_id = connection.client_id(
+        storage_configuration.config_set(),
+        &storage_configuration.connection_context,
+        sink_id,
+    );
     let group_id = connection.progress_group_id(&storage_configuration.connection_context, sink_id);
     let progress_topic = connection
         .progress_topic(&storage_configuration.connection_context)

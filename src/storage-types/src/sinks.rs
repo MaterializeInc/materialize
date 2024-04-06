@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::fmt::Debug;
 
+use mz_dyncfg::ConfigSet;
 use mz_persist_types::ShardId;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -26,7 +27,7 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::connections::ConnectionContext;
+use crate::connections::{ConnectionContext, KafkaConnection};
 use crate::controller::{AlterError, CollectionMetadata};
 use crate::AlterCompatible;
 
@@ -394,11 +395,16 @@ impl KafkaSinkConnection {
     ///
     /// The caller is responsible for providing the sink ID as it is not known
     /// to `KafkaSinkConnection`.
-    pub fn client_id(&self, connection_context: &ConnectionContext, sink_id: GlobalId) -> String {
-        format!(
-            "materialize-{}-{}-{}",
-            connection_context.environment_id, self.connection_id, sink_id,
-        )
+    pub fn client_id(
+        &self,
+        configs: &ConfigSet,
+        connection_context: &ConnectionContext,
+        sink_id: GlobalId,
+    ) -> String {
+        let mut client_id =
+            KafkaConnection::id_base(connection_context, self.connection_id, sink_id);
+        self.connection.enrich_client_id(configs, &mut client_id);
+        client_id
     }
 
     /// Returns the name of the progress topic to use for the sink.
@@ -421,7 +427,7 @@ impl KafkaSinkConnection {
             KafkaIdStyle::Prefix(ref prefix) => format!(
                 "{}{}",
                 prefix.as_deref().unwrap_or(""),
-                self.client_id(connection_context, sink_id)
+                KafkaConnection::id_base(connection_context, self.connection_id, sink_id),
             ),
             KafkaIdStyle::Legacy => format!("materialize-bootstrap-sink-{sink_id}"),
         }
@@ -440,7 +446,7 @@ impl KafkaSinkConnection {
             KafkaIdStyle::Prefix(ref prefix) => format!(
                 "{}{}",
                 prefix.as_deref().unwrap_or(""),
-                self.client_id(connection_context, sink_id)
+                KafkaConnection::id_base(connection_context, self.connection_id, sink_id)
             ),
             KafkaIdStyle::Legacy => format!("mz-producer-{sink_id}-0"),
         }

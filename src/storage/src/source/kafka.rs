@@ -173,7 +173,11 @@ impl SourceRender for KafkaSourceConnection {
             let [mut data_cap, mut progress_cap, health_cap, stats_cap]: [_; 4] =
                 caps.try_into().unwrap();
 
-            let client_id = self.client_id(&config.config.connection_context, config.id);
+            let client_id = self.client_id(
+                config.config.config_set(),
+                &config.config.connection_context,
+                config.id,
+            );
             let group_id = self.group_id(&config.config.connection_context, config.id);
             let KafkaSourceConnection {
                 connection,

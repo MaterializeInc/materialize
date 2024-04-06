@@ -14,6 +14,7 @@ use std::fmt;
 use std::time::Duration;
 
 use dec::OrderedDecimal;
+use mz_dyncfg::ConfigSet;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
@@ -27,7 +28,7 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::connections::ConnectionContext;
+use crate::connections::{ConnectionContext, KafkaConnection};
 use crate::controller::AlterError;
 use crate::sources::{MzOffset, SourceConnection, SourceTimestamp};
 
@@ -87,18 +88,25 @@ pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("offset", ScalarType::UInt64.nullable(true))
 });
 
-impl<C: ConnectionAccess> KafkaSourceConnection<C> {
+impl KafkaSourceConnection {
     /// Returns the client ID to register with librdkafka with.
     ///
     /// The caller is responsible for providing the source ID as it is not known
     /// to `KafkaSourceConnection`.
-    pub fn client_id(&self, connection_context: &ConnectionContext, source_id: GlobalId) -> String {
-        format!(
-            "materialize-{}-{}-{}",
-            connection_context.environment_id, self.connection_id, source_id,
-        )
+    pub fn client_id(
+        &self,
+        configs: &ConfigSet,
+        connection_context: &ConnectionContext,
+        source_id: GlobalId,
+    ) -> String {
+        let mut client_id =
+            KafkaConnection::id_base(connection_context, self.connection_id, source_id);
+        self.connection.enrich_client_id(configs, &mut client_id);
+        client_id
     }
+}
 
+impl<C: ConnectionAccess> KafkaSourceConnection<C> {
     /// Returns the ID for the consumer group the configured source will use.
     ///
     /// The caller is responsible for providing the source ID as it is not known
@@ -107,7 +115,7 @@ impl<C: ConnectionAccess> KafkaSourceConnection<C> {
         format!(
             "{}{}",
             self.group_id_prefix.as_deref().unwrap_or(""),
-            self.client_id(connection_context, source_id)
+            KafkaConnection::id_base(connection_context, self.connection_id, source_id),
         )
     }
 }
