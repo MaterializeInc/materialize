@@ -110,6 +110,8 @@ pub enum DataSourceOther {
     Compute,
     /// Some other sources writes this data, i.e. a subsource.
     Source,
+    /// WIP
+    Shard(ShardId),
 }
 
 /// Describes a request to create a source.

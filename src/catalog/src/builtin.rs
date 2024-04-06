@@ -130,13 +130,19 @@ pub struct BuiltinTable {
     pub access: Vec<MzAclItem>,
 }
 
+#[derive(Clone, Copy, Debug, Hash, Serialize)]
+pub enum BuiltinSourceType {
+    Storage(IntrospectionType),
+    Catalog,
+}
+
 #[derive(Clone, Debug, Hash, Serialize)]
 pub struct BuiltinSource {
     pub name: &'static str,
     pub schema: &'static str,
     pub oid: u32,
     pub desc: RelationDesc,
-    pub data_source: IntrospectionType,
+    pub data_source: BuiltinSourceType,
     /// Whether the source's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
     pub is_retained_metrics_object: bool,
@@ -1974,7 +1980,7 @@ pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSo
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_COMPUTE_DEPENDENCIES_OID,
-    data_source: IntrospectionType::ComputeDependencies,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::ComputeDependencies),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("dependency_id", ScalarType::String.nullable(false)),
@@ -1985,7 +1991,7 @@ pub static MZ_COMPUTE_HYDRATION_STATUSES: Lazy<BuiltinSource> = Lazy::new(|| Bui
     name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_STATUSES_OID,
-    data_source: IntrospectionType::ComputeHydrationStatus,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::ComputeHydrationStatus),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("replica_id", ScalarType::String.nullable(false))
@@ -1998,7 +2004,7 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: Lazy<BuiltinSource
         name: "mz_compute_operator_hydration_statuses_per_worker",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER_OID,
-        data_source: IntrospectionType::ComputeOperatorHydrationStatus,
+        data_source: BuiltinSourceType::Storage(IntrospectionType::ComputeOperatorHydrationStatus),
         desc: RelationDesc::empty()
             .with_column("object_id", ScalarType::String.nullable(false))
             .with_column("physical_plan_node_id", ScalarType::UInt64.nullable(false))
@@ -2008,6 +2014,16 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: Lazy<BuiltinSource
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
+
+pub static MZ_CATALOG_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_catalog_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_CATALOG_RAW_OID,
+    data_source: BuiltinSourceType::Catalog,
+    desc: crate::durable::persist::desc(),
+    is_retained_metrics_object: false,
+    access: vec![MONITOR_SELECT],
+});
 
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
@@ -2515,7 +2531,7 @@ pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinSource> = Lazy::new(|| Bui
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_CLUSTER_REPLICA_HEARTBEATS_OID,
-    data_source: IntrospectionType::ComputeReplicaHeartbeats,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::ComputeReplicaHeartbeats),
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column(
@@ -2548,7 +2564,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     name: "mz_source_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SOURCE_STATUS_HISTORY_OID,
-    data_source: IntrospectionType::SourceStatusHistory,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::SourceStatusHistory),
     desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2559,7 +2575,9 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: Lazy<BuiltinSource> =
         name: "mz_aws_privatelink_connection_status_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_OID,
-        data_source: IntrospectionType::PrivatelinkConnectionStatusHistory,
+        data_source: BuiltinSourceType::Storage(
+            IntrospectionType::PrivatelinkConnectionStatusHistory,
+        ),
         desc: MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -2602,7 +2620,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
     name: "mz_statement_execution_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_STATEMENT_EXECUTION_HISTORY_OID,
-    data_source: IntrospectionType::StatementExecutionHistory,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::StatementExecutionHistory),
     desc: MZ_STATEMENT_EXECUTION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
     access: vec![MONITOR_SELECT],
@@ -2627,7 +2645,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bui
     name: "mz_prepared_statement_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_PREPARED_STATEMENT_HISTORY_OID,
-    data_source: IntrospectionType::PreparedStatementHistory,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::PreparedStatementHistory),
     desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
     access: vec![MONITOR_SELECT],
@@ -2638,7 +2656,7 @@ pub static MZ_SQL_TEXT: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SQL_TEXT_OID,
     desc: MZ_SQL_TEXT_DESC.clone(),
-    data_source: IntrospectionType::SqlText,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::SqlText),
     is_retained_metrics_object: false,
     access: vec![MONITOR_SELECT],
 });
@@ -2688,7 +2706,7 @@ pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
     name: "mz_session_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SESSION_HISTORY_OID,
-    data_source: IntrospectionType::SessionHistory,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::SessionHistory),
     desc: MZ_SESSION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2772,7 +2790,7 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
             "occurred_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
-    data_source: IntrospectionType::StatementLifecycleHistory,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::StatementLifecycleHistory),
     is_retained_metrics_object: false,
     // TODO[btv]: Maybe this should be public instead of
     // `MONITOR_REDACTED`, but since that would be a backwards-compatible
@@ -2860,7 +2878,7 @@ pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
     name: "mz_sink_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SINK_STATUS_HISTORY_OID,
-    data_source: IntrospectionType::SinkStatusHistory,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::SinkStatusHistory),
     desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2977,7 +2995,7 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| Buil
     name: "mz_cluster_replica_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_CLUSTER_REPLICA_FRONTIERS_OID,
-    data_source: IntrospectionType::ReplicaFrontiers,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::ReplicaFrontiers),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("replica_id", ScalarType::String.nullable(false))
@@ -2990,7 +3008,7 @@ pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_FRONTIERS_OID,
-    data_source: IntrospectionType::Frontiers,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::Frontiers),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("read_frontier", ScalarType::MzTimestamp.nullable(true))
@@ -3106,7 +3124,7 @@ pub static MZ_SOURCE_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     name: "mz_source_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SOURCE_STATISTICS_RAW_OID,
-    data_source: IntrospectionType::StorageSourceStatistics,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::StorageSourceStatistics),
     desc: MZ_SOURCE_STATISTICS_RAW_DESC.clone(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
@@ -3115,7 +3133,7 @@ pub static MZ_SINK_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
     name: "mz_sink_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_SINK_STATISTICS_RAW_OID,
-    data_source: IntrospectionType::StorageSinkStatistics,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::StorageSinkStatistics),
     desc: MZ_SINK_STATISTICS_RAW_DESC.clone(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
@@ -3125,7 +3143,7 @@ pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_storage_shards",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_STORAGE_SHARDS_OID,
-    data_source: IntrospectionType::ShardMapping,
+    data_source: BuiltinSourceType::Storage(IntrospectionType::ShardMapping),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("shard_id", ScalarType::String.nullable(false)),
@@ -7109,6 +7127,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
+        Builtin::Source(&MZ_CATALOG_RAW),
         Builtin::View(&MZ_HYDRATION_STATUSES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),

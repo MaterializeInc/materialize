@@ -31,15 +31,15 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventDetails, EventType, FullNameV1, IdFullNameV1, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
-    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
-    BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
+    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinSourceType, BuiltinTable, BuiltinType,
+    BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
 use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, Transaction};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    Database, Role, Schema,
+    DataSourceDesc, Database, Role, Schema,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -181,6 +181,31 @@ impl Catalog {
 
         let mut storage = self.storage().await;
         let mut txn = storage.transaction().await?;
+
+        // WIP we communicate to the storage controller that the mz_catalog_raw
+        // collection already has a shard_id (that it can reuse as an
+        // optimization instead of needlessly copying it), but this happens much
+        // later in create_collections and we invent and write down the shard
+        // ids here. figure out how we want to model this
+        for e in self.entries() {
+            let shard_id = match &e.item {
+                CatalogItem::Source(x) => match x.data_source {
+                    DataSourceDesc::Introspection(BuiltinSourceType::Catalog) => {
+                        self.state.config().shard_id.to_string()
+                    }
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            use mz_storage_client::controller::StorageTxn;
+            match txn.get_collection_metadata().get(&e.id()) {
+                Some(x) => assert_eq!(x, &shard_id),
+                None => {
+                    txn.insert_collection_metadata([(e.id(), shard_id)].into())
+                        .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+                }
+            }
+        }
 
         storage_controller
             .initialize_state(

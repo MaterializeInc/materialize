@@ -438,7 +438,8 @@ where
                     | DataSource::Progress
                     | DataSource::Webhook
                     | DataSource::Other(DataSourceOther::Compute)
-                    | DataSource::Other(DataSourceOther::Source) => None,
+                    | DataSource::Other(DataSourceOther::Source)
+                    | DataSource::Other(DataSourceOther::Shard(_)) => None,
                 };
 
                 let metadata = CollectionMetadata {
@@ -500,7 +501,8 @@ where
                     | DataSource::Ingestion(_)
                     | DataSource::Progress
                     | DataSource::Other(DataSourceOther::Compute)
-                    | DataSource::Other(DataSourceOther::Source) => {},
+                    | DataSource::Other(DataSourceOther::Source)
+                    | DataSource::Other(DataSourceOther::Shard(_)) => {},
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
                         if since_handle.since().elements() == &[T::minimum()] {
@@ -571,7 +573,9 @@ where
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
                         table_registers.push((id, write, collection_state));
                     }
-                    DataSource::Progress | DataSource::Other(DataSourceOther::Compute) => {
+                    DataSource::Progress
+                    | DataSource::Other(DataSourceOther::Compute)
+                    | DataSource::Other(DataSourceOther::Shard(_)) => {
                         debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
                         self.collections.insert(id, collection_state);
                     }

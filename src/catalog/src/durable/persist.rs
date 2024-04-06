@@ -78,7 +78,7 @@ const CATALOG_SHARD_NAME: &str = "catalog";
 const UPGRADE_SHARD_NAME: &str = "catalog_upgrade";
 
 /// Seed used to generate the persist shard ID for the catalog.
-const CATALOG_SEED: usize = 1;
+pub const CATALOG_SEED: usize = 1;
 /// Seed used to generate the catalog upgrade shard ID.
 ///
 /// All state that gets written to persist is tagged with the version of the code that wrote that
@@ -735,9 +735,7 @@ impl UnopenedPersistCatalogState {
         let since_handle = persist_client
             .open_critical_since(
                 catalog_shard_id,
-                // TODO: We may need to use a different critical reader
-                // id for this if we want to be able to introspect it via SQL.
-                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                PersistClient::CATALOG_CRITICAL_SINCE,
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state critical since".to_string(),
@@ -1413,6 +1411,10 @@ impl DurableCatalogState for PersistCatalogState {
 
         Ok(events)
     }
+
+    fn shard_id(&self) -> ShardId {
+        self.shard_id
+    }
 }
 
 /// Deterministically generate an ID for the given `organization_id` and `seed`.
@@ -1425,7 +1427,7 @@ fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
 
 /// Returns the schema of the `Row`s/`SourceData`s stored in the persist
 /// shard backing the catalog.
-fn desc() -> RelationDesc {
+pub(crate) fn desc() -> RelationDesc {
     RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
 }
 

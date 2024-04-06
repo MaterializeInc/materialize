@@ -227,6 +227,7 @@ impl Catalog {
                     timestamp_interval: Duration::from_secs(1),
                     now: config.now.clone(),
                     connection_context: config.connection_context,
+                    shard_id: storage.shard_id(),
                 },
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 availability_zones: config.availability_zones,

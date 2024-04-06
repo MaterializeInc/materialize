@@ -165,7 +165,7 @@ use crate::statement_logging::StatementEndedExecutionReason;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
-use mz_catalog::builtin::BUILTINS;
+use mz_catalog::builtin::{BuiltinSourceType, BUILTINS};
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_ore::future::TimeoutError;
 use mz_timestamp_oracle::postgres_oracle::{
@@ -1947,9 +1947,13 @@ impl Coordinator {
                     (DataSource::Webhook, Some(source_status_collection_id))
                 }
                 DataSourceDesc::Progress => (DataSource::Progress, None),
-                DataSourceDesc::Introspection(introspection) => {
+                DataSourceDesc::Introspection(BuiltinSourceType::Storage(introspection)) => {
                     (DataSource::Introspection(*introspection), None)
                 }
+                DataSourceDesc::Introspection(BuiltinSourceType::Catalog) => (
+                    DataSource::Other(DataSourceOther::Shard(catalog.state().config().shard_id)),
+                    None,
+                ),
             };
             CollectionDescription {
                 desc: source.desc.clone(),

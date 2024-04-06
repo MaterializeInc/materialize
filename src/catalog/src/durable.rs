@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use mz_persist_types::ShardId;
 use uuid::Uuid;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
@@ -45,7 +46,7 @@ mod error;
 pub mod initialize;
 mod metrics;
 pub mod objects;
-mod persist;
+pub(crate) mod persist;
 mod transaction;
 mod upgrade;
 
@@ -278,6 +279,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = id.into_element();
         Ok(ReplicaId::System(id))
     }
+
+    /// WIP
+    fn shard_id(&self) -> ShardId;
 }
 
 /// Creates an openable durable catalog state implemented using persist.

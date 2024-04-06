@@ -49,7 +49,6 @@ use mz_sql::plan::{
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_sql_parser::ast::ClusterScheduleOptionValue;
-use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
@@ -61,7 +60,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use tracing::debug;
 
-use crate::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER};
+use crate::builtin::{BuiltinSourceType, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -389,7 +388,7 @@ pub enum DataSourceDesc {
     /// Receives data from some other source
     Source,
     /// Receives introspection data from an internal system
-    Introspection(IntrospectionType),
+    Introspection(BuiltinSourceType),
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP requests.

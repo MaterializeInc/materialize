@@ -26,6 +26,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::str::StrExt;
+use mz_persist_client::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
@@ -382,6 +383,8 @@ pub struct CatalogConfig {
     pub now: NowFn,
     /// Context for source and sink connections.
     pub connection_context: ConnectionContext,
+    /// The shard_id of the durable catalog.
+    pub shard_id: ShardId,
 }
 
 /// A database in a [`SessionCatalog`].

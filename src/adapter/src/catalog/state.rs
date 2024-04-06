@@ -21,6 +21,7 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::durable::Transaction;
+use mz_persist_types::ShardId;
 use mz_sql::session::metadata::SessionMetadata;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -174,6 +175,7 @@ impl CatalogState {
                 connection_context: ConnectionContext::for_tests(Arc::new(
                     InMemorySecretsController::new(),
                 )),
+                shard_id: ShardId::new(),
             },
             cluster_replica_sizes: Default::default(),
             availability_zones: Default::default(),

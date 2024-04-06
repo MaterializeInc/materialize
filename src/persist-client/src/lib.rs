@@ -446,6 +446,10 @@ impl PersistClient {
     pub const CONTROLLER_CRITICAL_SINCE: CriticalReaderId =
         CriticalReaderId([0, 0, 0, 0, 17, 17, 34, 34, 51, 51, 68, 68, 68, 68, 68, 68]);
 
+    /// WIP
+    pub const CATALOG_CRITICAL_SINCE: CriticalReaderId =
+        CriticalReaderId([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+
     /// Provides a capability for the durable TVC identified by `shard_id` at
     /// its current since frontier.
     ///
