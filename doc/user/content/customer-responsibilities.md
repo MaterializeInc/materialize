@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 ----
-title: "Customer Responsibility Model"
+title: "Customer responsibility model"
 description: "Details of our shared responsibility model"
 menu:
   main:
