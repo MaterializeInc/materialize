@@ -586,6 +586,8 @@ where
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(tokio_console_layer);
     let stack = stack.with(sentry_layer);
+
+    let stack: Arc<dyn Subscriber + Send + Sync + 'static> = Arc::new(stack);
     stack.init();
 
     #[cfg(feature = "tokio-console")]
