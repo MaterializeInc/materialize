@@ -679,6 +679,14 @@ impl<D: Ord> ConsolidatingVec<D> {
     /// Consolidate the contents.
     fn consolidate(&mut self) {
         consolidate(&mut self.0);
+
+        // We may have the opportunity to reclaim allocated memory.
+        // Given that `push` will double the capacity when the vector is more than half full, and
+        // we want to avoid entering into a resizing cycle, we choose to only shrink if the
+        // vector's length is less than one fourth of its capacity.
+        if self.0.len() < self.0.capacity() / 4 {
+            self.0.shrink_to_fit();
+        }
     }
 
     /// Return an iterator over the borrowed items.
