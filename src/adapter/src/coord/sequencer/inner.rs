@@ -23,10 +23,9 @@ use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::collections::{CollectionExt, HashSet};
-use mz_ore::task::spawn;
+use mz_ore::task::{self, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
-use mz_ore::{soft_assert_or_log, task};
 use mz_proto::RustType;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -71,8 +70,7 @@ use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ConnectionOption, ConnectionOptionName, CreateSourceConnection, DeferredItemName,
-    PgConfigOption, PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode,
-    WithOptionValue,
+    PgConfigOption, PgConfigOptionName, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
@@ -3333,224 +3331,6 @@ impl Coordinator {
         };
 
         match action {
-            plan::AlterSourceAction::DropSubsourceExports { to_drop } => {
-                mz_ore::soft_assert_or_log!(!to_drop.is_empty(), "`to_drop` is empty");
-
-                const ALTER_SOURCE: &str = "ALTER SOURCE...DROP TABLES";
-
-                let (mut create_source_stmt, mut resolved_ids) =
-                    create_sql_to_stmt_deps(self, ALTER_SOURCE, cur_entry.create_sql())?;
-
-                // Ensure that we are only dropping items on which we depend.
-                for t in &to_drop {
-                    // Remove dependency.
-                    let existed = resolved_ids.0.remove(t);
-                    if !existed {
-                        Err(AdapterError::internal(
-                            ALTER_SOURCE,
-                            format!("removed {t}, but {id} did not have dependency"),
-                        ))?;
-                    }
-                }
-
-                // We are doing a lot of unwrapping, so just make an error to reference; all of
-                // these invariants are guaranteed to be true because of how we plan subsources.
-                let purification_err =
-                    || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
-
-                let referenced_subsources = match create_source_stmt
-                    .referenced_subsources
-                    .as_mut()
-                    .ok_or(purification_err())?
-                {
-                    ReferencedSubsources::SubsetTables(ref mut s) => s,
-                    _ => return Err(purification_err()),
-                };
-
-                let mut dropped_references = BTreeSet::new();
-
-                // Fixup referenced_subsources. We panic rather than return
-                // errors here because `retain` is an infallible operation and
-                // actually erroring here is both incredibly unlikely and
-                // recoverable (users can stop trying to drop subsources if it
-                // panics).
-                referenced_subsources.retain(
-                    |mz_sql_parser::ast::CreateSourceSubsource {
-                         subsource,
-                         reference,
-                     }| {
-                        match subsource
-                            .as_ref()
-                            .unwrap_or_else(|| panic!("{}", purification_err().to_string()))
-                        {
-                            DeferredItemName::Named(name) => match name {
-                                // Retain all sources which we still have a dependency on.
-                                ResolvedItemName::Item { id, .. } => {
-                                    let contains = resolved_ids.0.contains(&id);
-                                    if !contains {
-                                        dropped_references.insert(reference.clone());
-                                    }
-                                    contains
-                                }
-                                _ => unreachable!("{}", purification_err()),
-                            },
-                            _ => unreachable!("{}", purification_err()),
-                        }
-                    },
-                );
-
-                referenced_subsources.sort();
-
-                // Remove dropped references from text columns.
-                match &mut create_source_stmt.connection {
-                    CreateSourceConnection::Postgres { options, .. } => {
-                        options.retain_mut(|option| {
-                            if option.name != PgConfigOptionName::TextColumns {
-                                return true;
-                            }
-
-                            // We know this is text_cols
-                            match &mut option.value {
-                                Some(WithOptionValue::Sequence(names)) => {
-                                    names.retain(|name| match name {
-                                        WithOptionValue::UnresolvedItemName(
-                                            column_qualified_reference,
-                                        ) => {
-                                            mz_ore::soft_assert_eq_or_log!(
-                                                column_qualified_reference.0.len(), 4
-                                            );
-                                            if column_qualified_reference.0.len() == 4 {
-                                                let mut table = column_qualified_reference.clone();
-                                                table.0.truncate(3);
-                                                !dropped_references.contains(&table)
-                                            } else {
-                                                tracing::warn!(
-                                                    "PgConfigOptionName::TextColumns had unexpected value {:?}; should have 4 components",
-                                                    column_qualified_reference
-                                                );
-                                                true
-                                            }
-                                        }
-                                        _ => true,
-                                    });
-
-                                    names.sort();
-                                    // Only retain this option if there are
-                                    // names left.
-                                    !names.is_empty()
-                                }
-                                _ => true
-                            }
-                        })
-                    }
-                    _ => {}
-                }
-
-                // Open a new catalog, which we will use to re-plan our
-                // statement with the desired subsources.
-                let mut catalog = self.catalog().for_system_session();
-                catalog.mark_id_unresolvable_for_replanning(cur_entry.id());
-
-                // Re-define our source in terms of the amended statement
-                let plan = match mz_sql::plan::plan(
-                    None,
-                    &catalog,
-                    Statement::CreateSource(create_source_stmt),
-                    &Params::empty(),
-                    &resolved_ids,
-                )
-                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
-                {
-                    Plan::CreateSource(plan) => plan,
-                    _ => unreachable!("create source plan is only valid response"),
-                };
-
-                // Ensure we have actually removed the subsource from the source's dependency and
-                // did not in any other way alter the dependencies.
-                let (_, new_resolved_ids) =
-                    create_sql_to_stmt_deps(self, ALTER_SOURCE, &plan.source.create_sql)?;
-
-                if let Some(id) = new_resolved_ids.0.iter().find(|id| to_drop.contains(id)) {
-                    Err(AdapterError::internal(
-                        ALTER_SOURCE,
-                        format!("failed to remove dropped ID {id} from dependencies"),
-                    ))?;
-                }
-
-                if new_resolved_ids.0 != resolved_ids.0 {
-                    Err(AdapterError::internal(
-                        ALTER_SOURCE,
-                        format!("expected resolved items to be {resolved_ids:?}, but is actually {new_resolved_ids:?}"),
-                    ))?;
-                }
-
-                let source = Source::new(
-                    id,
-                    plan,
-                    resolved_ids,
-                    cur_source.custom_logical_compaction_window,
-                    cur_source.is_retained_metrics_object,
-                );
-
-                // Get new ingestion description for storage.
-                let ingestion = match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => {
-                        ingestion
-                            .clone()
-                            .into_inline_connection(self.catalog().state())
-                            .desc
-                    }
-                    _ => unreachable!("already verified of type ingestion"),
-                };
-
-                let descs = btreemap! {id => ingestion};
-
-                self.controller
-                    .storage
-                    .check_alter_ingestion_source_desc(&descs)
-                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-
-                // CASCADE
-                let drops = self.catalog().object_dependents(
-                    &to_drop.into_iter().map(ObjectId::Item).collect(),
-                    session.conn_id(),
-                );
-
-                let DropOps {
-                    mut ops,
-                    dropped_active_db,
-                    dropped_active_cluster,
-                    dropped_in_use_indexes,
-                } = self.sequence_drop_common(session, drops)?;
-
-                assert!(
-                    !dropped_active_db && !dropped_active_cluster,
-                    "dropping subsources does not drop DBs or clusters"
-                );
-
-                soft_assert_or_log!(
-                    dropped_in_use_indexes.is_empty(),
-                    "Dropping subsources might drop indexes, but then all objects dependent on the index should also be dropped."
-                );
-
-                // Redefine source.
-                ops.push(catalog::Op::UpdateItem {
-                    id,
-                    // Look this up again so we don't have to hold an immutable reference to the
-                    // entry for so long.
-                    name: self.catalog.get_entry(&id).name().clone(),
-                    to_item: CatalogItem::Source(source),
-                });
-
-                self.catalog_transact(Some(session), ops).await?;
-
-                // Commit the new ingestion to storage.
-                self.controller
-                    .storage
-                    .alter_ingestion_source_desc(descs)
-                    .await
-                    .expect("altering collection after txn must succeed");
-            }
             plan::AlterSourceAction::AddSubsourceExports {
                 subsources,
                 options,

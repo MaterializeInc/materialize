@@ -1012,9 +1012,6 @@ pub struct AlterConnectionPlan {
 
 #[derive(Debug)]
 pub enum AlterSourceAction {
-    DropSubsourceExports {
-        to_drop: BTreeSet<GlobalId>,
-    },
     AddSubsourceExports {
         subsources: Vec<CreateSourcePlans>,
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,

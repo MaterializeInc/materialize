@@ -118,21 +118,21 @@ use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCL
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalDuration, TryFromValue};
+use crate::plan::WebhookValidation;
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan,
     AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
-    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
-    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
-    ReplicaConfig, Secret, Sink, Source, Table, Type, VariableValue, View, WebhookBodyFormat,
-    WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ClusterSchedule,
+    CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
+    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
+    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
 };
 use crate::session::vars;
 use crate::session::vars::ENABLE_CLUSTER_SCHEDULE_REFRESH;
@@ -5668,19 +5668,17 @@ pub fn plan_alter_source(
         action,
     } = stmt;
     let object_type = ObjectType::Source;
-    let entry = match resolve_item_or_type(scx, object_type, source_name.clone(), if_exists)? {
-        Some(entry) => entry,
-        None => {
-            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: source_name.to_string(),
-                object_type,
-            });
 
-            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
-        }
-    };
+    if resolve_item_or_type(scx, object_type, source_name.clone(), if_exists)?.is_none() {
+        scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+            name: source_name.to_string(),
+            object_type,
+        });
 
-    let action = match action {
+        return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+    }
+
+    match action {
         AlterSourceAction::SetOptions(options) => {
             let mut options = options.into_iter();
             let option = options.next().unwrap();
@@ -5720,55 +5718,13 @@ pub fn plan_alter_source(
             }
             sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
         }
-        AlterSourceAction::DropSubsources {
-            if_exists,
-            names,
-            cascade,
-        } => {
-            let mut to_drop = BTreeSet::new();
-            let subsources = entry.subsources();
-            for name in names {
-                match plan_drop_item(scx, ObjectType::Source, if_exists, name.clone(), cascade)? {
-                    Some(dropped_id) => {
-                        if !subsources.contains(&dropped_id) {
-                            let dropped_entry = scx.catalog.get_item(&dropped_id);
-                            return Err(PlanError::DropNonSubsource {
-                                non_subsource: scx
-                                    .catalog
-                                    .minimal_qualification(dropped_entry.name())
-                                    .to_string(),
-                                source: scx.catalog.minimal_qualification(entry.name()).to_string(),
-                            });
-                        }
-
-                        to_drop.insert(dropped_id);
-                    }
-                    None => {
-                        scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                            name: name.to_string(),
-                            object_type: ObjectType::Source,
-                        });
-                    }
-                }
-            }
-
-            if to_drop.is_empty() {
-                return Ok(Plan::AlterNoop(AlterNoopPlan {
-                    object_type: ObjectType::Source,
-                }));
-            } else {
-                crate::plan::AlterSourceAction::DropSubsourceExports { to_drop }
-            }
+        AlterSourceAction::DropSubsources { .. } => {
+            sql_bail!("ALTER SOURCE...DROP SUBSOURCE no longer supported; use DROP SOURCE")
         }
         AlterSourceAction::AddSubsources { .. } => {
             unreachable!("ALTER SOURCE...ADD SUBSOURCE must be purified")
         }
     };
-
-    Ok(Plan::AlterSource(AlterSourcePlan {
-        id: entry.id(),
-        action,
-    }))
 }
 
 pub fn describe_alter_system_set(

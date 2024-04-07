@@ -131,18 +131,6 @@ pub enum PlanError {
     ParserStatement(ParserStatementError),
     Parser(ParserError),
     DropViewOnMaterializedView(String),
-    DropSubsource {
-        subsource: String,
-        source: String,
-    },
-    DropProgressCollection {
-        progress_collection: String,
-        source: String,
-    },
-    DropNonSubsource {
-        non_subsource: String,
-        source: String,
-    },
     DependentObjectsStillExist {
         object_type: String,
         object_name: String,
@@ -350,12 +338,6 @@ impl PlanError {
             Self::DropViewOnMaterializedView(_) => {
                 Some("Use DROP MATERIALIZED VIEW to remove a materialized view.".into())
             }
-            Self::DropSubsource { source, subsource } => Some(format!(
-                "Use ALTER SOURCE {source} DROP SUBSOURCE {subsource}"
-            )),
-            Self::DropProgressCollection { source, .. } => Some(format!(
-                "Use DROP SOURCE {source} to drop the primary source along with all subsources"
-            )),
             Self::DependentObjectsStillExist {..} => Some("Use DROP ... CASCADE to drop the dependent objects too.".into()),
             Self::AlterViewOnMaterializedView(_) => {
                 Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
@@ -594,9 +576,6 @@ impl fmt::Display for PlanError {
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
             }
-            Self::DropSubsource { subsource, source: _} => write!(f, "SOURCE {} is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE", subsource.quoted()),
-            Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
-            Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is not a subsource of {}", non_subsource.quoted(), source.quoted()),
             Self::DependentObjectsStillExist {object_type, object_name, dependents} => {
                 let reason = match &dependents[..] {
                     [] => " because other objects depend on it".to_string(),
