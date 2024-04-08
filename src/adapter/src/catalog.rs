@@ -102,6 +102,7 @@ mod builtin_table_updates;
 pub(crate) mod consistency;
 mod migrate;
 
+mod apply;
 mod open;
 mod state;
 
