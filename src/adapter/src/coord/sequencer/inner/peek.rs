@@ -7,11 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use futures::stream::FuturesOrdered;
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use futures::stream::FuturesOrdered;
 use http::Uri;
 use itertools::Either;
 use maplit::btreemap;

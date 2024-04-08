@@ -28,6 +28,7 @@ use tracing::dispatcher;
 use tracing_subscriber::prelude::*;
 
 use crate::coord::peek::FastPathPlan;
+use crate::explain::insights;
 use crate::explain::Explainable;
 use crate::AdapterError;
 
@@ -108,20 +109,22 @@ impl OptimizerTrace {
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
     ) -> Result<Vec<Row>, AdapterError> {
-        let mut traces = self.collect_all(
-            format,
-            config,
-            humanizer,
-            row_set_finishing,
-            target_cluster,
-            dataflow_metainfo,
-        )?;
+        let collect_all = |format| {
+            self.collect_all(
+                format,
+                config,
+                humanizer,
+                row_set_finishing.clone(),
+                target_cluster,
+                dataflow_metainfo.clone(),
+            )
+        };
 
-        let rows = match stage.path() {
-            None => {
+        let rows = match stage {
+            ExplainStage::Trace => {
                 // For the `Trace` (pseudo-)stage, return the entire trace as
                 // triples of (time, path, plan) values.
-                let rows = traces
+                let rows = collect_all(format)?
                     .0
                     .into_iter()
                     .map(|entry| {
@@ -136,9 +139,53 @@ impl OptimizerTrace {
                     .collect();
                 rows
             }
-            Some(path) => {
+            ExplainStage::PlanInsights => {
+                if format != ExplainFormat::Json {
+                    coord_bail!("EXPLAIN PLAN INSIGHTS only supports JSON format");
+                }
+
+                let mut text_traces = collect_all(ExplainFormat::Text)?;
+                let mut json_traces = collect_all(ExplainFormat::Json)?;
+                let global_plan = self.collect_global_plan();
+                let fast_path_plan = self.collect_fast_path_plan();
+
+                let mut get_plan = |name: NamedPlan| {
+                    let text_plan = match text_traces.remove(name.path()) {
+                        None => "<unknown>".into(),
+                        Some(entry) => entry.plan,
+                    };
+                    let json_plan = match json_traces.remove(name.path()) {
+                        None => serde_json::Value::Null,
+                        Some(entry) => serde_json::from_str(&entry.plan).map_err(|e| {
+                            AdapterError::Unstructured(anyhow::anyhow!("internal error: {e}"))
+                        })?,
+                    };
+                    Ok::<_, AdapterError>(serde_json::json!({
+                        "text": text_plan,
+                        "json": json_plan,
+                    }))
+                };
+
+                let output = serde_json::json!({
+                    "plans": {
+                        "raw": get_plan(NamedPlan::Raw)?,
+                        "optimized": {
+                            "global": get_plan(NamedPlan::Global)?,
+                        }
+                    },
+                    "insights": insights::plan_insights(humanizer, global_plan, fast_path_plan),
+                });
+                let output = serde_json::to_string_pretty(&output).expect("JSON string");
+                vec![Row::pack_slice(&[Datum::from(output.as_str())])]
+            }
+            _ => {
                 // For everything else, return the plan for the stage identified
                 // by the corresponding path.
+
+                let path = stage.path().ok_or_else(|| {
+                    AdapterError::Internal("explain stage unexpectedly missing path".into())
+                })?;
+                let mut traces = collect_all(format)?;
 
                 // For certain stages we want to return the resulting fast path
                 // plan instead of the selected stage if it is present.
@@ -244,6 +291,22 @@ impl OptimizerTrace {
         results.sort_by_key(|x| x.instant);
 
         Ok(TraceEntries(results))
+    }
+
+    /// Collects the global optimized plan from the trace, if it exists.
+    pub fn collect_global_plan(&self) -> Option<DataflowDescription<OptimizedMirRelationExpr>> {
+        self.0
+            .downcast_ref::<PlanTrace<DataflowDescription<OptimizedMirRelationExpr>>>()
+            .and_then(|trace| trace.find(NamedPlan::Global.path()))
+            .map(|entry| entry.plan)
+    }
+
+    /// Collects the fast path plan from the trace, if it exists.
+    pub fn collect_fast_path_plan(&self) -> Option<FastPathPlan> {
+        self.0
+            .downcast_ref::<PlanTrace<FastPathPlan>>()
+            .and_then(|trace| trace.find(NamedPlan::FastPath.path()))
+            .map(|entry| entry.plan)
     }
 
     /// Collect all trace entries of a plan type `T` that implements

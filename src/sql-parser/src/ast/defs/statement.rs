@@ -3739,6 +3739,8 @@ pub enum ExplainStage {
     PhysicalPlan,
     /// The complete trace of the plan through the optimizer
     Trace,
+    /// Insights about the plan
+    PlanInsights,
 }
 
 impl ExplainStage {
@@ -3752,6 +3754,7 @@ impl ExplainStage {
             Self::GlobalPlan => Some(Global.path()),
             Self::PhysicalPlan => Some(Physical.path()),
             Self::Trace => None,
+            Self::PlanInsights => None,
         }
     }
 
@@ -3765,6 +3768,7 @@ impl ExplainStage {
             Self::GlobalPlan => true,
             Self::PhysicalPlan => true,
             Self::Trace => false,
+            Self::PlanInsights => false,
         }
     }
 }
@@ -3778,6 +3782,7 @@ impl AstDisplay for ExplainStage {
             Self::GlobalPlan => f.write_str("OPTIMIZED PLAN"),
             Self::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
             Self::Trace => f.write_str("OPTIMIZER TRACE"),
+            Self::PlanInsights => f.write_str("PLAN INSIGHTS"),
         }
     }
 }

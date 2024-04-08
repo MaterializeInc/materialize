@@ -59,7 +59,7 @@ pub mod tracing;
 pub use crate::explain::tracing::trace_plan;
 
 /// Possible output formats for an explanation.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ExplainFormat {
     Text,
     Json,

@@ -201,6 +201,7 @@ Inline
 Inner
 Input
 Insert
+Insights
 Inspect
 Int
 Integer

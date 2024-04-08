@@ -7517,8 +7517,12 @@ impl<'a> Parser<'a> {
                 (true, Some(ExplainStage::Trace))
             }
             Some(PLAN) => {
-                // Use the default plan for the explainee.
-                (true, None)
+                if self.parse_keyword(INSIGHTS) {
+                    (true, Some(ExplainStage::PlanInsights))
+                } else {
+                    // Use the default plan for the explainee.
+                    (true, None)
+                }
             }
             None => {
                 // Use the default plan for the explainee.
