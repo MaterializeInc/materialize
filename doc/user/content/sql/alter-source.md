@@ -20,10 +20,6 @@ menu:
 
 {{< diagram "alter-source-drop-clause.svg" >}}
 
-#### alter_source_set_clause
-
-{{< diagram "alter-source-set-clause.svg" >}}
-
 #### with_options
 
 {{< diagram "with-options.svg" >}}

@@ -26,8 +26,8 @@ use timely::progress::timestamp::Refines;
 
 use crate::logging::compute::{LogImportFrontiers, Logger};
 use crate::metrics::TraceMetrics;
-use crate::render::context::SpecializedArrangementImport;
-use crate::typedefs::{ErrAgent, RowAgent, RowRowAgent};
+use crate::render::context::MzArrangementImport;
+use crate::typedefs::{ErrAgent, RowRowAgent};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
@@ -104,14 +104,12 @@ impl TraceManager {
     }
 }
 
-/// Represents a type-specialized trace handle for successful computations wherein keys or
-/// values were previously type-specialized via `render::context::SpecializedArrangementFlavor`.
+/// An abstraction of a trace handle.
 ///
-/// The variants defined here must thus match the ones used in creating type-specialized
-/// arrangements.
+/// This type exists as an `enum` to support potential experimentation with alternate
+/// representation and layouts.
 #[derive(Clone)]
 pub enum SpecializedTraceHandle {
-    RowUnit(RowAgent<Timestamp, Diff>),
     RowRow(RowRowAgent<Timestamp, Diff>),
 }
 
@@ -119,7 +117,6 @@ impl SpecializedTraceHandle {
     /// Obtains the logical compaction frontier for the underlying trace handle.
     fn get_logical_compaction(&mut self) -> AntichainRef<Timestamp> {
         match self {
-            SpecializedTraceHandle::RowUnit(handle) => handle.get_logical_compaction(),
             SpecializedTraceHandle::RowRow(handle) => handle.get_logical_compaction(),
         }
     }
@@ -127,7 +124,6 @@ impl SpecializedTraceHandle {
     /// Advances the logical compaction frontier for the underlying trace handle.
     pub fn set_logical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
         match self {
-            SpecializedTraceHandle::RowUnit(handle) => handle.set_logical_compaction(frontier),
             SpecializedTraceHandle::RowRow(handle) => handle.set_logical_compaction(frontier),
         }
     }
@@ -135,7 +131,6 @@ impl SpecializedTraceHandle {
     /// Advances the physical compaction frontier for the underlying trace handle.
     pub fn set_physical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
         match self {
-            SpecializedTraceHandle::RowUnit(handle) => handle.set_physical_compaction(frontier),
             SpecializedTraceHandle::RowRow(handle) => handle.set_physical_compaction(frontier),
         }
     }
@@ -143,12 +138,11 @@ impl SpecializedTraceHandle {
     /// Reads the upper frontier of the underlying trace handle.
     pub fn read_upper(&mut self, target: &mut Antichain<Timestamp>) {
         match self {
-            SpecializedTraceHandle::RowUnit(handle) => handle.read_upper(target),
             SpecializedTraceHandle::RowRow(handle) => handle.read_upper(target),
         }
     }
 
-    /// Maps the underlying trace handle to a `SpecializedArrangementImport`,
+    /// Maps the underlying trace handle to a `MzArrangementImport`,
     /// while readjusting times by `since` and `until`.
     pub fn import_frontier_logged<'g, G, T>(
         &mut self,
@@ -160,7 +154,7 @@ impl SpecializedTraceHandle {
         idx_id: GlobalId,
         export_ids: Vec<GlobalId>,
     ) -> (
-        SpecializedArrangementImport<Child<'g, G, T>, Timestamp>,
+        MzArrangementImport<Child<'g, G, T>, Timestamp>,
         ShutdownButton<CapabilitySet<Timestamp>>,
     )
     where
@@ -168,19 +162,6 @@ impl SpecializedTraceHandle {
         T: Lattice + Refines<G::Timestamp>,
     {
         match self {
-            SpecializedTraceHandle::RowUnit(handle) => {
-                let (oks, oks_button) =
-                    handle.import_frontier_core(&scope.parent, name, since, until);
-                let oks = if let Some(logger) = logger {
-                    oks.log_import_frontiers(logger, idx_id, export_ids)
-                } else {
-                    oks
-                };
-                (
-                    SpecializedArrangementImport::RowUnit(oks.enter(scope)),
-                    oks_button,
-                )
-            }
             SpecializedTraceHandle::RowRow(handle) => {
                 let (oks, oks_button) =
                     handle.import_frontier_core(&scope.parent, name, since, until);
@@ -189,10 +170,7 @@ impl SpecializedTraceHandle {
                 } else {
                     oks
                 };
-                (
-                    SpecializedArrangementImport::RowRow(oks.enter(scope)),
-                    oks_button,
-                )
+                (MzArrangementImport::RowRow(oks.enter(scope)), oks_button)
             }
         }
     }

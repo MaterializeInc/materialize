@@ -1,31 +1,33 @@
 
 ---
 title: "SHOW"
-description: "Display the value of a session or system variable."
+description: "Display the value of a configuration parameter."
 menu:
   main:
     parent: 'commands'
 
 ---
 
-`SHOW` displays the value of a session or system variable.
+`SHOW` displays the value of a configuration parameter.
 
 ## Syntax
 
-{{< diagram "show-variable.svg" >}}
+{{< diagram "show-stmt.svg" >}}
 
 Field                  | Use
 -----------------------|-----
-_variable&lowbar;name_ | The name of the session or system variable to display.
-**ALL**                | Display the values of all session and system variables.
+_name_                 | The name of the configuration parameter to display.
+**ALL**                | Display the values of all configuration parameters.
 
-{{% session-variables %}}
+### Aliased configuration parameters
 
-## Special Syntax
+There are a few configuration parameters that act as aliases for other
+configuration parameters.
 
-`SHOW SCHEMA` will show the first resolvable schema on the search path, or `NULL` if no such schema exists.
+- `schema`: an alias for showing the first resolvable schema in `search_path`
+- `time zone`: an alias for `timezone`
 
-{{% system-variables %}}
+{{% configuration-parameters %}}
 
 ## Examples
 

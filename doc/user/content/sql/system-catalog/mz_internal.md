@@ -42,11 +42,11 @@ that have been issued to Materialize in the last three days, along
 with various metadata about them.
 
 Entries in this log may be sampled. The sampling rate is controlled by
-the session variable `statement_logging_sample_rate`, which may be set
+the configuration parameter `statement_logging_sample_rate`, which may be set
 to any value between 0 and 1. For example, to disable statement
 logging entirely for a session, execute `SET
 statement_logging_sample_rate TO 0`. Materialize may apply a lower
-sampling rate than the one set in this variable.
+sampling rate than the one set in this parameter.
 
 The view can be accessed by Materialize _superusers_ or users that have been
 granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-roles).
@@ -57,9 +57,9 @@ granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-role
 | `execution_id`             | [`uuid`]                     | An ID that is unique for each executed statement.                                                                                                                                                                                                                             |
 | `sample_rate`              | [`double precision`]         | The actual rate at which the statement was sampled.                                                                                                                                                                                                                           |
 | `cluster_id`               | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                      |
-| `application_name`         | [`text`]                     | The value of the `application_name` session variable at execution time.                                                                                                                                                                                                       |
+| `application_name`         | [`text`]                     | The value of the `application_name` configuration parameter at execution time.                                                                                                                                                                                                       |
 | `cluster_name`             | [`text`]                     | The name of the cluster with ID `cluster_id` at execution time.                                                                                                                                                                                                               |
-| `transaction_isolation`    | [`text`]                     | The value of the `transaction_isolation` session variable at execution time.                                                                                                                                                                                                  |
+| `transaction_isolation`    | [`text`]                     | The value of the `transaction_isolation` configuration parameter at execution time.                                                                                                                                                                                                  |
 | `execution_timestamp`      | [`uint8`]                    | The logical timestamp at which execution was scheduled.                                                                                                                                                                                                                       |
 | `transient_index_id`       | [`text`]                     | The internal index of the compute dataflow created for the query, if any.                                                                                                                                                                                                     |
 | `params`                   | [`text array`]               | The parameters with which the statement was executed.                                                                                                                                                                                                                         |
@@ -926,7 +926,7 @@ thirty days may be removed.
 
 The system chooses to log statements randomly; the probability of
 logging an execution is controlled by the
-`statement_logging_sample_rate` session variable. A value of 0 means
+`statement_logging_sample_rate` configuration parameter. A value of 0 means
 to log nothing; a value of 0.8 means to log approximately 80% of
 statement executions. If `statement_logging_sample_rate` is higher
 than `statement_logging_max_sample_rate` (which is set by Materialize

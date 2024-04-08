@@ -75,10 +75,10 @@ CREATE ROLE foo
 query TT rowsort
 SELECT id, name FROM mz_roles
 ----
+g1  mz_monitor
+g2  mz_monitor_redacted
 s1  mz_system
 s2  mz_support
-s3  mz_monitor
-s4  mz_monitor_redacted
 u1  materialize
 u2  foo
 
@@ -94,10 +94,10 @@ CREATE ROLE bar
 query TT rowsort
 SELECT id, name FROM mz_roles
 ----
+g1  mz_monitor
+g2  mz_monitor_redacted
 s1  mz_system
 s2  mz_support
-s3  mz_monitor
-s4  mz_monitor_redacted
 u1  materialize
 u3  bar
 

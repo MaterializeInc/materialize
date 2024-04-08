@@ -99,7 +99,6 @@ mod container {
 
     use differential_dataflow::trace::cursor::MyTrait;
     use differential_dataflow::trace::implementations::BatchContainer;
-    use differential_dataflow::trace::implementations::OffsetList;
     use mz_ore::region::Region;
     use mz_repr::{read_datum, Datum, Row};
 
@@ -118,7 +117,7 @@ mod container {
                 self.batches.capacity() * std::mem::size_of::<DatumBatch>(),
             );
             for batch in self.batches.iter() {
-                crate::row_spine::offset_list_size(&batch.offsets, &mut callback);
+                batch.offsets.heap_size(&mut callback);
                 callback(batch.storage.len(), batch.storage.capacity());
             }
         }
@@ -189,7 +188,7 @@ mod container {
     ///
     /// The backing storage for this batch will not be resized.
     pub struct DatumBatch {
-        offsets: OffsetList,
+        offsets: crate::row_spine::OffsetOptimized,
         storage: Region<u8>,
     }
 
@@ -208,7 +207,7 @@ mod container {
         fn index(&self, index: usize) -> &[u8] {
             let lower = self.offsets.index(index);
             let upper = self.offsets.index(index + 1);
-            &self.storage[lower..upper]
+            &self.storage[*lower..*upper]
         }
         fn len(&self) -> usize {
             self.offsets.len() - 1
@@ -216,7 +215,7 @@ mod container {
 
         fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
             // TODO: be wary of `byte_cap` greater than 2^32.
-            let mut offsets = OffsetList::with_capacity(item_cap + 1);
+            let mut offsets = crate::row_spine::OffsetOptimized::with_capacity(item_cap + 1);
             offsets.push(0);
             Self {
                 offsets,
@@ -290,10 +289,10 @@ mod container {
         }
     }
 
-    use mz_repr::fixed_length::IntoRowByTypes;
-    impl<'long> IntoRowByTypes for DatumSeq<'long> {
+    use mz_repr::fixed_length::ToDatumIter;
+    impl<'long> ToDatumIter for DatumSeq<'long> {
         type DatumIter<'short> = DatumSeq<'short> where Self: 'short;
-        fn into_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
+        fn to_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
             *self
         }
     }

@@ -1,24 +1,26 @@
 ---
 title: "ALTER SYSTEM RESET"
-description: "Reset a system variable to its default value."
+description: "Globally reset a configuration parameter to its default value."
 menu:
   main:
     parent: 'commands'
 ---
 
-`ALTER SYSTEM RESET` restores the value of a system variable to its default value. This command is an alternative spelling for [`ALTER SYSTEM SET...TO DEFAULT`](../alter-system-set).
+`ALTER SYSTEM RESET` globally restores the value of a configuration parameter to
+its default value. This command is an alternative spelling for [`ALTER SYSTEM
+SET...TO DEFAULT`](../alter-system-set).
 
-To see the current value of a system variable, use [`SHOW`](../show).
+To see the current value of a configuration parameter, use [`SHOW`](../show).
 
 ## Syntax
 
-{{< diagram "reset-system-variable.svg" >}}
+{{< diagram "alter-system-reset-stmt.svg" >}}
 
-Field | Use
-------|-----
-_variable&lowbar;name_ | The system variable name.
+Field  | Use
+-------|-----
+_name_ | The configuration parameter's name.
 
-{{% system-variables %}}
+{{% configuration-parameters %}}
 
 ## Examples
 

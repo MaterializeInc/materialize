@@ -7,25 +7,22 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- extract objects
+-- Get all system objects matching a given pattern.
 SELECT
   o.id as id,
   o.oid as oid,
   o.type as type,
   o.name as name,
   s.name as schema,
-  d.name as database
+  'mz' as database
 FROM
   mz_objects AS o JOIN
-  mz_schemas AS s ON (o.schema_id = s.id) JOIN
-  mz_databases AS d ON (s.database_id = d.id)
+  mz_schemas AS s ON (o.schema_id = s.id)
 WHERE
-  o.id like 'u%' AND
+  o.id like 's%' AND
   o.name ilike {name} AND
-  s.name ilike {schema} AND
-  d.name ilike {database}
+  s.name ilike {schema}
 ORDER BY
   o.type,
-  d.name,
   s.name,
   o.name;

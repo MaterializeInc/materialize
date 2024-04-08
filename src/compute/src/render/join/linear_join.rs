@@ -21,7 +21,7 @@ use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_dyncfg::ConfigSet;
-use mz_repr::fixed_length::IntoRowByTypes;
+use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -32,12 +32,11 @@ use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
-    SpecializedArrangementImport,
+    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::RowRowSpine;
-use crate::typedefs::{RowAgent, RowEnter, RowRowAgent, RowRowEnter};
+use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
 ///
@@ -194,9 +193,9 @@ where
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(SpecializedArrangement<G>),
+    Local(MzArrangement<G>),
     /// An imported arrangement.
-    Trace(SpecializedArrangementImport<G, T>),
+    Trace(MzArrangementImport<G, T>),
 }
 
 impl<G, T> Context<G, T>
@@ -367,7 +366,7 @@ where
             // By knowing how types propagate through joins we could specialize intermediate
             // arrangements as well, either in values or eventually in keys.
             let arranged = keyed.mz_arrange::<RowRowSpine<_, _>>("JoinStage");
-            joined = JoinedFlavor::Local(SpecializedArrangement::RowRow(arranged));
+            joined = JoinedFlavor::Local(MzArrangement::RowRow(arranged));
         }
 
         // Demultiplex the four different cross products of arrangement types we might have.
@@ -375,8 +374,8 @@ where
             .arrangement(&lookup_key[..])
             .expect("Arrangement absent despite explicit construction");
 
-        use SpecializedArrangement as A;
-        use SpecializedArrangementImport as I;
+        use MzArrangement as A;
+        use MzArrangementImport as I;
 
         match joined {
             JoinedFlavor::Collection(_) => {
@@ -385,18 +384,6 @@ where
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = match (local, oks) {
-                        (A::RowUnit(prev_keyed), A::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowAgent<_, _>, RowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (A::RowUnit(prev_keyed), A::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowAgent<_, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (A::RowRow(prev_keyed), A::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowRowAgent<_, _>, RowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
                         (A::RowRow(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
                                 prev_keyed, next_input, closure,
@@ -409,18 +396,6 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = match (local, oks) {
-                        (A::RowUnit(prev_keyed), I::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowAgent<_, _>, RowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (A::RowUnit(prev_keyed), I::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowAgent<_, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (A::RowRow(prev_keyed), I::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowRowAgent<_, _>, RowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
                         (A::RowRow(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
                                 prev_keyed, next_input, closure,
@@ -435,18 +410,6 @@ where
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = match (trace, oks) {
-                        (I::RowUnit(prev_keyed), A::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowEnter<_, _, _>, RowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (I::RowUnit(prev_keyed), A::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowEnter<_, _, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                        (I::RowRow(prev_keyed), A::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowRowEnter<_, _, _>, RowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
                         (I::RowRow(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
                                 prev_keyed, next_input, closure,
@@ -459,24 +422,6 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = match (trace, oks) {
-                        (I::RowUnit(prev_keyed), I::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowEnter<_, _, _>, RowEnter<_, _, _>>(
-                                prev_keyed,
-                                next_input,
-                                closure,
-                            ),
-                        (I::RowUnit(prev_keyed), I::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowEnter<_, _, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed,
-                                next_input,
-                                closure,
-                            ),
-                        (I::RowRow(prev_keyed), I::RowUnit(next_input)) => self
-                            .differential_join_inner::<_, RowRowEnter<_, _, _>, RowEnter<_, _, _>>(
-                                prev_keyed,
-                                next_input,
-                                closure,
-                            ),
                         (I::RowRow(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
                                 prev_keyed, next_input, closure,
@@ -512,9 +457,9 @@ where
         Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
             + Clone
             + 'static,
-        for<'a> Tr1::Key<'a>: IntoRowByTypes,
-        for<'a> Tr1::Val<'a>: IntoRowByTypes,
-        for<'a> Tr2::Val<'a>: IntoRowByTypes,
+        for<'a> Tr1::Key<'a>: ToDatumIter,
+        for<'a> Tr1::Val<'a>: ToDatumIter,
+        for<'a> Tr2::Val<'a>: ToDatumIter,
     {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -531,9 +476,9 @@ where
                         let mut row_builder = binding.borrow_mut();
                         let temp_storage = RowArena::new();
 
-                        let key = key.into_datum_iter();
-                        let old = old.into_datum_iter();
-                        let new = new.into_datum_iter();
+                        let key = key.to_datum_iter();
+                        let old = old.to_datum_iter();
+                        let new = new.to_datum_iter();
 
                         let mut datums_local = datums.borrow();
                         datums_local.extend(key);
@@ -566,9 +511,9 @@ where
                     let mut row_builder = binding.borrow_mut();
                     let temp_storage = RowArena::new();
 
-                    let key = key.into_datum_iter();
-                    let old = old.into_datum_iter();
-                    let new = new.into_datum_iter();
+                    let key = key.to_datum_iter();
+                    let old = old.to_datum_iter();
+                    let new = new.to_datum_iter();
 
                     let mut datums_local = datums.borrow();
                     datums_local.extend(key);

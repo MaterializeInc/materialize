@@ -24,17 +24,17 @@ Field               | Use
 --------------------|-------------------------------------------------------------------------
 **INHERIT**         | Grants the role the ability to inherit privileges of other roles.
 
-#### `alter_role_variables`
+#### `alter_role_set`
 
 {{< public-preview />}}
 
-{{< diagram "alter-role-variables.svg" >}}
+{{< diagram "alter-role-set.svg" >}}
 
 Field               | Use
 --------------------|-------------------------------------------------------------------------
-_variable_name_     | The name of the session variable to modify.
-_variable_value_    | The value to assign to the session variable.
-**DEFAULT**         | Reset the value of the [session variable](/sql/show/#session-variables) for the specified role to the system's default. Equivalent to `ALTER ROLE ... RESET`.
+_name_              | The name of the configuration parameter to modify.
+_value_             | The value to assign to the configuration parameter.
+**DEFAULT**         | Reset the value of the configuration parameter for the specified role to the system's default. Equivalent to `ALTER ROLE ... RESET`.
 
 ## Details
 
@@ -55,7 +55,7 @@ privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
 
 When RBAC is enabled a role must have the `CREATEROLE` system privilege to alter another role.
 
-Like PostgreSQL, altering the variable for a role only affects **new sessions**. Also like PostgreSQL, role variable defaults are **not inherited**.
+Like PostgreSQL, altering the configuration parameter for a role only affects **new sessions**. Also like PostgreSQL, role configuration parameters are **not inherited**.
 
 ## Examples
 
@@ -71,7 +71,7 @@ SELECT name, inherit FROM mz_roles WHERE name = 'rj';
 rj  true
 ```
 
-#### Setting session variable defaults for a role
+#### Setting configuration parameters for a role
 
 ```sql
 SHOW cluster;
@@ -79,15 +79,15 @@ quickstart
 
 ALTER ROLE rj SET cluster TO rj_compute;
 
--- Role variables only take effect for new sessions.
+-- Role parameters only take effect for new sessions.
 SHOW cluster;
 quickstart
 
--- Start a new SQL session with the Role 'rj'.
+-- Start a new SQL session with the role 'rj'.
 SHOW cluster;
 rj_compute
 
--- In a new SQL session with a Role that is not 'rj'.
+-- In a new SQL session with a role that is not 'rj'.
 SHOW cluster;
 quickstart
 ```

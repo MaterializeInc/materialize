@@ -7,9 +7,6 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-{{ config(materialized='source') }}
-
-CREATE SOURCE {{ this }}
-IN CLUSTER qa_canary_environment_storage
+{{ config(materialized='source', cluster='qa_canary_environment_storage') }}
 FROM MYSQL CONNECTION mysql
 FOR TABLES (public.people, public.relationships)

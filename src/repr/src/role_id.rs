@@ -22,6 +22,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.role_id.rs"));
 
 const SYSTEM_CHAR: char = 's';
 const SYSTEM_BYTE: u8 = b's';
+const PREDEFINED_CHAR: char = 'g';
+const PREDEFINED_BYTE: u8 = b'g';
 const USER_CHAR: char = 'u';
 const USER_BYTE: u8 = b'u';
 const PUBLIC_CHAR: char = 'p';
@@ -44,6 +46,10 @@ const PUBLIC_BYTE: u8 = b'p';
 )]
 pub enum RoleId {
     System(u64),
+    /// Like system roles, these are roles built into the system. However, they are grantable to
+    /// users and provide access to certain, commonly needed, privileged capabilities and
+    /// information (modelled after <https://www.postgresql.org/docs/16/predefined-roles.html>).
+    Predefined(u64),
     User(u64),
     Public,
 }
@@ -61,11 +67,23 @@ impl RoleId {
         matches!(self, Self::Public)
     }
 
+    pub fn is_predefined(&self) -> bool {
+        matches!(self, Self::Predefined(_))
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        self.is_public() || self.is_system() || self.is_predefined()
+    }
+
     pub fn encode_binary(&self) -> Vec<u8> {
         let mut res = Vec::with_capacity(Self::binary_size());
         match self {
             RoleId::System(id) => {
                 res.push(SYSTEM_BYTE);
+                res.extend_from_slice(&id.to_le_bytes());
+            }
+            RoleId::Predefined(id) => {
+                res.push(PREDEFINED_BYTE);
                 res.extend_from_slice(&id.to_le_bytes());
             }
             RoleId::User(id) => {
@@ -94,6 +112,7 @@ impl RoleId {
 
         match variant {
             SYSTEM_BYTE => Ok(RoleId::System(id)),
+            PREDEFINED_BYTE => Ok(RoleId::Predefined(id)),
             USER_BYTE => Ok(RoleId::User(id)),
             PUBLIC_BYTE => Ok(RoleId::Public),
             _ => Err(anyhow!("unrecognized role id variant byte '{variant}'")),
@@ -109,30 +128,36 @@ impl FromStr for RoleId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let err = || anyhow!("couldn't parse role id '{s}'");
+        fn parse_u64(s: &str) -> Result<u64, Error> {
+            if s.len() < 2 {
+                return Err(anyhow!("couldn't parse role id '{s}'"));
+            }
+            s[1..]
+                .parse()
+                .map_err(|_| anyhow!("couldn't parse role id '{s}'"))
+        }
+
         match s.chars().next() {
             Some(SYSTEM_CHAR) => {
-                if s.len() < 2 {
-                    return Err(err());
-                }
-                let val: u64 = s[1..].parse().map_err(|_| err())?;
+                let val = parse_u64(s)?;
                 Ok(Self::System(val))
             }
+            Some(PREDEFINED_CHAR) => {
+                let val = parse_u64(s)?;
+                Ok(Self::Predefined(val))
+            }
             Some(USER_CHAR) => {
-                if s.len() < 2 {
-                    return Err(err());
-                }
-                let val: u64 = s[1..].parse().map_err(|_| err())?;
+                let val = parse_u64(s)?;
                 Ok(Self::User(val))
             }
             Some(PUBLIC_CHAR) => {
                 if s.len() == 1 {
                     Ok(Self::Public)
                 } else {
-                    Err(err())
+                    Err(anyhow!("couldn't parse role id '{s}'"))
                 }
             }
-            _ => Err(err()),
+            _ => Err(anyhow!("couldn't parse role id '{s}'")),
         }
     }
 }
@@ -141,6 +166,7 @@ impl fmt::Display for RoleId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::System(id) => write!(f, "{SYSTEM_CHAR}{id}"),
+            Self::Predefined(id) => write!(f, "{PREDEFINED_CHAR}{id}"),
             Self::User(id) => write!(f, "{USER_CHAR}{id}"),
             Self::Public => write!(f, "{PUBLIC_CHAR}"),
         }
@@ -153,6 +179,7 @@ impl RustType<ProtoRoleId> for RoleId {
         ProtoRoleId {
             kind: Some(match self {
                 RoleId::System(x) => System(*x),
+                RoleId::Predefined(x) => Predefined(*x),
                 RoleId::User(x) => User(*x),
                 RoleId::Public => Public(()),
             }),
@@ -163,6 +190,7 @@ impl RustType<ProtoRoleId> for RoleId {
         use proto_role_id::Kind::*;
         match proto.kind {
             Some(System(x)) => Ok(RoleId::System(x)),
+            Some(Predefined(x)) => Ok(RoleId::Predefined(x)),
             Some(User(x)) => Ok(RoleId::User(x)),
             Some(Public(_)) => Ok(RoleId::Public),
             None => Err(TryFromProtoError::missing_field("ProtoRoleId::kind")),
@@ -179,6 +207,11 @@ fn test_role_id_parsing() {
     let s = "s42";
     let role_id: RoleId = s.parse().unwrap();
     assert_eq!(RoleId::System(42), role_id);
+    assert_eq!(s, role_id.to_string());
+
+    let s = "g24";
+    let role_id: RoleId = s.parse().unwrap();
+    assert_eq!(RoleId::Predefined(24), role_id);
     assert_eq!(s, role_id.to_string());
 
     let s = "u666";
@@ -207,6 +240,12 @@ fn test_role_id_parsing() {
 #[mz_ore::test]
 fn test_role_id_binary() {
     let role_id = RoleId::System(42);
+    assert_eq!(
+        role_id,
+        RoleId::decode_binary(&role_id.encode_binary()).unwrap()
+    );
+
+    let role_id = RoleId::Predefined(24);
     assert_eq!(
         role_id,
         RoleId::decode_binary(&role_id.encode_binary()).unwrap()
