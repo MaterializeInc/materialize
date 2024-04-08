@@ -110,7 +110,7 @@ class OutputConsistencyTest:
         max_iterations: int,
         avoid_expressions_expecting_db_error: bool,
     ) -> ConsistencyTestSummary:
-        input_data = ConsistencyTestInputData()
+        input_data = self.create_input_data()
 
         output_printer = OutputPrinter(input_data)
         scenario = self.get_scenario()
@@ -196,6 +196,9 @@ class OutputConsistencyTest:
 
     def shall_run(self, sql_executors: SqlExecutors) -> bool:
         return True
+
+    def create_input_data(self) -> ConsistencyTestInputData:
+        return ConsistencyTestInputData()
 
     def create_sql_executors(
         self,
