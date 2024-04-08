@@ -402,7 +402,10 @@ class CopyToS3Action(Action):
     def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         obj_name = str(obj)
-        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{self.rng.randrange(100)}' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')"
+        with exe.db.lock:
+            location = exe.db.s3_path
+            exe.db.s3_path += 1
+        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')"
 
         exe.execute(query, explainable=False)
         return True
