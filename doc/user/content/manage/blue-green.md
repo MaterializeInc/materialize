@@ -1,12 +1,18 @@
 ---
 title: "Blue/green deployments"
 description: "How to perform blue/green deployments in Materialize."
+draft: true
 menu:
   main:
     parent: manage
     name: "Blue/green deployments"
     weight: 13
 ---
+
+[//]: # "TODO(morsapaes) We want to nudge users to use the automated dbt
+workflow, but should document the raw sequence of commands as reference. This
+page mostly describes the pre-automation dbt workflow, though, so marking as
+draft for now."
 
 Materialize offers some helpful tools to manage blue/green deployments. We
 recommend using the blue/green pattern any time you need to deploy changes to

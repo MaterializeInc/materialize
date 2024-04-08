@@ -422,10 +422,10 @@ p+p {
             &:before {
                 content: counter(list-counter);
                 color: var(--orchid);
-                font-size: 4.5rem;
+                font-size: 3rem;
                 font-weight: 100;
                 position: absolute;
-                top: 0;
+                top: 100;
                 left: 1rem;
 
                 @media(max-width: 850px) {
