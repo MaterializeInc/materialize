@@ -108,7 +108,7 @@ impl OptimizerTrace {
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
     ) -> Result<Vec<Row>, AdapterError> {
-        let mut trace = self.collect_all(
+        let mut traces = self.collect_all(
             format,
             config,
             humanizer,
@@ -121,7 +121,8 @@ impl OptimizerTrace {
             None => {
                 // For the `Trace` (pseudo-)stage, return the entire trace as
                 // triples of (time, path, plan) values.
-                let rows = trace
+                let rows = traces
+                    .0
                     .into_iter()
                     .map(|entry| {
                         // The trace would have to take over 584 years to overflow a u64.
@@ -139,20 +140,14 @@ impl OptimizerTrace {
                 // For everything else, return the plan for the stage identified
                 // by the corresponding path.
 
-                // A helper struct hat removes the first (and by assumption the
-                // only) plan that matches the given path from the collected
-                // trace.
-                let mut remove_plan = |path: &'static str| {
-                    let index = trace.iter().position(|entry| entry.path == path);
-                    index.map(|index| trace.remove(index))
-                };
-
                 // For certain stages we want to return the resulting fast path
                 // plan instead of the selected stage if it is present.
                 let plan = if stage.show_fast_path() && !config.no_fast_path {
-                    remove_plan(NamedPlan::FastPath.path()).or_else(|| remove_plan(path))
+                    traces
+                        .remove(NamedPlan::FastPath.path())
+                        .or_else(|| traces.remove(path))
                 } else {
-                    remove_plan(path)
+                    traces.remove(path)
                 };
 
                 let row = plan
@@ -187,7 +182,7 @@ impl OptimizerTrace {
         row_set_finishing: Option<RowSetFinishing>,
         target_cluster: Option<&str>,
         dataflow_metainfo: DataflowMetainfo,
-    ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
+    ) -> Result<TraceEntries<String>, ExplainError> {
         let mut results = vec![];
 
         // First, create an ExplainContext without `used_indexes`. We'll use this to, e.g., collect
@@ -248,7 +243,7 @@ impl OptimizerTrace {
         // to `*.extend` the `results` vector is already sorted).
         results.sort_by_key(|x| x.instant);
 
-        Ok(results)
+        Ok(TraceEntries(results))
     }
 
     /// Collect all trace entries of a plan type `T` that implements
@@ -343,5 +338,17 @@ impl From<&OptimizerTrace> for tracing::Dispatch {
         // be not afraid: value.0 is a Dispatcher, which is Arc<dyn Subscriber + ...>
         // https://docs.rs/tracing-core/0.1.30/src/tracing_core/dispatcher.rs.html#451-453
         value.0.clone()
+    }
+}
+
+/// A collection of optimizer trace entries with convenient accessor methods.
+pub struct TraceEntries<T>(pub Vec<TraceEntry<T>>);
+
+impl<T> TraceEntries<T> {
+    // Removes the first (and by assumption the only) trace that matches the
+    // given path from the collected trace.
+    pub fn remove(&mut self, path: &'static str) -> Option<TraceEntry<T>> {
+        let index = self.0.iter().position(|entry| entry.path == path);
+        index.map(|index| self.0.remove(index))
     }
 }
