@@ -26,6 +26,7 @@ cluster_replica                     ""                      "Sets a target clust
 database                            materialize             "Sets the current database (CockroachDB)."
 DateStyle                           "ISO, MDY"              "Sets the display format for date and time values (PostgreSQL)."
 emit_introspection_query_notice     on                      "Whether to print a notice when querying per-replica introspection sources."
+emit_plan_insights_notice           off                     "Boolean flag indicating whether to send a NOTICE with JSON-formatted plan insights before executing a SELECT statement (Materialize)."
 emit_timestamp_notice               off                     "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize)."
 emit_trace_id_notice                off                     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
 enable_alter_swap                   on                      "Whether the ALTER SWAP feature for objects is allowed (Materialize)."

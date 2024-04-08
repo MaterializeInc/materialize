@@ -1401,7 +1401,9 @@ pub enum RequireLinearization {
 impl From<&ExplainContext> for RequireLinearization {
     fn from(ctx: &ExplainContext) -> Self {
         match ctx {
-            ExplainContext::None => RequireLinearization::Required,
+            ExplainContext::None | ExplainContext::PlanInsightsNotice(_) => {
+                RequireLinearization::Required
+            }
             _ => RequireLinearization::NotRequired,
         }
     }

@@ -15,6 +15,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::explain::ExplainContext;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_ore::collections::CollectionExt;
 use mz_repr::explain::tracing::{DelegateSubscriber, PlanTrace, TraceEntry};
 use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
@@ -171,6 +172,7 @@ impl OptimizerTrace {
                         "raw": get_plan(NamedPlan::Raw)?,
                         "optimized": {
                             "global": get_plan(NamedPlan::Global)?,
+                            "fast_path": get_plan(NamedPlan::FastPath)?,
                         }
                     },
                     "insights": insights::plan_insights(humanizer, global_plan, fast_path_plan),
@@ -217,6 +219,30 @@ impl OptimizerTrace {
         };
 
         Ok(rows)
+    }
+
+    pub fn into_plan_insights(
+        self,
+        humanizer: &dyn ExprHumanizer,
+        row_set_finishing: Option<RowSetFinishing>,
+        target_cluster: Option<&str>,
+        dataflow_metainfo: DataflowMetainfo,
+    ) -> Result<String, AdapterError> {
+        let rows = self.into_rows(
+            ExplainFormat::Json,
+            &ExplainConfig::default(),
+            humanizer,
+            row_set_finishing,
+            target_cluster,
+            dataflow_metainfo,
+            ExplainStage::PlanInsights,
+            plan::ExplaineeStatementKind::Select,
+        )?;
+
+        // When using `ExplainStage::PlanInsights`, we're guaranteed that the
+        // output is a single row containing a single column containing the plan
+        // insights as a string.
+        Ok(rows.into_element().into_element().unwrap_str().into())
     }
 
     /// Collect all traced plans for all plan types `T` that are available in
