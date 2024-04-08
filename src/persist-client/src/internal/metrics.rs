@@ -695,6 +695,7 @@ pub struct BatchWriteMetrics {
     pub(crate) step_columnar_encoding: Counter,
     pub(crate) step_stats: Counter,
     pub(crate) step_part_writing: Counter,
+    pub(crate) step_inline: Counter,
 }
 
 impl BatchWriteMetrics {
@@ -734,6 +735,10 @@ impl BatchWriteMetrics {
             step_part_writing: registry.register(metric!(
                 name: format!("mz_persist_{}_step_part_writing", name),
                 help: format!("blocking time spent writing parts for {} updates", name),
+            )),
+            step_inline: registry.register(metric!(
+                name: format!("mz_persist_{}_step_inline", name),
+                help: format!("time spent encoding {} inline batches", name)
             )),
         }
     }
@@ -2808,12 +2813,22 @@ impl TasksMetrics {
 
 #[derive(Debug)]
 pub struct InlineMetrics {
+    pub(crate) part_commit_count: IntCounter,
+    pub(crate) part_commit_bytes: IntCounter,
     pub(crate) backpressure: BatchWriteMetrics,
 }
 
 impl InlineMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         InlineMetrics {
+            part_commit_count: registry.register(metric!(
+                name: "mz_persist_inline_part_commit_count",
+                help: "count of inline parts committed to state",
+            )),
+            part_commit_bytes: registry.register(metric!(
+                name: "mz_persist_inline_part_commit_bytes",
+                help: "total size of of inline parts committed to state",
+            )),
             backpressure: BatchWriteMetrics::new(registry, "inline_backpressure"),
         }
     }

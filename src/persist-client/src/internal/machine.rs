@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 use mz_dyncfg::{Config, ConfigSet};
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -44,9 +45,9 @@ use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
-    IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
-    Upper,
+    BatchPart, CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch,
+    HollowRollup, IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr,
+    StateCollections, Upper,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -435,8 +436,16 @@ where
                     if !writer_was_present {
                         metrics.state.writer_added.inc();
                     }
-                    // WIP metrics coverage for how many inline bytes we just
-                    // linked in?
+                    for part in &batch.parts {
+                        match part {
+                            BatchPart::Inline { updates, .. } => {
+                                let bytes = u64::cast_from(updates.encoded_size_bytes());
+                                metrics.inline.part_commit_count.inc();
+                                metrics.inline.part_commit_bytes.inc_by(bytes);
+                            }
+                            BatchPart::Hollow(_) => {}
+                        }
+                    }
                     return CompareAndAppendRes::Success(seqno, writer_maintenance);
                 }
                 Err(CompareAndAppendBreak::AlreadyCommitted) => {
