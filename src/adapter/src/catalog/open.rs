@@ -38,7 +38,7 @@ use mz_cluster_client::ReplicaId;
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{is_cluster_size_v2, ClusterId};
-use mz_ore::cast::{usize_to_u64, CastFrom};
+use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
@@ -51,7 +51,7 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
-use mz_sql::names::{QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId};
+use mz_sql::names::{QualifiedItemName, SchemaId};
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -486,98 +486,14 @@ impl Catalog {
                 }
             }
 
-            let mut builtin_table_updates = vec![];
-            for (schema_id, schema) in &catalog.state.ambient_schemas_by_id {
-                let db_spec = ResolvedDatabaseSpecifier::Ambient;
-                builtin_table_updates
-                    .push(catalog.state.pack_schema_update(&db_spec, schema_id, 1));
-                for (_item_name, item_id) in &schema.items {
-                    builtin_table_updates.extend(catalog.state.pack_item_update(*item_id, 1));
-                }
-                for (_item_name, function_id) in &schema.functions {
-                    builtin_table_updates.extend(catalog.state.pack_item_update(*function_id, 1));
-                }
-                for (_item_name, type_id) in &schema.types {
-                    builtin_table_updates.extend(catalog.state.pack_item_update(*type_id, 1));
-                }
-            }
-            for (_id, db) in &catalog.state.database_by_id {
-                builtin_table_updates.push(catalog.state.pack_database_update(db, 1));
-                let db_spec = ResolvedDatabaseSpecifier::Id(db.id.clone());
-                for (schema_id, schema) in &db.schemas_by_id {
-                    builtin_table_updates
-                        .push(catalog.state.pack_schema_update(&db_spec, schema_id, 1));
-                    for (_item_name, item_id) in &schema.items {
-                        builtin_table_updates.extend(catalog.state.pack_item_update(*item_id, 1));
-                    }
-                    for (_item_name, function_id) in &schema.functions {
-                        builtin_table_updates
-                            .extend(catalog.state.pack_item_update(*function_id, 1));
-                    }
-                    for (_item_name, type_id) in &schema.types {
-                        builtin_table_updates.extend(catalog.state.pack_item_update(*type_id, 1));
-                    }
-                }
-            }
-            for (id, sub_component, comment) in catalog.state.comments.iter() {
-                builtin_table_updates.push(catalog.state.pack_comment_update(
-                    id,
-                    sub_component,
-                    comment,
-                    1,
-                ));
-            }
-            for (_id, role) in &catalog.state.roles_by_id {
-                builtin_table_updates.extend(catalog.state.pack_role_update(role.id, 1));
-                for group_id in role.membership.map.keys() {
-                    builtin_table_updates.push(
-                        catalog
-                            .state
-                            .pack_role_members_update(*group_id, role.id, 1),
-                    )
-                }
-            }
-            for (default_privilege_object, default_privilege_acl_items) in
-                catalog.state.default_privileges.iter()
-            {
-                for default_privilege_acl_item in default_privilege_acl_items {
-                    builtin_table_updates.push(catalog.state.pack_default_privileges_update(
-                        default_privilege_object,
-                        &default_privilege_acl_item.grantee,
-                        &default_privilege_acl_item.acl_mode,
-                        1,
-                    ));
-                }
-            }
-            for system_privilege in catalog.state.system_privileges.all_values_owned() {
-                builtin_table_updates.push(
-                    catalog
-                        .state
-                        .pack_system_privileges_update(system_privilege, 1),
-                );
-            }
-            for (id, cluster) in &catalog.state.clusters_by_id {
-                builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
-                for (replica_name, replica_id) in
-                    cluster.replicas().map(|r| (&r.name, r.replica_id))
-                {
-                    builtin_table_updates.extend(catalog.state.pack_cluster_replica_update(
-                        *id,
-                        replica_name,
-                        1,
-                    ));
-                    let replica = catalog.state.get_cluster_replica(*id, replica_id);
-                    for process_id in 0..replica.config.location.num_processes() {
-                        let update = catalog.state.pack_cluster_replica_status_update(
-                            *id,
-                            replica_id,
-                            u64::cast_from(process_id),
-                            1,
-                        );
-                        builtin_table_updates.push(update);
-                    }
-                }
-            }
+            let updates = catalog
+                .storage()
+                .await
+                .transaction()
+                .await?
+                .get_updates()
+                .collect();
+            let mut builtin_table_updates = catalog.state.generate_builtin_table_updates(updates);
             // Operators aren't stored in the catalog, but we would like them in
             // introspection views.
             for (op, func) in OP_IMPLS.iter() {
