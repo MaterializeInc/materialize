@@ -80,6 +80,12 @@ impl<T: Copy> AsRef<[T]> for MetricsRegion<T> {
     }
 }
 
+impl From<Arc<MetricsRegion<u8>>> for LgBytes {
+    fn from(region: Arc<MetricsRegion<u8>>) -> Self {
+        LgBytes { offset: 0, region }
+    }
+}
+
 impl AsRef<[u8]> for LgBytes {
     fn as_ref(&self) -> &[u8] {
         // This implementation of [bytes::Buf] chooses to panic instead of
@@ -267,10 +273,7 @@ impl LgBytesOpMetrics {
     /// region, falling back to a heap allocation.
     pub fn try_mmap<T: AsRef<[u8]>>(&self, buf: T) -> LgBytes {
         let region = self.try_mmap_region(buf);
-        LgBytes {
-            offset: 0,
-            region: Arc::new(region),
-        }
+        LgBytes::from(Arc::new(region))
     }
 
     /// Attempts to copy the given buf into an lgalloc managed file-based mapped
