@@ -306,7 +306,10 @@ impl Catalog {
             state.apply_updates_for_bootstrap(updates);
 
             // Load all builtin types.
-            let (builtin_types, builtin_non_types): (Vec<_>, Vec<_>) = builtin_item_ids.all_builtins.into_iter().partition(|(builtin, _)| matches!(builtin, Builtin::Type(_)));
+            let (builtin_types, builtin_non_types): (Vec<_>, Vec<_>) = builtin_item_ids
+                .all_builtins
+                .into_iter()
+                .partition(|(builtin, _)| matches!(builtin, Builtin::Type(_)));
             let type_id_map = builtin_types
                 .into_iter()
                 .map(|(builtin, id)| (builtin.name(), id))
