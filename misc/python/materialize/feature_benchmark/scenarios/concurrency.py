@@ -20,6 +20,7 @@ class ParallelIngestion(Concurrency):
     """Measure the time it takes to ingest multiple sources concurrently."""
 
     SOURCES = 10
+    FIXED_SCALE = True  # Disk slowness in CRDB leading to CRDB going down
 
     def shared(self) -> Action:
         return TdAction(
