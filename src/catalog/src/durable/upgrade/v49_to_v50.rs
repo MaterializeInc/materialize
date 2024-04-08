@@ -9,8 +9,8 @@
 
 use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v49 as v49, objects_v50 as v50};
-use mz_stash::upgrade::WireCompatible;
-use mz_stash::wire_compatible;
+use mz_proto::wire_compatible;
+use mz_proto::wire_compatible::WireCompatible;
 
 wire_compatible!(v49::ClusterKey with v50::ClusterKey);
 wire_compatible!(v49::RoleId with v50::RoleId);

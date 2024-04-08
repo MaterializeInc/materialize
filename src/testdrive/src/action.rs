@@ -753,12 +753,6 @@ impl Run for PosCommand {
                     "set-from-sql" => set::run_set_from_sql(builtin, state).await,
                     "set-from-file" => set::run_set_from_file(builtin, state).await,
                     "webhook-append" => webhook::run_append(builtin, state).await,
-                    // "verify-timestamp-compaction" => Box::new(
-                    //     verify_timestamp_compaction::run_verify_timestamp_compaction_action(
-                    //         builtin,
-                    //     )
-                    //     .await,
-                    // ),
                     _ => {
                         return Err(PosError::new(
                             anyhow!("unknown built-in command {}", builtin.name),

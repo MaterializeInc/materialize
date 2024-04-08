@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_stash::upgrade::WireCompatible;
-use mz_stash::wire_compatible;
+use mz_proto::wire_compatible;
+use mz_proto::wire_compatible::WireCompatible;
 
 use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v53 as v53, objects_v54 as v54};

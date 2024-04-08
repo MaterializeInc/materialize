@@ -12,7 +12,6 @@ pre-image:
   - type: cargo-build
     bin:
       - persistcli
-      - mz-stash-debug
       - mz-catalog-debug
     strip: false
 publish: true

@@ -131,7 +131,3 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 
 > SELECT mz_unsafe.mz_sleep(5);
 <null>
-
-# TODO: enable when possible
-# max-size=0 requires that we compact past the max timestamp when this is first invoked
-# $ verify-timestamp-compaction source=input max-size=0 permit-progress=true

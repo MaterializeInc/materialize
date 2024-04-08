@@ -48,7 +48,6 @@ use mz_persist_types::{Codec64, Opaque};
 use mz_proto::RustType;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
-use mz_stash::{self, TypedCollection};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
     StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
@@ -62,7 +61,6 @@ use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
     SinkStatisticsUpdate, SourceStatisticsUpdate, WebhookStatistics,
 };
-use mz_storage_types::collections as proto;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{
@@ -89,21 +87,6 @@ mod collection_status;
 mod persist_handles;
 mod rehydration;
 mod statistics;
-
-pub static METADATA_COLLECTION: TypedCollection<proto::GlobalId, proto::DurableCollectionMetadata> =
-    TypedCollection::new("storage-collection-metadata");
-
-pub static PERSIST_TXNS_SHARD: TypedCollection<(), String> =
-    TypedCollection::new("persist-txns-shard");
-
-pub static SHARD_FINALIZATION: TypedCollection<String, ()> =
-    TypedCollection::new("storage-shards-to-finalize");
-
-pub static ALL_COLLECTIONS: &[&str] = &[
-    METADATA_COLLECTION.name(),
-    PERSIST_TXNS_SHARD.name(),
-    SHARD_FINALIZATION.name(),
-];
 
 #[derive(Debug)]
 enum PersistTxns<T> {

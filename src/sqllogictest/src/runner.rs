@@ -76,7 +76,6 @@ use mz_sql_parser::ast::{
     UnresolvedItemName, UnresolvedObjectName, ViewDefinition,
 };
 use mz_sql_parser::parser;
-use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use once_cell::sync::Lazy;
@@ -1031,7 +1030,6 @@ impl<'a> RunnerInner<'a> {
                 persist_clients,
                 storage_stash_url,
                 now: SYSTEM_TIME.clone(),
-                stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
                 metrics_registry: metrics_registry.clone(),
                 persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
                 secrets_args: mz_service::secrets::SecretsReaderCliArgs {
