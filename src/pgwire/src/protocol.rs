@@ -1915,6 +1915,13 @@ where
                 CopyFormatParams::Csv(CopyCsvFormatParams::default()),
                 Format::Text,
             ),
+            CopyFormat::Parquet => {
+                let text = "Parquet format is not supported".to_string();
+                return self
+                    .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
+                    .await
+                    .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
+            }
         };
 
         let encode_fn = |row: &Row, typ: &RelationType, out: &mut Vec<u8>| {

@@ -991,7 +991,9 @@ fn plan_copy_to_expr(
             CopyCsvFormatParams::try_new(None, None, None, None, None)
                 .map_err(|e| sql_err!("{}", e))?,
         )),
-        _ => sql_bail!("only CSV format is supported for COPY ... TO <expr>"),
+        CopyFormat::Parquet => S3SinkFormat::Parquet,
+        CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
+        CopyFormat::Text => bail_unsupported!("FORMAT TEXT"),
     };
 
     // Converting the to expr to a HirScalarExpr
@@ -1080,6 +1082,7 @@ fn plan_copy_from(
             )
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
+        CopyFormat::Parquet => bail_unsupported!("FORMAT PARQUET"),
     };
 
     let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;
@@ -1116,6 +1119,7 @@ pub fn plan_copy(
         "text" => CopyFormat::Text,
         "csv" => CopyFormat::Csv,
         "binary" => CopyFormat::Binary,
+        "parquet" => CopyFormat::Parquet,
         _ => sql_bail!("unknown FORMAT: {}", options.format),
     };
     if let CopyDirection::To = direction {

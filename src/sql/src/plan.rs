@@ -1529,6 +1529,7 @@ pub enum CopyFormat {
     Text,
     Csv,
     Binary,
+    Parquet,
 }
 
 #[derive(Debug, Copy, Clone)]
