@@ -1139,6 +1139,14 @@ where
         Ok(())
     }
 
+    // Dropping a table takes roughly the following flow:
+    //
+    //   1. We remove the table from the persist table write worker.
+    //   2. The table removal is awaited in an async task.
+    //   3. A message is sent to the storage controller that the table has been removed from the
+    //      table write worker.
+    //   4. The controller drains all table drop messages during `process`.
+    //   5. `process` calls `drop_sources` with the dropped tables.
     fn drop_tables(
         &mut self,
         identifiers: Vec<GlobalId>,
