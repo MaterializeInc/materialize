@@ -99,8 +99,8 @@ steps:
                 - common-ancestor
                 - --regression-against
                 - common-ancestor
-                - --workload-group-marker
-                - "DmlDqlWorkload"
+                - --workload
+                - "InsertWorkload"
                 - --max-concurrency
                 - "256"
       - id: scalability-benchmark-ddl
