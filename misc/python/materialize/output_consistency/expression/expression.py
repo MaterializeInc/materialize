@@ -127,8 +127,8 @@ class LeafExpression(Expression):
         data_type: DataType,
         characteristics: set[ExpressionCharacteristics],
         storage_layout: ValueStorageLayout,
-        is_aggregate: bool,
-        is_expect_error: bool,
+        is_aggregate: bool = False,
+        is_expect_error: bool = False,
     ):
         super().__init__(characteristics, storage_layout, is_aggregate, is_expect_error)
         self.column_name = column_name
