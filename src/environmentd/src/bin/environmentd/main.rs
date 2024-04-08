@@ -57,7 +57,6 @@ use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
 use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
-use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use once_cell::sync::Lazy;
@@ -873,7 +872,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         clusterd_image: args.clusterd_image.expect("clap enforced"),
         init_container_image: args.orchestrator_kubernetes_init_container_image,
         now: SYSTEM_TIME.clone(),
-        stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
         metrics_registry: metrics_registry.clone(),
         persist_pubsub_url: args.persist_pubsub_url,
         connection_context,

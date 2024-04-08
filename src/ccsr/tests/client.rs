@@ -133,7 +133,6 @@ async fn test_client() -> Result<(), anyhow::Error> {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
-#[ignore] // TODO: Reenable when #18269 is fixed
 async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
     let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 

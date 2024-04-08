@@ -2488,7 +2488,7 @@ impl Blob for MetricsBlob {
         res
     }
 
-    #[instrument(name = "blob::set", fields(shard=blob_key_shard_id(key)))]
+    #[instrument(name = "blob::set", fields(shard=blob_key_shard_id(key),size_bytes=value.len()))]
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let bytes = value.len();
         let res = self
@@ -2590,7 +2590,7 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    #[instrument(name = "consensus::compare_and_set", fields(shard=key))]
+    #[instrument(name = "consensus::compare_and_set", fields(shard=key,size_bytes=new.data.len()))]
     async fn compare_and_set(
         &self,
         key: &str,

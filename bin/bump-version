@@ -29,7 +29,7 @@ version=${1#v}
 
 sed -i.bak \
     "s/^version = .*/version = \"$version\"/" \
-    src/{clusterd,environmentd,persist-client,testdrive,stash-debug,catalog-debug,balancerd}/Cargo.toml
+    src/{clusterd,environmentd,persist-client,testdrive,catalog-debug,balancerd}/Cargo.toml
 
 if ! [[ "$version" = *dev ]]; then
     sed -i.bak \
@@ -49,7 +49,7 @@ else
     done
 fi
 
-rm -f src/{clusterd,environmentd,persist-client,testdrive,stash-debug,catalog-debug,balancerd}/Cargo.toml.bak LICENSE.bak
+rm -f src/{clusterd,environmentd,persist-client,testdrive,catalog-debug,balancerd}/Cargo.toml.bak LICENSE.bak
 
 cargo check
 

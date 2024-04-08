@@ -83,9 +83,6 @@ members = [
     "src/sql-parser",
     "src/sql-pretty",
     "src/sqllogictest",
-    "src/stash",
-    "src/stash-debug",
-    "src/stash-types",
     "src/storage",
     "src/storage-client",
     "src/storage-controller",
@@ -120,7 +117,6 @@ default-members = [
     "src/mz",
     "src/persist-cli",
     "src/sqllogictest",
-    "src/stash-debug",
     "src/testdrive",
     "test/metabase/smoketest",
 ]

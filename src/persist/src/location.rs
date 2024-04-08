@@ -621,7 +621,7 @@ pub mod tests {
     >(
         new_fn: NewFn,
     ) -> Result<(), ExternalError> {
-        let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
+        let values = ["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
 
         let blob0 = new_fn("path0").await?;
 

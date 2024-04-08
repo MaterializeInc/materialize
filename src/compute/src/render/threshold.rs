@@ -26,8 +26,7 @@ use timely::progress::Timestamp;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, SpecializedArrangement,
-    SpecializedArrangementImport,
+    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport,
 };
 
 /// Shared function to compute an arrangement of values matching `logic`.
@@ -66,34 +65,29 @@ where
 /// Dispatches according to existing type-specialization to an appropriate threshold computation
 /// resulting in another type-specialized arrangement.
 fn dispatch_threshold_arrangement_local<G, L>(
-    oks: &SpecializedArrangement<G>,
+    oks: &MzArrangement<G>,
     name: &str,
     logic: L,
-) -> SpecializedArrangement<G>
+) -> MzArrangement<G>
 where
     G: Scope,
     G::Timestamp: Lattice + Columnation,
     L: Fn(&Diff) -> bool + 'static,
 {
     match oks {
-        SpecializedArrangement::RowUnit(inner) => {
-            let name = format!("{} [val: empty]", name);
-            let oks = threshold_arrangement(inner, &name, logic);
-            SpecializedArrangement::RowUnit(oks)
-        }
-        SpecializedArrangement::RowRow(inner) => {
+        MzArrangement::RowRow(inner) => {
             let oks = threshold_arrangement(inner, name, logic);
-            SpecializedArrangement::RowRow(oks)
+            MzArrangement::RowRow(oks)
         }
     }
 }
 
 /// Dispatches threshold computation for a trace, similarly to `dispatch_threshold_arrangement_local`.
 fn dispatch_threshold_arrangement_trace<G, T, L>(
-    oks: &SpecializedArrangementImport<G, T>,
+    oks: &MzArrangementImport<G, T>,
     name: &str,
     logic: L,
-) -> SpecializedArrangement<G>
+) -> MzArrangement<G>
 where
     G: Scope,
     T: Timestamp + Lattice + Columnation,
@@ -101,14 +95,9 @@ where
     L: Fn(&Diff) -> bool + 'static,
 {
     match oks {
-        SpecializedArrangementImport::RowUnit(inner) => {
-            let name = format!("{} [val: empty]", name);
-            let oks = threshold_arrangement(inner, &name, logic);
-            SpecializedArrangement::RowUnit(oks)
-        }
-        SpecializedArrangementImport::RowRow(inner) => {
+        MzArrangementImport::RowRow(inner) => {
             let oks = threshold_arrangement(inner, name, logic);
-            SpecializedArrangement::RowRow(oks)
+            MzArrangement::RowRow(oks)
         }
     }
 }

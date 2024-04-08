@@ -8,8 +8,6 @@
 -- by the Apache License, Version 2.0.
 
 {% macro create_loadgen_source(name) %}
-CREATE SOURCE IF NOT EXISTS "{{ name.schema }}"."{{ name.table }}"
-IN CLUSTER qa_canary_environment_storage
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'datagen_demo_snowflakeschema_{{ name.table }}')
 KEY FORMAT BYTES
 VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection

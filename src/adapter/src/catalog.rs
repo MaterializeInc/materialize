@@ -1639,15 +1639,6 @@ impl Catalog {
                         )));
                     }
                     let cluster = state.get_cluster(cluster_id);
-                    if cluster_id.is_system()
-                        && !session
-                            .map(|session| session.user().is_internal())
-                            .unwrap_or(false)
-                    {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlyCluster(cluster.name.clone()),
-                        )));
-                    }
                     tx.insert_cluster_replica(
                         cluster_id,
                         id,
@@ -1967,6 +1958,11 @@ impl Catalog {
                         }
                         ObjectId::Role(id) => {
                             let name = state.get_role(&id).name().to_string();
+                            if id.is_system() || id.is_predefined() {
+                                return Err(AdapterError::Catalog(Error::new(
+                                    ErrorKind::ReservedRoleName(name.clone()),
+                                )));
+                            }
                             state.ensure_not_reserved_role(&id)?;
                             tx.remove_role(&name)?;
                             if let Some(builtin_update) = state.pack_role_update(id, -1) {
@@ -2034,20 +2030,6 @@ impl Catalog {
                         ObjectId::ClusterReplica((cluster_id, replica_id)) => {
                             let cluster = state.get_cluster(cluster_id);
                             let replica = cluster.replica(replica_id).expect("Must exist");
-                            if is_reserved_name(&replica.name) {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReservedReplicaName(replica.name.clone()),
-                                )));
-                            }
-                            if cluster_id.is_system()
-                                && !session
-                                    .map(|session| session.user().is_internal())
-                                    .unwrap_or(false)
-                            {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyCluster(cluster.name.clone()),
-                                )));
-                            }
                             tx.remove_cluster_replica(replica_id)?;
 
                             for process_id in replica.process_status.keys() {
@@ -2436,14 +2418,9 @@ impl Catalog {
                     name,
                     to_name,
                 } => {
-                    if cluster_id.is_system() {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlyCluster(name.cluster.into_string()),
-                        )));
-                    }
                     if is_reserved_name(&to_name) {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedClusterName(to_name),
+                            ErrorKind::ReservedReplicaName(to_name),
                         )));
                     }
                     tx.rename_cluster_replica(replica_id, &name, &to_name)?;
@@ -2489,15 +2466,13 @@ impl Catalog {
                     }
 
                     if entry.id().is_system() {
-                        let schema_name = state
-                            .resolve_full_name(
-                                entry.name(),
-                                session.map(|session| session.conn_id()),
-                            )
-                            .schema;
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlySystemSchema(schema_name),
-                        )));
+                        let name = state.resolve_full_name(
+                            entry.name(),
+                            session.map(|session| session.conn_id()),
+                        );
+                        return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                            name.to_string(),
+                        ))));
                     }
 
                     let mut to_full_name = current_full_name.clone();
@@ -2771,19 +2746,14 @@ impl Catalog {
                         }
                         ObjectId::ClusterReplica((cluster_id, replica_id)) => {
                             let cluster = state.get_cluster(*cluster_id);
-                            if cluster_id.is_system() {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyCluster(cluster.name().to_string()),
-                                )));
-                            }
                             let replica_name = cluster
                                 .replica(*replica_id)
                                 .expect("catalog out of sync")
                                 .name
                                 .clone();
-                            if is_reserved_name(&replica_name) {
+                            if replica_id.is_system() {
                                 return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReservedReplicaName(replica_name),
+                                    ErrorKind::ReadOnlyClusterReplica(replica_name),
                                 )));
                             }
                             builtin_table_updates.extend(state.pack_cluster_replica_update(
@@ -2805,6 +2775,11 @@ impl Catalog {
                         }
                         ObjectId::Database(id) => {
                             let database = state.get_database(id);
+                            if id.is_system() {
+                                return Err(AdapterError::Catalog(Error::new(
+                                    ErrorKind::ReadOnlyDatabase(database.name().to_string()),
+                                )));
+                            }
                             builtin_table_updates.push(state.pack_database_update(database, -1));
                             let database = state.get_database_mut(id);
                             Self::update_privilege_owners(
@@ -2818,7 +2793,15 @@ impl Catalog {
                             builtin_table_updates.push(state.pack_database_update(database, 1));
                         }
                         ObjectId::Schema((database_spec, schema_spec)) => {
-                            let schema_id = schema_spec.clone().into();
+                            let schema_id: SchemaId = schema_spec.clone().into();
+                            if schema_id.is_system() {
+                                let schema = state.get_schema(database_spec, schema_spec, conn_id);
+                                let name = schema.name();
+                                let full_name = state.resolve_full_schema_name(name);
+                                return Err(AdapterError::Catalog(Error::new(
+                                    ErrorKind::ReadOnlySystemSchema(full_name.to_string()),
+                                )));
+                            }
                             builtin_table_updates.push(state.pack_schema_update(
                                 database_spec,
                                 &schema_id,
@@ -3456,11 +3439,21 @@ impl Catalog {
         conn_id: &ConnectionId,
     ) -> Result<(), Error> {
         match object_id {
-            ObjectId::Cluster(cluster_id) | ObjectId::ClusterReplica((cluster_id, _)) => {
+            ObjectId::Cluster(cluster_id) => {
                 if cluster_id.is_system() {
                     let cluster = self.get_cluster(*cluster_id);
                     Err(Error::new(ErrorKind::ReadOnlyCluster(
                         cluster.name().to_string(),
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                if replica_id.is_system() {
+                    let replica = self.get_cluster_replica(*cluster_id, *replica_id);
+                    Err(Error::new(ErrorKind::ReadOnlyClusterReplica(
+                        replica.name().to_string(),
                     )))
                 } else {
                     Ok(())

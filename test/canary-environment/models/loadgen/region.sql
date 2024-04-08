@@ -7,6 +7,5 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-{{ config(materialized='source', indexes=[{'default': True, 'cluster': 'qa_canary_environment_compute'}]) }}
-
+{{ config(materialized='source', cluster='qa_canary_environment_storage', indexes=[{'default': True, 'cluster': 'qa_canary_environment_compute'}]) }}
 {{ create_loadgen_source(this) }}

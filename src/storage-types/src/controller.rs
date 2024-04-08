@@ -19,7 +19,6 @@ use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
-use mz_stash_types::StashError;
 use mz_timely_util::antichain::AntichainExt;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -179,8 +178,6 @@ pub enum StorageError<T> {
     ReadBeforeSince(GlobalId),
     /// The expected upper of one or more appends was different from the actual upper of the collection
     InvalidUppers(Vec<InvalidUpper<T>>),
-    /// An operation failed to read or write state
-    IOError(StashError),
     /// The (client for) the requested cluster instance is missing.
     IngestionInstanceMissing {
         storage_instance_id: StorageInstanceId,
@@ -225,7 +222,6 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
             Self::InvalidUppers(_) => None,
             Self::IngestionInstanceMissing { .. } => None,
             Self::ExportInstanceMissing { .. } => None,
-            Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
             Self::InvalidAlter { .. } => None,
             Self::InvalidUsage(_) => None,
@@ -291,9 +287,6 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
             ),
             // N.B. For these errors, the underlying error is reported in `source()`, and it
             // is the responsibility of the caller to print the chain of errors, when desired.
-            Self::IOError(_err) => write!(f, "failed to read or write state",),
-            // N.B. For these errors, the underlying error is reported in `source()`, and it
-            // is the responsibility of the caller to print the chain of errors, when desired.
             Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
             Self::InvalidAlter(err) => std::fmt::Display::fmt(err, f),
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
@@ -335,12 +328,6 @@ impl fmt::Display for AlterError {
 impl<T> From<AlterError> for StorageError<T> {
     fn from(error: AlterError) -> Self {
         Self::InvalidAlter(error)
-    }
-}
-
-impl<T> From<StashError> for StorageError<T> {
-    fn from(error: StashError) -> Self {
-        Self::IOError(error)
     }
 }
 

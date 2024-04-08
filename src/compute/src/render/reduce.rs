@@ -44,7 +44,7 @@ use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
-use crate::render::context::{CollectionBundle, Context, SpecializedArrangement};
+use crate::render::context::{CollectionBundle, Context, MzArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::{ArrangementFlavor, Pairer};
@@ -198,7 +198,7 @@ where
         errors: &mut Vec<Collection<S, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> SpecializedArrangement<S>
+    ) -> MzArrangement<S>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -216,29 +216,29 @@ where
                 let (arranged_output, errs) =
                     self.build_accumulable(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(arranged_output)
+                MzArrangement::RowRow(arranged_output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
                 let (output, errs) = self.build_monotonic(collection, expr, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::RowRow(output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
                 let (output, errs) = self.build_bucketed(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
                 let (output, errs) = self
                     .build_basic_aggregate(collection, index, &aggr, true, key_arity, mfp_after);
                 errors.push(errs.expect("validation should have occurred as it was requested"));
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
                 let (output, errs) =
                     self.build_basic_aggregates(collection, aggrs, key_arity, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::RowRow(output)
             }
             // Otherwise, we need to render something different for each type of
             // reduction, and then stitch them together.
@@ -264,12 +264,7 @@ where
                         key_arity,
                         None,
                     ) {
-                        SpecializedArrangement::RowUnit(_) => {
-                            unreachable!(
-                                "Unexpected RowUnit arrangement in reduce collation rendering"
-                            )
-                        }
-                        SpecializedArrangement::RowRow(arranged) => arranged,
+                        MzArrangement::RowRow(arranged) => arranged,
                     };
                     to_collate.push((r#type, arrangement));
                 }
@@ -282,7 +277,7 @@ where
                     mfp_after,
                 );
                 errors.push(errs);
-                SpecializedArrangement::RowRow(oks)
+                MzArrangement::RowRow(oks)
             }
         };
         arrangement
@@ -492,23 +487,13 @@ where
         &self,
         collection: Collection<S, (Row, Row), Diff>,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (
-        SpecializedArrangement<S>,
-        Collection<S, DataflowError, Diff>,
-    )
+    ) -> (MzArrangement<S>, Collection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
-        let collection = collection.map(|(k, v)| {
-            assert!(v.is_empty());
-            (k, ())
-        });
-        let (arrangement, errs) = self.build_distinct::<RowSpine<_, _>, RowErrSpine<_, _>, _>(
-            collection,
-            " [val: empty]",
-            mfp_after,
-        );
-        (SpecializedArrangement::RowUnit(arrangement), errs)
+        let (arrangement, errs) = self
+            .build_distinct::<RowRowSpine<_, _>, RowErrSpine<_, _>, _>(collection, "", mfp_after);
+        (MzArrangement::RowRow(arrangement), errs)
     }
 
     /// Build the dataflow to compute the set of distinct keys.

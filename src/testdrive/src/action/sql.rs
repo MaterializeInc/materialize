@@ -137,10 +137,19 @@ async fn try_run_sql(
         .prepare(query)
         .await
         .context("preparing query failed")?;
-    let rows: Vec<_> = state
-        .pgclient
-        .query(&stmt, &[])
-        .await
+
+    let query_with_timeout = tokio::time::timeout(
+        state.default_timeout.clone(),
+        state.pgclient.query(&stmt, &[]),
+    )
+    .await;
+
+    if query_with_timeout.is_err() {
+        bail!("query timed out")
+    }
+
+    let rows: Vec<_> = query_with_timeout
+        .unwrap()
         .context("executing query failed")?
         .into_iter()
         .map(|row| decode_row(state, row))

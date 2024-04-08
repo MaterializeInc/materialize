@@ -116,8 +116,6 @@
 /src/sql-parser                     @MaterializeInc/adapter
 /src/sqllogictest                   @MaterializeInc/adapter
 /src/ssh-util                       @MaterializeInc/storage
-/src/stash                          @MaterializeInc/adapter
-/src/stash-debug                    @MaterializeInc/adapter
 /src/storage                        @MaterializeInc/storage
 /src/storage-client                 @MaterializeInc/storage
 /src/storage-controller             @MaterializeInc/storage

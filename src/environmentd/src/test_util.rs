@@ -42,7 +42,6 @@ use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_tracing::CloneableEnvFilter;
@@ -484,7 +483,6 @@ impl Listeners {
                     persist_clients,
                     storage_stash_url,
                     now: config.now.clone(),
-                    stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
                     metrics_registry: metrics_registry.clone(),
                     persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
                     secrets_args: mz_service::secrets::SecretsReaderCliArgs {
