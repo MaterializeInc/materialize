@@ -238,7 +238,35 @@ impl Authenticator {
                     let request: Pin<Box<AuthFuture>> = Box::pin({
                         let inner = Arc::clone(&self.inner);
                         let expected_email = String::from(expected_email);
-                        async move { inner.authenticate(expected_email, password).await }
+                        async move {
+                            let result = inner.authenticate(expected_email, password).await;
+
+                            // Make sure our AuthSession state is correct.
+                            //
+                            // Note: We're quite defensive here because this has been a source of
+                            // bugs in the past.
+                            let mut sessions = inner.active_sessions.lock().expect("lock poisoned");
+                            if let Err(err) = &result {
+                                let session = sessions.remove(&password);
+                                tracing::debug!(?err, ?session, "removing failed auth session");
+                            } else {
+                                // If the request succeeds, make sure our state is what we expect.
+                                match sessions.get(&password) {
+                                    // Expected State.
+                                    Some(AuthSession::Active { .. }) => (),
+                                    // Invalid! The AuthSession should have become Active.
+                                    None | Some(AuthSession::Pending(_)) => {
+                                        tracing::error!(
+                                            ?password.client_id,
+                                            "failed to make auth session active!"
+                                        );
+                                        sessions.remove(&password);
+                                    }
+                                }
+                            }
+
+                            result
+                        }
                     });
 
                     // Store the future so that future requests can latch on.
@@ -249,6 +277,16 @@ impl Authenticator {
                         .session_request_count
                         .with_label_values(&["new"])
                         .inc();
+
+                    // Make sure there is always something driving the request to completion
+                    // incase the client goes away.
+                    mz_ore::task::spawn(|| "auth-session-listener", {
+                        let request = request.clone();
+                        async move {
+                            // We don't care about the result here, someone else handles it.
+                            let _ = request.await;
+                        }
+                    });
 
                     // Wait for the request to complete.
                     request
