@@ -17,7 +17,8 @@ use arrow2::array::{Array, BinaryArray, PrimitiveArray};
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::{DataType, Field, Schema};
 use mz_dyncfg::Config;
-use mz_ore::lgbytes::MetricsRegion;
+use mz_ore::bytes::MaybeLgBytes;
+use mz_ore::lgbytes::{LgBytes, MetricsRegion};
 use once_cell::sync::Lazy;
 
 use crate::indexed::columnar::ColumnarRecords;
@@ -77,7 +78,7 @@ pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Box<dyn Array>> {
                 .to_vec()
                 .try_into()
                 .expect("valid offsets"),
-            (*x.key_data).as_ref().to_vec().into(),
+            x.key_data.as_ref().to_vec().into(),
             None,
         ))),
         Box::new(BinaryArray::new(
@@ -87,7 +88,7 @@ pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Box<dyn Array>> {
                 .to_vec()
                 .try_into()
                 .expect("valid offsets"),
-            (*x.val_data).as_ref().to_vec().into(),
+            x.val_data.as_ref().to_vec().into(),
             None,
         )),
         Box::new(PrimitiveArray::new(
@@ -172,9 +173,9 @@ pub fn decode_arrow_batch_kvtd(
     let len = x.len();
     let ret = ColumnarRecords {
         len,
-        key_data,
+        key_data: MaybeLgBytes::LgBytes(LgBytes::from(key_data)),
         key_offsets,
-        val_data,
+        val_data: MaybeLgBytes::LgBytes(LgBytes::from(val_data)),
         val_offsets,
         timestamps,
         diffs,
