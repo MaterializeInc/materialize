@@ -343,6 +343,7 @@ where
 mod tests {
     use std::str::FromStr;
 
+    use mz_dyncfg::ConfigUpdates;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
 
@@ -384,10 +385,10 @@ mod tests {
         assert_eq!(container.reader_id, id);
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn rate_limit() {
-        let client = crate::tests::new_test_client().await;
+    async fn rate_limit(dyncfgs: ConfigUpdates) {
+        let client = crate::tests::new_test_client(&dyncfgs).await;
 
         let shard_id = crate::ShardId::new();
 
@@ -416,10 +417,10 @@ mod tests {
     }
 
     // Verifies that the handle updates its view of the opaque token correctly
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn handle_opaque_token() {
-        let client = new_test_client().await;
+    async fn handle_opaque_token(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
         let shard_id = ShardId::new();
 
         let mut since = client

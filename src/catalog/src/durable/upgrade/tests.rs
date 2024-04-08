@@ -86,7 +86,7 @@ fn test_proto_serialization_stability() {
         assert_eq!(
             encoded_str,
             reencoded.as_str(),
-            "SourceData serde should be stable"
+            "SourceData serde should be stable for {snapshot_file}"
         )
     }
 }

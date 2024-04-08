@@ -412,6 +412,20 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_introspection_cluster_replica_size: String,
+    /// The size of the builtin probe cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE",
+        default_value = "1"
+    )]
+    bootstrap_builtin_probe_cluster_replica_size: String,
+    /// The size of the builtin support cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE",
+        default_value = "1"
+    )]
+    bootstrap_builtin_support_cluster_replica_size: String,
     /// An list of NAME=VALUE pairs used to override static defaults
     /// for system parameters.
     #[clap(
@@ -916,6 +930,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .bootstrap_builtin_system_cluster_replica_size,
                 bootstrap_builtin_introspection_cluster_replica_size: args
                     .bootstrap_builtin_introspection_cluster_replica_size,
+                bootstrap_builtin_probe_cluster_replica_size: args
+                    .bootstrap_builtin_probe_cluster_replica_size,
+                bootstrap_builtin_support_cluster_replica_size: args
+                    .bootstrap_builtin_support_cluster_replica_size,
                 system_parameter_defaults: args
                     .system_parameter_default
                     .into_iter()
@@ -942,6 +960,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
                 persist_txn_tables_cli: args.persist_txn_tables,
+                reload_certs: mz_server_core::default_cert_reload_ticker(),
             })
             .await
     })?;

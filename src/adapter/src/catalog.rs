@@ -39,7 +39,7 @@ use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, Transaction}
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    DataSourceDesc, Database, Index, MaterializedView, Role, Schema, Sink, Source,
+    Database, Role, Schema,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -102,7 +102,6 @@ mod builtin_table_updates;
 pub(crate) mod consistency;
 mod migrate;
 
-mod inner;
 mod open;
 mod state;
 
@@ -664,6 +663,8 @@ impl Catalog {
                     cluster_replica_sizes: Default::default(),
                     builtin_system_cluster_replica_size: "1".into(),
                     builtin_introspection_cluster_replica_size: "1".into(),
+                    builtin_probe_cluster_replica_size: "1".into(),
+                    builtin_support_cluster_replica_size: "1".into(),
                     system_parameter_defaults,
                     remote_system_parameters: None,
                     availability_zones: vec![],
@@ -1338,16 +1339,6 @@ impl Catalog {
 
                     info!("update role {name} ({id})");
                 }
-                Op::AlterSetCluster { id, cluster } => Self::transact_alter_set_cluster(
-                    state,
-                    tx,
-                    builtin_table_updates,
-                    oracle_write_ts,
-                    audit_events,
-                    session,
-                    id,
-                    cluster,
-                )?,
                 Op::CreateDatabase { name, owner_id } => {
                     let database_owner_privileges = vec![rbac::owner_privilege(
                         mz_sql::catalog::ObjectType::Database,
@@ -3455,6 +3446,10 @@ impl Catalog {
         self.state.ensure_not_system_role(role_id)
     }
 
+    pub fn ensure_not_predefined_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        self.state.ensure_not_predefined_role(role_id)
+    }
+
     pub fn ensure_not_reserved_object(
         &self,
         object_id: &ObjectId,
@@ -3584,10 +3579,6 @@ pub enum Op {
         id: GlobalId,
         value: Option<Value>,
         window: CompactionWindow,
-    },
-    AlterSetCluster {
-        id: GlobalId,
-        cluster: ClusterId,
     },
     AlterRole {
         id: RoleId,

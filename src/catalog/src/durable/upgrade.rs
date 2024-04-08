@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This module contains all of the helpers and code paths for upgrading/migrating the `Catalog`.
+//! This module contains all the helpers and code paths for upgrading/migrating the `Catalog`.
 //!
 //! We facilitate migrations by keeping snapshots of the objects we previously stored, and relying
 //! entirely on these snapshots. These exist in the form of `catalog/protos/objects_vXX.proto`. By
@@ -34,7 +34,7 @@
 //!    `objects_v15.proto` and `objects_v16.proto`. In this migration code you __should not__
 //!    import any defaults or constants from elsewhere in the codebase, because then a future
 //!    change could then impact a previous migration.
-//! 9. Call your upgrade function in [`persist::upgrade()`].
+//! 9. Call your upgrade function in [`run_upgrade()`].
 //! 10. Generate a test file for the new version:
 //!     ```ignore
 //!     cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
@@ -170,36 +170,31 @@ macro_rules! objects {
     }
 }
 
-objects!(v42, v43, v44, v45, v46, v47, v48, v49, v50, v51, v52, v53);
+objects!(v48, v49, v50, v51, v52, v53, v54);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 53;
+pub const CATALOG_VERSION: u64 = 54;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
 /// After bumping this we can delete the old migrations.
-pub(crate) const MIN_CATALOG_VERSION: u64 = 42;
+pub(crate) const MIN_CATALOG_VERSION: u64 = 48;
 
 // Note(parkmycar): Ideally we wouldn't have to define these extra constants,
 // but const expressions aren't yet supported in match statements.
 const TOO_OLD_VERSION: u64 = MIN_CATALOG_VERSION - 1;
 const FUTURE_VERSION: u64 = CATALOG_VERSION + 1;
 
-mod v42_to_v43;
-mod v43_to_v44;
-mod v44_to_v45;
-mod v45_to_v46;
-mod v46_to_v47;
-mod v47_to_v48;
 mod v48_to_v49;
 mod v49_to_v50;
 mod v50_to_v51;
 mod v51_to_v52;
 mod v52_to_v53;
+mod v53_to_v54;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -207,6 +202,7 @@ enum MigrationAction<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> {
     /// Deletes the provided key.
     Delete(V1),
     /// Inserts the provided key-value pair. The key must not currently exist!
+    #[allow(unused)]
     Insert(V2),
     /// Update the key-value pair for the provided key.
     #[allow(unused)]
@@ -257,76 +253,50 @@ pub(crate) async fn upgrade(
         version = new_version;
     }
 
-    /// Determines which upgrade to run for the `version` and executes it.
-    ///
-    /// Returns the new version and upper.
-    async fn run_upgrade(
-        unopened_catalog_state: &mut UnopenedPersistCatalogState,
-        mode: Mode,
-        version: u64,
-    ) -> Result<u64, CatalogError> {
-        let incompatible = DurableCatalogError::IncompatibleDataVersion {
-            found_version: version,
-            min_catalog_version: MIN_CATALOG_VERSION,
-            catalog_version: CATALOG_VERSION,
-        }
-        .into();
-
-        match version {
-            ..=TOO_OLD_VERSION => Err(incompatible),
-
-            42 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v42_to_v43::upgrade)
-                    .await
-            }
-            43 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v43_to_v44::upgrade)
-                    .await
-            }
-            44 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v44_to_v45::upgrade)
-                    .await
-            }
-            45 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v45_to_v46::upgrade)
-                    .await
-            }
-            46 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v46_to_v47::upgrade)
-                    .await
-            }
-            47 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v47_to_v48::upgrade)
-                    .await
-            }
-            48 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v48_to_v49::upgrade)
-                    .await
-            }
-            49 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v49_to_v50::upgrade)
-                    .await
-            }
-            50 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v50_to_v51::upgrade)
-                    .await
-            }
-            51 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v51_to_v52::upgrade)
-                    .await
-            }
-            52 => {
-                run_versioned_upgrade(unopened_catalog_state, mode, version, v52_to_v53::upgrade)
-                    .await
-            }
-
-            // Up-to-date, no migration needed!
-            CATALOG_VERSION => Ok(CATALOG_VERSION),
-            FUTURE_VERSION.. => Err(incompatible),
-        }
-    }
-
     Ok(())
+}
+
+/// Determines which upgrade to run for the `version` and executes it.
+///
+/// Returns the new version and upper.
+async fn run_upgrade(
+    unopened_catalog_state: &mut UnopenedPersistCatalogState,
+    mode: Mode,
+    version: u64,
+) -> Result<u64, CatalogError> {
+    let incompatible = DurableCatalogError::IncompatibleDataVersion {
+        found_version: version,
+        min_catalog_version: MIN_CATALOG_VERSION,
+        catalog_version: CATALOG_VERSION,
+    }
+    .into();
+
+    match version {
+        ..=TOO_OLD_VERSION => Err(incompatible),
+
+        48 => {
+            run_versioned_upgrade(unopened_catalog_state, mode, version, v48_to_v49::upgrade).await
+        }
+        49 => {
+            run_versioned_upgrade(unopened_catalog_state, mode, version, v49_to_v50::upgrade).await
+        }
+        50 => {
+            run_versioned_upgrade(unopened_catalog_state, mode, version, v50_to_v51::upgrade).await
+        }
+        51 => {
+            run_versioned_upgrade(unopened_catalog_state, mode, version, v51_to_v52::upgrade).await
+        }
+        52 => {
+            run_versioned_upgrade(unopened_catalog_state, mode, version, v52_to_v53::upgrade).await
+        }
+        53 => {
+            run_versioned_upgrade(unopened_catalog_state, mode, version, v53_to_v54::upgrade).await
+        }
+
+        // Up-to-date, no migration needed!
+        CATALOG_VERSION => Ok(CATALOG_VERSION),
+        FUTURE_VERSION.. => Err(incompatible),
+    }
 }
 
 /// Runs `migration_logic` on the contents of the current catalog assuming a current version of

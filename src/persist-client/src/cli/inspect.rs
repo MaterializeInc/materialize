@@ -39,7 +39,7 @@ use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
-use crate::internal::state::{HollowBatchPart, ProtoRollup, ProtoStateDiff, State};
+use crate::internal::state::{BatchPart, HollowBatchPart, ProtoRollup, ProtoStateDiff, State};
 use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId};
@@ -390,28 +390,25 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
         .fetch_current_state::<u64>(&shard_id, versions.0.clone())
         .await;
     let state = state.check_ts_codec(&shard_id)?;
+    let shard_metrics = state_versions.metrics.shards.shard(&shard_id, "unknown");
     // This is odd, but advance by the upper to get maximal consolidation.
     let as_of = state.upper().borrow();
 
     let mut updates = Vec::new();
     for batch in state.collections.trace.batches() {
         for part in batch.parts.iter() {
-            let key = part.key.complete(&shard_id);
-            tracing::info!("fetching {}", key);
-            let buf = state_versions
-                .blob
-                .get(&*key)
-                .await
-                .expect("blob exists")
-                .expect("part exists");
-            let parsed = BlobTraceBatchPart::<u64>::decode(&buf, &state_versions.metrics.columnar)
-                .expect("decodable");
-            let encoded_part = EncodedPart::new(
-                state_versions.metrics.read.snapshot.clone(),
-                batch.desc.clone(),
+            tracing::info!("fetching {}", part.printable_name());
+            let encoded_part = EncodedPart::fetch(
+                &shard_id,
+                &*state_versions.blob,
+                &state_versions.metrics,
+                &shard_metrics,
+                &state_versions.metrics.read.snapshot,
+                &batch.desc,
                 part,
-                parsed,
-            );
+            )
+            .await
+            .expect("part exists");
             let mut cursor = Cursor::default();
             while let Some((k, v, mut t, d)) = cursor.pop(&encoded_part) {
                 t.advance_by(as_of);
@@ -535,14 +532,22 @@ pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
         let writers = state.collections.writers.len();
 
         state.collections.trace.map_batches(|b| {
-            bytes += b.parts.iter().map(|p| p.encoded_size_bytes).sum::<usize>();
+            bytes += b
+                .parts
+                .iter()
+                .map(|p| p.encoded_size_bytes())
+                .sum::<usize>();
             parts += b.parts.len();
             batches += 1;
             if b.parts.is_empty() {
                 empty_batches += 1;
             }
             for run in b.runs() {
-                let largest_part = run.iter().map(|p| p.encoded_size_bytes).max().unwrap_or(0);
+                let largest_part = run
+                    .iter()
+                    .map(|p| p.encoded_size_bytes())
+                    .max()
+                    .unwrap_or(0);
                 runs += 1;
                 longest_run = longest_run.max(run.len());
                 byte_width += largest_part;
@@ -598,7 +603,9 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
         }
         for batch in v.collections.trace.batches() {
             for batch_part in &batch.parts {
-                known_parts.insert(batch_part.key.clone());
+                match batch_part {
+                    BatchPart::Hollow(x) => known_parts.insert(x.key.clone()),
+                };
             }
         }
         for rollup in v.collections.rollups.values() {

@@ -359,7 +359,7 @@ impl ConfigUpdates {
     ///
     /// If a value of the same config has previously been added to these
     /// updates, replaces it.
-    pub fn add_dynamic(&mut self, name: &'static str, val: ConfigVal) {
+    pub fn add_dynamic(&mut self, name: &str, val: ConfigVal) {
         self.updates.insert(
             name.to_owned(),
             ProtoConfigVal {

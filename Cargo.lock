@@ -2462,9 +2462,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.24"
+version = "0.3.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb2c4422095b67ee78da96fbb51a4cc413b3b25883c7717ff7ca1ab31022c9c9"
+checksum = "81fe527a889e1532da5c525686d96d4c2e74cdd345badf8dfef9f6b39dd5f5e8"
 dependencies = [
  "bytes",
  "fnv",
@@ -3782,7 +3782,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.95.0-dev"
+version = "0.96.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3814,7 +3814,6 @@ dependencies = [
  "tokio",
  "tokio-openssl",
  "tokio-postgres",
- "tokio-stream",
  "tokio-util",
  "tracing",
  "uuid",
@@ -3900,7 +3899,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.95.0-dev"
+version = "0.96.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -4053,7 +4052,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.95.0-dev"
+version = "0.96.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -4288,7 +4287,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.95.0-dev"
+version = "0.96.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4302,6 +4301,7 @@ dependencies = [
  "chrono",
  "clap",
  "datadriven",
+ "derivative",
  "fail",
  "fallible-iterator",
  "futures",
@@ -5022,7 +5022,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.95.0-dev"
+version = "0.96.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5041,6 +5041,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-ore",
  "mz-persist",
+ "mz-persist-proc",
  "mz-persist-types",
  "mz-postgres-client",
  "mz-proto",
@@ -5067,6 +5068,16 @@ dependencies = [
  "tonic-build",
  "tracing",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-persist-proc"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.107",
  "workspace-hack",
 ]
 
@@ -5772,6 +5783,7 @@ dependencies = [
  "mz-pgrepr",
  "mz-repr",
  "mz-secrets",
+ "mz-server-core",
  "mz-service",
  "mz-sql",
  "mz-sql-parser",
@@ -5852,7 +5864,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.95.0-dev"
+version = "0.96.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -6171,7 +6183,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.95.0-dev"
+version = "0.96.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -6663,9 +6675,9 @@ checksum = "77af24da69f9d9341038eba93a073b1fdaaa1b788221b00a69bce9e762cb32de"
 
 [[package]]
 name = "openssl-src"
-version = "111.25.0+1.1.1t"
+version = "111.28.1+1.1.1w"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3173cd3626c43e3854b1b727422a276e568d9ec5fe8cec197822cf52cfb743d6"
+checksum = "4bf7e82ffd6d3d6e6524216a0bfd85509f68b5b28354e8e7800057e44cefa9b4"
 dependencies = [
  "cc",
 ]
@@ -9668,9 +9680,9 @@ checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
 
 [[package]]
 name = "unsafe-libyaml"
-version = "0.2.9"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f28467d3e1d3c6586d8f25fa243f544f5800fec42d97032474e17222c2b75cfa"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"

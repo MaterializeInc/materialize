@@ -1056,6 +1056,8 @@ impl<'a> RunnerInner<'a> {
             bootstrap_default_cluster_replica_size: config.replicas.to_string(),
             bootstrap_builtin_system_cluster_replica_size: config.replicas.to_string(),
             bootstrap_builtin_introspection_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_probe_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_support_cluster_replica_size: config.replicas.to_string(),
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(
@@ -1082,6 +1084,7 @@ impl<'a> RunnerInner<'a> {
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
             persist_txn_tables_cli: Some(PersistTxnTablesImpl::Lazy),
+            reload_certs: mz_server_core::cert_reload_never_reload(),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

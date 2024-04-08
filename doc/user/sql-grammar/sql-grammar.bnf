@@ -34,9 +34,9 @@ alter_swap ::=
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_role ::=
-    'ALTER' 'ROLE' role_name ( alter_role_attributes | alter_role_variables )
+    'ALTER' 'ROLE' role_name ( alter_role_attributes | alter_role_set )
 alter_role_attributes ::= 'WITH'? 'INHERIT'
-alter_role_variables ::= ('SET' variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' ) | 'RESET' variable_name)
+alter_role_set ::= ('SET' name ( 'TO' | '=' ) ( value | 'DEFAULT' ) | 'RESET' name)
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
 alter_source ::=
@@ -50,6 +50,10 @@ alter_source_drop_clause ::=
   'DROP' ('SUBSOURCE' | 'TABLE') subsrc_name ( ',' subsrc_name )* ('RESTRICT' | 'CASCADE')?
 alter_set_cluster ::=
   'ALTER' 'MATERIALIZED VIEW' 'IF EXISTS'? name 'SET' 'IN' 'CLUSTER' cluster_name
+alter_system_set_stmt ::=
+  'ALTER' 'SYSTEM' 'SET' name ( 'TO' | '=' ) ( value | 'DEFAULT' )
+alter_system_reset_stmt ::=
+  'ALTER' 'SYSTEM' 'RESET' name
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
@@ -406,10 +410,8 @@ privilege ::=
   ('SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'CREATE' | 'USAGE' | 'CREATEROLE' | 'CREATEDB' | 'CREATECLUSTER')
 reassign_owned ::=
   'REASSIGN' 'OWNED' 'BY' old_role (',' old_role)* 'TO' new_role
-reset_session_variable ::=
-  'RESET' variable_name
-reset_system_variable ::=
-  'RESET' variable_name
+reset_stmt ::=
+  'RESET' parameter_name
 revoke_privilege ::=
   'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ( ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'SYSTEM' | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'SCHEMAS') 'IN' 'DATABASE' database_name (',' database_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') ) 'FROM' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 revoke_role ::=
@@ -431,10 +433,8 @@ simple_select_stmt ::=
   ( 'LIMIT' integer )?
   ( 'OFFSET' integer )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
-set_session_variable ::=
-  'SET' ( 'SESSION' | 'LOCAL' )? variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' )
-set_system_variable ::=
-  'ALTER' 'SYSTEM' 'SET' variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' )
+set_stmt ::=
+  'SET' ( 'SESSION' | 'LOCAL' )? name ( 'TO' | '=' ) ( value | 'DEFAULT' )
 set_transaction_isolation ::=
   'SET' 'TRANSACTION_ISOLATION' ( 'TO' | '=' ) isolation_level
 show_columns ::=
@@ -477,8 +477,8 @@ show_roles ::=
   ('LIKE' 'pattern' | 'WHERE' expr)?
 show_secrets ::=
     'SHOW' 'SECRETS' ('FROM' schema_name)? ('LIKE' 'pattern' | 'WHERE' expr)?
-show_variable ::=
-  'SHOW' ( variable_name | 'ALL' )
+show_stmt ::=
+  'SHOW' ( name | 'ALL' )
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=

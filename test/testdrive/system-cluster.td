@@ -16,13 +16,18 @@ SELECT ${arg.replicas} > 1;
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
+$ postgres-execute connection=mz_system
 > SELECT name FROM (SHOW CLUSTERS)
 mz_system
 mz_introspection
 quickstart
+mz_probe
+mz_support
 
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-execute connection=mz_system
 > select managed from mz_catalog.mz_clusters where id like 's%';
+true
+true
 true
 true
 
@@ -99,3 +104,12 @@ $ set-regex match=true|false replacement=<TRUE_OR_FALSE>
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
 mz_system r1 1 <TRUE_OR_FALSE>
+
+> SELECT COUNT(*) FROM mz_catalog.mz_cluster_replicas as r, mz_catalog.mz_clusters as c WHERE r.cluster_id = c.id and c.name = 'mz_support';
+0
+
+! ALTER CLUSTER mz_support SET (replication factor 1, size '2');
+contains: must be owner of CLUSTER mz_support
+
+$ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI
+ALTER CLUSTER mz_support SET (replication factor 0, size '1');

@@ -198,14 +198,8 @@ impl<T: Timestamp> Controller<T> {
         self.compute.activate(&mut *self.storage)
     }
 
-    pub fn set_default_idle_arrangement_merge_effort(&mut self, value: u32) {
-        self.compute
-            .set_default_idle_arrangement_merge_effort(value);
-    }
-
-    pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
-        self.compute
-            .set_default_arrangement_exert_proportionality(value);
+    pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
+        self.compute.set_arrangement_exert_proportionality(value);
     }
 
     /// Returns the connection context installed in the controller.

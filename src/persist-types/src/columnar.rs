@@ -221,6 +221,8 @@ pub enum ColumnFormat {
     String,
     /// A column of type [crate::dyn_struct::DynStruct].
     Struct(DynStructCfg),
+    /// A column of type [`Vec<u8>`] that contains opaque bytes.
+    OpaqueData,
     // TODO: FixedSizedBytes for UUIDs?
 }
 
@@ -267,7 +269,6 @@ pub trait Schema<T>: Debug + Send + Sync {
 pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
     schema: &T::Schema,
     val: &T,
-    skip_decode: bool,
 ) -> Result<(), String> {
     let mut part = PartBuilder::new(schema, &UnitSchema);
     {
@@ -280,10 +281,6 @@ pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
 
     // Sanity check that we can compute stats.
     let _stats = part.key_stats().expect("stats should be compute-able");
-
-    if skip_decode {
-        return Ok(());
-    }
 
     let mut actual = T::default();
     assert_eq!(part.len(), 1);
@@ -298,3 +295,7 @@ pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
         Ok(())
     }
 }
+
+/// Opaque binary encoded data.
+#[derive(Debug)]
+pub struct OpaqueData;

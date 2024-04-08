@@ -18,7 +18,7 @@ In Materialize, you can request any of these isolation
 levels, but they all behave the same as the Serializable isolation level. In addition to the four levels defined in the
 SQL Standard, Materialize also defines a [Strict Serializable](#strict-serializable) isolation level.
 
-Isolation level is a per session configurable variable that can be set by the user. The default isolation level is
+Isolation level is a configuration parameter that can be set by the user on a session-by-session basis. The default isolation level is
 [Strict Serializable](#strict-serializable).
 
 ## Syntax

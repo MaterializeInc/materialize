@@ -377,6 +377,14 @@ fn test_copy() {
             .read_to_string(&mut buf)
             .unwrap();
         assert_eq!(buf, "");
+
+        let mut buf = String::new();
+        client
+            .copy_out("COPY (SELECT 1 WHERE FALSE) TO STDOUT (FORMAT CSV)")
+            .unwrap()
+            .read_to_string(&mut buf)
+            .unwrap();
+        assert_eq!(buf, "");
     }
 
     // Test basic, non-empty COPY.
@@ -400,6 +408,14 @@ fn test_copy() {
             .read_to_string(&mut buf)
             .unwrap();
         assert_eq!(buf, "\\N\t2\n\\t\t4\n");
+
+        let mut buf = String::new();
+        client
+            .copy_out("COPY (VALUES (NULL, '21', 2), (E'\t', 'my,str', 4)) TO STDOUT (FORMAT CSV)")
+            .unwrap()
+            .read_to_string(&mut buf)
+            .unwrap();
+        assert_eq!(buf, ",21,2\n\t,\"my,str\",4\n");
     }
 }
 

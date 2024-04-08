@@ -75,10 +75,10 @@ CREATE ROLE foo
 query TT rowsort
 SELECT id, name FROM mz_roles
 ----
+g1  mz_monitor
+g2  mz_monitor_redacted
 s1  mz_system
 s2  mz_support
-s3  mz_monitor
-s4  mz_monitor_redacted
 u1  materialize
 u2  foo
 
@@ -94,10 +94,10 @@ CREATE ROLE bar
 query TT rowsort
 SELECT id, name FROM mz_roles
 ----
+g1  mz_monitor
+g2  mz_monitor_redacted
 s1  mz_system
 s2  mz_support
-s3  mz_monitor
-s4  mz_monitor_redacted
 u1  materialize
 u3  bar
 
@@ -107,10 +107,12 @@ CREATE CLUSTER foo REPLICAS (r1 (size '1'))
 query TT rowsort
 SELECT id, name FROM mz_clusters
 ----
-s1 mz_system
-s2 mz_introspection
-u1 quickstart
-u2 foo
+s1  mz_system
+s2  mz_introspection
+s3  mz_probe
+s4  mz_support
+u1  quickstart
+u2  foo
 
 statement ok
 DROP CLUSTER foo CASCADE
@@ -121,7 +123,9 @@ CREATE CLUSTER bar REPLICAS (r1 (size '1'))
 query TT rowsort
 SELECT id, name FROM mz_clusters
 ----
-s1 mz_system
-s2 mz_introspection
-u1 quickstart
-u3 bar
+s1  mz_system
+s2  mz_introspection
+s3  mz_probe
+s4  mz_support
+u1  quickstart
+u3  bar

@@ -666,7 +666,7 @@ mod tests {
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
-
+    use mz_dyncfg::ConfigUpdates;
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
@@ -747,20 +747,21 @@ mod tests {
         }
     }
 
-    pub fn new_test_client_cache() -> PersistClientCache {
+    pub fn new_test_client_cache(dyncfgs: &ConfigUpdates) -> PersistClientCache {
         // Configure an aggressively small blob_target_size so we get some
         // amount of coverage of that in tests. Similarly, for max_outstanding.
         let mut cache = PersistClientCache::new_no_metrics();
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 10);
         cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(1);
+        dyncfgs.apply(cache.cfg());
 
         // Enable compaction in tests to ensure we get coverage.
         cache.cfg.compaction_enabled = true;
         cache
     }
 
-    pub async fn new_test_client() -> PersistClient {
-        let cache = new_test_client_cache();
+    pub async fn new_test_client(dyncfgs: &ConfigUpdates) -> PersistClient {
+        let cache = new_test_client_cache(dyncfgs);
         cache
             .open(PersistLocation::new_in_mem())
             .await
@@ -821,16 +822,16 @@ mod tests {
         (part, updates)
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn sanity_check() {
+    async fn sanity_check(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let (mut write, mut read) = new_test_client()
+        let (mut write, mut read) = new_test_client(&dyncfgs)
             .await
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
@@ -869,9 +870,9 @@ mod tests {
     }
 
     // Sanity check that the open_reader and open_writer calls work.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn open_reader_writer() {
+    async fn open_reader_writer(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -879,7 +880,7 @@ mod tests {
         ];
 
         let shard_id = ShardId::new();
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
         let mut write1 = client
             .open_writer::<String, String, u64, i64>(
                 shard_id,
@@ -926,9 +927,9 @@ mod tests {
         assert_eq!(read1.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
-    async fn invalid_usage() {
+    async fn invalid_usage(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -938,7 +939,7 @@ mod tests {
         let shard_id0 = "s00000000-0000-0000-0000-000000000000"
             .parse::<ShardId>()
             .expect("invalid shard id");
-        let mut client = new_test_client().await;
+        let mut client = new_test_client(&dyncfgs).await;
 
         let (mut write0, mut read0) = client
             .expect_open::<String, String, u64, i64>(shard_id0)
@@ -1185,9 +1186,9 @@ mod tests {
         }
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn multiple_shards() {
+    async fn multiple_shards(dyncfgs: ConfigUpdates) {
         let data1 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1195,7 +1196,7 @@ mod tests {
 
         let data2 = vec![(("1".to_owned(), ()), 1, 1), (("2".to_owned(), ()), 2, 1)];
 
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
 
         let (mut write1, mut read1) = client
             .expect_open::<String, String, u64, i64>(ShardId::new())
@@ -1226,15 +1227,15 @@ mod tests {
         );
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn fetch_upper() {
+    async fn fetch_upper(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
 
         let shard_id = ShardId::new();
 
@@ -1258,15 +1259,15 @@ mod tests {
         assert_eq!(write2.upper(), &Antichain::from_elem(3));
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn append_with_invalid_upper() {
+    async fn append_with_invalid_upper(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
 
         let shard_id = ShardId::new();
 
@@ -1304,14 +1305,14 @@ mod tests {
     // Make sure that the API structs are Sync + Send, so that they can be used in async tasks.
     // NOTE: This is a compile-time only test. If it compiles, we're good.
     #[allow(unused)]
-    async fn sync_send() {
+    async fn sync_send(dyncfgs: ConfigUpdates) {
         mz_ore::test::init_logging();
 
         fn is_send_sync<T: Send + Sync>(_x: T) -> bool {
             true
         }
 
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
 
         let (write, read) = client
             .expect_open::<String, String, u64, i64>(ShardId::new())
@@ -1322,9 +1323,9 @@ mod tests {
         assert!(is_send_sync(read));
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn compare_and_append() {
+    async fn compare_and_append(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1332,7 +1333,7 @@ mod tests {
         ];
 
         let id = ShardId::new();
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
         let (mut write1, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
@@ -1379,9 +1380,9 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn overlapping_append() {
+    async fn overlapping_append(dyncfgs: ConfigUpdates) {
         mz_ore::test::init_logging_default("info");
 
         let data = vec![
@@ -1393,7 +1394,7 @@ mod tests {
         ];
 
         let id = ShardId::new();
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
 
         let (mut write1, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
 
@@ -1430,9 +1431,9 @@ mod tests {
 
     // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not
     // be in advance of the current shard upper.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn contiguous_append() {
+    async fn contiguous_append(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1442,7 +1443,7 @@ mod tests {
         ];
 
         let id = ShardId::new();
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
 
         let (mut write, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
 
@@ -1478,9 +1479,9 @@ mod tests {
 
     // Per-writer appends can be non-contiguous, as long as appends to the shard from all writers
     // combined are contiguous.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn noncontiguous_append_per_writer() {
+    async fn noncontiguous_append_per_writer(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1490,7 +1491,7 @@ mod tests {
         ];
 
         let id = ShardId::new();
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
 
         let (mut write1, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
 
@@ -1521,9 +1522,9 @@ mod tests {
 
     // Compare_and_appends need to be contiguous for a shard, meaning the lower of an appended
     // batch needs to match the current shard upper.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn contiguous_compare_and_append() {
+    async fn contiguous_compare_and_append(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1533,7 +1534,7 @@ mod tests {
         ];
 
         let id = ShardId::new();
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
 
         let (mut write, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
 
@@ -1568,9 +1569,9 @@ mod tests {
 
     // Per-writer compare_and_appends can be non-contiguous, as long as appends to the shard from
     // all writers combined are contiguous.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn noncontiguous_compare_and_append_per_writer() {
+    async fn noncontiguous_compare_and_append_per_writer(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1580,7 +1581,7 @@ mod tests {
         ];
 
         let id = ShardId::new();
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
 
         let (mut write1, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
 
@@ -1613,14 +1614,14 @@ mod tests {
         );
     }
 
-    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
-    async fn concurrency() {
+    async fn concurrency(dyncfgs: ConfigUpdates) {
         let data = DataGenerator::small();
 
         const NUM_WRITERS: usize = 2;
         let id = ShardId::new();
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
         let mut handles = Vec::<mz_ore::task::JoinHandle<()>>::new();
         for idx in 0..NUM_WRITERS {
             let (data, client) = (data.clone(), client.clone());
@@ -1711,9 +1712,9 @@ mod tests {
     // Regression test for #12131. Snapshot with as_of >= upper would
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn regression_blocking_reads() {
+    async fn regression_blocking_reads(dyncfgs: ConfigUpdates) {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
@@ -1724,7 +1725,7 @@ mod tests {
         ];
 
         let id = ShardId::new();
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
         let (mut write, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         // Grab a listener as_of (aka gt) 1, which is not yet closed out.
@@ -1783,12 +1784,12 @@ mod tests {
         assert_eq!(snap.await, all_ok(&data[..], 3));
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn heartbeat_task_shutdown() {
+    async fn heartbeat_task_shutdown(dyncfgs: ConfigUpdates) {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.
-        let mut cache = new_test_client_cache();
+        let mut cache = new_test_client_cache(&dyncfgs);
         cache
             .cfg
             .set_config(&READER_LEASE_DURATION, Duration::from_millis(1));
@@ -1814,11 +1815,11 @@ mod tests {
     /// Regression test for 16743, where the nightly tests found that calling
     /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
     /// would panic.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn regression_16743_heartbeat_tombstone() {
+    async fn regression_16743_heartbeat_tombstone(dyncfgs: ConfigUpdates) {
         const EMPTY: &[(((), ()), u64, i64)] = &[];
-        let (mut write, mut read) = new_test_client()
+        let (mut write, mut read) = new_test_client(&dyncfgs)
             .await
             .expect_open::<(), (), u64, i64>(ShardId::new())
             .await;

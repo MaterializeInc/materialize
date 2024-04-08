@@ -11,10 +11,13 @@ syntax = "proto3";
 
 package mz_pgcopy.copy;
 
+import "google/protobuf/empty.proto";
+
 message ProtoCopyFormatParams {
     oneof kind {
         ProtoCopyTextFormatParams text = 1;
         ProtoCopyCsvFormatParams csv = 2;
+        google.protobuf.Empty binary = 3;
     }
 }
 

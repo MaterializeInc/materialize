@@ -18,18 +18,6 @@ breaking:
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects.proto
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v42.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v43.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v44.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v45.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v46.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v47.proto
-    # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v48.proto
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v49.proto
@@ -41,6 +29,8 @@ breaking:
     - catalog/protos/objects_v52.proto
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v53.proto
+    # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v54.proto
     # reason: does currently not require backward-compatibility
     - cluster-client/src/client.proto
     # reason: does currently not require backward-compatibility
@@ -61,8 +51,8 @@ breaking:
     - expr/src/relation.proto
     # reason: not yet released
     - mysql-util/src/desc.proto
-    # reason: still under active development
-    - persist-types/src/stats.proto
+    # reason: working around a false positive in buf's breaking change lint
+    - persist-client/src/internal/state.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
     # reason: does currently not require backward-compatibility

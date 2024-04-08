@@ -1,28 +1,27 @@
 ---
 title: "ALTER SYSTEM SET"
-description: "`ALTER SYSTEM SET` modifies system variables, or session variables globally (i.e. for all users)."
+description: "`ALTER SYSTEM SET` globally modifies the value of a configuration parameter."
 menu:
   main:
     parent: 'commands'
 
 ---
 
-`ALTER SYSTEM SET` modifies the value of a system variable, or the value of a
-session variable globally (i.e. for all users).
+`ALTER SYSTEM SET` globally modifies the value of a configuration parameter.
 
-To see the current value of a system variable, use [`SHOW`](../show).
+To see the current value of a configuration parameter, use [`SHOW`](../show).
 
 ## Syntax
 
-{{< diagram "set-system-variable.svg" >}}
+{{< diagram "alter-system-set-stmt.svg" >}}
 
 Field                   | Use
 ------------------------|-----
-_variable&lowbar;name_  | The name of the system variable to modify.
-_variable&lowbar;value_ | The value to assign to the system variable.
-**DEFAULT**             | Reset the system variable's default value. Equivalent to [`ALTER SYSTEM RESET`](../alter-system-reset).
+_name_                  | The name of the configuration parameter to modify.
+_value_                 | The value to assign to the configuration parameter.
+**DEFAULT**             | Reset the configuration parameter's default value. Equivalent to [`ALTER SYSTEM RESET`](../alter-system-reset).
 
-{{% system-variables %}}
+{{% configuration-parameters %}}
 
 ## Examples
 

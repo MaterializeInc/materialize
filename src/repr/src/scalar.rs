@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Write};
 use std::hash::Hash;
 use std::iter;
@@ -3228,6 +3229,9 @@ impl ScalarType {
                 Datum::String(&"x".repeat(100)),
                 // Valid timezone.
                 Datum::String("JAPAN"),
+                Datum::String("1,2,3"),
+                Datum::String("\r\n"),
+                Datum::String("\"\""),
             ])
         });
         static CHAR: Lazy<Row> = Lazy::new(|| {
@@ -3236,6 +3240,23 @@ impl ScalarType {
                 Datum::String("'"),
                 Datum::String("\""),
                 Datum::String("."),
+                Datum::String(","),
+                Datum::String("\t"),
+                Datum::String("\n"),
+                Datum::String("\r"),
+                Datum::String("\\"),
+                // Null character.
+                Datum::String(std::str::from_utf8(b"\x00").unwrap()),
+                // Start of text.
+                Datum::String(std::str::from_utf8(b"\x02").unwrap()),
+                // End of text.
+                Datum::String(std::str::from_utf8(b"\x03").unwrap()),
+                // Backspace.
+                Datum::String(std::str::from_utf8(b"\x08").unwrap()),
+                // Escape.
+                Datum::String(std::str::from_utf8(b"\x1B").unwrap()),
+                // Delete.
+                Datum::String(std::str::from_utf8(b"\x7F").unwrap()),
             ])
         });
         static JSONB: Lazy<Row> = Lazy::new(|| {
@@ -3251,7 +3272,52 @@ impl ScalarType {
                 Datum::Uuid(Uuid::from_u128(u128::MAX)),
             ])
         });
-        static ARRAY: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static ARRAY: Lazy<BTreeMap<&'static ScalarType, Row>> = Lazy::new(|| {
+            let generate_row = |inner_type: &ScalarType| {
+                let datums: Vec<_> = inner_type.interesting_datums().collect();
+
+                let mut row = Row::default();
+                row.packer()
+                    .push_array::<_, Datum<'static>>(
+                        &[ArrayDimension {
+                            lower_bound: 1,
+                            length: 0,
+                        }],
+                        [],
+                    )
+                    .expect("failed to push empty array");
+                row.packer()
+                    .push_array(
+                        &[ArrayDimension {
+                            lower_bound: 1,
+                            length: datums.len(),
+                        }],
+                        datums,
+                    )
+                    .expect("failed to push array");
+
+                row
+            };
+
+            ScalarType::enumerate()
+                .into_iter()
+                .filter(|ty| !matches!(ty, ScalarType::Array(_)))
+                .map(|ty| (ty, generate_row(ty)))
+                .collect()
+        });
+        static EMPTY_ARRAY: Lazy<Row> = Lazy::new(|| {
+            let mut row = Row::default();
+            row.packer()
+                .push_array::<_, Datum<'static>>(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: 0,
+                    }],
+                    [],
+                )
+                .expect("failed to push empty array");
+            row
+        });
         static LIST: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
         static RECORD: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
         static OID: Lazy<Row> =
@@ -3302,44 +3368,57 @@ impl ScalarType {
         // aclitem has no binary encoding so we can't test it here.
         static ACLITEM: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
 
-        match self {
-            ScalarType::Bool => (*BOOL).iter(),
-            ScalarType::Int16 => (*INT16).iter(),
-            ScalarType::Int32 => (*INT32).iter(),
-            ScalarType::Int64 => (*INT64).iter(),
-            ScalarType::UInt16 => (*UINT16).iter(),
-            ScalarType::UInt32 => (*UINT32).iter(),
-            ScalarType::UInt64 => (*UINT64).iter(),
-            ScalarType::Float32 => (*FLOAT32).iter(),
-            ScalarType::Float64 => (*FLOAT64).iter(),
-            ScalarType::Numeric { .. } => (*NUMERIC).iter(),
-            ScalarType::Date => (*DATE).iter(),
-            ScalarType::Time => (*TIME).iter(),
-            ScalarType::Timestamp { .. } => (*TIMESTAMP).iter(),
-            ScalarType::TimestampTz { .. } => (*TIMESTAMPTZ).iter(),
-            ScalarType::Interval => (*INTERVAL).iter(),
-            ScalarType::PgLegacyChar => (*PGLEGACYCHAR).iter(),
-            ScalarType::PgLegacyName => (*PGLEGACYNAME).iter(),
-            ScalarType::Bytes => (*BYTES).iter(),
-            ScalarType::String => (*STRING).iter(),
-            ScalarType::Char { .. } => (*CHAR).iter(),
-            ScalarType::VarChar { .. } => (*STRING).iter(),
-            ScalarType::Jsonb => (*JSONB).iter(),
-            ScalarType::Uuid => (*UUID).iter(),
-            ScalarType::Array(_) => (*ARRAY).iter(),
-            ScalarType::List { .. } => (*LIST).iter(),
-            ScalarType::Record { .. } => (*RECORD).iter(),
-            ScalarType::Oid => (*OID).iter(),
-            ScalarType::Map { .. } => (*MAP).iter(),
-            ScalarType::RegProc => (*OID).iter(),
-            ScalarType::RegType => (*OID).iter(),
-            ScalarType::RegClass => (*OID).iter(),
-            ScalarType::Int2Vector => (*INT2VECTOR).iter(),
-            ScalarType::MzTimestamp => (*MZTIMESTAMP).iter(),
-            ScalarType::Range { .. } => (*RANGE).iter(),
-            ScalarType::MzAclItem { .. } => (*MZACLITEM).iter(),
-            ScalarType::AclItem { .. } => (*ACLITEM).iter(),
-        }
+        let iter: Box<dyn Iterator<Item = Datum<'static>>> = match self {
+            ScalarType::Bool => Box::new((*BOOL).iter()),
+            ScalarType::Int16 => Box::new((*INT16).iter()),
+            ScalarType::Int32 => Box::new((*INT32).iter()),
+            ScalarType::Int64 => Box::new((*INT64).iter()),
+            ScalarType::UInt16 => Box::new((*UINT16).iter()),
+            ScalarType::UInt32 => Box::new((*UINT32).iter()),
+            ScalarType::UInt64 => Box::new((*UINT64).iter()),
+            ScalarType::Float32 => Box::new((*FLOAT32).iter()),
+            ScalarType::Float64 => Box::new((*FLOAT64).iter()),
+            ScalarType::Numeric { .. } => Box::new((*NUMERIC).iter()),
+            ScalarType::Date => Box::new((*DATE).iter()),
+            ScalarType::Time => Box::new((*TIME).iter()),
+            ScalarType::Timestamp { .. } => Box::new((*TIMESTAMP).iter()),
+            ScalarType::TimestampTz { .. } => Box::new((*TIMESTAMPTZ).iter()),
+            ScalarType::Interval => Box::new((*INTERVAL).iter()),
+            ScalarType::PgLegacyChar => Box::new((*PGLEGACYCHAR).iter()),
+            ScalarType::PgLegacyName => Box::new((*PGLEGACYNAME).iter()),
+            ScalarType::Bytes => Box::new((*BYTES).iter()),
+            ScalarType::String => Box::new((*STRING).iter().chain((*CHAR).iter())),
+            ScalarType::Char { .. } => Box::new((*CHAR).iter()),
+            ScalarType::VarChar { .. } => Box::new((*STRING).iter().chain((*CHAR).iter())),
+            ScalarType::Jsonb => Box::new((*JSONB).iter()),
+            ScalarType::Uuid => Box::new((*UUID).iter()),
+            ScalarType::Array(inner_type) => {
+                if matches!(inner_type.as_ref(), ScalarType::Array(_)) {
+                    panic!("ScalarType::Array cannot have a nested Array");
+                }
+
+                Box::new(
+                    (*ARRAY)
+                        .get(inner_type.as_ref())
+                        .unwrap_or(&*EMPTY_ARRAY)
+                        .iter(),
+                )
+            }
+            ScalarType::List { .. } => Box::new((*LIST).iter()),
+            ScalarType::Record { .. } => Box::new((*RECORD).iter()),
+            ScalarType::Oid => Box::new((*OID).iter()),
+            ScalarType::Map { .. } => Box::new((*MAP).iter()),
+            ScalarType::RegProc => Box::new((*OID).iter()),
+            ScalarType::RegType => Box::new((*OID).iter()),
+            ScalarType::RegClass => Box::new((*OID).iter()),
+            ScalarType::Int2Vector => Box::new((*INT2VECTOR).iter()),
+            ScalarType::MzTimestamp => Box::new((*MZTIMESTAMP).iter()),
+            ScalarType::Range { .. } => Box::new((*RANGE).iter()),
+            ScalarType::MzAclItem { .. } => Box::new((*MZACLITEM).iter()),
+            ScalarType::AclItem { .. } => Box::new((*ACLITEM).iter()),
+        };
+
+        iter
     }
 
     /// Returns all non-parameterized types and some versions of some
@@ -3511,7 +3590,15 @@ impl Arbitrary for ScalarType {
             Just(ScalarType::RegType).boxed(),
             Just(ScalarType::RegClass).boxed(),
             Just(ScalarType::Int2Vector).boxed(),
-        ]);
+        ])
+        .boxed();
+
+        // The Array type is not recursive, so we define it separately.
+        let array = leaf
+            .clone()
+            .prop_map(|inner_type| ScalarType::Array(Box::new(inner_type)))
+            .boxed();
+        let leaf = Union::new_weighted(vec![(30, leaf), (1, array)]);
 
         leaf.prop_recursive(
             2, // For now, just go one level deep
@@ -3519,11 +3606,6 @@ impl Arbitrary for ScalarType {
             5,
             |inner| {
                 Union::new(vec![
-                    // Array
-                    inner
-                        .clone()
-                        .prop_map(|x| ScalarType::Array(Box::new(x)))
-                        .boxed(),
                     // List
                     (inner.clone(), any::<Option<GlobalId>>())
                         .prop_map(|(x, id)| ScalarType::List {

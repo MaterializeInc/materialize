@@ -160,7 +160,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     pub async fn snapshot_cursor<K, V, D>(
         &self,
         data_read: &mut ReadHandle<K, V, T, D>,
-        should_fetch_part: impl for<'a> Fn(&'a Option<LazyPartStats>) -> bool,
+        should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>>
     where
         K: Debug + Codec + Ord,

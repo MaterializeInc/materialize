@@ -31,7 +31,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
-use mz_pgcopy::{CopyFormatParams, CopyTextFormatParams};
+use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_server_core::TlsMode;
@@ -1905,29 +1905,20 @@ where
         row_desc: RelationDesc,
         mut stream: RecordFirstRowStream,
     ) -> Result<(State, SendRowsEndedReason), io::Error> {
-        let (encode_fn, encode_format): (
-            fn(&Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
-            Format,
-        ) = match format {
-            // TODO (mouli): refactor to use `mz_pgcopy::encode_copy_format` and
-            // handle `Binary` there as well.
-            CopyFormat::Text => {
-                let encode_fn = |row: &Row, typ: &RelationType, out: &mut Vec<u8>| {
-                    mz_pgcopy::encode_copy_row_text(CopyTextFormatParams::default(), row, typ, out)
-                };
-                (encode_fn, Format::Text)
-            }
-            CopyFormat::Binary => (mz_pgcopy::encode_copy_row_binary, Format::Binary),
-            _ => {
-                let msg = format!("COPY TO format {:?} not supported", format);
-                return self
-                    .error(ErrorResponse::error(
-                        SqlState::FEATURE_NOT_SUPPORTED,
-                        msg.clone(),
-                    ))
-                    .await
-                    .map(|state| (state, SendRowsEndedReason::Errored { error: msg }));
-            }
+        let (row_format, encode_format) = match format {
+            CopyFormat::Text => (
+                CopyFormatParams::Text(CopyTextFormatParams::default()),
+                Format::Text,
+            ),
+            CopyFormat::Binary => (CopyFormatParams::Binary, Format::Binary),
+            CopyFormat::Csv => (
+                CopyFormatParams::Csv(CopyCsvFormatParams::default()),
+                Format::Text,
+            ),
+        };
+
+        let encode_fn = |row: &Row, typ: &RelationType, out: &mut Vec<u8>| {
+            mz_pgcopy::encode_copy_format(&row_format, row, typ, out)
         };
 
         let typ = row_desc.typ();
@@ -2041,8 +2032,10 @@ where
                     },
                 );
             }
-            _ => {
-                assert!(ctx_extra.is_trivial())
+            other => {
+                tracing::warn!(?other, "aborting COPY FROM");
+                self.adapter_client
+                    .retire_execute(ctx_extra, StatementEndedExecutionReason::Aborted);
             }
         }
         res

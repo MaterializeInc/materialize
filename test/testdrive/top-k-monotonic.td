@@ -279,7 +279,7 @@ a
 > SET cluster_replica = r1
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]]"
 ArrangeBy[[Column(0)]]-errors
 "Arranged TopK input"
 "Reduced TopK input"

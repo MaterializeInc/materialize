@@ -38,7 +38,9 @@ use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
-use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
+use crate::internal::state::{
+    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
+};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -1121,13 +1123,17 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             .inc_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| &*x.key)
+            .map(|x| match x {
+                BatchPart::Hollow(x) => &x.key,
+            })
             .collect();
         let full_parts = self
             .full_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| &*x.key)
+            .map(|x| match x {
+                BatchPart::Hollow(x) => &x.key,
+            })
             .collect();
         assert_eq!(inc_parts, full_parts);
 
@@ -1138,16 +1144,18 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
 
 #[cfg(test)]
 mod tests {
+    use mz_dyncfg::ConfigUpdates;
+
     use crate::tests::new_test_client;
 
     use super::*;
 
     /// Regression test for (part of) #17752, where an interrupted
     /// `bin/environmentd --reset` resulted in panic in persist usage code.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn fetch_all_live_states_regression_uninitialized() {
-        let client = new_test_client().await;
+    async fn fetch_all_live_states_regression_uninitialized(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
         let state_versions = StateVersions::new(
             client.cfg.clone(),
             Arc::clone(&client.consensus),

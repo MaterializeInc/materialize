@@ -43,13 +43,13 @@ use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
 use mz_repr::user::ExternalUserMetadata;
-use mz_server_core::{ConnectionHandler, Server};
+use mz_server_core::{ConnectionHandler, ReloadingSslContext, Server};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SUPPORT_USER_NAME, SYSTEM_USER_NAME};
 use mz_sql::session::vars::{
     ConnectionCounter, DropConnection, Value, Var, VarInput, WELCOME_MESSAGE,
 };
-use openssl::ssl::{Ssl, SslContext};
+use openssl::ssl::Ssl;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -82,7 +82,7 @@ pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
     pub source: &'static str,
-    pub tls: Option<TlsConfig>,
+    pub tls: Option<ReloadingTlsConfig>,
     pub frontegg: Option<FronteggAuthentication>,
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
@@ -92,8 +92,8 @@ pub struct HttpConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct TlsConfig {
-    pub context: SslContext,
+pub struct ReloadingTlsConfig {
+    pub context: ReloadingSslContext,
     pub mode: TlsMode,
 }
 
@@ -118,7 +118,7 @@ pub struct WebhookState {
 
 #[derive(Debug)]
 pub struct HttpServer {
-    tls: Option<TlsConfig>,
+    tls: Option<ReloadingTlsConfig>,
     router: Router,
 }
 
@@ -205,10 +205,6 @@ impl HttpServer {
 
         HttpServer { tls, router }
     }
-
-    fn tls_context(&self) -> Option<&SslContext> {
-        self.tls.as_ref().map(|tls| &tls.context)
-    }
 }
 
 impl Server for HttpServer {
@@ -216,11 +212,12 @@ impl Server for HttpServer {
 
     fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler {
         let router = self.router.clone();
-        let tls_context = self.tls_context().cloned();
+        let tls_config = self.tls.clone();
         Box::pin(async {
-            let (conn, conn_protocol) = match tls_context {
-                Some(tls_context) => {
-                    let mut ssl_stream = SslStream::new(Ssl::new(&tls_context)?, conn)?;
+            let (conn, conn_protocol) = match tls_config {
+                Some(tls_config) => {
+                    let mut ssl_stream =
+                        SslStream::new(Ssl::new(&tls_config.context.get())?, conn)?;
                     if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
                         let _ = ssl_stream.get_mut().shutdown().await;
                         return Err(e.into());

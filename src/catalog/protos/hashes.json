@@ -1,31 +1,7 @@
 [
   {
     "name": "objects.proto",
-    "md5": "132da4007cd9313983132a1a478d8f4f"
-  },
-  {
-    "name": "objects_v42.proto",
-    "md5": "78ab44ed4cf6d27f9e4cd6b2a904dfd5"
-  },
-  {
-    "name": "objects_v43.proto",
-    "md5": "ce66c8524532beec9b4212a30dbc4c8f"
-  },
-  {
-    "name": "objects_v44.proto",
-    "md5": "525713434537302656566c0151d323e3"
-  },
-  {
-    "name": "objects_v45.proto",
-    "md5": "895d292bdd188bc9f09aee0d32243b4b"
-  },
-  {
-    "name": "objects_v46.proto",
-    "md5": "d5d7092a8001d81e73448c07b9c2717f"
-  },
-  {
-    "name": "objects_v47.proto",
-    "md5": "5cd2d06907da6131b05c01dcbd2064f0"
+    "md5": "d7f71bc761bbd70a9b668e5016b4eddb"
   },
   {
     "name": "objects_v48.proto",
@@ -50,5 +26,9 @@
   {
     "name": "objects_v53.proto",
     "md5": "b05fb78a9569ffaae85ac13809c5abfe"
+  },
+  {
+    "name": "objects_v54.proto",
+    "md5": "48aaebabec99a2cb46b8709cca94fc7c"
   }
 ]

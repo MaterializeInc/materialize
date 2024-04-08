@@ -11,7 +11,7 @@
 
 use crate::internal::encoding::UntypedState;
 use crate::internal::paths::BlobKey;
-use crate::internal::state::State;
+use crate::internal::state::{BatchPart, State};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::internal::state_versions::StateVersions;
 use crate::ShardId;
@@ -86,7 +86,9 @@ pub(crate) async fn restore_blob(
             }
             for batch in rollup_state.collections.trace.batches() {
                 for part in &batch.parts {
-                    let key = part.key.complete(&shard_id);
+                    let key = match part {
+                        BatchPart::Hollow(x) => x.key.complete(&shard_id),
+                    };
                     check_restored(&key, blob.restore(&key).await);
                 }
             }
@@ -94,7 +96,9 @@ pub(crate) async fn restore_blob(
         for diff in diff.referenced_batches() {
             if let Some(after) = after(diff) {
                 for part in &after.parts {
-                    let key = part.key.complete(&shard_id);
+                    let key = match part {
+                        BatchPart::Hollow(x) => x.key.complete(&shard_id),
+                    };
                     check_restored(&key, blob.restore(&key).await);
                 }
             }

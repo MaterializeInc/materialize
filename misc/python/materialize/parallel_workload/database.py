@@ -865,6 +865,7 @@ class Database:
     postgres_source_id: int
     kafka_sinks: list[KafkaSink]
     kafka_sink_id: int
+    s3_path: int
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
@@ -890,6 +891,7 @@ class Database:
         NAUGHTY_IDENTIFIERS = naughty_identifiers
         self.fast_startup = fast_startup
 
+        self.s3_path = 0
         self.dbs = [DB(seed, i) for i in range(rng.randint(1, MAX_INITIAL_DBS))]
         self.db_id = len(self.dbs)
         self.schemas = [

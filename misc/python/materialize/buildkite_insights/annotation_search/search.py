@@ -208,7 +208,7 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        prog="buildkite-failure-search",
+        prog="buildkite-annotation-search",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -228,7 +228,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--fetch-builds",
-        type=lambda mode: FetchMode[mode],
+        type=lambda mode: FetchMode[mode.upper()],
         choices=FETCH_MODE_CHOICES,
         default=FetchMode.AUTO,
         help="Whether to fetch fresh builds from Buildkite.",

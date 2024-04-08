@@ -34,6 +34,10 @@ foo
 NULL
 mz_introspection
 r1 (2)
+mz_probe
+r1 (2)
+mz_support
+NULL
 mz_system
 r1 (2)
 quickstart

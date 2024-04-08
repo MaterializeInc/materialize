@@ -30,7 +30,7 @@ use mz_expr::{
     AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
 };
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
-use mz_repr::fixed_length::IntoRowByTypes;
+use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -44,7 +44,7 @@ use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
-use crate::render::context::{CollectionBundle, Context, SpecializedArrangement};
+use crate::render::context::{CollectionBundle, Context, MzArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::{ArrangementFlavor, Pairer};
@@ -198,7 +198,7 @@ where
         errors: &mut Vec<Collection<S, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> SpecializedArrangement<S>
+    ) -> MzArrangement<S>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -216,29 +216,29 @@ where
                 let (arranged_output, errs) =
                     self.build_accumulable(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(arranged_output)
+                MzArrangement::RowRow(arranged_output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
                 let (output, errs) = self.build_monotonic(collection, expr, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::RowRow(output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
                 let (output, errs) = self.build_bucketed(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
                 let (output, errs) = self
                     .build_basic_aggregate(collection, index, &aggr, true, key_arity, mfp_after);
                 errors.push(errs.expect("validation should have occurred as it was requested"));
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
                 let (output, errs) =
                     self.build_basic_aggregates(collection, aggrs, key_arity, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::RowRow(output)
             }
             // Otherwise, we need to render something different for each type of
             // reduction, and then stitch them together.
@@ -264,12 +264,7 @@ where
                         key_arity,
                         None,
                     ) {
-                        SpecializedArrangement::RowUnit(_) => {
-                            unreachable!(
-                                "Unexpected RowUnit arrangement in reduce collation rendering"
-                            )
-                        }
-                        SpecializedArrangement::RowRow(arranged) => arranged,
+                        MzArrangement::RowRow(arranged) => arranged,
                     };
                     to_collate.push((r#type, arrangement));
                 }
@@ -282,7 +277,7 @@ where
                     mfp_after,
                 );
                 errors.push(errs);
-                SpecializedArrangement::RowRow(oks)
+                MzArrangement::RowRow(oks)
             }
         };
         arrangement
@@ -377,7 +372,7 @@ where
                         }
 
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter();
+                        let datum_iter = key.to_datum_iter();
                         let mut datums_local = datums1.borrow();
                         datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
@@ -446,7 +441,7 @@ where
                     }
 
                     let temp_storage = RowArena::new();
-                    let datum_iter = key.into_datum_iter();
+                    let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
 
@@ -492,23 +487,13 @@ where
         &self,
         collection: Collection<S, (Row, Row), Diff>,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (
-        SpecializedArrangement<S>,
-        Collection<S, DataflowError, Diff>,
-    )
+    ) -> (MzArrangement<S>, Collection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
-        let collection = collection.map(|(k, v)| {
-            assert!(v.is_empty());
-            (k, ())
-        });
-        let (arrangement, errs) = self.build_distinct::<RowSpine<_, _>, RowErrSpine<_, _>, _>(
-            collection,
-            " [val: empty]",
-            mfp_after,
-        );
-        (SpecializedArrangement::RowUnit(arrangement), errs)
+        let (arrangement, errs) = self
+            .build_distinct::<RowRowSpine<_, _>, RowErrSpine<_, _>, _>(collection, "", mfp_after);
+        (MzArrangement::RowRow(arrangement), errs)
     }
 
     /// Build the dataflow to compute the set of distinct keys.
@@ -526,7 +511,7 @@ where
         T1: Trace<KeyOwned = Row, Time = G::Timestamp, Diff = Diff> + 'static,
         T1::Batch: Batch,
         T1::Batcher: Batcher<Item = ((Row, T1::ValOwned), G::Timestamp, Diff)>,
-        for<'a> T1::Key<'a>: std::fmt::Debug + IntoRowByTypes,
+        for<'a> T1::Key<'a>: std::fmt::Debug + ToDatumIter,
         T1::ValOwned: Columnation + ExchangeData + Default,
         Arranged<S, TraceAgent<T1>>: ArrangementSize,
         T2: for<'a> Trace<
@@ -561,7 +546,7 @@ where
                 move |key, _input, output| {
                     let temp_storage = RowArena::new();
                     let mut datums_local = datums1.borrow();
-                    datums_local.extend(key.into_datum_iter());
+                    datums_local.extend(key.to_datum_iter());
 
                     // Note that the key contains all the columns in a `Distinct` and that `mfp_after` is
                     // required to preserve the key. Therefore, if `mfp_after` maps, then it must project
@@ -591,7 +576,7 @@ where
                     // If `mfp_after` can error, then evaluate it here.
                     let Some(mfp) = &mfp_after2 else { return };
                     let temp_storage = RowArena::new();
-                    let datum_iter = key.into_datum_iter();
+                    let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
 
@@ -660,7 +645,7 @@ where
         let output = arranged.mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceFuseBasic", {
             move |key, input, output| {
                 let temp_storage = RowArena::new();
-                let datum_iter = key.into_datum_iter();
+                let datum_iter = key.to_datum_iter();
                 let mut datums_local = datums1.borrow();
                 datums_local.extend(datum_iter);
                 let key_len = datums_local.len();
@@ -689,7 +674,7 @@ where
                         // Since negative accumulations are checked in at least one component
                         // aggregate, we only need to look for MFP errors here.
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter();
+                        let datum_iter = key.to_datum_iter();
                         let mut datums_local = datums2.borrow();
                         datums_local.extend(datum_iter);
 
@@ -787,11 +772,11 @@ where
                     // Note that in the non-positive case, this is wrong, but harmless because
                     // our other reduction will produce an error.
                     let count = usize::try_from(*w).unwrap_or(0);
-                    std::iter::repeat(v.into_datum_iter().next().unwrap()).take(count)
+                    std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
                 });
 
                 let temp_storage = RowArena::new();
-                let datum_iter = key.into_datum_iter();
+                let datum_iter = key.to_datum_iter();
                 let mut datums_local = datums1.borrow();
                 datums_local.extend(datum_iter);
                 let key_len = datums_local.len();
@@ -844,13 +829,13 @@ where
                         let Some(mfp) = &mfp_after2 else { return };
                         let iter = source.iter().flat_map(|(mut v, w)| {
                             let count = usize::try_from(*w).unwrap_or(0);
-                            // This would ideally use `into_datum_iter` but we cannot as it needs to
+                            // This would ideally use `to_datum_iter` but we cannot as it needs to
                             // borrow `v` and only presents datums with that lifetime, not any longer.
                             std::iter::repeat(v.next().unwrap()).take(count)
                         });
 
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter();
+                        let datum_iter = key.to_datum_iter();
                         let mut datums_local = datums2.borrow();
                         datums_local.extend(datum_iter);
                         datums_local.push(
@@ -1073,7 +1058,7 @@ where
                             // We know that `mfp_after` can error if it exists, so try to evaluate it here.
                             let Some(mfp) = &mfp_after2 else { return };
                             let temp_storage = RowArena::new();
-                            let datum_iter = key.into_datum_iter();
+                            let datum_iter = key.to_datum_iter();
                             let mut datums_local = datums2.borrow();
                             datums_local.extend(datum_iter);
 
@@ -1105,7 +1090,7 @@ where
                 .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMinsMaxes", {
                     move |key, source, target| {
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter();
+                        let datum_iter = key.to_datum_iter();
                         let mut datums_local = datums1.borrow();
                         datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
@@ -1288,7 +1273,7 @@ where
         let output = arranged.mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMonotonic", {
             move |key, input, output| {
                 let temp_storage = RowArena::new();
-                let datum_iter = key.into_datum_iter();
+                let datum_iter = key.to_datum_iter();
                 let mut datums_local = datums1.borrow();
                 datums_local.extend(datum_iter);
                 let key_len = datums_local.len();
@@ -1314,7 +1299,7 @@ where
                 .mz_reduce_abelian::<_, RowErrSpine<_, _>>("ReduceMonotonic Error Check", {
                     move |key, input, output| {
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter();
+                        let datum_iter = key.to_datum_iter();
                         let mut datums_local = datums2.borrow();
                         datums_local.extend(datum_iter);
                         let accum = &input[0].1;
@@ -1467,7 +1452,7 @@ where
                         let (ref accums, total) = input[0].1;
 
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter();
+                        let datum_iter = key.to_datum_iter();
                         let mut datums_local = datums1.borrow();
                         datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
@@ -1526,7 +1511,7 @@ where
                     // If `mfp_after` can error, then evaluate it here.
                     let Some(mfp) = &mfp_after2 else { return };
                     let temp_storage = RowArena::new();
-                    let datum_iter = key.into_datum_iter();
+                    let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
                     for (aggr, accum) in full_aggrs2.iter().zip(accums) {

@@ -40,7 +40,7 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
-use mz_server_core::TlsCertConfig;
+use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
@@ -95,6 +95,8 @@ pub struct TestHarness {
     default_cluster_replica_size: String,
     builtin_system_cluster_replica_size: String,
     builtin_introspection_cluster_replica_size: String,
+    builtin_probe_cluster_replica_size: String,
+    builtin_support_cluster_replica_size: String,
     propagate_crashes: bool,
     enable_tracing: bool,
     // This is currently unrelated to enable_tracing, and is used only to disable orchestrator
@@ -125,6 +127,8 @@ impl Default for TestHarness {
             default_cluster_replica_size: "1".to_string(),
             builtin_system_cluster_replica_size: "1".to_string(),
             builtin_introspection_cluster_replica_size: "1".to_string(),
+            builtin_probe_cluster_replica_size: "1".to_string(),
+            builtin_support_cluster_replica_size: "1".to_string(),
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
@@ -156,10 +160,26 @@ impl TestHarness {
         self.try_start().await.expect("Failed to start test Server")
     }
 
+    /// Like [`TestHarness::start`] but can specify a cert reload trigger.
+    pub async fn start_with_trigger(self, reload_certs: ReloadTrigger) -> TestServer {
+        self.try_start_with_trigger(reload_certs)
+            .await
+            .expect("Failed to start test Server")
+    }
+
     /// Starts a test [`TestServer`], returning an error if the server could not be started.
     pub async fn try_start(self) -> Result<TestServer, anyhow::Error> {
+        self.try_start_with_trigger(mz_server_core::cert_reload_never_reload())
+            .await
+    }
+
+    /// Like [`TestHarness::try_start`] but can specify a cert reload trigger.
+    pub async fn try_start_with_trigger(
+        self,
+        reload_certs: ReloadTrigger,
+    ) -> Result<TestServer, anyhow::Error> {
         let listeners = Listeners::new().await?;
-        listeners.serve(self).await
+        listeners.serve_with_trigger(self, reload_certs).await
     }
 
     /// Starts a runtime and returns a [`TestServerWithRuntime`].
@@ -304,6 +324,15 @@ impl Listeners {
     }
 
     pub async fn serve(self, config: TestHarness) -> Result<TestServer, anyhow::Error> {
+        self.serve_with_trigger(config, mz_server_core::cert_reload_never_reload())
+            .await
+    }
+
+    pub async fn serve_with_trigger(
+        self,
+        config: TestHarness,
+        reload_certs: ReloadTrigger,
+    ) -> Result<TestServer, anyhow::Error> {
         let (data_directory, temp_dir) = match config.data_directory {
             None => {
                 // If no data directory is provided, we create a temporary
@@ -482,6 +511,10 @@ impl Listeners {
                     .builtin_system_cluster_replica_size,
                 bootstrap_builtin_introspection_cluster_replica_size: config
                     .builtin_introspection_cluster_replica_size,
+                bootstrap_builtin_probe_cluster_replica_size: config
+                    .builtin_probe_cluster_replica_size,
+                bootstrap_builtin_support_cluster_replica_size: config
+                    .builtin_support_cluster_replica_size,
                 system_parameter_defaults: config.system_parameter_defaults,
                 availability_zones: Default::default(),
                 tracing_handle,
@@ -500,6 +533,7 @@ impl Listeners {
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 persist_txn_tables_cli: Some(PersistTxnTablesImpl::Lazy),
+                reload_certs,
             })
             .await?;
 
@@ -1236,7 +1270,7 @@ pub fn make_header<H: Header>(h: H) -> HeaderMap {
 
 pub fn make_pg_tls<F>(configure: F) -> MakeTlsConnector
 where
-    F: Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
+    F: FnOnce(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
 {
     let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
     // Disable TLS v1.3 because `postgres` and `hyper` produce stabler error

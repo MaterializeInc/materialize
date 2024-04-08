@@ -112,8 +112,8 @@ pub enum UserKind {
 
 pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
 pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
-pub const MZ_MONITOR_ROLE_ID: RoleId = RoleId::System(3);
-pub const MZ_MONITOR_REDACTED_ROLE_ID: RoleId = RoleId::System(4);
+pub const MZ_MONITOR_ROLE_ID: RoleId = RoleId::Predefined(1);
+pub const MZ_MONITOR_REDACTED_ROLE_ID: RoleId = RoleId::Predefined(2);
 
 /// Metadata about a Session's role.
 ///

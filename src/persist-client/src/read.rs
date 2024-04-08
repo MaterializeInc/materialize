@@ -41,7 +41,7 @@ use crate::fetch::{
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{HollowBatch, HollowBatchPart};
+use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
 use crate::iter::Consolidator;
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
@@ -750,7 +750,7 @@ where
     fn lease_batch_part(
         &mut self,
         desc: Description<T>,
-        part: HollowBatchPart<T>,
+        part: BatchPart<T>,
         filter: FetchBatchFilter<T>,
     ) -> LeasedBatchPart<T> {
         LeasedBatchPart {
@@ -1033,7 +1033,7 @@ where
     pub async fn snapshot_cursor(
         &mut self,
         as_of: Antichain<T>,
-        should_fetch_part: impl for<'a> Fn(&'a Option<LazyPartStats>) -> bool,
+        should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
@@ -1053,7 +1053,7 @@ where
                     .map(|part| {
                         self.lease_batch_part(batch.desc.clone(), part.clone(), filter.clone())
                     })
-                    .filter(|p| should_fetch_part(&p.part.stats))
+                    .filter(|p| should_fetch_part(p.part.stats()))
                     .collect();
                 consolidator.enqueue_leased_run(
                     &self.blob,
@@ -1090,8 +1090,8 @@ where
             .into_iter()
             .flat_map(|b| b.parts)
             .map(|p| SnapshotPartStats {
-                encoded_size_bytes: p.encoded_size_bytes,
-                stats: p.stats,
+                encoded_size_bytes: p.encoded_size_bytes(),
+                stats: p.stats().cloned(),
             })
             .collect();
         Ok(SnapshotPartsStats {
@@ -1218,6 +1218,7 @@ mod tests {
     use std::pin;
     use std::str::FromStr;
 
+    use mz_dyncfg::ConfigUpdates;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
@@ -1237,16 +1238,16 @@ mod tests {
     use super::*;
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn drop_unused_subscribe() {
+    async fn drop_unused_subscribe(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
-        let (mut write, read) = new_test_client()
+        let (mut write, read) = new_test_client(&dyncfgs)
             .await
             .expect_open::<String, String, u64, i64>(crate::ShardId::new())
             .await;
@@ -1267,9 +1268,9 @@ mod tests {
     }
 
     // Verifies that we streaming-consolidate away identical key-values in the same batch.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn streaming_consolidate() {
+    async fn streaming_consolidate(dyncfgs: ConfigUpdates) {
         let data = &[
             // Identical records should sum together...
             (("k".to_owned(), "v".to_owned()), 0, 1),
@@ -1281,7 +1282,7 @@ mod tests {
         ];
 
         let (mut write, read) = {
-            let client = new_test_client().await;
+            let client = new_test_client(&dyncfgs).await;
             client.cfg.set_config(&BLOB_TARGET_SIZE, 1000); // So our batch stays together!
             client
                 .expect_open::<String, String, u64, i64>(crate::ShardId::new())
@@ -1316,9 +1317,9 @@ mod tests {
         )
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn snapshot_and_stream() {
+    async fn snapshot_and_stream(dyncfgs: ConfigUpdates) {
         let data = &mut [
             (("k1".to_owned(), "v1".to_owned()), 0, 1),
             (("k2".to_owned(), "v2".to_owned()), 1, 1),
@@ -1328,7 +1329,7 @@ mod tests {
         ];
 
         let (mut write, mut read) = {
-            let client = new_test_client().await;
+            let client = new_test_client(&dyncfgs).await;
             client.cfg.set_config(&BLOB_TARGET_SIZE, 0); // split batches across multiple parts
             client
                 .expect_open::<String, String, u64, i64>(crate::ShardId::new())
@@ -1355,9 +1356,9 @@ mod tests {
     }
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
-    #[mz_ore::test(tokio::test)]
+    #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/materialize/issues/19983
-    async fn seqno_leases() {
+    async fn seqno_leases(dyncfgs: ConfigUpdates) {
         let mut data = vec![];
         for i in 0..20 {
             data.push(((i.to_string(), i.to_string()), i, 1))
@@ -1365,7 +1366,7 @@ mod tests {
 
         let shard_id = ShardId::new();
 
-        let client = new_test_client().await;
+        let client = new_test_client(&dyncfgs).await;
         let (mut write, read) = client
             .expect_open::<String, String, u64, i64>(shard_id)
             .await;

@@ -44,12 +44,12 @@ To take advantage of these indexes, Materialize will automatically re-route
 `SHOW` commands and queries using system catalog objects to the
 `mz_introspection` system cluster. You can disable this behavior in
 your session via the `auto_route_introspection_queries`
-[session variable](/sql/show/#other-session-variables).
+[configuration parameter](/sql/show/#other-configuration-parameters).
 
 The following characteristics apply to the `mz_introspection` cluster:
 
   * You are **not** billed for this cluster.
-  * You cannot create indexes or materialized views on this cluster.
+  * You cannot create objects in this cluster.
   * You cannot drop this cluster.
   * You can run `SELECT` or `SUBSCRIBE` statements against [system catalog
   objects](https://materialize.com/docs/sql/system-catalog/) on this cluster.
@@ -64,7 +64,35 @@ This cluster is used for various internal system monitoring tasks.
 The following characteristics apply to the `mz_system` cluster:
 
   * You are **not** billed for this cluster.
-  * You cannot create indexes or materialized views on this cluster.
+  * You cannot create objects in this cluster.
+  * You cannot drop this cluster.
+  * You cannot run `SELECT` or `SUBSCRIBE` on this cluster.
+
+### `mz_probe` system cluster
+
+{{< warn-if-unreleased "v0.95" >}}
+
+A system cluster named `mz_probe` will be pre-installed in every environment.
+This cluster is used for uptiming monitoring.
+
+The following characteristics apply to the `mz_probe` cluster:
+
+  * You are **not** billed for this cluster.
+  * You cannot create objects in this cluster.
+  * You cannot drop this cluster.
+  * You cannot run `SELECT` or `SUBSCRIBE` on this cluster.
+
+### `mz_support` system cluster
+
+{{< warn-if-unreleased "v0.95" >}}
+
+A system cluster named `mz_support` will be pre-installed in every environment.
+This cluster is used for support to perform one-off debugging and validation.
+
+The following characteristics apply to the `mz_support` cluster:
+
+  * You are **not** billed for this cluster.
+  * You cannot create objects in this cluster.
   * You cannot drop this cluster.
   * You cannot run `SELECT` or `SUBSCRIBE` on this cluster.
 
@@ -83,6 +111,8 @@ SHOW CLUSTERS;
  auction_house        |  r1 (25cc)
  mz_introspection     |  r1 (50cc)
  mz_system            |  r1 (50cc)
+ mz_probe             |  r1 (mz_probe)
+ mz_support           |
 ```
 
 ```sql

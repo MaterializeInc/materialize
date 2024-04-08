@@ -198,7 +198,9 @@ impl Coordinator {
         };
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
-            tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
+            if !id.is_system() {
+                tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
+            }
             coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
         };
 
