@@ -239,7 +239,7 @@ impl Authenticator {
                         let inner = Arc::clone(&self.inner);
                         let expected_email = String::from(expected_email);
                         async move {
-                            let result = inner.authenticate(expected_email.clone(), password).await;
+                            let result = inner.authenticate(expected_email, password).await;
 
                             // Make sure our AuthSession state is correct.
                             //
@@ -257,8 +257,8 @@ impl Authenticator {
                                     // Invalid! The AuthSession should have become Active.
                                     None | Some(AuthSession::Pending(_)) => {
                                         tracing::error!(
-                                            expected_email,
-                                            "Failed to make AuthSession active!"
+                                            ?password.client_id,
+                                            "failed to make auth session active!"
                                         );
                                         sessions.remove(&password);
                                     }
@@ -277,6 +277,16 @@ impl Authenticator {
                         .session_request_count
                         .with_label_values(&["new"])
                         .inc();
+
+                    // Make sure there is always something driving the request to completion
+                    // incase the client goes away.
+                    mz_ore::task::spawn(|| "auth-session-listener", {
+                        let request = request.clone();
+                        async move {
+                            // We don't care about the result here, someone else handles it.
+                            let _ = request.await;
+                        }
+                    });
 
                     // Wait for the request to complete.
                     request

@@ -2537,8 +2537,7 @@ async fn test_transient_auth_failures() {
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
-            // Make the refresh window very large so it's easy to test.
-            refresh_drop_factor: 1.0,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,
@@ -2649,8 +2648,7 @@ async fn test_transient_auth_failure_on_refresh() {
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
-            // Make the refresh window very large so it's easy to test.
-            refresh_drop_factor: 1.0,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,
