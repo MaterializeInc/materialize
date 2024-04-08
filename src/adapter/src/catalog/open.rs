@@ -9,8 +9,7 @@
 
 //! Logic related to opening a [`Catalog`].
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::str::FromStr;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,7 +30,7 @@ use mz_catalog::durable::{
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, DefaultPrivileges, Func, Log, Source,
-    StateUpdateKind, Table, Type,
+    StateUpdate, StateUpdateKind, Table, Type,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -48,23 +47,21 @@ use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema,
-    CatalogType, NameReference, RoleMembership, RoleVars,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogType,
+    NameReference, RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
     ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
     SchemaSpecifier,
 };
+use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{SystemVars, VarError, VarInput};
-use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::Expr;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_types::sources::Timeline;
-use once_cell::sync::Lazy;
-use regex::Regex;
 use timely::Container;
 use tracing::{info, warn, Instrument};
 use uuid::Uuid;
@@ -302,20 +299,27 @@ impl Catalog {
 
             // Durable catalog updates must be partitioned so that we can weave the loading of
             // builtin objects into the right spots.
-            let (non_cluster_updates, cluster_updates) = txn.get_updates().partition(|update| match update.kind {
-                StateUpdateKind::Role(_)
-                | StateUpdateKind::Database(_)
-                | StateUpdateKind::Schema(_)
-                | StateUpdateKind::DefaultPrivilege(_)
-                | StateUpdateKind::SystemPrivilege(_)
-                | StateUpdateKind::SystemConfiguration(_)
-                | StateUpdateKind::Comment(_) => true,
-                StateUpdateKind::Cluster(_)
-                | StateUpdateKind::IntrospectionSourceIndex(_)
-                | StateUpdateKind::ClusterReplica(_) => false,
-            });
+            let mut pre_cluster_updates = Vec::new();
+            let mut cluster_updates = Vec::new();
+            let mut item_updates = Vec::new();
+            let mut comment_updates = Vec::new();
+            for update in txn.get_updates() {
+                match &update.kind {
+                    StateUpdateKind::Role(_)
+                    | StateUpdateKind::Database(_)
+                    | StateUpdateKind::Schema(_)
+                    | StateUpdateKind::DefaultPrivilege(_)
+                    | StateUpdateKind::SystemPrivilege(_)
+                    | StateUpdateKind::SystemConfiguration(_) => pre_cluster_updates.push(update),
+                    StateUpdateKind::Cluster(_)
+                    | StateUpdateKind::IntrospectionSourceIndex(_)
+                    | StateUpdateKind::ClusterReplica(_) => cluster_updates.push(update),
+                    StateUpdateKind::Item(_) => item_updates.push(update),
+                    StateUpdateKind::Comment(_) => comment_updates.push(update),
+                }
+            }
 
-            state.apply_updates_for_bootstrap(non_cluster_updates);
+            state.apply_updates_for_bootstrap(pre_cluster_updates)?;
 
             // Load all builtin types.
             let (builtin_types, builtin_non_types): (Vec<_>, Vec<_>) = builtin_item_ids
@@ -480,7 +484,7 @@ impl Catalog {
                 }
             }
 
-            state.apply_updates_for_bootstrap(cluster_updates);
+            state.apply_updates_for_bootstrap(cluster_updates)?;
 
             // Load all builtin indexes.
             for (builtin, id) in builtin_indexes {
@@ -551,11 +555,16 @@ impl Catalog {
                             cause: e.to_string(),
                         })
                     })?;
-
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
+                // Throw the existing item updates away because they may have been re-written in
+                // the migration.
+                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: 1}).collect();
+                state.apply_updates_for_bootstrap(item_updates)?;
+            } else {
+                state.apply_updates_for_bootstrap(item_updates)?;
             }
 
-            let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
+            state.apply_updates_for_bootstrap(comment_updates)?;
 
             // Migrate builtin items.
             let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
@@ -1114,177 +1123,6 @@ impl Catalog {
         )?;
 
         Ok(())
-    }
-
-    /// Takes a catalog which only has items in its on-disk storage ("unloaded")
-    /// and cannot yet resolve names, and returns a catalog loaded with those
-    /// items.
-    ///
-    /// This function requires transactions to support loading a catalog with
-    /// the transaction's currently in-flight updates to existing catalog
-    /// objects, which is necessary for at least one catalog migration.
-    ///
-    /// TODO(justin): it might be nice if these were two different types.
-    #[mz_ore::instrument]
-    pub fn load_catalog_items<'a>(
-        tx: &mut Transaction<'a>,
-        state: &CatalogState,
-    ) -> Result<CatalogState, Error> {
-        let mut state = state.clone();
-        let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
-        let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
-        let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
-        while let Some(item) = items.pop_front() {
-            // TODO(benesch): a better way of detecting when a view has depended
-            // upon a non-existent logging view. This is fine for now because
-            // the only goal is to produce a nicer error message; we'll bail out
-            // safely even if the error message we're sniffing out changes.
-            static LOGGING_ERROR: Lazy<Regex> =
-                Lazy::new(|| Regex::new("mz_catalog.[^']*").expect("valid regex"));
-
-            let catalog_item = match state.deserialize_item(item.id, &item.create_sql) {
-                Ok(item) => item,
-                Err(AdapterError::Catalog(Error {
-                    kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(name)),
-                })) if LOGGING_ERROR.is_match(&name.to_string()) => {
-                    return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
-                        depender_name: name,
-                    }));
-                }
-                // If we were missing a dependency, wait for it to be added.
-                Err(AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))) => {
-                    awaiting_id_dependencies
-                        .entry(missing_dep)
-                        .or_default()
-                        .push(item);
-                    continue;
-                }
-                // If we were missing a dependency, wait for it to be added.
-                Err(AdapterError::PlanError(plan::PlanError::Catalog(
-                    SqlCatalogError::UnknownItem(missing_dep),
-                ))) => {
-                    match GlobalId::from_str(&missing_dep) {
-                        Ok(id) => {
-                            awaiting_id_dependencies.entry(id).or_default().push(item);
-                        }
-                        Err(_) => {
-                            awaiting_name_dependencies
-                                .entry(missing_dep)
-                                .or_default()
-                                .push(item);
-                        }
-                    }
-                    continue;
-                }
-                Err(e) => {
-                    let schema = state.find_non_temp_schema(&item.schema_id);
-                    let name = QualifiedItemName {
-                        qualifiers: ItemQualifiers {
-                            database_spec: schema.database().clone(),
-                            schema_spec: schema.id().clone(),
-                        },
-                        item: item.name,
-                    };
-                    let name = state.resolve_full_name(&name, None);
-                    return Err(Error::new(ErrorKind::Corruption {
-                        detail: format!(
-                            "failed to deserialize item {} ({}): {}\n\n{}",
-                            item.id, name, e, item.create_sql
-                        ),
-                    }));
-                }
-            };
-
-            // Enqueue any items waiting on this dependency.
-            if let Some(dependent_items) = awaiting_id_dependencies.remove(&item.id) {
-                items.extend(dependent_items);
-            }
-            let schema = state.find_non_temp_schema(&item.schema_id);
-            let name = QualifiedItemName {
-                qualifiers: ItemQualifiers {
-                    database_spec: schema.database().clone(),
-                    schema_spec: schema.id().clone(),
-                },
-                item: item.name,
-            };
-            let full_name = state.resolve_full_name(&name, None);
-            if let Some(dependent_items) = awaiting_name_dependencies.remove(&full_name.to_string())
-            {
-                items.extend(dependent_items);
-            }
-
-            state.insert_item(
-                item.id,
-                item.oid,
-                name,
-                catalog_item,
-                item.owner_id,
-                PrivilegeMap::from_mz_acl_items(item.privileges),
-            );
-        }
-
-        // Error on any unsatisfied dependencies.
-        if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
-            let mz_catalog::durable::Item {
-                id,
-                oid: _,
-                schema_id,
-                name,
-                create_sql: _,
-                owner_id: _,
-                privileges: _,
-            } = dependents.remove(0);
-            let schema = state.find_non_temp_schema(&schema_id);
-            let name = QualifiedItemName {
-                qualifiers: ItemQualifiers {
-                    database_spec: schema.database().clone(),
-                    schema_spec: schema.id().clone(),
-                },
-                item: name,
-            };
-            let name = state.resolve_full_name(&name, None);
-            return Err(Error::new(ErrorKind::Corruption {
-                detail: format!(
-                    "failed to deserialize item {} ({}): {}",
-                    id,
-                    name,
-                    AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))
-                ),
-            }));
-        }
-
-        if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
-            let mz_catalog::durable::Item {
-                id,
-                oid: _,
-                schema_id,
-                name,
-                create_sql: _,
-                owner_id: _,
-                privileges: _,
-            } = dependents.remove(0);
-            let schema = state.find_non_temp_schema(&schema_id);
-            let name = QualifiedItemName {
-                qualifiers: ItemQualifiers {
-                    database_spec: schema.database().clone(),
-                    schema_spec: schema.id().clone(),
-                },
-                item: name,
-            };
-            let name = state.resolve_full_name(&name, None);
-            return Err(Error::new(ErrorKind::Corruption {
-                detail: format!(
-                    "failed to deserialize item {} ({}): {}",
-                    id,
-                    name,
-                    AdapterError::Catalog(Error {
-                        kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(missing_dep))
-                    })
-                ),
-            }));
-        }
-
-        Ok(state)
     }
 
     /// Politely releases all external resources that can only be released in an async context.
