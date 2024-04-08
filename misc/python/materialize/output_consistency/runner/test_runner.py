@@ -82,6 +82,7 @@ class ConsistencyTestRunner:
 
         time_guard = TimeGuard(self.config.max_runtime_in_sec)
 
+        self.output_printer.start_section("Running predefined queries")
         success = self._run_predefined_queries(test_summary)
 
         if not success and self.config.fail_fast:
@@ -90,6 +91,8 @@ class ConsistencyTestRunner:
             )
             return test_summary
 
+        self.output_printer.print_empty_line()
+        self.output_printer.start_section("Running generated queries")
         while True:
             if expression_count > 0 and expression_count % 200 == 0:
                 self.output_printer.print_status(
@@ -208,6 +211,7 @@ class ConsistencyTestRunner:
 
     def _run_predefined_queries(self, test_summary: ConsistencyTestSummary) -> bool:
         if len(self.input_data.predefined_queries) == 0:
+            self.output_printer.print_status("No predefined queries exist")
             return True
 
         all_passed = True
@@ -220,5 +224,9 @@ class ConsistencyTestRunner:
 
             if not query_succeeded and self.config.fail_fast:
                 return False
+
+        self.output_printer.print_status(
+            f"Executed {len(self.input_data.predefined_queries)} predefined queries"
+        )
 
         return all_passed

@@ -180,7 +180,7 @@ class OutputConsistencyTest:
         )
         test_runner.setup()
 
-        output_printer.start_section("Test execution")
+        output_printer.start_section("Test remarks")
 
         if not config.verbose_output:
             output_printer.print_info(
