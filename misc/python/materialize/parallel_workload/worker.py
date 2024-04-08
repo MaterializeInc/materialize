@@ -37,7 +37,6 @@ class Worker:
 
     def __init__(
         self,
-        worker_id: int,
         rng: random.Random,
         actions: list[Action],
         weights: list[float],
@@ -47,7 +46,6 @@ class Worker:
         composition: Composition | None,
         action_list: ActionList | None = None,
     ):
-        self.worker_id = worker_id
         self.rng = rng
         self.action_list = action_list
         self.actions = actions
@@ -67,7 +65,7 @@ class Worker:
         )
         self.conn.autocommit = self.autocommit
         cur = self.conn.cursor()
-        self.exe = ParallelWorkloadExecutor(self.worker_id, self.rng, cur, database)
+        self.exe = ParallelWorkloadExecutor(self.rng, cur, database)
         self.exe.set_isolation("SERIALIZABLE")
         cur.execute("SET auto_route_introspection_queries TO false")
         cur.execute("SELECT pg_backend_pid()")
