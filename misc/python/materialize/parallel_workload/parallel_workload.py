@@ -47,10 +47,7 @@ from materialize.parallel_workload.database import (
     MAX_WEBHOOK_SOURCES,
     Database,
 )
-from materialize.parallel_workload.executor import (
-    ParallelWorkloadExecutor,
-    initialize_logging,
-)
+from materialize.parallel_workload.executor import Executor, initialize_logging
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.parallel_workload.worker import Worker
 from materialize.parallel_workload.worker_exception import WorkerFailedException
@@ -94,7 +91,7 @@ def run(
     )
     system_conn.autocommit = True
     with system_conn.cursor() as system_cur:
-        system_exe = ParallelWorkloadExecutor(-1, rng, system_cur, database)
+        system_exe = Executor(rng, system_cur, database)
         system_exe.execute(
             f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 10 + num_threads}"
         )
@@ -144,9 +141,7 @@ def run(
         conn.autocommit = True
         with conn.cursor() as cur:
             assert composition
-            database.create(
-                ParallelWorkloadExecutor(-1, rng, cur, database), composition
-            )
+            database.create(Executor(rng, cur, database), composition)
         conn.close()
 
     workers = []
@@ -177,7 +172,6 @@ def run(
             for action_class in action_list.action_classes
         ]
         worker = Worker(
-            i,
             worker_rng,
             actions,
             action_list.weights,
@@ -204,7 +198,6 @@ def run(
     if scenario == Scenario.Cancel:
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
         worker = Worker(
-            num_threads + 1,
             worker_rng,
             [CancelAction(worker_rng, composition, workers)],
             [1],
@@ -225,7 +218,6 @@ def run(
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
         assert composition, "Kill scenario only works in mzcompose"
         worker = Worker(
-            num_threads + 2,
             worker_rng,
             [KillAction(worker_rng, composition, sanity_restart)],
             [1],
@@ -251,7 +243,6 @@ def run(
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
         assert composition, "TogglePersistTxn scenario only works in mzcompose"
         worker = Worker(
-            num_threads + 3,
             worker_rng,
             [
                 KillAction(
@@ -279,7 +270,6 @@ def run(
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
         assert composition, "Backup & Restore scenario only works in mzcompose"
         worker = Worker(
-            num_threads + 4,
             worker_rng,
             [BackupRestoreAction(worker_rng, composition, database)],
             [1],
@@ -304,7 +294,6 @@ def run(
     if False:  # sanity check for debugging
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
         worker = Worker(
-            num_threads + 5,
             worker_rng,
             [StatisticsAction(worker_rng, composition)],
             [1],
@@ -375,7 +364,7 @@ def run(
     with conn.cursor() as cur:
         # Dropping the database also releases the long running connections
         # used by database objects.
-        database.drop(ParallelWorkloadExecutor(-1, rng, cur, database))
+        database.drop(Executor(rng, cur, database))
 
         # Make sure all unreachable connections are closed too
         gc.collect()

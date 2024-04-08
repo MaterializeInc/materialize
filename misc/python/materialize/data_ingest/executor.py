@@ -32,7 +32,7 @@ from materialize.data_ingest.transaction import Transaction
 from materialize.mzcompose.services.mysql import MySql
 
 
-class DataIngestExecutor:
+class Executor:
     num_transactions: int
     ports: dict[str, int]
     mz_conn: pg8000.Connection
@@ -112,7 +112,7 @@ class DataIngestExecutor:
                     time.sleep(wait_time_in_sec)
 
 
-class PrintExecutor(DataIngestExecutor):
+class PrintExecutor(Executor):
     def create(self, logging_exe: Any | None = None) -> None:
         pass
 
@@ -125,7 +125,7 @@ def delivery_report(err: str, msg: Any) -> None:
     assert err is None, f"Delivery failed for User record {msg.key()}: {err}"
 
 
-class KafkaExecutor(DataIngestExecutor):
+class KafkaExecutor(Executor):
     producer: confluent_kafka.Producer
     avro_serializer: AvroSerializer
     key_avro_serializer: AvroSerializer
@@ -288,7 +288,7 @@ class KafkaExecutor(DataIngestExecutor):
         self.producer.flush()
 
 
-class MySqlExecutor(DataIngestExecutor):
+class MySqlExecutor(Executor):
     mysql_conn: pymysql.Connection
     table: str
     source: str
@@ -413,7 +413,7 @@ class MySqlExecutor(DataIngestExecutor):
         self.mysql_conn.commit()
 
 
-class PgExecutor(DataIngestExecutor):
+class PgExecutor(Executor):
     pg_conn: pg8000.Connection
     table: str
     source: str
@@ -537,7 +537,7 @@ class PgExecutor(DataIngestExecutor):
         self.pg_conn.commit()
 
 
-class KafkaRoundtripExecutor(DataIngestExecutor):
+class KafkaRoundtripExecutor(Executor):
     table: str
     table_original: str
     topic: str
