@@ -24,10 +24,13 @@ ALTER SYSTEM SET min_timestamp_interval = '100ms'
 # Make sure that the general pattern of all queries in this file will use TopK and not some other future operator or optimization
 #
 
-# Remove both newlines, references to internal table identifiers, and "materialize.public" strings, all with a single regexp
-$ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
-> EXPLAIN SELECT (SELECT 'a' LIMIT 1);
-"Explained Query (fast path):  Constant    - (\"a\")"
+# Remove references to internal table identifiers and "materialize.public" strings
+$ set-regex match=(\s\(u\d+\)|materialize\.public\.) replacement=
+
+? EXPLAIN SELECT (SELECT 'a' LIMIT 1);
+Explained Query (fast path):
+  Constant
+    - ("a")
 
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": ["int", "null"]} , {"name": "f2", "type": ["int", "null"]}] }
 

@@ -79,8 +79,12 @@ SELECT id FROM mz_schemas WHERE name = 'green';
 > SELECT * FROM blue.mv1;
 60
 
-> EXPLAIN SELECT * FROM blue.mv1;
-"Explained Query (fast path):\n  ReadIndex on=materialize.blue.mv1 mv1_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.blue.mv1_primary_idx (*** full scan ***)\n"
+? EXPLAIN SELECT * FROM blue.mv1;
+Explained Query (fast path):
+  ReadIndex on=materialize.blue.mv1 mv1_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.blue.mv1_primary_idx (*** full scan ***)
 
 > SET cluster TO quickstart;
 
@@ -99,8 +103,12 @@ SELECT id FROM mz_schemas WHERE name = 'green';
 > SELECT * FROM green.mv1;
 20
 
-> EXPLAIN SELECT * FROM green.mv1;
-"Explained Query (fast path):\n  ReadIndex on=materialize.green.mv1 mv1_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.green.mv1_primary_idx (*** full scan ***)\n"
+? EXPLAIN SELECT * FROM green.mv1;
+Explained Query (fast path):
+  ReadIndex on=materialize.green.mv1 mv1_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.green.mv1_primary_idx (*** full scan ***)
 
 > SET cluster to defaut;
 
@@ -130,8 +138,12 @@ SELECT id FROM mz_clusters WHERE name = 'green_serving';
 > SELECT * FROM blue.mv1;
 20
 
-> EXPLAIN SELECT * FROM blue.mv1;
-"Explained Query (fast path):\n  ReadIndex on=materialize.blue.mv1 mv1_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.blue.mv1_primary_idx (*** full scan ***)\n"
+? EXPLAIN SELECT * FROM blue.mv1;
+Explained Query (fast path):
+  ReadIndex on=materialize.blue.mv1 mv1_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.blue.mv1_primary_idx (*** full scan ***)
 
 > SELECT name FROM mz_schemas WHERE id = '${og-green-schema-id}';
 "blue"
@@ -152,5 +164,9 @@ SELECT id FROM mz_clusters WHERE name = 'green_serving';
 > SELECT * FROM blue.mv1;
 20
 
-> EXPLAIN SELECT * FROM blue.mv1;
-"Explained Query (fast path):\n  ReadIndex on=materialize.blue.mv1 mv1_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.blue.mv1_primary_idx (*** full scan ***)\n"
+? EXPLAIN SELECT * FROM blue.mv1;
+Explained Query (fast path):
+  ReadIndex on=materialize.blue.mv1 mv1_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.blue.mv1_primary_idx (*** full scan ***)

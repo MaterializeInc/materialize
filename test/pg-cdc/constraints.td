@@ -62,23 +62,41 @@ ALTER TABLE unique_nullable REPLICA IDENTITY FULL;
 <null> <null> <null>
 
 # Not null constraint optimizes like this:
-> EXPLAIN SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
-"Explained Query (fast path):\n  Constant <empty>\n"
+? EXPLAIN SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
+Explained Query (fast path):
+  Constant <empty>
 
-> EXPLAIN SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
-"Explained Query (fast path):\n  Constant <empty>\n"
-
-#
-# Unique converted to keys
-> EXPLAIN SELECT DISTINCT f1, f2 FROM pk
-"Explained Query (fast path):\n  Project (#0, #1)\n    ReadIndex on=materialize.public.pk pk_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.pk_primary_idx (*** full scan ***)\n"
+? EXPLAIN SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
+Explained Query (fast path):
+  Constant <empty>
 
 #
 # Unique converted to keys
-> EXPLAIN SELECT DISTINCT f1, f2 FROM unique_not_null
-"Explained Query (fast path):\n  Project (#0, #1)\n    ReadIndex on=materialize.public.unique_not_null unique_not_null_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.unique_not_null_primary_idx (*** full scan ***)\n"
+? EXPLAIN SELECT DISTINCT f1, f2 FROM pk
+Explained Query (fast path):
+  Project (#0, #1)
+    ReadIndex on=materialize.public.pk pk_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.pk_primary_idx (*** full scan ***)
+
+#
+# Unique converted to keys
+? EXPLAIN SELECT DISTINCT f1, f2 FROM unique_not_null
+Explained Query (fast path):
+  Project (#0, #1)
+    ReadIndex on=materialize.public.unique_not_null unique_not_null_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.unique_not_null_primary_idx (*** full scan ***)
 
 #
 # Unique NOT converted to keys because values are nullable
-> EXPLAIN SELECT DISTINCT f1, f2 FROM unique_nullable
-"Explained Query:\n  Distinct project=[#0, #1]\n    Project (#0, #1)\n      ReadIndex on=unique_nullable unique_nullable_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.unique_nullable_primary_idx (*** full scan ***)\n"
+? EXPLAIN SELECT DISTINCT f1, f2 FROM unique_nullable
+Explained Query:
+  Distinct project=[#0, #1]
+    Project (#0, #1)
+      ReadIndex on=unique_nullable unique_nullable_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.unique_nullable_primary_idx (*** full scan ***)
