@@ -2483,3 +2483,238 @@ async fn test_refresh_dropped_session_lru() {
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 4);
     drop(pg_client);
 }
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_transient_auth_failures() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let password = Uuid::new_v4().to_string();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+
+    let frontegg_user = "user@_.com";
+
+    let users = BTreeMap::from([(
+        frontegg_user.to_string(),
+        UserConfig {
+            email: frontegg_user.to_string(),
+            password,
+            tenant_id,
+            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            roles: Vec::new(),
+        },
+    )]);
+    let issuer = "frontegg-mock".to_owned();
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        issuer,
+        encoding_key,
+        decoding_key,
+        users,
+        None,
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+    )
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            // Make the refresh window very large so it's easy to test.
+            refresh_drop_factor: 1.0,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+    let frontegg_user = "user@_.com";
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    // Disable auth.
+    frontegg_server.enable_auth.store(false, Ordering::Relaxed);
+
+    // Try connecting once, we should fail.
+    let result = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await;
+    assert!(result.is_err());
+
+    // Re-enable auth.
+    frontegg_server.enable_auth.store(true, Ordering::Relaxed);
+
+    let pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        frontegg_user
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_transient_auth_failure_on_refresh() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let password = Uuid::new_v4().to_string();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+
+    let frontegg_user = "user@_.com";
+
+    let users = BTreeMap::from([(
+        frontegg_user.to_string(),
+        UserConfig {
+            email: frontegg_user.to_string(),
+            password,
+            tenant_id,
+            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            roles: Vec::new(),
+        },
+    )]);
+    let issuer = "frontegg-mock".to_owned();
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        issuer,
+        encoding_key,
+        decoding_key,
+        users,
+        None,
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+    )
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            // Make the refresh window very large so it's easy to test.
+            refresh_drop_factor: 1.0,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+    let frontegg_user = "user@_.com";
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    // Connect once.
+    let pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        frontegg_user
+    );
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 1);
+
+    // Disable auth.
+    frontegg_server.enable_auth.store(false, Ordering::Relaxed);
+
+    // Wait for refresh to occur.
+    frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 2);
+
+    // Our client should have been closed since auth refresh failed.
+    assert!(pg_client.query_one("SELECT 1", &[]).await.is_err());
+
+    // Re-enable auth.
+    frontegg_server.enable_auth.store(true, Ordering::Relaxed);
+
+    // We should be able to reconnect.
+    let pg_client2 = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+    assert!(pg_client2.query_one("SELECT 1", &[]).await.is_ok());
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 3);
+}

@@ -238,7 +238,18 @@ impl Authenticator {
                     let request: Pin<Box<AuthFuture>> = Box::pin({
                         let inner = Arc::clone(&self.inner);
                         let expected_email = String::from(expected_email);
-                        async move { inner.authenticate(expected_email, password).await }
+                        async move {
+                            let result = inner.authenticate(expected_email, password).await;
+
+                            // If we return an error make sure we remove the pending session.
+                            let mut sessions = inner.active_sessions.lock().expect("lock poisoned");
+                            if let Err(err) = &result {
+                                let session = sessions.remove(&password);
+                                tracing::debug!(?err, ?session, "removing failed auth session");
+                            }
+
+                            result
+                        }
                     });
 
                     // Store the future so that future requests can latch on.
