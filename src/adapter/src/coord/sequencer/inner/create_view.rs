@@ -439,8 +439,7 @@ impl Coordinator {
             let full_name = self.catalog().resolve_full_name(&name, None);
             let transient_items = btreemap! {
                 id => TransientItem::new(
-                    Some(full_name.to_string()),
-                    Some(full_name.item.to_string()),
+                    Some(full_name.into_parts()),
                     Some(column_names.iter().map(|c| c.to_string()).collect()),
                 )
             };

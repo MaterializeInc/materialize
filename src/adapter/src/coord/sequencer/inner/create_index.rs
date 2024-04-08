@@ -555,8 +555,7 @@ impl Coordinator {
 
             let transient_items = btreemap! {
                 exported_index_id => TransientItem::new(
-                    Some(full_name.to_string()),
-                    Some(full_name.item.to_string()),
+                    Some(full_name.into_parts()),
                     Some(on_desc.iter_names().map(|c| c.to_string()).collect()),
                 )
             };

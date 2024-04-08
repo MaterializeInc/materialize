@@ -424,6 +424,10 @@ pub trait ExprHumanizer: fmt::Debug {
     /// Same as above, but without qualifications, e.g., only `foo` for `materialize.public.foo`.
     fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String>;
 
+    /// Like [`Self::humanize_id`], but returns the consituent parts of the
+    /// name as individual elements.
+    fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>>;
+
     /// Returns a human-readable name for the specified scalar type.
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
 
@@ -464,15 +468,28 @@ impl<'a> ExprHumanizerExt<'a> {
 impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
         match self.items.get(&id) {
-            Some(item) => item.humanized_id.clone(),
+            Some(item) => item
+                .humanized_id_parts
+                .as_ref()
+                .map(|parts| parts.join(".")),
             None => self.inner.humanize_id(id),
         }
     }
 
     fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
         match self.items.get(&id) {
-            Some(item) => item.humanized_id_unqualified.clone(),
+            Some(item) => item
+                .humanized_id_parts
+                .as_ref()
+                .and_then(|parts| parts.last().cloned()),
             None => self.inner.humanize_id_unqualified(id),
+        }
+    }
+
+    fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>> {
+        match self.items.get(&id) {
+            Some(item) => item.humanized_id_parts.clone(),
+            None => self.inner.humanize_id_parts(id),
         }
     }
 
@@ -497,20 +514,14 @@ impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
 /// `items` list.
 #[derive(Debug)]
 pub struct TransientItem {
-    humanized_id: Option<String>,
-    humanized_id_unqualified: Option<String>,
+    humanized_id_parts: Option<Vec<String>>,
     column_names: Option<Vec<String>>,
 }
 
 impl TransientItem {
-    pub fn new(
-        humanized_id: Option<String>,
-        humanized_id_unqualified: Option<String>,
-        column_names: Option<Vec<String>>,
-    ) -> Self {
+    pub fn new(humanized_id_parts: Option<Vec<String>>, column_names: Option<Vec<String>>) -> Self {
         Self {
-            humanized_id,
-            humanized_id_unqualified,
+            humanized_id_parts,
             column_names,
         }
     }
@@ -532,6 +543,10 @@ impl ExprHumanizer for DummyHumanizer {
     }
 
     fn humanize_id_unqualified(&self, _id: GlobalId) -> Option<String> {
+        None
+    }
+
+    fn humanize_id_parts(&self, _id: GlobalId) -> Option<Vec<String>> {
         None
     }
 

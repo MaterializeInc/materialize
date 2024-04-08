@@ -926,8 +926,7 @@ impl Coordinator {
         let expr_humanizer = {
             let transient_items = btreemap! {
                 select_id => TransientItem::new(
-                    Some(GlobalId::Explain.to_string()),
-                    Some(GlobalId::Explain.to_string()),
+                    Some(vec![GlobalId::Explain.to_string()]),
                     Some(desc.iter_names().map(|c| c.to_string()).collect()),
                 )
             };
