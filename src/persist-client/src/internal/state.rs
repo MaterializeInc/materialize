@@ -744,7 +744,7 @@ where
         lease_duration_ms: u64,
         idempotency_token: &IdempotencyToken,
         debug_info: &HandleDebugState,
-        inline_update_max_bytes: usize,
+        inline_writes_total_max_bytes: usize,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -826,7 +826,10 @@ where
             let mut existing_inline_bytes = 0;
             self.trace
                 .map_batches(|x| existing_inline_bytes += x.inline_bytes());
-            if existing_inline_bytes + new_inline_bytes >= inline_update_max_bytes {
+            // TODO: For very small batches, it may actually _increase_ the size
+            // of state to flush them out. Consider another threshold under
+            // which an inline part can be appended no matter what.
+            if existing_inline_bytes + new_inline_bytes >= inline_writes_total_max_bytes {
                 return Break(CompareAndAppendBreak::InlineBackpressure);
             }
         }

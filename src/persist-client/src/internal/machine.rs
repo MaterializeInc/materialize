@@ -32,7 +32,7 @@ use timely::PartialOrder;
 use tracing::{debug, info, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::batch::INLINE_UPDATE_MAX_BYTES;
+use crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES;
 use crate::cache::StateCache;
 use crate::cfg::RetryParameters;
 use crate::critical::CriticalReaderId;
@@ -389,7 +389,7 @@ where
                         lease_duration_ms,
                         idempotency_token,
                         debug_info,
-                        INLINE_UPDATE_MAX_BYTES.get(cfg),
+                        INLINE_WRITES_TOTAL_MAX_BYTES.get(cfg),
                     )
                 })
                 .await;

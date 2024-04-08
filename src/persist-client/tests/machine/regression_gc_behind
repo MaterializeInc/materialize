@@ -9,7 +9,7 @@
 
 # Disable inline writes so we can match on batches below.
 dyncfg
-persist_inline_update_threshold_bytes 0
+persist_inline_writes_single_max_bytes 0
 ----
 ok
 

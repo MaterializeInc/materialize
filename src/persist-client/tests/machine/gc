@@ -9,8 +9,8 @@
 
 # Disable inline writes so interesting things happen in Blob.
 dyncfg
-persist_inline_update_threshold_bytes 0
-persist_inline_update_max_bytes 0
+persist_inline_writes_single_max_bytes 0
+persist_inline_writes_total_max_bytes 0
 ----
 ok
 

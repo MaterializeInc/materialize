@@ -743,8 +743,8 @@ mod tests {
     use timely::progress::Antichain;
 
     use crate::batch::{
-        BatchBuilderConfig, BLOB_TARGET_SIZE, INLINE_UPDATE_MAX_BYTES,
-        INLINE_UPDATE_THRESHOLD_BYTES,
+        BatchBuilderConfig, BLOB_TARGET_SIZE, INLINE_WRITES_SINGLE_MAX_BYTES,
+        INLINE_WRITES_TOTAL_MAX_BYTES,
     };
     use crate::internal::paths::{PartialRollupKey, RollupId};
     use crate::tests::new_test_client;
@@ -763,7 +763,7 @@ mod tests {
         ];
 
         let client = new_test_client(&dyncfgs).await;
-        let inline_writes_enabled = INLINE_UPDATE_THRESHOLD_BYTES.get(&client.cfg) > 0;
+        let inline_writes_enabled = INLINE_WRITES_SINGLE_MAX_BYTES.get(&client.cfg) > 0;
         let build_version = client.cfg.build_version.clone();
         let shard_id_one = ShardId::new();
         let shard_id_two = ShardId::new();
@@ -877,7 +877,7 @@ mod tests {
 
         let shard_id = ShardId::new();
         let mut client = new_test_client(&dyncfgs).await;
-        let inline_writes_enabled = INLINE_UPDATE_THRESHOLD_BYTES.get(&client.cfg) > 0;
+        let inline_writes_enabled = INLINE_WRITES_SINGLE_MAX_BYTES.get(&client.cfg) > 0;
 
         let (mut write0, _) = client
             .expect_open::<String, String, u64, i64>(shard_id)
@@ -956,7 +956,7 @@ mod tests {
         // call consumes the Batch, so we don't have any way of getting the new
         // one. So, sniff out whether backpressure would flush out the part and
         // do it before we get the sizes.
-        let backpressure_would_flush = INLINE_UPDATE_MAX_BYTES.get(&client.cfg) == 0;
+        let backpressure_would_flush = INLINE_WRITES_TOTAL_MAX_BYTES.get(&client.cfg) == 0;
 
         let (mut write, _read) = client
             .expect_open::<String, String, u64, i64>(shard_id)

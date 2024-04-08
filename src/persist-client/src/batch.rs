@@ -253,7 +253,9 @@ where
                     ts_rewrite,
                 } => (updates, key_lower, ts_rewrite),
             };
-            let updates = updates.decode::<T>().expect("valid inline part");
+            let updates = updates
+                .decode::<T>(&self.metrics.columnar)
+                .expect("valid inline part");
             let write_span =
                 debug_span!("batch::flush_to_blob", shard = %self.shard_metrics.shard_id)
                     .or_current();
@@ -298,7 +300,7 @@ pub struct BatchBuilderConfig {
     pub(crate) blob_target_size: usize,
     pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
-    pub(crate) inline_update_threshold_bytes: usize,
+    pub(crate) inline_writes_single_max_bytes: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
@@ -323,17 +325,17 @@ pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
     "A target maximum size of persist blob payloads in bytes (Materialize).",
 );
 
-pub(crate) const INLINE_UPDATE_THRESHOLD_BYTES: Config<usize> = Config::new(
-    "persist_inline_update_threshold_bytes",
+pub(crate) const INLINE_WRITES_SINGLE_MAX_BYTES: Config<usize> = Config::new(
+    "persist_inline_writes_single_max_bytes",
     0,
     "The (exclusive) maximum size of a write that persist will inline in metadata.",
 );
 
-pub(crate) const INLINE_UPDATE_MAX_BYTES: Config<usize> = Config::new(
-    "persist_inline_update_max_bytes",
+pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
+    "persist_inline_writes_total_max_bytes",
     0,
     "\
-    The (inclusive) maximum total size of inline writes in metadata before \
+    The (exclusive) maximum total size of inline writes in metadata before \
     persist will backpressure them by flushing out to s3.",
 );
 
@@ -348,7 +350,7 @@ impl BatchBuilderConfig {
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
-            inline_update_threshold_bytes: INLINE_UPDATE_THRESHOLD_BYTES.get(value),
+            inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
             stats_untrimmable_columns: Arc::new(untrimmable_columns(value)),
@@ -907,7 +909,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
         let ts_rewrite = None;
 
-        let handle = if updates.goodbytes() < self.cfg.inline_update_threshold_bytes {
+        let handle = if updates.goodbytes() < self.cfg.inline_writes_single_max_bytes {
             let span = debug_span!("batch::inline_part", shard = %self.shard_id).or_current();
             mz_ore::task::spawn(
                 || "batch::inline_part",

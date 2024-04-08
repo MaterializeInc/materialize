@@ -89,7 +89,7 @@ impl CompactConfig {
         // make room for more inline writes. We could instead do this at the end
         // of compaction by flushing out the batch, but doing it here based on
         // the config allows BatchBuilder to do its normal pipelining of writes.
-        ret.batch.inline_update_threshold_bytes = 0;
+        ret.batch.inline_writes_single_max_bytes = 0;
         ret
     }
 }

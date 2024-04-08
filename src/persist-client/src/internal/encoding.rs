@@ -18,8 +18,10 @@ use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::halt;
+use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{SeqNo, VersionedData};
+use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::stats::{PartStats, ProtoStructStats};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -1358,8 +1360,11 @@ impl Arbitrary for LazyPartStats {
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoInlineBatchPart> for BlobTraceBatchPart<T> {
-    fn into_proto(&self) -> ProtoInlineBatchPart {
+impl ProtoInlineBatchPart {
+    pub(crate) fn into_rust<T: Timestamp + Codec64>(
+        lgbytes: &ColumnarMetrics,
+        proto: Self,
+    ) -> Result<BlobTraceBatchPart<T>, TryFromProtoError> {
         // BlobTraceBatchPart has a Vec<ColumnarRecords>. Inline writes only
         // needs one and it's nice to only have to model one at the
         // ProtoInlineBatchPart level. I'm _pretty_ sure that the actual
@@ -1369,16 +1374,14 @@ impl<T: Timestamp + Codec64> RustType<ProtoInlineBatchPart> for BlobTraceBatchPa
         // confirm before rolling anything out). In the meantime, just construct
         // the ProtoInlineBatchPart directly in BatchParts where it still knows
         // that it has exactly one ColumnarRecords.
-        unreachable!("unused")
-    }
-
-    fn from_proto(proto: ProtoInlineBatchPart) -> Result<Self, TryFromProtoError> {
+        let updates = proto
+            .updates
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoInlineBatchPart::updates"))?;
+        let updates = ColumnarRecords::from_proto(lgbytes, updates)?;
         Ok(BlobTraceBatchPart {
             desc: proto.desc.into_rust_if_some("ProtoInlineBatchPart::desc")?,
             index: proto.index.into_rust()?,
-            updates: vec![proto
-                .updates
-                .into_rust_if_some("ProtoInlineBatchPart::updates")?],
+            updates: vec![updates],
         })
     }
 }
@@ -1418,9 +1421,10 @@ impl LazyInlineBatchPart {
     /// called.
     pub fn decode<T: Timestamp + Codec64>(
         &self,
+        lgbytes: &ColumnarMetrics,
     ) -> Result<BlobTraceBatchPart<T>, TryFromProtoError> {
         let proto = self.0.decode().expect("valid proto");
-        proto.into_rust()
+        ProtoInlineBatchPart::into_rust(lgbytes, proto)
     }
 }
 

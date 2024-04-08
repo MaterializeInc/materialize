@@ -526,6 +526,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                 ts_rewrite,
             } => {
                 let parsed = EncodedPart::from_inline(
+                    &self.metrics,
                     self.read_metrics.clone(),
                     desc.clone(),
                     updates,
@@ -743,6 +744,7 @@ where
                 key_lower: _,
                 ts_rewrite,
             } => Ok(EncodedPart::from_inline(
+                metrics,
                 read_metrics.clone(),
                 registered_desc.clone(),
                 updates,
@@ -752,13 +754,14 @@ where
     }
 
     pub(crate) fn from_inline(
-        metrics: ReadMetrics,
+        metrics: &Metrics,
+        read_metrics: ReadMetrics,
         desc: Description<T>,
         x: &LazyInlineBatchPart,
         ts_rewrite: Option<&Antichain<T>>,
     ) -> Self {
-        let parsed = x.decode().expect("valid inline part");
-        Self::new(metrics, desc, "inline", ts_rewrite, parsed)
+        let parsed = x.decode(&metrics.columnar).expect("valid inline part");
+        Self::new(read_metrics, desc, "inline", ts_rewrite, parsed)
     }
 
     pub(crate) fn from_hollow(
@@ -779,7 +782,7 @@ where
     pub(crate) fn new(
         metrics: ReadMetrics,
         registered_desc: Description<T>,
-        key: &str,
+        printable_name: &str,
         ts_rewrite: Option<&Antichain<T>>,
         parsed: BlobTraceBatchPart<T>,
     ) -> Self {
@@ -801,7 +804,7 @@ where
             assert!(
                 PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
                 "key={} inline={:?} registered={:?}",
-                key,
+                printable_name,
                 inline_desc,
                 registered_desc
             );
@@ -813,7 +816,7 @@ where
                 assert!(
                     PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
                     "key={} inline={:?} registered={:?}",
-                    key,
+                    printable_name,
                     inline_desc,
                     registered_desc
                 );
@@ -826,7 +829,7 @@ where
                 inline_desc.since(),
                 &Antichain::from_elem(T::minimum()),
                 "key={} inline={:?} registered={:?}",
-                key,
+                printable_name,
                 inline_desc,
                 registered_desc
             );
@@ -834,7 +837,7 @@ where
             assert_eq!(
                 inline_desc, &registered_desc,
                 "key={} inline={:?} registered={:?}",
-                key, inline_desc, registered_desc
+                printable_name, inline_desc, registered_desc
             );
         }
 

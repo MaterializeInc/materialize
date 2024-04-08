@@ -323,6 +323,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                 } => {
                     let read_metrics = read_metrics(&metrics.read).clone();
                     let part = EncodedPart::from_inline(
+                        metrics,
                         read_metrics,
                         desc.clone(),
                         updates,

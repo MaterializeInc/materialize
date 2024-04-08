@@ -487,31 +487,33 @@ impl ColumnarRecordsBuilder {
     }
 }
 
-impl RustType<ProtoColumnarRecords> for ColumnarRecords {
-    fn into_proto(&self) -> ProtoColumnarRecords {
+impl ColumnarRecords {
+    /// See [RustType::into_proto].
+    pub fn into_proto(&self) -> ProtoColumnarRecords {
         ProtoColumnarRecords {
             len: self.len.into_proto(),
             key_offsets: (*self.key_offsets).as_ref().to_vec(),
-            key_data: Bytes::copy_from_slice((*self.key_data).as_ref()),
+            key_data: Bytes::copy_from_slice(self.key_data.as_ref()),
             val_offsets: (*self.val_offsets).as_ref().to_vec(),
-            val_data: Bytes::copy_from_slice((*self.val_data).as_ref()),
+            val_data: Bytes::copy_from_slice(self.val_data.as_ref()),
             timestamps: (*self.timestamps).as_ref().to_vec(),
             diffs: (*self.diffs).as_ref().to_vec(),
         }
     }
 
-    fn from_proto(proto: ProtoColumnarRecords) -> Result<Self, TryFromProtoError> {
-        // WIP plumb real metrics
-        let lgbytes = LgBytesMetrics::new(&MetricsRegistry::new());
-        // WIP or should we use MaybeLgBytes in ColumnarRecords? also no .to_vec
+    /// See [RustType::from_proto].
+    pub fn from_proto(
+        lgbytes: &ColumnarMetrics,
+        proto: ProtoColumnarRecords,
+    ) -> Result<Self, TryFromProtoError> {
         let ret = ColumnarRecords {
             len: proto.len.into_rust()?,
-            key_offsets: Arc::new(lgbytes.persist_arrow.heap_region(proto.key_offsets)),
-            key_data: Arc::new(lgbytes.persist_arrow.heap_region(proto.key_data.to_vec())),
-            val_offsets: Arc::new(lgbytes.persist_arrow.heap_region(proto.val_offsets)),
-            val_data: Arc::new(lgbytes.persist_arrow.heap_region(proto.val_data.to_vec())),
-            timestamps: Arc::new(lgbytes.persist_arrow.heap_region(proto.timestamps)),
-            diffs: Arc::new(lgbytes.persist_arrow.heap_region(proto.diffs)),
+            key_offsets: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.key_offsets)),
+            key_data: MaybeLgBytes::Bytes(proto.key_data),
+            val_offsets: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.val_offsets)),
+            val_data: MaybeLgBytes::Bytes(proto.val_data),
+            timestamps: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.timestamps)),
+            diffs: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.diffs)),
         };
         let () = ret
             .borrow()

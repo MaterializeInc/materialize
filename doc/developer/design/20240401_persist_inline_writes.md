@@ -44,18 +44,35 @@ inlining them. However, nothing prevents new writes from arriving faster than
 compaction can pull them out. We protect the control plane with the following
 two limits to create a hard upper bound on how much data can be inline:
 
-- `persist_inline_update_threshold_bytes`: An (exclusive) maximum size of a
+- `persist_inline_writes_single_max_bytes`: An (exclusive) maximum size of a
   write that persist will inline in metadata.
-- `persist_inline_update_max_bytes`: An (inclusive) maximum total size of inline
-  writes in metadata. Any attempted writes beyond this threshold will instead
-  fall through to the s3 path.
+- `persist_inline_writes_total_max_bytes`: An (inclusive) maximum total size of
+  inline writes in metadata. Any attempted writes beyond this threshold will
+  instead fall through to the s3 path.
 
 ## Alternatives
 
-- In addition to S3, also store _blobs_ in CRDB (or a third technology). CRDB is
-  not tuned as a blob store and doesn't handle these workloads well. A third
-  technology would not be worth the additional operational burden.
+- In addition to S3, also store _blobs_ in CRDB (or a third technology).
+
+  CRDB [self-documents as not a good fit][crdb-large-blob] for workloads
+  involving large binary blobs: "it's recommended to keep values under 1 MB to
+  ensure adequate performance". That said, given that inline writes are small
+  and directly translate to a CRDB write anyway, this would likely be a totally
+  workable alternative.
+
+  That said, CRDB is already a dominant cost of persist and a large part of that
+  is a function of the rate of SQL values changed, regardless of the size or
+  batching of those writes.
+
+  Additionally, putting the writes inline in persist state allows pubsub to push
+  them around for us, meaning that a reader that is subscribed/listening to the
+  shard doesn't hit the network when it gets the new seqno.
+
+  A third technology would not be worth the additional operational burden.
+
 - Make S3 faster. This is not actionable in the short term.
+
+[crdb-large-blob]: https://www.cockroachlabs.com/docs/stable/bytes#size
 
 ## Open Questions
 

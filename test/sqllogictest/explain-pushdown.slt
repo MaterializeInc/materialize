@@ -11,7 +11,7 @@ mode cockroach
 
 # Disable persist inline writes so we get real part numbers below
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET persist_inline_update_threshold_bytes = 0
+ALTER SYSTEM SET persist_inline_writes_single_max_bytes = 0
 ----
 COMPLETE 0
 
