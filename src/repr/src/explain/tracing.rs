@@ -213,7 +213,7 @@ where
 impl<S, T> layer::Filter<S> for PlanTrace<T>
 where
     S: subscriber::Subscriber,
-    T: 'static,
+    T: 'static + Clone,
 {
     fn enabled(&self, meta: &Metadata<'_>, _cx: &layer::Context<'_, S>) -> bool {
         self.is_enabled(meta)
@@ -228,7 +228,7 @@ where
     }
 }
 
-impl<T: 'static> PlanTrace<T> {
+impl<T: 'static + Clone> PlanTrace<T> {
     /// Create a new trace for plans of type `T` that will only accumulate
     /// [`TraceEntry`] instances along the prefix of the given `path`.
     pub fn new(filter: Option<&'static str>) -> Self {
@@ -255,6 +255,12 @@ impl<T: 'static> PlanTrace<T> {
     pub fn drain_as_vec(&self) -> Vec<TraceEntry<T>> {
         let mut entries = self.entries.lock().expect("entries shouldn't be poisoned");
         entries.split_off(0)
+    }
+
+    /// Retrieve the trace data collected so far while leaving it in place.
+    pub fn collect_as_vec(&self) -> Vec<TraceEntry<T>> {
+        let entries = self.entries.lock().expect("entries shouldn't be poisoned");
+        (*entries).clone()
     }
 
     /// Find and return a clone of the [`TraceEntry`] for the given `path`.

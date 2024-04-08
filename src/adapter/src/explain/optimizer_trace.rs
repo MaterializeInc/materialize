@@ -40,8 +40,8 @@ use crate::AdapterError;
 /// Use `tracing::dispatcher::set_default` to trace in synchronous context.
 /// Use `tracing::instrument::WithSubscriber::with_subscriber(&optimizer_trace)` to trace the result of a `Future`.
 ///
-/// The [`OptimizerTrace::drain_all`] method on the created instance can be
-/// then used to collect the trace, and [`OptimizerTrace::drain_all`] to obtain
+/// The [`OptimizerTrace::collect_all`] method on the created instance can be
+/// then used to collect the trace, and [`OptimizerTrace::collect_all`] to obtain
 /// the collected trace as a vector of [`TraceEntry`] instances.
 pub struct OptimizerTrace(dispatcher::Dispatch);
 
@@ -108,7 +108,7 @@ impl OptimizerTrace {
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
     ) -> Result<Vec<Row>, AdapterError> {
-        let mut trace = self.drain_all(
+        let mut trace = self.collect_all(
             format,
             config,
             humanizer,
@@ -179,8 +179,8 @@ impl OptimizerTrace {
 
     /// Collect all traced plans for all plan types `T` that are available in
     /// the wrapped [`dispatcher::Dispatch`].
-    pub fn drain_all(
-        self,
+    pub fn collect_all(
+        &self,
         format: ExplainFormat,
         config: &ExplainConfig,
         humanizer: &dyn ExprHumanizer,
@@ -190,7 +190,7 @@ impl OptimizerTrace {
     ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
         let mut results = vec![];
 
-        // First, create an ExplainContext without `used_indexes`. We'll use this to, e.g., drain
+        // First, create an ExplainContext without `used_indexes`. We'll use this to, e.g., collect
         // HIR plans.
         let mut context = ExplainContext {
             config,
@@ -206,13 +206,13 @@ impl OptimizerTrace {
             )?,
         };
 
-        // Drain trace entries of types produced by local optimizer stages.
+        // Collect trace entries of types produced by local optimizer stages.
         results.extend(itertools::chain!(
-            self.drain_explainable_entries::<HirRelationExpr>(&format, &mut context)?,
-            self.drain_explainable_entries::<MirRelationExpr>(&format, &mut context)?,
+            self.collect_explainable_entries::<HirRelationExpr>(&format, &mut context)?,
+            self.collect_explainable_entries::<MirRelationExpr>(&format, &mut context)?,
         ));
 
-        // Drain trace entries of types produced by global optimizer stages.
+        // Collect trace entries of types produced by global optimizer stages.
         let mut context = ExplainContext {
             config,
             humanizer,
@@ -227,20 +227,20 @@ impl OptimizerTrace {
             )?,
         };
         results.extend(itertools::chain!(
-            self.drain_explainable_entries::<DataflowDescription<OptimizedMirRelationExpr>>(
+            self.collect_explainable_entries::<DataflowDescription<OptimizedMirRelationExpr>>(
                 &format,
                 &mut context,
             )?,
-            self.drain_explainable_entries::<DataflowDescription<Plan>>(&format, &mut context)?,
-            self.drain_explainable_entries::<FastPathPlan>(&format, &mut context)?,
+            self.collect_explainable_entries::<DataflowDescription<Plan>>(&format, &mut context)?,
+            self.collect_explainable_entries::<FastPathPlan>(&format, &mut context)?,
         ));
 
-        // Drain trace entries of type String, HirScalarExpr, MirScalarExpr
+        // Collect trace entries of type String, HirScalarExpr, MirScalarExpr
         // which are useful for ad-hoc debugging.
         results.extend(itertools::chain!(
-            self.drain_scalar_entries::<HirScalarExpr>(),
-            self.drain_scalar_entries::<MirScalarExpr>(),
-            self.drain_string_entries(),
+            self.collect_scalar_entries::<HirScalarExpr>(),
+            self.collect_scalar_entries::<MirScalarExpr>(),
+            self.collect_string_entries(),
         ));
 
         // sort plans by instant (TODO: this can be implemented in a more
@@ -253,7 +253,7 @@ impl OptimizerTrace {
 
     /// Collect all trace entries of a plan type `T` that implements
     /// [`Explainable`].
-    fn drain_explainable_entries<T>(
+    fn collect_explainable_entries<T>(
         &self,
         format: &ExplainFormat,
         context: &mut ExplainContext,
@@ -267,7 +267,7 @@ impl OptimizerTrace {
             let used_indexes_trace = self.0.downcast_ref::<PlanTrace<UsedIndexes>>();
 
             trace
-                .drain_as_vec()
+                .collect_as_vec()
                 .into_iter()
                 .map(|mut entry| {
                     // Update the context with the current time.
@@ -301,19 +301,19 @@ impl OptimizerTrace {
                 })
                 .collect()
         } else {
-            unreachable!("drain_explainable_entries called with wrong plan type T");
+            unreachable!("collect_explainable_entries called with wrong plan type T");
         }
     }
 
     /// Collect all trace entries of a plan type `T`.
-    fn drain_scalar_entries<T>(&self) -> Vec<TraceEntry<String>>
+    fn collect_scalar_entries<T>(&self) -> Vec<TraceEntry<String>>
     where
         T: Clone + Debug + 'static,
         T: Display,
     {
         if let Some(trace) = self.0.downcast_ref::<PlanTrace<T>>() {
             trace
-                .drain_as_vec()
+                .collect_as_vec()
                 .into_iter()
                 .map(|entry| TraceEntry {
                     instant: entry.instant,
@@ -329,9 +329,9 @@ impl OptimizerTrace {
     }
 
     /// Collect all trace entries with plans of type [`String`].
-    fn drain_string_entries(&self) -> Vec<TraceEntry<String>> {
+    fn collect_string_entries(&self) -> Vec<TraceEntry<String>> {
         if let Some(trace) = self.0.downcast_ref::<PlanTrace<String>>() {
-            trace.drain_as_vec()
+            trace.collect_as_vec()
         } else {
             vec![]
         }
