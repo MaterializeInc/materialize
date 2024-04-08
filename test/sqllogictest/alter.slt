@@ -33,7 +33,7 @@ ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
 simple conn=mz_system,user=mz_system
 ALTER TABLE mz_tables RENAME TO foo;
 ----
-db error: db error: ERROR: system item 'mz_catalog.mz_tables' cannot be modified
+db error: ERROR: system item 'mz_catalog.mz_tables' cannot be modified
 
 simple conn=mz_system,user=mz_system
 ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
