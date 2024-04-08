@@ -1255,12 +1255,11 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
             },
             BatchPart::Inline {
                 updates,
-                key_lower,
                 ts_rewrite,
             } => ProtoHollowBatchPart {
                 kind: Some(proto_hollow_batch_part::Kind::Inline(updates.into_proto())),
                 encoded_size_bytes: 0,
-                key_lower: Bytes::copy_from_slice(key_lower),
+                key_lower: Bytes::new(),
                 key_stats: None,
                 ts_rewrite: ts_rewrite.as_ref().map(|x| x.into_proto()),
             },
@@ -1284,11 +1283,11 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
                 assert_eq!(proto.encoded_size_bytes, 0);
+                assert_eq!(proto.key_lower.len(), 0);
                 assert!(proto.key_stats.is_none());
                 let updates = LazyInlineBatchPart(x.into_rust()?);
                 Ok(BatchPart::Inline {
                     updates,
-                    key_lower: proto.key_lower.into(),
                     ts_rewrite,
                 })
             }

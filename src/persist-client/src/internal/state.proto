@@ -28,11 +28,11 @@ message ProtoHollowBatchPart {
         string key = 1;
         bytes inline = 5;
     }
-    bytes key_lower = 3;
     ProtoU64Antichain ts_rewrite = 4;
 
     // Only set when Kind is Key
     uint64 encoded_size_bytes = 2;
+    bytes key_lower = 3;
     optional bytes key_stats = 536870906;
 
     reserved 536870907 to 536870911;

@@ -1283,6 +1283,7 @@ pub mod datadriven {
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
     use mz_dyncfg::{ConfigUpdates, ConfigVal};
+    use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{
@@ -1679,8 +1680,16 @@ pub mod datadriven {
         let mut s = String::new();
         for (idx, part) in batch.parts.iter().enumerate() {
             write!(s, "<part {idx}>\n");
-            if stats == Some("lower") && !part.key_lower().is_empty() {
-                writeln!(s, "<key lower={}>", std::str::from_utf8(part.key_lower())?)
+            let key_lower = match part {
+                BatchPart::Hollow(x) => x.key_lower.clone(),
+                BatchPart::Inline { updates, .. } => {
+                    let updates: BlobTraceBatchPart<u64> =
+                        updates.decode(&datadriven.client.metrics.columnar).unwrap();
+                    updates.key_lower().to_vec()
+                }
+            };
+            if stats == Some("lower") && !key_lower.is_empty() {
+                writeln!(s, "<key lower={}>", std::str::from_utf8(&key_lower)?)
             }
             match part {
                 BatchPart::Hollow(part) => {

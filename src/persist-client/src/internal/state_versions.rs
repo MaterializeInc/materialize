@@ -1133,12 +1133,10 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
                 BatchPart::Hollow(x) => x.key.to_string(),
                 BatchPart::Inline {
                     updates,
-                    key_lower,
                     ts_rewrite,
                 } => {
                     let mut h = DefaultHasher::new();
                     updates.hash(&mut h);
-                    key_lower.hash(&mut h);
                     ts_rewrite.as_ref().map(|x| x.elements()).hash(&mut h);
                     h.finish().to_string()
                 }

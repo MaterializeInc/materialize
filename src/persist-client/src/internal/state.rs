@@ -178,7 +178,6 @@ pub enum BatchPart<T> {
     Hollow(HollowBatchPart<T>),
     Inline {
         updates: LazyInlineBatchPart,
-        key_lower: Vec<u8>,
         ts_rewrite: Option<Antichain<T>>,
     },
 }
@@ -210,7 +209,13 @@ impl<T> BatchPart<T> {
     pub fn key_lower(&self) -> &[u8] {
         match self {
             BatchPart::Hollow(x) => x.key_lower.as_slice(),
-            BatchPart::Inline { key_lower, .. } => key_lower.as_slice(),
+            // We don't duplicate the lowest key because this can be
+            // considerable overhead for small parts.
+            //
+            // The empty key might not be a tight lower bound, but it is a valid
+            // lower bound. If a caller is interested in a tighter lower bound,
+            // the data is inline.
+            BatchPart::Inline { .. } => &[],
         }
     }
 
@@ -235,24 +240,14 @@ impl<T: Ord> Ord for BatchPart<T> {
             (
                 BatchPart::Inline {
                     updates: s_updates,
-                    key_lower: s_key_lower,
                     ts_rewrite: s_ts_rewrite,
                 },
                 BatchPart::Inline {
                     updates: o_updates,
-                    key_lower: o_key_lower,
                     ts_rewrite: o_ts_rewrite,
                 },
-            ) => (
-                s_updates,
-                s_key_lower,
-                s_ts_rewrite.as_ref().map(|x| x.elements()),
-            )
-                .cmp(&(
-                    o_updates,
-                    o_key_lower,
-                    o_ts_rewrite.as_ref().map(|x| x.elements()),
-                )),
+            ) => (s_updates, s_ts_rewrite.as_ref().map(|x| x.elements()))
+                .cmp(&(o_updates, o_ts_rewrite.as_ref().map(|x| x.elements()))),
             (BatchPart::Hollow(_), BatchPart::Inline { .. }) => Ordering::Less,
             (BatchPart::Inline { .. }, BatchPart::Hollow(_)) => Ordering::Greater,
         }
@@ -1799,13 +1794,8 @@ pub(crate) mod tests {
 
     pub fn any_batch_part<T: Arbitrary + Timestamp>() -> impl Strategy<Value = BatchPart<T>> {
         Strategy::prop_map(
-            (
-                any::<bool>(),
-                any_hollow_batch_part(),
-                proptest::collection::vec(any::<u8>(), 0..3),
-                any::<Option<T>>(),
-            ),
-            |(is_hollow, hollow, key_lower, ts_rewrite)| {
+            (any::<bool>(), any_hollow_batch_part(), any::<Option<T>>()),
+            |(is_hollow, hollow, ts_rewrite)| {
                 if is_hollow {
                     BatchPart::Hollow(hollow)
                 } else {
@@ -1813,7 +1803,6 @@ pub(crate) mod tests {
                     let ts_rewrite = ts_rewrite.map(Antichain::from_elem);
                     BatchPart::Inline {
                         updates,
-                        key_lower,
                         ts_rewrite,
                     }
                 }

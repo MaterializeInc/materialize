@@ -242,20 +242,21 @@ where
         // don't bother.
         let mut parts = Vec::new();
         for part in self.batch.parts.drain(..) {
-            let (updates, key_lower, ts_rewrite) = match part {
+            let (updates, ts_rewrite) = match part {
                 BatchPart::Hollow(x) => {
                     parts.push(BatchPart::Hollow(x));
                     continue;
                 }
                 BatchPart::Inline {
                     updates,
-                    key_lower,
                     ts_rewrite,
-                } => (updates, key_lower, ts_rewrite),
+                } => (updates, ts_rewrite),
             };
             let updates = updates
                 .decode::<T>(&self.metrics.columnar)
                 .expect("valid inline part");
+            let key_lower = updates.key_lower().to_vec();
+
             let write_span =
                 debug_span!("batch::flush_to_blob", shard = %self.shard_metrics.shard_id)
                     .or_current();
@@ -925,7 +926,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         .inc_by(start.elapsed().as_secs_f64());
                     BatchPart::Inline {
                         updates,
-                        key_lower,
                         ts_rewrite,
                     }
                 }

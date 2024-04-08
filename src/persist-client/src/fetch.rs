@@ -122,7 +122,6 @@ where
             }
             BatchPart::Inline {
                 updates,
-                key_lower: _,
                 ts_rewrite,
             } => FetchedBlobBuf::Inline {
                 desc: part.desc.clone(),
@@ -741,7 +740,6 @@ where
             }
             BatchPart::Inline {
                 updates,
-                key_lower: _,
                 ts_rewrite,
             } => Ok(EncodedPart::from_inline(
                 metrics,
