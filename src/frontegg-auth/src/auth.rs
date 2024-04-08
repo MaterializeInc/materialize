@@ -239,13 +239,30 @@ impl Authenticator {
                         let inner = Arc::clone(&self.inner);
                         let expected_email = String::from(expected_email);
                         async move {
-                            let result = inner.authenticate(expected_email, password).await;
+                            let result = inner.authenticate(expected_email.clone(), password).await;
 
-                            // If we return an error make sure we remove the pending session.
+                            // Make sure our AuthSession state is correct.
+                            //
+                            // Note: We're quite defensive here because this has been a source of
+                            // bugs in the past.
                             let mut sessions = inner.active_sessions.lock().expect("lock poisoned");
                             if let Err(err) = &result {
                                 let session = sessions.remove(&password);
                                 tracing::debug!(?err, ?session, "removing failed auth session");
+                            } else {
+                                // If the request succeeds, make sure our state is what we expect.
+                                match sessions.get(&password) {
+                                    // Expected State.
+                                    Some(AuthSession::Active { .. }) => (),
+                                    // Invalid! The AuthSession should have become Active.
+                                    None | Some(AuthSession::Pending(_)) => {
+                                        tracing::error!(
+                                            expected_email,
+                                            "Failed to make AuthSession active!"
+                                        );
+                                        sessions.remove(&password);
+                                    }
+                                }
                             }
 
                             result
