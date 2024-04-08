@@ -82,6 +82,14 @@ class ConsistencyTestRunner:
 
         time_guard = TimeGuard(self.config.max_runtime_in_sec)
 
+        success = self._run_predefined_queries(test_summary)
+
+        if not success and self.config.fail_fast:
+            self.output_printer.print_info(
+                "Ending test run because the of a comparison mismatch in predefined queries (fail_fast mode)"
+            )
+            return test_summary
+
         while True:
             if expression_count > 0 and expression_count % 200 == 0:
                 self.output_printer.print_status(
@@ -197,3 +205,20 @@ class ConsistencyTestRunner:
             return True
 
         return False
+
+    def _run_predefined_queries(self, test_summary: ConsistencyTestSummary) -> bool:
+        if len(self.input_data.predefined_queries) == 0:
+            return True
+
+        all_passed = True
+
+        for predefined_query in self.input_data.predefined_queries:
+            query_succeeded = self.execution_manager.execute_query(
+                predefined_query, test_summary
+            )
+            all_passed = all_passed and query_succeeded
+
+            if not query_succeeded and self.config.fail_fast:
+                return False
+
+        return all_passed

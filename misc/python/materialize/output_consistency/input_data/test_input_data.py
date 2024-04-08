@@ -13,6 +13,7 @@ from materialize.output_consistency.input_data.test_input_operations import (
 from materialize.output_consistency.input_data.test_input_types import (
     ConsistencyTestTypesInput,
 )
+from materialize.output_consistency.query.query_template import QueryTemplate
 
 
 class ConsistencyTestInputData:
@@ -23,6 +24,7 @@ class ConsistencyTestInputData:
     ) -> None:
         self.types_input = ConsistencyTestTypesInput()
         self.operations_input = ConsistencyTestOperationsInput()
+        self.predefined_queries: list[QueryTemplate] = []
 
     def remove_postgres_incompatible_data(self) -> None:
         self.types_input.remove_postgres_incompatible_data()
@@ -31,6 +33,5 @@ class ConsistencyTestInputData:
     def get_stats(self) -> str:
         count_data_types = len(self.types_input.all_data_types_with_values)
         count_ops = len(self.operations_input.all_operation_types)
-        return (
-            f"Input stats: count_data_types={count_data_types}, count_ops={count_ops}"
-        )
+        count_predefined_queries = len(self.predefined_queries)
+        return f"Input stats: count_data_types={count_data_types}, count_ops={count_ops}, count_predefined_queries={count_predefined_queries}"
