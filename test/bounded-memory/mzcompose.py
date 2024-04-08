@@ -306,7 +306,7 @@ SCENARIOS = [
             """
         ),
         materialized_memory="4.5Gb",
-        clusterd_memory="4.5Gb",
+        clusterd_memory="6Gb",
     ),
     MySqlCdcScenario(
         name="mysql-cdc-snapshot",
