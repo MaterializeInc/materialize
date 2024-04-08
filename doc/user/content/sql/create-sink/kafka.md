@@ -75,8 +75,6 @@ Field                | Value  | Description
 
 #### `DOC ON` option syntax
 
-{{< private-preview />}}
-
 {{< diagram "create-sink-doc-on-option.svg" >}}
 
 The `DOC ON` option has special syntax, shown above, with the following
@@ -191,15 +189,12 @@ may be created using [non-null assertions](../../create-materialized-view#non-nu
 
 #### Avro schema documentation
 
-{{< private-preview />}}
-
 Materialize allows control over the `doc` attribute for record fields and types
 in the generated Avro schemas for the sink.
 
 For the container record type (named `row` for the key schema and `envelope` for
-the value schema, unless overridden by the [`AVRO ... FULLNAME`
-options](#csr-connection-options)), Materialize searches for documentation in
-the following locations, in order:
+the value schema, unless overridden by the [`AVRO ... FULLNAME` options](#csr-connection-options)),
+Materialize searches for documentation in the following locations, in order:
 
 1. For the key schema, a [`KEY DOC ON TYPE` option](#doc-on-option-syntax)
    naming the sink's underlying relation. For the value schema, a
