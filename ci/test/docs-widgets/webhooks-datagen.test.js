@@ -1,3 +1,12 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file at the root of this repository.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
 import { beforeEach, describe, it, expect, vi } from "vitest";
 import { JSDOM } from "jsdom";
 import fs from "fs";
@@ -7,7 +16,7 @@ describe("Webhooks Data Generator", async () => {
   let window, document;
   let isGenerating = false;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const htmlPath = path.join(
       __dirname,
       "../../../doc/user/layouts/shortcodes/plugins/webhooks-datagen.html"
@@ -23,8 +32,12 @@ describe("Webhooks Data Generator", async () => {
     document = window.document;
 
     // Wait for all the scripts and content to load
-    return new Promise((resolve) => {
-      document.addEventListener("DOMContentLoaded", resolve);
+    await vi.waitFor(() => {
+      if (document.readyState === "complete") {
+        return true;
+      } else {
+        throw new Error("Document not ready yet");
+      }
     });
   });
 
@@ -35,7 +48,7 @@ describe("Webhooks Data Generator", async () => {
     const startButton = window.document.getElementById("startButton");
     const stopButton = window.document.getElementById("stopButton");
 
-    await new Promise((r) => setTimeout(r, 650));
+    await vi.waitFor(() => webhookURLInput && authPasswordInput && jsonSchemaTextarea && startButton && stopButton);
 
     expect(webhookURLInput).not.toBeNull();
     expect(authPasswordInput).not.toBeNull();
@@ -69,7 +82,7 @@ describe("Webhooks Data Generator", async () => {
 
     startButton.click();
 
-    await new Promise((r) => setTimeout(r, 500));
+    await vi.waitFor(() => !stopButton.disabled);
 
     expect(stopButton.disabled).toBe(false);
   });
@@ -104,12 +117,12 @@ describe("Webhooks Data Generator", async () => {
     jsonSchemaTextarea.value = "invalid json";
     jsonSchemaTextarea.dispatchEvent(new window.Event("blur"));
 
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => jsonErrorDiv.style.display === "block");
 
     jsonSchemaTextarea.value = '{"valid": "json"}';
     jsonSchemaTextarea.dispatchEvent(new window.Event("blur"));
 
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => jsonErrorDiv.style.display === "none");
 
     expect(jsonErrorDiv.style.display).toBe("none");
   });
@@ -117,7 +130,7 @@ describe("Webhooks Data Generator", async () => {
   it("should have empty webhook URL and auth password inputs initially", async () => {
     const webhookURLInput = window.document.getElementById("webhookURL");
     const authPasswordInput = window.document.getElementById("authPassword");
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => webhookURLInput && authPasswordInput);
     expect(webhookURLInput.value).toBe("");
     expect(authPasswordInput.value).toBe("");
   });
@@ -126,13 +139,13 @@ describe("Webhooks Data Generator", async () => {
     const startButton = window.document.getElementById("startButton");
     const webhookURLInput = window.document.getElementById("webhookURL");
     const authPasswordInput = window.document.getElementById("authPassword");
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await vi.waitFor(() => startButton && webhookURLInput && authPasswordInput);
     webhookURLInput.value = "";
     authPasswordInput.value = "";
 
     startButton.click();
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await vi.waitFor(() => isGenerating);
 
     expect(isGenerating).toBe(false);
   });
@@ -144,11 +157,11 @@ describe("Webhooks Data Generator", async () => {
     // Trigger generation
     startButton.click();
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await vi.waitFor(() => isGenerating);
 
     stopButton.click();
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await vi.waitFor(() => !isGenerating);
 
     expect(isGenerating).toBe(false);
     expect(startButton.style.display).not.toBe("none");
