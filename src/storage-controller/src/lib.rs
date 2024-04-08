@@ -199,10 +199,10 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     pending_compaction_commands: Vec<PendingCompactionCommand<T>>,
     /// Channel for sending table handle drops.
     #[derivative(Debug = "ignore")]
-    pending_table_handle_drops_tx: mpsc::UnboundedSender<Vec<GlobalId>>,
+    pending_table_handle_drops_tx: mpsc::UnboundedSender<GlobalId>,
     /// Channel for receiving table handle drops.
     #[derivative(Debug = "ignore")]
-    pending_table_handle_drops_rx: mpsc::UnboundedReceiver<Vec<GlobalId>>,
+    pending_table_handle_drops_rx: mpsc::UnboundedReceiver<GlobalId>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -1160,7 +1160,9 @@ where
         let tx = self.pending_table_handle_drops_tx.clone();
         mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
             drop_notif.await;
-            let _ = tx.send(identifiers);
+            for identifier in identifiers {
+                let _ = tx.send(identifier);
+            }
         });
         Ok(())
     }
@@ -1764,8 +1766,8 @@ where
 
         // Process dropped tables in a single batch.
         let mut dropped_table_ids = Vec::new();
-        while let Ok(dropped_ids) = self.pending_table_handle_drops_rx.try_recv() {
-            dropped_table_ids.extend(dropped_ids);
+        while let Ok(dropped_id) = self.pending_table_handle_drops_rx.try_recv() {
+            dropped_table_ids.push(dropped_id);
         }
         if !dropped_table_ids.is_empty() {
             self.drop_sources(storage_metadata, dropped_table_ids)?;
