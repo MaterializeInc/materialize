@@ -17,7 +17,9 @@ from materialize.cloudtest.util.common import retry
 LOGGER = logging.getLogger(__name__)
 
 
-def fetch_jwt(email: str, password: str, host: str, scheme: str) -> str:
+def fetch_jwt(
+    email: str, password: str, host: str, scheme: str, max_tries: int = 10
+) -> str:
     def fetch():
         res = requests.post(
             f"{scheme}://{host}/identity/resources/auth/v1/user",
@@ -28,7 +30,7 @@ def fetch_jwt(email: str, password: str, host: str, scheme: str) -> str:
         return res
 
     try:
-        res = retry(fetch, 10, [requests.exceptions.HTTPError])
+        res = retry(fetch, max_tries, [requests.exceptions.HTTPError])
     except requests.exceptions.HTTPError as e:
         res = e.response
         LOGGER.error(
