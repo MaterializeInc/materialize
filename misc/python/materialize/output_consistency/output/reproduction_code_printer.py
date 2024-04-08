@@ -58,26 +58,30 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self.print_separator_line()
 
         # evaluation strategy 1
-        self.__print_setup_code_for_error(
-            query_template,
-            error.details1.strategy,
-            table_column_selection,
-            apply_row_filter,
-        )
-        self.print_separator_line()
+        if not query_template.custom_db_object_name:
+            self.__print_setup_code_for_error(
+                query_template,
+                error.details1.strategy,
+                table_column_selection,
+                apply_row_filter,
+            )
+            self.print_separator_line()
+
         self.__print_query_of_error(
             query_template, error.details1.strategy, query_column_selection
         )
         self.print_separator_line()
 
         # evaluation strategy 2
-        self.__print_setup_code_for_error(
-            query_template,
-            error.details2.strategy,
-            table_column_selection,
-            apply_row_filter,
-        )
-        self.print_separator_line()
+        if not query_template.custom_db_object_name:
+            self.__print_setup_code_for_error(
+                query_template,
+                error.details2.strategy,
+                table_column_selection,
+                apply_row_filter,
+            )
+            self.print_separator_line()
+
         self.__print_query_of_error(
             query_template, error.details2.strategy, query_column_selection
         )
@@ -106,7 +110,9 @@ class ReproductionCodePrinter(BaseOutputPrinter):
             query_template.storage_layout,
             row_selection,
             table_column_selection,
-            override_db_object_name=evaluation_strategy.simple_db_object_name,
+            override_db_object_name=query_template.custom_db_object_name
+            if query_template.custom_db_object_name is not None
+            else evaluation_strategy.simple_db_object_name,
         )
 
         for line in setup_code_lines:
@@ -126,7 +132,8 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                 evaluation_strategy,
                 QueryOutputFormat.MULTI_LINE,
                 query_column_selection,
-                override_db_object_name=evaluation_strategy.simple_db_object_name,
+                override_db_object_name=query_template.custom_db_object_name
+                or evaluation_strategy.simple_db_object_name,
             )
         )
 
