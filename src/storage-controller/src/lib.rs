@@ -11,7 +11,7 @@
 
 use std::any::Any;
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::fmt::{Debug, Display};
 use std::num::NonZeroI64;
 use std::str::FromStr;
@@ -77,8 +77,8 @@ use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
 use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::oneshot;
 use tokio::sync::watch::{channel, Sender};
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamMap;
 use tracing::{debug, info, warn};
 
@@ -197,9 +197,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
     pending_compaction_commands: Vec<PendingCompactionCommand<T>>,
-    /// Channel for table handle drops.
+    /// Channel for sending table handle drops.
     #[derivative(Debug = "ignore")]
-    pending_table_handle_drops: VecDeque<oneshot::Receiver<Vec<GlobalId>>>,
+    pending_table_handle_drops_tx: mpsc::UnboundedSender<Vec<GlobalId>>,
+    /// Channel for receiving table handle drops.
+    #[derivative(Debug = "ignore")]
+    pending_table_handle_drops_rx: mpsc::UnboundedReceiver<Vec<GlobalId>>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -1154,12 +1157,11 @@ where
         let drop_notif = self
             .persist_table_worker
             .drop_handles(identifiers.clone(), ts);
-        let (tx, rx) = oneshot::channel();
+        let tx = self.pending_table_handle_drops_tx.clone();
         mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
             drop_notif.await;
             let _ = tx.send(identifiers);
         });
-        self.pending_table_handle_drops.push_back(rx);
         Ok(())
     }
 
@@ -1760,13 +1762,13 @@ where
         // IDs of sources (and subsources) whose statistics should be cleared.
         let mut source_statistics_to_drop = vec![];
 
-        while let Some(Ok(dropped_ids)) = self
-            .pending_table_handle_drops
-            .front_mut()
-            .map(|rx| rx.try_recv())
-        {
-            self.pending_table_handle_drops.pop_front();
-            self.drop_sources(storage_metadata, dropped_ids)?;
+        // Process dropped tables in a single batch.
+        let mut dropped_table_ids = Vec::new();
+        while let Ok(dropped_ids) = self.pending_table_handle_drops_rx.try_recv() {
+            dropped_table_ids.extend(dropped_ids);
+        }
+        if !dropped_table_ids.is_empty() {
+            self.drop_sources(storage_metadata, dropped_table_ids)?;
         }
 
         // TODO(aljoscha): We could consolidate these before sending to
@@ -2412,6 +2414,9 @@ where
         let (statistics_interval_sender, _) =
             channel(mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT);
 
+        let (pending_table_handle_drops_tx, pending_table_handle_drops_rx) =
+            tokio::sync::mpsc::unbounded_channel();
+
         Self {
             build_info,
             finalizable_shards: BTreeSet::new(),
@@ -2426,7 +2431,8 @@ where
             txns_metrics,
             stashed_response: None,
             pending_compaction_commands: vec![],
-            pending_table_handle_drops: VecDeque::new(),
+            pending_table_handle_drops_tx,
+            pending_table_handle_drops_rx,
             collection_manager,
             collection_status_manager,
             introspection_ids,
