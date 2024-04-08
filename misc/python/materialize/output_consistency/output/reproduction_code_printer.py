@@ -106,7 +106,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
             query_template.row_selection if apply_row_filter else ALL_ROWS_SELECTION
         )
         setup_code_lines = evaluation_strategy.generate_source_for_storage_layout(
-            self.input_data,
+            self.input_data.types_input,
             query_template.storage_layout,
             row_selection,
             table_column_selection,

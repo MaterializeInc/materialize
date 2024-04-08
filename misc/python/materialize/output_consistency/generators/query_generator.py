@@ -46,7 +46,7 @@ class QueryGenerator:
     ):
         self.config = config
         self.randomized_picker = randomized_picker
-        self.vertical_storage_row_count = input_data.max_value_count
+        self.vertical_storage_row_count = input_data.types_input.max_value_count
         self.ignore_filter = ignore_filter
 
         self.count_pending_expressions = 0
