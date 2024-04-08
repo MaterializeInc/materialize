@@ -17,19 +17,17 @@ cd "$(dirname "$0")/../../../.."
 
 . misc/shlib/shlib.bash
 
-INSTALLED_CARGO_PACKAGES=$(cargo install --list)
-
-if ! echo "$INSTALLED_CARGO_PACKAGES" | grep --silent "cargo-about"; then
+if ! cargo about --version > /dev/null 2>&1; then
   echo "lint: cargo-about is not installed"
   echo "hint: install it with: cargo install cargo-about"
 fi
 
-if ! echo "$INSTALLED_CARGO_PACKAGES" | grep --silent "cargo-hakari"; then
+if ! cargo hakari --version > /dev/null 2>&1; then
   echo "lint: cargo-hakari is not installed"
   echo "hint: install it with: cargo install cargo-hakari"
 fi
 
-if ! echo "$INSTALLED_CARGO_PACKAGES" | grep --silent "cargo-deplint"; then
+if ! cargo --list | grep --quiet deplint; then
   echo "lint: cargo-deplint is not installed"
   echo "hint: install it with: cargo install cargo-deplint"
 fi
