@@ -20,6 +20,10 @@ import "storage-types/src/connections.proto";
 
 package mz_storage_types.sinks;
 
+// TODO: Remove this after https://github.com/MaterializeInc/materialize/pull/26495 merges
+// buf breaking: ignore (copy-to-s3 not yet released)
+
+
 message ProtoStorageSinkDesc {
     reserved 5, 8, 9, 10;
     mz_repr.global_id.ProtoGlobalId from = 1;

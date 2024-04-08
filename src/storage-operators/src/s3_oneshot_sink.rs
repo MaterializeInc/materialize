@@ -13,10 +13,10 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
+use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
 use differential_dataflow::{Collection, Hashable};
 use http::Uri;
-
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::task::JoinHandleExt;

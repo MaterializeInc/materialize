@@ -51,14 +51,14 @@ breaking:
     - compute-types/src/sinks.proto
     # reason: Ignore because plans are currently not persisted.
     - expr/src/relation.proto
-    # reason: not yet released
-    - mysql-util/src/desc.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/statistics.proto
     # reason: currently does not require backward-compatibility
     - storage-types/src/connections/aws.proto
+    # reason: copy-to-s3 not yet released
+    - storage-types/src/sinks.proto
 lint:
   use:
     - DEFAULT
