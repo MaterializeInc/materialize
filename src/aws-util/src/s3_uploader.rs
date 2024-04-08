@@ -343,9 +343,9 @@ pub enum S3MultiPartUploadError {
 }
 
 /// On CI, these tests are enabled by adding the scratch-aws-access plugin
-/// to the `cargo-test` step in `ci/test/pipeline.template.yml` and setting
+/// to the `cargo-test` step in `ci/tests/pipeline.template.yml` and setting
 /// `MZ_S3_UPLOADER_TEST_S3_BUCKET` in
-/// `ci/test/cargo-test/mzcompose.py`.
+/// `ci/tests/cargo-test/mzcompose.py`.
 ///
 /// For a Materialize developer, to opt in to these tests locally for
 /// development, follow the AWS access guide:

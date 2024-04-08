@@ -268,7 +268,7 @@ Every CI job is a combination of an mzcompose "composition" and a "workflow". A
 composition is the name of a directory containing a mzcompose.py file. A
 workflow is the name of a service or Python function to run within the
 composition. You can see the definition of each CI job in
-[ci/test/pipeline.template.yml](./test/pipeline.template.yml). To invoke a
+[ci/tests/pipeline.template.yml](./test/pipeline.template.yml). To invoke a
 workflow manually, you run `bin/mzcompose --find COMPOSITION run WORKFLOW`.
 
 For example, here's how you'd run the testdrive job on the EC2 instance:

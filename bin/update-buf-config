@@ -17,5 +17,5 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-try bin/pyactivate ./ci/test/lint-buf/generate-buf-config.py
+try bin/pyactivate ./ci/tests/lint-buf/generate-buf-config.py
 try_status_report

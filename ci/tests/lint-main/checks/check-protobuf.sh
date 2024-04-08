@@ -45,12 +45,12 @@ echo $IN_BUILDKITE_PR
 echo $IN_LOCAL_NON_MAIN_BRANCH
 
 if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
-  # see ./ci/test/lint-buf/README.md
+  # see ./ci/tests/lint-buf/README.md
 
   fetch_pr_target_branch
 
   ci_collapsed_heading "Verify that protobuf config is up-to-date"
-  try bin/pyactivate ./ci/test/lint-buf/generate-buf-config.py
+  try bin/pyactivate ./ci/tests/lint-buf/generate-buf-config.py
   try yamllint src/buf.yaml
   try git diff --name-only --exit-code src/buf.yaml
 

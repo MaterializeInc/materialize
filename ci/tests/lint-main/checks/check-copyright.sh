@@ -44,7 +44,7 @@ copyright_files=$(grep -vE \
     -e '^doc/user/.*(\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^ci/builder/(ssh_known_hosts|crosstool-.+\.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
-    -e '^ci/test/lint-deps/' \
+    -e '^ci/tests/lint-deps/' \
     -e '^misc/cargo-vet/config.toml$' \
     -e '^misc/cargo-vet/audits.toml$' \
     -e '^misc/cargo-vet/imports.toml$' \

@@ -14,7 +14,7 @@
 #
 # Example usages:
 #
-#     $ ci/test/lint-docs-catalog.sh
+#     $ ci/tests/lint-docs-catalog.sh
 #
 # To rewrite the stored files, pass the --rewrite option.
 
@@ -42,9 +42,9 @@ fi
 for catalog_file in "${catalog_files[@]}"; do
     slt="$slt_directory/$(basename "$catalog_file" .md).slt"
     if $rewrite; then
-        try bin/pyactivate ci/test/lint-docs-catalog.py "$catalog_file" > "$slt"
+        try bin/pyactivate ci/tests/lint-docs-catalog.py "$catalog_file" > "$slt"
     else
-        try diff "$slt" <(bin/pyactivate ci/test/lint-docs-catalog.py "$catalog_file")
+        try diff "$slt" <(bin/pyactivate ci/tests/lint-docs-catalog.py "$catalog_file")
     fi
 done
 

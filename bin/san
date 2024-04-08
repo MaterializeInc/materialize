@@ -15,7 +15,7 @@
 #
 #     $ bin/san address cargo run --bin sqllogictest
 #
-#     $ bin/san address ci/test/slt-fast.sh
+#     $ bin/san address ci/tests/slt-fast.sh
 #
 # Requires x64 and a nightly toolchain.
 

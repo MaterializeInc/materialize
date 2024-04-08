@@ -131,7 +131,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "bin/ci-builder",
                     "run",
                     "nightly",
-                    "ci/test/cargo-test-miri.sh",
+                    "ci/tests/cargo-test-miri.sh",
                 ],
                 env=env,
             )
@@ -141,7 +141,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "bin/ci-builder",
                     "run",
                     "nightly",
-                    "ci/test/cargo-test-miri-fast.sh",
+                    "ci/tests/cargo-test-miri-fast.sh",
                 ],
                 env=env,
             )

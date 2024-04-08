@@ -150,7 +150,7 @@ on a Mac or on Linux, run:
 
 To check the links on your branch, run:
 
-`./ci/test/lint-docs.sh`
+`./ci/tests/lint-docs.sh`
 
 ## Function + operator docs
 

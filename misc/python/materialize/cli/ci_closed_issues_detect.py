@@ -71,7 +71,7 @@ IGNORE_RE = re.compile(
     | Liquibase
     # cloud repo
     | cloud\#
-    # ci/test/lint-buf/README.md
+    # ci/tests/lint-buf/README.md
     | Ignore\ because\ of\ #99999
     # src/storage-client/src/controller.rs
     | issues/20211\>

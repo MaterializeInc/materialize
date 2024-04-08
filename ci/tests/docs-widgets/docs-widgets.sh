@@ -11,7 +11,7 @@
 #
 # Example usages:
 #
-#     $ ci/test/docs-widgets/docs-widgets.sh
+#     $ ci/tests/docs-widgets/docs-widgets.sh
 
 # This script is used to run tests for the Materialize Docs Widgets
 

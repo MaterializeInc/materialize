@@ -26,13 +26,13 @@ Additionally you can also download the full coverage report in HTML format from 
 
 ## Limitations
 
-The [Coverage](https://buildkite.com/materialize/coverage/builds) Buildkite pipeline runs a subset of tests from the [Tests](https://buildkite.com/materialize/tests) pipeline, which is already automatically run against each pull request. The excluded tests are marked with a `coverage: skip` in the [`pipeline.template.yml`](https://github.com/MaterializeInc/materialize/blob/main/ci/test/pipeline.template.yml):
+The [Coverage](https://buildkite.com/materialize/coverage/builds) Buildkite pipeline runs a subset of tests from the [Tests](https://buildkite.com/materialize/tests) pipeline, which is already automatically run against each pull request. The excluded tests are marked with a `coverage: skip` in the [`pipeline.template.yml`](https://github.com/MaterializeInc/materialize/blob/main/ci/tests/pipeline.template.yml):
 
 - Miri test: Subset of cargo test, no additional use
 - Maelstrom coverage of persist: Randomized testing probably shouldn't count for coverage, not stable
 - Feature benchmark (Kafka only): Benchmarks shouldn't count for coverage
 
-https://github.com/MaterializeInc/materialize/blob/8147c0b1a6a4b6d0c318f947a23ca4c57ad47142/ci/test/pipeline.template.yml#L155-L162
+https://github.com/MaterializeInc/materialize/blob/8147c0b1a6a4b6d0c318f947a23ca4c57ad47142/ci/tests/pipeline.template.yml#L155-L162
 
 We don't run code coverage automatically against each PR yet. This has three reasons:
 1. Code coverage runs can take twice as much time as regular test runs

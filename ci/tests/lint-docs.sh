@@ -19,6 +19,6 @@ git clean -ffdX ci/www/public
 try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --destination ../../ci/www/public/docs
 echo "<!doctype html>" > ci/www/public/index.html
 try htmltest -s ci/www/public -c doc/user/.htmltest.yml
-try ci/test/lint-docs-catalog.sh
+try ci/tests/lint-docs-catalog.sh
 
 try_status_report

@@ -14,7 +14,7 @@
 #
 # Example usages:
 #
-#     $ ci/test/lint-deps.sh
+#     $ ci/tests/lint-deps.sh
 #
 # To rewrite the stored files, pass the --rewrite option.
 #
@@ -70,7 +70,7 @@ function deps() {
     done
 }
 
-ci_uncollapsed_heading "Linting dependencies -- if the check fails, consult ci/test/lint-deps/README.md"
+ci_uncollapsed_heading "Linting dependencies -- if the check fails, consult ci/tests/lint-deps/README.md"
 
 for target in "${targets[@]}"; do
     if $rewrite; then
