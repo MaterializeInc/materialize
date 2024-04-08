@@ -31,7 +31,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-large
+        queue: builder-linux-aarch64
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -54,7 +54,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-large
+        queue: builder-linux-aarch64
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -65,7 +65,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-large
+        queue: builder-linux-aarch64
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -99,7 +99,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64
+        queue: linux-aarch64-large
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -122,11 +122,12 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-large
+        queue: builder-linux-aarch64
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
             args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=100000, --max-execution-time=8h]
+      skip: "Reenable when #19999 is fixed"
 
   - id: feature-benchmark-scale-plus-one
     label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
@@ -153,6 +154,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=2, --runtime=6000]
+      skip: "Reenable when #23451 is fixed"
 
     - id: sqlsmith-explain-long
       label: "Longer SQLsmith explain"
@@ -164,6 +166,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=15, --explain-only, --runtime=6000]
+      skip: "Reenable when #23451 is fixed"
 
   - id: tests-preflight-check-rollback
     label: Tests with preflight check and rollback

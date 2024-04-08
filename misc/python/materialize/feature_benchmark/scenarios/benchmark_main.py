@@ -1439,6 +1439,8 @@ class MySqlInitialLoad(MySqlCdc):
     """Measure the time it takes to read 1M existing records from MySQL
     when creating a materialized source"""
 
+    FIXED_SCALE = True  # TODO: Remove when #25323 is fixed
+
     def shared(self) -> Action:
         return TdAction(
             f"""
