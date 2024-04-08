@@ -327,15 +327,19 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosErro
     let mut expected_output: String = line_reader
         .inner
         .lines()
+        .filter(|l| !matches!(l.chars().next(), Some('#')))
         .take_while(|l| !is_sigil(l.chars().next()))
         .fold(String::new(), |mut output, l| {
             let _ = write!(output, "{}\n", l);
             output
         });
-    slurp_all(line_reader);
     while expected_output.ends_with("\n\n") {
         expected_output.pop();
     }
+    // We parsed the multiline expected_output directly using line_reader.inner
+    // above.
+    slurp_all(line_reader);
+
     Ok(SqlCommand {
         query: line1[1..].trim().to_owned(),
         expected_output: SqlOutput::Full {
