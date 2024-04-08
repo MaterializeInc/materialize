@@ -345,7 +345,7 @@ user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
 [[publisher.h2]]
-version = "0.3.24"
+version = "0.3.26"
 when = "2024-01-17"
 user-id = 359
 user-login = "seanmonstar"
@@ -505,7 +505,7 @@ user-login = "seanmonstar"
 user-name = "Sean McArthur"
 
 [[publisher.openssl-src]]
-version = "111.25.0+1.1.1t"
+version = "111.28.1+1.1.1w"
 when = "2023-02-07"
 user-id = 1
 user-login = "alexcrichton"
@@ -834,7 +834,7 @@ user-login = "Manishearth"
 user-name = "Manish Goregaokar"
 
 [[publisher.unsafe-libyaml]]
-version = "0.2.9"
+version = "0.2.11"
 when = "2023-07-15"
 user-id = 3618
 user-login = "dtolnay"
