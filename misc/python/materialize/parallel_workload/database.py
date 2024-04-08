@@ -32,7 +32,7 @@ from materialize.data_ingest.transaction import Transaction
 from materialize.data_ingest.workload import WORKLOADS
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
-from materialize.parallel_workload.executor import ParallelWorkloadExecutor
+from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.util import naughty_strings
 
@@ -162,10 +162,10 @@ class DB:
     def __str__(self) -> str:
         return identifier(self.name())
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         exe.execute(f"CREATE DATABASE {self}")
 
-    def drop(self, exe: ParallelWorkloadExecutor) -> None:
+    def drop(self, exe: Executor) -> None:
         exe.execute(f"DROP DATABASE IF EXISTS {self}")
 
 
@@ -189,7 +189,7 @@ class Schema:
     def __str__(self) -> str:
         return f"{self.db}.{identifier(self.name())}"
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         query = f"CREATE SCHEMA {self}"
         exe.execute(query)
 
@@ -204,7 +204,7 @@ class DBObject:
     def name(self) -> str:
         raise NotImplementedError
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         raise NotImplementedError
 
 
@@ -233,7 +233,7 @@ class Table(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         query = f"CREATE TABLE {self}("
         query += ",\n    ".join(column.create() for column in self.columns)
         query += ")"
@@ -326,7 +326,7 @@ class View(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         if self.materialized:
             query = "CREATE MATERIALIZED VIEW"
         else:
@@ -451,7 +451,7 @@ class WebhookSource(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         query = f"CREATE SOURCE {self} IN CLUSTER {self.cluster} FROM WEBHOOK BODY FORMAT {self.body_format.name}"
         if self.include_headers:
             query += " INCLUDE HEADERS"
@@ -531,7 +531,7 @@ class KafkaSource(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{self.name()}"
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         self.executor.create(logging_exe=exe)
 
 
@@ -585,7 +585,7 @@ class KafkaSink(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         topic = f"sink_topic{self.sink_id}"
         query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}) {self.key} FORMAT {self.format} ENVELOPE {self.envelope}"
         exe.execute(query)
@@ -655,7 +655,7 @@ class MySqlSource(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{self.name()}"
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         self.executor.create(logging_exe=exe)
 
 
@@ -723,7 +723,7 @@ class PostgresSource(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{self.name()}"
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         self.executor.create(logging_exe=exe)
 
 
@@ -753,7 +753,7 @@ class Role:
     def __str__(self) -> str:
         return f"role{self.role_id}"
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         exe.execute(f"CREATE ROLE {self}")
 
 
@@ -779,7 +779,7 @@ class ClusterReplica:
     def __str__(self) -> str:
         return identifier(self.name())
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         # TODO: More Cluster Replica settings
         exe.execute(
             f"CREATE CLUSTER REPLICA {self.cluster}.{self} SIZE = '{self.size}'"
@@ -823,7 +823,7 @@ class Cluster:
     def __str__(self) -> str:
         return identifier(self.name())
 
-    def create(self, exe: ParallelWorkloadExecutor) -> None:
+    def create(self, exe: Executor) -> None:
         query = f"CREATE CLUSTER {self} "
         if self.managed:
             query += f"SIZE = '{self.size}', REPLICATION FACTOR = {len(self.replicas)}, INTROSPECTION INTERVAL = '{self.introspection_interval}'"
@@ -1022,7 +1022,7 @@ class Database:
             self.schemas + self.clusters + self.roles + self.db_objects()
         ).__iter__()
 
-    def create(self, exe: ParallelWorkloadExecutor, composition: Composition) -> None:
+    def create(self, exe: Executor, composition: Composition) -> None:
         for db in self.dbs:
             db.drop(exe)
             db.create(exe)
@@ -1074,7 +1074,7 @@ class Database:
             )
             self.sqlsmith_state = result.stdout
 
-    def drop(self, exe: ParallelWorkloadExecutor) -> None:
+    def drop(self, exe: Executor) -> None:
         for db in self.dbs:
             print(f"Dropping database {db}")
             db.drop(exe)
