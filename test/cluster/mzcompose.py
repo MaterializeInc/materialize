@@ -1764,6 +1764,11 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
         return reused, replaced
 
+    # Run a slow-path SELECT to allocate a transient ID. This ensures that
+    # after the restart dataflows get different internal transient IDs
+    # assigned, which is something we want reconciliation to be able to handle.
+    c.sql("SELECT * FROM mz_views JOIN mz_indexes USING (id)")
+
     # Set up a cluster and a number of dataflows that can be reconciled.
     c.sql(
         """

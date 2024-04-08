@@ -439,25 +439,89 @@ where
     }
 }
 
-impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P, S, T> {
+impl<S, T> DataflowDescription<FlatPlan, S, T>
+where
+    S: Clone + PartialEq,
+    T: Clone + timely::PartialOrder,
+{
     /// Determine if a dataflow description is compatible with this dataflow description.
     ///
-    /// Compatible dataflows have equal exports, imports, and objects to build. The `as_of` of
-    /// the receiver has to be less equal the `other` `as_of`.
+    /// Compatible dataflows have structurally equal exports, imports, and objects to build. The
+    /// `as_of` of the receiver has to be less equal the `other` `as_of`.
+    ///
+    /// Note that this method performs normalization as part of the structural equality checking,
+    /// which involves cloning both `self` and `other`. It is therefore relatively expensive and
+    /// should only be used on cold code paths.
     ///
     // TODO: The semantics of this function are only useful for command reconciliation at the moment.
     pub fn compatible_with(&self, other: &Self) -> bool {
-        let equality = self.index_exports == other.index_exports
-            && self.sink_exports == other.sink_exports
-            && self.objects_to_build == other.objects_to_build
-            && self.index_imports == other.index_imports
-            && self.source_imports == other.source_imports;
-        let partial = if let (Some(as_of), Some(other_as_of)) = (&self.as_of, &other.as_of) {
-            timely::PartialOrder::less_equal(as_of, other_as_of)
+        let old = self.as_comparable();
+        let new = other.as_comparable();
+
+        let equality = old.index_exports == new.index_exports
+            && old.sink_exports == new.sink_exports
+            && old.objects_to_build == new.objects_to_build
+            && old.index_imports == new.index_imports
+            && old.source_imports == new.source_imports;
+
+        let partial = if let (Some(old_as_of), Some(new_as_of)) = (&old.as_of, &new.as_of) {
+            timely::PartialOrder::less_equal(old_as_of, new_as_of)
         } else {
             false
         };
+
         equality && partial
+    }
+
+    /// Returns a `DataflowDescription` that has the same structure as `self` and can be
+    /// structurally compared to other `DataflowDescription`s.
+    ///
+    /// For now this method performs a single normalization only: It replaces transient `GlobalId`s
+    /// that are only used internally (i.e. not imported nor exported) with consecutive IDs
+    /// starting from `t1`.
+    fn as_comparable(&self) -> Self {
+        let external_ids: BTreeSet<_> = self.import_ids().chain(self.export_ids()).collect();
+
+        let mut id_counter = 0;
+        let mut replacements = BTreeMap::new();
+
+        let mut maybe_replace = |id: GlobalId| {
+            if id.is_transient() && !external_ids.contains(&id) {
+                *replacements.entry(id).or_insert_with(|| {
+                    id_counter += 1;
+                    GlobalId::Transient(id_counter)
+                })
+            } else {
+                id
+            }
+        };
+
+        let mut objects_to_build = self.objects_to_build.clone();
+        for object in &mut objects_to_build {
+            object.id = maybe_replace(object.id);
+            object.plan.replace_ids(&mut maybe_replace);
+        }
+
+        let mut index_exports = self.index_exports.clone();
+        for (desc, _typ) in index_exports.values_mut() {
+            desc.on_id = maybe_replace(desc.on_id);
+        }
+
+        let mut sink_exports = self.sink_exports.clone();
+        for desc in sink_exports.values_mut() {
+            desc.from = maybe_replace(desc.from);
+        }
+
+        DataflowDescription {
+            source_imports: self.source_imports.clone(),
+            index_imports: self.index_imports.clone(),
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of: self.as_of.clone(),
+            until: self.until.clone(),
+            debug_name: self.debug_name.clone(),
+        }
     }
 }
 
