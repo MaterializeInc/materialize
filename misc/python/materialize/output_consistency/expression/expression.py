@@ -158,3 +158,8 @@ class LeafExpression(Expression):
     def contains_leaf_not_directly_consumed_by_aggregation(self) -> bool:
         # This is not decided at leaf level.
         return False
+
+    def recursively_collect_involved_characteristics(
+        self, row_selection: DataRowSelection
+    ) -> set[ExpressionCharacteristics]:
+        return self.own_characteristics
