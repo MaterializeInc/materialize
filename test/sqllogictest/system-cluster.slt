@@ -490,11 +490,46 @@ ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
 
-statement error system cluster 'mz_introspection' cannot be modified
+statement error permission denied for CLUSTER "mz_introspection"
 CREATE MATERIALIZED VIEW live_keys AS ( SELECT key FROM bar );
 
-statement error  cannot modify managed cluster mz_introspection
-CREATE CLUSTER REPLICA mz_introspection.backup SIZE '1';
+statement error must be owner of CLUSTER mz_introspection
+ALTER CLUSTER mz_introspection SET (REPLICATION FACTOR 2);
 
-statement error system cluster 'mz_introspection' cannot be modified
+statement error permission denied for CLUSTER "mz_introspection"
 CREATE INDEX i_keys ON bar (key);
+
+statement error must be owner of CLUSTER mz_system
+ALTER CLUSTER mz_system SET (MANAGED = false)
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER mz_system SET (REPLICATION FACTOR 0)
+----
+COMPLETE 0
+
+statement error must be owner of CLUSTER mz_system
+ALTER CLUSTER mz_system SET (REPLICATION FACTOR 1)
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER mz_system SET (REPLICATION FACTOR 1)
+----
+COMPLETE 0
+
+# Replicas in system clusters should system IDs.
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER mz_system SET (SIZE = '2')
+----
+COMPLETE 0
+
+query I
+SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'mz_system') AND id LIKE 's%';
+----
+1
+
+query I
+SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'mz_system') AND id LIKE 'u%';
+----
+0
+
+reset-server

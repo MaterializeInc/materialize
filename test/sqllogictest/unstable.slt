@@ -9,7 +9,7 @@
 
 mode cockroach
 
-# Objects in the mz_internal schema are.
+# Objects in the mz_internal schema are unstable.
 
 statement error cannot create view with unstable dependencies
 CREATE VIEW v AS SELECT id, object_type, comment FROM mz_internal.mz_comments
@@ -19,7 +19,8 @@ ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
 
-statement error cannot create index with unstable dependencies
+# RBAC stops us from creating the index before we get the unstable error.
+statement error must be owner of TABLE mz_internal.mz_comments
 CREATE DEFAULT INDEX ON mz_internal.mz_comments
 
 simple conn=mz_system,user=mz_system

@@ -43,6 +43,8 @@ pub enum ErrorKind {
     ReservedReplicaName(String),
     #[error("system cluster '{0}' cannot be modified")]
     ReadOnlyCluster(String),
+    #[error("system cluster replica '{0}' cannot be modified")]
+    ReadOnlyClusterReplica(String),
     #[error("system database '{0}' cannot be modified")]
     ReadOnlyDatabase(String),
     #[error("system schema '{0}' cannot be modified")]

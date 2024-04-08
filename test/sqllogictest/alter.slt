@@ -24,11 +24,21 @@ ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
 
-query error system schema 'mz_catalog' cannot be modified
+query error must be owner of TABLE mz_catalog.mz_tables
 ALTER TABLE mz_tables RENAME TO foo;
 
-query error system schema 'mz_internal' cannot be modified
+query error must be owner of SOURCE mz_internal.mz_storage_shards
 ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE mz_tables RENAME TO foo;
+----
+db error: ERROR: system item 'mz_catalog.mz_tables' cannot be modified
+
+simple conn=mz_system,user=mz_system
+ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
+----
+db error: ERROR: system item 'mz_internal.mz_storage_shards' cannot be modified
 
 query error Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
 ALTER SOURCE mz_internal.mz_storage_shards RESET (size);
