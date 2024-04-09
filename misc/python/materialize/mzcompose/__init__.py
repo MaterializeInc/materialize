@@ -80,7 +80,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_sink_doc_on_option": "true",
     "enable_statement_lifecycle_logging": "true",
     "enable_table_keys": "true",
-    "enable_try_parse_monotonic_iso8601_timestamp": "true",
     "enable_variadic_left_join_lowering": "true",
     "enable_worker_core_affinity": "true",
     "persist_batch_delete_enabled": "true",

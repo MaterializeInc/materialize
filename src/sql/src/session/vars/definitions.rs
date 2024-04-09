@@ -1759,13 +1759,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_mfp_pushdown_explain,
-        desc: "`filter_pushdown` explain",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_multi_worker_storage_persist_sink,
         desc: "multi-worker storage persist sink",
         default: true,
@@ -1859,13 +1852,6 @@ feature_flags!(
     {
         name: enable_connection_validation_syntax,
         desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_try_parse_monotonic_iso8601_timestamp,
-        desc: "the try_parse_monotonic_iso8601_timestamp function",
         default: true,
         internal: true,
         enable_for_item_parsing: true,

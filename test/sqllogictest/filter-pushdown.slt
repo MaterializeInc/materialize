@@ -10,11 +10,6 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_mfp_pushdown_explain = true
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET persist_stats_filter_enabled = true
 ----
 COMPLETE 0
@@ -217,11 +212,6 @@ EOF
 
 # Verify that try_parse_monotonic_iso8601_timestamp gets pushdown (the whole
 # point of that func)
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_try_parse_monotonic_iso8601_timestamp = true;
-----
-COMPLETE 0
 
 query T multiline
 EXPLAIN WITH(humanized expressions, filter pushdown)
