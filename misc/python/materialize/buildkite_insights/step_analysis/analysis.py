@@ -135,7 +135,7 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
+    parser.add_argument("pipeline", choices=MZ_PIPELINES, type=str)
     parser.add_argument("--build-step-key", action="append", default=[], type=str)
     parser.add_argument(
         "--fetch",
