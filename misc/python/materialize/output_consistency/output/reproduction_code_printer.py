@@ -28,13 +28,18 @@ from materialize.output_consistency.selection.selection import (
 )
 from materialize.output_consistency.validation.validation_message import ValidationError
 
+MAX_ERRORS_WITH_REPRODUCTION_CODE = 5
+
 
 class ReproductionCodePrinter(BaseOutputPrinter):
     def __init__(self, input_data: ConsistencyTestInputData):
         self.input_data = input_data
 
     def print_reproduction_code(self, errors: list[ValidationError]) -> None:
-        for error in errors:
+        for i, error in enumerate(errors):
+            if i == MAX_ERRORS_WITH_REPRODUCTION_CODE:
+                break
+
             self.__print_reproduction_code_of_error(error)
 
     def __print_reproduction_code_of_error(self, error: ValidationError) -> None:
