@@ -306,7 +306,7 @@ SCENARIOS = [
             """
         ),
         materialized_memory="4.5Gb",
-        clusterd_memory="6Gb",
+        clusterd_memory="9Gb",  # TODO(def-) Reduce when #26514 is fixed
     ),
     MySqlCdcScenario(
         name="mysql-cdc-snapshot",
