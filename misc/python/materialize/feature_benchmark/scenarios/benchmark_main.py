@@ -234,6 +234,8 @@ class ManySmallInserts(DML):
         return self.table_ten()
 
     def benchmark(self) -> MeasurementSource:
+        random.seed(self.seed())
+
         statements = []
         for _ in range(0, 10000):
             statements.append(f"> INSERT INTO t1 VALUES ({random.randint(0, 100000)})")
@@ -351,6 +353,8 @@ class ManySmallUpdates(DML):
         ]
 
     def benchmark(self) -> MeasurementSource:
+        random.seed(self.seed())
+
         statements = []
         for _ in range(0, 10000):
             statements.append(
