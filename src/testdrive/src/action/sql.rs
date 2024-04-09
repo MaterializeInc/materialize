@@ -138,11 +138,8 @@ async fn try_run_sql(
         .await
         .context("preparing query failed")?;
 
-    let query_with_timeout = tokio::time::timeout(
-        state.default_timeout.clone(),
-        state.pgclient.query(&stmt, &[]),
-    )
-    .await;
+    let query_with_timeout =
+        tokio::time::timeout(state.timeout.clone(), state.pgclient.query(&stmt, &[])).await;
 
     if query_with_timeout.is_err() {
         bail!("query timed out")
