@@ -219,7 +219,7 @@ if __name__ == "__main__":
         help="Use * for all pipelines",
     )
 
-    parser.add_argument("pattern", nargs="*", type=str)
+    parser.add_argument("pattern", type=str)
 
     parser.add_argument(
         "--branch",
@@ -262,9 +262,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    assert len(args.pattern) == 1, "Exactly one search pattern must be provided"
-    pattern = args.pattern[0]
-
     main(
         args.pipeline,
         args.branch,
@@ -276,6 +273,6 @@ if __name__ == "__main__":
         args.only_one_result_per_build,
         args.only_failed_builds,
         args.only_failed_build_step_key,
-        pattern,
+        args.pattern,
         args.use_regex,
     )
