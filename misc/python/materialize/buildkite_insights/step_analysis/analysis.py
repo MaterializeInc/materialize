@@ -138,6 +138,11 @@ if __name__ == "__main__":
     parser.add_argument("pipeline", choices=MZ_PIPELINES, type=str)
     parser.add_argument("--build-step-key", action="append", default=[], type=str)
     parser.add_argument(
+        "--build-step-parallel-index",
+        type=int,
+        help="This is only applied if exactly one build-step-key is specified",
+    )
+    parser.add_argument(
         "--fetch",
         type=lambda mode: FetchMode[mode.upper()],
         choices=FETCH_MODE_CHOICES,
@@ -176,7 +181,12 @@ if __name__ == "__main__":
     main(
         args.pipeline,
         [
-            BuildStepMatcher(build_step_key, None)
+            BuildStepMatcher(
+                build_step_key,
+                args.build_step_parallel_index
+                if len(args.build_step_key) == 1
+                else None,
+            )
             for build_step_key in args.build_step_key
         ],
         args.fetch,
