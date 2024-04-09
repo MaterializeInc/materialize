@@ -25,7 +25,7 @@ body:
       label: Buildkite link
       description: |
         Provide a link to the failed Buildkite job.
-      placeholder: https://buildkite.com/materialize/tests/builds/...
+      placeholder: https://buildkite.com/materialize/test/builds/...
     validations:
       required: true
   - type: textarea

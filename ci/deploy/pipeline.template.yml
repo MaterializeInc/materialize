@@ -38,7 +38,7 @@ steps:
       queue: linux-x86_64
 
   - label: ":bulb: Full SQL Logic Tests"
-    trigger: sql-logic-tests
+    trigger: slt
     async: true
     branches: "v*.*rc*"
     build:
@@ -48,7 +48,7 @@ steps:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
 
   - label: ":nightmare: Full Nightly"
-    trigger: nightlies
+    trigger: nightly
     async: true
     branches: "v*.*rc*"
     build:

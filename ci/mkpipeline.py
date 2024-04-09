@@ -326,8 +326,8 @@ def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
 def add_version_to_preflight_tests(pipeline: Any) -> None:
     for step in steps(pipeline):
         if step.get("id", "") in (
-            "tests-preflight-check-rollback",
-            "nightlies-preflight-check-rollback",
+            "test-preflight-check-rollback",
+            "nightly-preflight-check-rollback",
         ):
             current_version = MzVersion.parse_cargo()
             version = get_previous_published_version(

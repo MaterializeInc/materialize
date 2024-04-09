@@ -4,7 +4,7 @@ Mz test runs multiple commands to test the `mz` CLI.
 
 # Usage
 
-The mz-e2e is made to run alone and during nightlies.
+The mz-e2e is made to run alone and during nightly.
 
 # Running
 

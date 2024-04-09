@@ -63,7 +63,7 @@ impl crate::Transform for Join {
         //
         // TODO(#25918): This is a temporary solution which fixes the "Product
         // limits" issue observed in a failed Nightly run when the PR was first
-        // tested (https://buildkite.com/materialize/nightlies/builds/6670). We
+        // tested (https://buildkite.com/materialize/nightly/builds/6670). We
         // should re-evaluate if we need this ad-hoc re-normalization step when
         // LiteralLifting is removed in favor of EquivalencePropagation.
         if transformed {

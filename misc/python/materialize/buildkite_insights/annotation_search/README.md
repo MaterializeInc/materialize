@@ -15,7 +15,8 @@ usage: buildkite-annotation-search [-h]
                                    [--only-failed-builds]
                                    [--only-failed-build-step-key ONLY_FAILED_BUILD_STEP_KEY]
                                    [--use-regex]
-                                   {cleanup,coverage,deploy,deploy-lsp,deploy-mz,deploy-website,license,nightlies,release-qualification,security,sql-logic-tests,tests,www} pattern
+                                   {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,release-qualification,security,slt,test,www}
+                                   pattern
 ```
 
 ## Examples
@@ -23,23 +24,23 @@ usage: buildkite-annotation-search [-h]
 Builds that have an annotation containing `Error { kind: Db, cause: Some(DbError`
 
 ```
-bin/buildkite-annotation-search tests "Error { kind: Db, cause: Some(DbError"
+bin/buildkite-annotation-search test "Error { kind: Db, cause: Some(DbError"
 ```
 
 Builds that have an annotation containing `Error` and include a larger number of recent builds
 
 ```
-bin/buildkite-annotation-search tests --max-build-fetches 10 "Error"
+bin/buildkite-annotation-search test --max-build-fetches 10 "Error"
 ```
 
 Builds on branch `main` that have an annotation matching the regex pattern `cannot serve requested as_of AntiChain.*testdrive-materialized-1`
 
 ```
-bin/buildkite-annotation-search tests --branch main --use-regex "cannot serve requested as_of AntiChain.*testdrive-materialized-1"
+bin/buildkite-annotation-search test --branch main --use-regex "cannot serve requested as_of AntiChain.*testdrive-materialized-1"
 ```
 
 Nightly builds that failed and have an annotation containing `fivetran-destination action=describe`
 
 ```
-bin/buildkite-annotation-search nightlies --only-failed-builds "fivetran-destination action=describe"
+bin/buildkite-annotation-search nightly --only-failed-builds "fivetran-destination action=describe"
 ```
