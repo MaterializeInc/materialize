@@ -204,6 +204,8 @@ case "$cmd" in
             --env AWS_SECRET_ACCESS_KEY
             --env AWS_SESSION_TOKEN
             --env BUILDKITE_CI_API_KEY
+            --env CANARY_LOADTEST_APP_PASSWORD
+            --env CANARY_LOADTEST_PASSWORD
             --env CI
             --env CI_SANITIZER
             --env CI_COVERAGE_ENABLED
