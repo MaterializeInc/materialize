@@ -370,6 +370,7 @@ def run(
         gc.collect()
 
         stopping_time = datetime.datetime.now() + datetime.timedelta(seconds=30)
+        sessions = []
         while datetime.datetime.now() < stopping_time:
             cur.execute(
                 "SELECT * FROM mz_internal.mz_sessions WHERE id <> pg_backend_pid()"
@@ -381,6 +382,12 @@ def run(
                 f"Sessions are still running even though all threads are done: {sessions}"
             )
         else:
+            for i, worker in enumerate(workers):
+                for session in sessions:
+                    if session[0] == worker.exe.pg_pid:
+                        print(
+                            f"Worker {i}'s session still running: {worker.exe.pg_pid}"
+                        )
             raise ValueError("Sessions did not clean up within 30s of threads stopping")
     conn.close()
 
