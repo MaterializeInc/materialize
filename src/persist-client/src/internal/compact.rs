@@ -379,7 +379,11 @@ where
                             part_deletes.add(&part);
                         }
                         let () = part_deletes
-                            .delete(&blob, &metrics.retries.external.compaction_noop_delete)
+                            .delete(
+                                &blob,
+                                machine.shard_id(),
+                                &metrics.retries.external.compaction_noop_delete,
+                            )
                             .await;
                         Ok(apply_merge_result)
                     }
