@@ -32,8 +32,8 @@ _name_  | The identifier of the source you want to alter.
 
 ### **ADD SUBSOURCE** `with_options`
 
-Field                                | Value     | Description
--------------------------------------|-----------|-------------------------------------
+Field                                | Value           | Description
+-------------------------------------|-----------------|-------------------------------------
 `TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
 
 ## Context

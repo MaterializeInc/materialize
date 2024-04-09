@@ -6,10 +6,6 @@ menu:
     parent: 'sql-functions'
 ---
 
-{{< public-preview >}}
-[Temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
-{{</ public-preview >}}
-
 `try_parse_monotonic_iso8601_timestamp` parses a subset of [ISO 8601]
 timestamps that matches the 24 character length output
 of the javascript [Date.toISOString()] function.
