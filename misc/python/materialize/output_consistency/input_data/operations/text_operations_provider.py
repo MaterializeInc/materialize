@@ -292,7 +292,7 @@ TEXT_OPERATION_TYPES.append(
 TEXT_OPERATION_TYPES.append(
     DbFunction(
         "regexp_replace",
-        [TextOperationParam(), REGEX_PARAM, TextOperationParam()],
+        [TextOperationParam(), REGEX_PARAM, TextOperationParam(), REGEX_FLAG_PARAM],
         TextReturnTypeSpec(),
         tags={TAG_REGEX},
     )
