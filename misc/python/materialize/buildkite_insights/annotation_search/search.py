@@ -212,15 +212,15 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument("pattern", nargs="*", type=str)
-
     parser.add_argument(
-        "--pipeline",
+        "pipeline",
         choices=MZ_PIPELINES,
         type=str,
-        required=True,
         help="Use * for all pipelines",
     )
+
+    parser.add_argument("pattern", nargs="*", type=str)
+
     parser.add_argument(
         "--branch",
         type=str,
