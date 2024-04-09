@@ -3700,7 +3700,7 @@ impl<'a> Parser<'a> {
         let paren = self.consume_token(&Token::LParen);
         let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
         if paren {
-            let _ = self.consume_token(&Token::RParen);
+            self.expect_token(&Token::RParen)?;
         }
 
         let features = if self.parse_keywords(&[FEATURES]) {
