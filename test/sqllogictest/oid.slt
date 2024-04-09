@@ -792,7 +792,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16678  mz_compute_exports_per_worker
 16679  mz_compute_frontiers_per_worker
 16680  mz_compute_import_frontiers_per_worker
-16681  mz_compute_delays_histogram_raw
 16682  mz_compute_error_counts_raw
 16683  mz_active_peeks_per_worker
 16684  mz_peek_durations_histogram_raw
@@ -938,8 +937,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16824  mz_compute_operator_durations_histogram
 16825  mz_scheduling_parks_histogram_per_worker
 16826  mz_scheduling_parks_histogram
-16827  mz_compute_delays_histogram_per_worker
-16828  mz_compute_delays_histogram
 16829  mz_compute_error_counts_per_worker
 16830  mz_compute_error_counts
 16831  mz_compute_operator_hydration_statuses

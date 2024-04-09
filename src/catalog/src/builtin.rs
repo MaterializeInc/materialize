@@ -1807,14 +1807,6 @@ pub static MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_COMPUTE_DELAYS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
-    name: "mz_compute_delays_histogram_raw",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::LOG_MZ_COMPUTE_DELAYS_HISTOGRAM_RAW_OID,
-    variant: LogVariant::Compute(ComputeLog::FrontierDelay),
-    access: vec![PUBLIC_SELECT],
-});
-
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_error_counts_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4311,36 +4303,6 @@ SELECT
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_scheduling_parks_histogram_per_worker
 GROUP BY slept_for_ns, requested_ns",
-    access: vec![PUBLIC_SELECT],
-});
-
-pub static MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
-    name: "mz_compute_delays_histogram_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER_OID,
-    column_defs: None,
-    sql: "SELECT
-    export_id, import_id, worker_id, delay_ns, pg_catalog.count(*) AS count
-FROM
-    mz_internal.mz_compute_delays_histogram_raw
-GROUP BY
-    export_id, import_id, worker_id, delay_ns",
-    access: vec![PUBLIC_SELECT],
-});
-
-pub static MZ_COMPUTE_DELAYS_HISTOGRAM: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
-    name: "mz_compute_delays_histogram",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_COMPUTE_DELAYS_HISTOGRAM_OID,
-    column_defs: None,
-    sql: "
-SELECT
-    export_id,
-    import_id,
-    delay_ns,
-    pg_catalog.sum(count) AS count
-FROM mz_internal.mz_compute_delays_histogram_per_worker
-GROUP BY export_id, import_id, delay_ns",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6903,7 +6865,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
-        Builtin::Log(&MZ_COMPUTE_DELAYS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
@@ -6998,8 +6959,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
-        Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER),
-        Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM),
         Builtin::View(&MZ_SHOW_SOURCES),
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),

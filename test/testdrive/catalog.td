@@ -547,7 +547,6 @@ mz_arrangement_sharing_raw                   log   <null>   <null>
 mz_aws_privatelink_connection_status_history source <null>  <null>
 mz_cluster_replica_frontiers                 source <null>  <null>
 mz_cluster_replica_heartbeats                source <null>  <null>
-mz_compute_delays_histogram_raw              log   <null>   <null>
 mz_compute_dependencies                      source <null>  <null>
 mz_compute_error_counts_raw                  log   <null>   <null>
 mz_compute_exports_per_worker                log   <null>   <null>
@@ -611,8 +610,6 @@ mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
 mz_cluster_replica_history
 mz_cluster_replica_utilization
-mz_compute_delays_histogram
-mz_compute_delays_histogram_per_worker
 mz_compute_error_counts
 mz_compute_error_counts_per_worker
 mz_compute_exports
@@ -710,7 +707,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-185
+180
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

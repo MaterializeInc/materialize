@@ -1047,21 +1047,6 @@ Specifically, reductions can use more memory than we show here.
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_capacity_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_size_raw -->
 
-### `mz_compute_delays_histogram`
-
-The `mz_compute_delays_histogram` view describes a histogram of the wall-clock delay in nanoseconds between observations of import frontier advancements of a [dataflow] and the advancements of the corresponding export frontiers.
-
-<!-- RELATION_SPEC mz_internal.mz_compute_delays_histogram -->
-| Field        | Type        | Meaning                                                                                                                                                                                                                                              |
-| ------------ |-------------| --------                                                                                                                                                                                                                                             |
-| `export_id`  | [`text`]    | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).                                                                                                                                                 |
-| `import_id`  | [`text`]    | The ID of the dataflow import. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views). |
-| `delay_ns`   | [`uint8`]   | The upper bound of the bucket in nanoseconds.                                                                                                                                                                                                        |
-| `count`      | [`numeric`] | The (noncumulative) count of delay measurements in this bucket.                                                                                                                                                                                      |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_raw -->
-
 ### `mz_compute_error_counts`
 
 The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows][dataflow] in the system.

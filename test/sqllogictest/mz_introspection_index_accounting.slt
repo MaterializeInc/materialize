@@ -43,7 +43,6 @@ mz_cluster_replica_sizes_ind  CREATE␠INDEX␠"mz_cluster_replica_sizes_ind"␠
 mz_cluster_replica_statuses_ind  CREATE␠INDEX␠"mz_cluster_replica_statuses_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_statuses"␠("replica_id")
 mz_cluster_replicas_ind  CREATE␠INDEX␠"mz_cluster_replicas_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_cluster_replicas"␠("id")
 mz_clusters_ind  CREATE␠INDEX␠"mz_clusters_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_clusters"␠("id")
-mz_compute_delays_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_compute_delays_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_compute_delays_histogram_raw"␠("export_id",␠"import_id",␠"worker_id",␠"delay_ns")
 mz_compute_dependencies_ind  CREATE␠INDEX␠"mz_compute_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_compute_dependencies"␠("dependency_id")
 mz_compute_error_counts_raw_s2_primary_idx  CREATE␠INDEX␠"mz_compute_error_counts_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_compute_error_counts_raw"␠("export_id",␠"worker_id")
 mz_compute_exports_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_exports_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_compute_exports_per_worker"␠("export_id",␠"worker_id")
@@ -215,10 +214,6 @@ mz_columns  position
 mz_columns  type
 mz_columns  type_mod
 mz_columns  type_oid
-mz_compute_delays_histogram_raw  delay_ns
-mz_compute_delays_histogram_raw  export_id
-mz_compute_delays_histogram_raw  import_id
-mz_compute_delays_histogram_raw  worker_id
 mz_compute_dependencies  dependency_id
 mz_compute_dependencies  object_id
 mz_compute_error_counts_raw  count

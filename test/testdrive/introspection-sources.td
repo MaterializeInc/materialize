@@ -28,18 +28,6 @@ SELECT '${arg.default-replica-size}' != '4-4'
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
 
-> SELECT count_all > 0
-  FROM (SELECT SUM(count) as count_all
-        FROM
-            mz_materialized_views AS views,
-            mz_internal.mz_compute_exports as compute_exports,
-            mz_internal.mz_compute_delays_histogram_per_worker AS delays
-        WHERE
-            views.name = 'mv' AND
-            views.id = compute_exports.export_id AND
-            compute_exports.export_id = delays.export_id)
-true
-
 > SELECT COUNT(*)
   FROM
     mz_materialized_views AS views,
@@ -55,12 +43,6 @@ true
 > CREATE VIEW vv AS SELECT * FROM t
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.export_id, delays.import_id
-        FROM
-            mz_internal.mz_compute_delays_histogram AS delays)
-1
-
-> SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
             mz_internal.mz_compute_import_frontiers AS import_frontiers)
@@ -69,30 +51,10 @@ true
 > CREATE DEFAULT INDEX ON vv
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.export_id, delays.import_id
-        FROM
-            mz_internal.mz_compute_delays_histogram AS delays)
-2
-
-> SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
             mz_internal.mz_compute_import_frontiers AS import_frontiers)
 2
-
-> SELECT count_all > 0
-  FROM (SELECT SUM(count) as count_all
-        FROM
-            mz_views AS views,
-            mz_indexes AS indexes,
-            mz_internal.mz_compute_exports AS compute_exports,
-            mz_internal.mz_compute_delays_histogram_per_worker AS delays
-        WHERE
-            views.name = 'vv' AND
-            views.id = indexes.on_id AND
-            indexes.id = compute_exports.export_id AND
-            compute_exports.export_id = delays.export_id)
-true
 
 > SELECT COUNT(*)
   FROM
@@ -111,24 +73,12 @@ true
 > CREATE MATERIALIZED VIEW mvv AS SELECT * FROM vv
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.export_id, delays.import_id
-        FROM
-            mz_internal.mz_compute_delays_histogram AS delays)
-3
-
-> SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
             mz_internal.mz_compute_import_frontiers AS import_frontiers)
 3
 
 > DROP MATERIALIZED VIEW mvv
-
-> SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.export_id, delays.import_id
-        FROM
-            mz_internal.mz_compute_delays_histogram AS delays)
-2
 
 > SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
@@ -139,24 +89,12 @@ true
 > DROP INDEX vv_primary_idx
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.export_id, delays.import_id
-        FROM
-            mz_internal.mz_compute_delays_histogram AS delays)
-1
-
-> SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
             mz_internal.mz_compute_import_frontiers AS import_frontiers)
 1
 
 > DROP MATERIALIZED VIEW mv
-
-> SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.export_id, delays.import_id
-        FROM
-            mz_internal.mz_compute_delays_histogram AS delays)
-0
 
 > SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
