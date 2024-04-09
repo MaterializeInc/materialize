@@ -864,6 +864,54 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 }
 
+/// Logging state maintained for a compute collection.
+///
+/// This type is used to produce appropriate log events in response to changes of logged collection
+/// state, e.g. frontiers, and to produce cleanup events when a collection is dropped.
+pub struct CollectionLogging {
+    id: GlobalId,
+    logger: Logger,
+
+    logged_frontier: Option<Timestamp>,
+}
+
+impl CollectionLogging {
+    /// Create new logging state for the identified collection and emit initial logging events.
+    pub fn new(id: GlobalId, logger: Logger, dataflow_index: usize) -> Self {
+        logger.log(ComputeEvent::Export { id, dataflow_index });
+
+        let mut self_ = Self {
+            id,
+            logger,
+            logged_frontier: None,
+        };
+        self_.set_frontier(Some(Timestamp::MIN));
+        self_
+    }
+
+    /// Set the collection frontier to the given new time and emit corresponding logging events.
+    pub fn set_frontier(&mut self, new_time: Option<Timestamp>) {
+        let old_time = self.logged_frontier;
+        self.logged_frontier = new_time;
+
+        if old_time != new_time {
+            let id = self.id;
+            let retraction = old_time.map(|time| ComputeEvent::Frontier { id, time, diff: -1 });
+            let insertion = new_time.map(|time| ComputeEvent::Frontier { id, time, diff: 1 });
+            let events = retraction.into_iter().chain(insertion);
+            self.logger.log_many(events);
+        }
+    }
+}
+
+impl Drop for CollectionLogging {
+    fn drop(&mut self) {
+        // Emit retraction events to clean up events previously logged.
+        self.set_frontier(None);
+        self.logger.log(ComputeEvent::ExportDropped { id: self.id });
+    }
+}
+
 /// Extension trait to attach `ComputeEvent::ImportFrontier` logging operators to streams and
 /// arrangements.
 pub(crate) trait LogImportFrontiers {
