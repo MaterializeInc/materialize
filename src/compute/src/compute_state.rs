@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -28,7 +28,7 @@ use mz_compute_client::protocol::response::{
     SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::{ENABLE_CONTROLLER_DATAFLOW_SCHEDULING, HYDRATION_CONCURRENCY};
+use mz_compute_types::dyncfgs::ENABLE_CONTROLLER_DATAFLOW_SCHEDULING;
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
@@ -136,13 +136,7 @@ pub struct ComputeState {
     /// Each entry stores a reference to a token that can be dropped to unsuspend the collection's
     /// dataflow. Multiple collections can reference the same token if they are exported by the
     /// same dataflow.
-    waiting_collections: BTreeMap<GlobalId, Rc<Box<dyn Any>>>,
-    /// Collections in the process of hydrating.
-    hydrating_collections: BTreeSet<GlobalId>,
-    /// Queue of dataflows awaiting hydration.
-    ///
-    /// Each entry is a dataflow ID and a token that can be dropped to unsuspend the dataflow.
-    hydration_queue: VecDeque<(usize, Box<dyn Any>)>,
+    suspended_collections: BTreeMap<GlobalId, Rc<dyn Any>>,
 }
 
 impl ComputeState {
@@ -176,9 +170,7 @@ impl ComputeState {
             worker_config: mz_dyncfgs::all_dyncfgs(),
             hydration_rx,
             hydration_tx,
-            waiting_collections: Default::default(),
-            hydration_queue: Default::default(),
-            hydrating_collections: Default::default(),
+            suspended_collections: Default::default(),
         }
     }
 
@@ -255,36 +247,6 @@ impl ComputeState {
             DATAFLOW_MAX_INFLIGHT_BYTES_CC.get(&self.worker_config)
         } else {
             DATAFLOW_MAX_INFLIGHT_BYTES.get(&self.worker_config)
-        }
-    }
-
-    /// Check for completed hydration of dataflows and begin hydrating new ones if capacity is
-    /// available.
-    pub fn process_sequential_hydration(&mut self) {
-        self.hydrating_collections.retain(|id| {
-            let collection = self.collections.get(id).expect("must exist");
-            if collection.is_hydrated() {
-                info!(%id, "collection hydrated (or dropped)");
-                false
-            } else {
-                true
-            }
-        });
-
-        let capacity = HYDRATION_CONCURRENCY.get(&self.worker_config);
-        while self.hydrating_collections.len() < capacity {
-            let Some((dataflow_id, suspension_token)) = self.hydration_queue.pop_front() else {
-                break;
-            };
-
-            drop(suspension_token);
-
-            for (id, collection) in &self.collections {
-                if collection.dataflow_id == Some(dataflow_id) {
-                    info!(?id, "collection hydration started");
-                    self.hydrating_collections.insert(*id);
-                }
-            }
         }
     }
 }
@@ -398,8 +360,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         for object_id in dataflow.export_ids() {
             let mut collection = CollectionState::new();
 
-            collection.as_of = as_of.clone();
-            collection.dataflow_id = Some(dataflow_index);
             collection.reported_frontier = ReportedFrontier::NotReported {
                 lower: as_of.clone(),
             };
@@ -426,20 +386,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             }
         }
 
-        // Schedule transient dataflows immediately, under the assumption that they are created for
-        // interactive user queries. Suspend non-transient dataflows, to enforce the configured
-        // `hydration_concurrency`.
         let (start_signal, suspension_token) = StartSignal::new();
-        if dataflow.is_transient() {
-            drop(suspension_token);
-        } else if !ENABLE_CONTROLLER_DATAFLOW_SCHEDULING.get(&self.compute_state.worker_config) {
+        if !ENABLE_CONTROLLER_DATAFLOW_SCHEDULING.get(&self.compute_state.worker_config) {
             drop(suspension_token);
         } else {
-            let token = Rc::new(suspension_token);
             for id in dataflow.export_ids() {
                 self.compute_state
-                    .waiting_collections
-                    .insert(id, Rc::clone(&token));
+                    .suspended_collections
+                    .insert(id, Rc::clone(&suspension_token));
             }
         }
 
@@ -457,25 +411,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // dataflow can export multiple collections and they all share one suspension token, so the
         // computation of a dataflow will only start once all its exported collections have been
         // scheduled.
-        //
-        // Instead of immediately dropping the suspension token, we add it to the
-        // `hydration_queue`, to enforce the configured `hydration_concurrency`.
-
-        let Some(suspension_token) = self.compute_state.waiting_collections.remove(&id) else {
-            // During reconciliation we might reuse already running dataflows, for which we will
-            // then receive `Schedule` commands even though they are not suspended.
-            return;
-        };
-        let Some(suspension_token) = Rc::into_inner(suspension_token) else {
-            // The dataflow exports other collections that are still unscheduled.
-            return;
-        };
-
-        let collection = self.compute_state.expect_collection(id);
-        let dataflow_id = collection.dataflow_id.expect("must be known");
-        self.compute_state
-            .hydration_queue
-            .push_back((dataflow_id, suspension_token));
+        let suspension_token = self.compute_state.suspended_collections.remove(&id);
+        drop(suspension_token);
     }
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
@@ -533,9 +470,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // If this collection is an index, remove its trace.
         self.compute_state.traces.del_trace(&id);
 
-        // Remove scheduling and hydration tracking state.
-        self.compute_state.waiting_collections.remove(&id);
-        self.compute_state.hydrating_collections.remove(&id);
+        // If the collection is unscheduled, remove it from the list of waiting collections.
+        self.compute_state.suspended_collections.remove(&id);
 
         // Remove frontier logging.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
@@ -1404,12 +1340,6 @@ impl ReportedFrontier {
 
 /// State maintained for a compute collection.
 pub struct CollectionState {
-    /// The initial as-of frontier.
-    as_of: Antichain<Timestamp>,
-    /// The ID of the dataflow maintaining this collection.
-    ///
-    /// `None` if the dataflow ID is unknown, which is the case for logging collections.
-    dataflow_id: Option<usize>,
     /// Tracks the frontier that has been reported to the controller.
     pub reported_frontier: ReportedFrontier,
     /// A token that should be dropped when this collection is dropped to clean up associated
@@ -1426,8 +1356,6 @@ pub struct CollectionState {
 impl CollectionState {
     fn new() -> Self {
         Self {
-            as_of: Antichain::from_elem(Timestamp::MIN),
-            dataflow_id: None,
             reported_frontier: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
@@ -1436,13 +1364,6 @@ impl CollectionState {
 
     fn is_subscribe(&self) -> bool {
         self.sink_token.is_some() && self.sink_write_frontier.is_none()
-    }
-
-    fn is_hydrated(&self) -> bool {
-        match &self.reported_frontier {
-            ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
-            ReportedFrontier::NotReported { .. } => false,
-        }
     }
 }
 

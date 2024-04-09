@@ -1157,9 +1157,9 @@ pub(super) struct StartSignal(
 impl StartSignal {
     /// Create a new `StartSignal` and a corresponding token that activates the signal when
     /// dropped.
-    pub fn new() -> (Self, Box<dyn Any>) {
+    pub fn new() -> (Self, Rc<dyn Any>) {
         let (tx, rx) = oneshot::channel::<Infallible>();
-        let token = Box::new(tx);
+        let token = Rc::new(tx);
         let signal = Self(rx.shared());
         (signal, token)
     }
