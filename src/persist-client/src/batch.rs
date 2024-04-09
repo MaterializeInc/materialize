@@ -197,7 +197,11 @@ where
             deletes.add(part);
         }
         let () = deletes
-            .delete(&self.blob, &self.metrics.retries.external.batch_delete)
+            .delete(
+                &self.blob,
+                self.shard_id(),
+                &self.metrics.retries.external.batch_delete,
+            )
             .await;
     }
 
@@ -1024,12 +1028,18 @@ impl PartDeletes {
         }
     }
 
-    pub async fn delete(self, blob: &Arc<dyn Blob + Send + Sync>, metrics: &Arc<RetryMetrics>) {
+    pub async fn delete(
+        self,
+        blob: &Arc<dyn Blob + Send + Sync>,
+        shard_id: ShardId,
+        metrics: &Arc<RetryMetrics>,
+    ) {
         let deletes = FuturesUnordered::new();
         for key in self.0 {
             let metrics = Arc::clone(metrics);
             let blob = Arc::clone(blob);
             deletes.push(async move {
+                let key = key.complete(&shard_id);
                 retry_external(&metrics, || blob.delete(&key)).await;
             });
         }
