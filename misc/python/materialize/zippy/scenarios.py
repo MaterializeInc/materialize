@@ -339,7 +339,8 @@ class KafkaSourcesLarge(Scenario):
             CreateViewParameterized(
                 max_views=50, expensive_aggregates=False, max_inputs=1
             ): 5,
-            CreateSinkParameterized(max_sinks=25): 10,
+            # TODO(def-) Reenable when #26511 is fixed
+            # CreateSinkParameterized(max_sinks=25): 10,
             ValidateView: 10,
             Ingest: 100,
             PeekCancellation: 5,
