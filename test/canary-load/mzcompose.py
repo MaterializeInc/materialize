@@ -32,9 +32,20 @@ SERVICES = [
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     REGION = "aws/us-east-1"
     ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
-    USERNAME = os.getenv("CANARY_LOADTEST_USERNAME", "infra+qanaryload@materialize.io")
+    USERNAME = os.getenv(
+        "CANARY_LOADTEST_USERNAME", "infra+qacanaryload@materialize.io"
+    )
     PASSWORD = os.environ["CANARY_LOADTEST_PASSWORD"]
     APP_PASSWORD = os.environ["CANARY_LOADTEST_APP_PASSWORD"]
+
+    def fetch_token() -> str:
+        return fetch_jwt(
+            email=USERNAME,
+            password=PASSWORD,
+            host="admin.cloud.materialize.com/frontegg",
+            scheme="https",
+            max_tries=1,
+        )
 
     parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
     args = parser.parse_args()
@@ -46,15 +57,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ):
         host = c.cloud_hostname()
 
-        token = fetch_jwt(
-            email=USERNAME,
-            password=PASSWORD,
-            host="admin.cloud.materialize.com/frontegg",
-            scheme="https",
-            max_tries=1,
-        )
-
-        def http_sql_query(query: str) -> list[list[str]]:
+        def http_sql_query(query: str, token: str) -> list[list[str]]:
             try:
                 r = requests.post(
                     f'https://{host}/api/sql?options={{"application_name":"canary-load","cluster":"qa_canary_environment_compute"}}',
@@ -65,7 +68,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 res = e.response
                 print(f"{e}\n{res}\n{res.text}")
                 raise
-            assert r.status_code == 200
+            assert r.status_code == 200, f"{r}\n{r.text}"
             results = r.json()["results"]
             assert len(results) == 1, results
             return results[0]["rows"]
@@ -187,40 +190,50 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             int(r[-1][2]) == (i + 1) * 100 - 1
                         ), f"Unexpected results: {r}"
 
-                        result = http_sql_query("SELECT 1")
+                        # Token can run out, so refresh it occasionally
+                        token = fetch_token()
+
+                        result = http_sql_query("SELECT 1", token)
                         assert result == [["1"]]
                         result = http_sql_query(
-                            "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0"
+                            "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0",
+                            token,
                         )
                         assert result == [["0"]]
 
                         result = http_sql_query(
-                            "SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'"
+                            "SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'",
+                            token,
                         )
                         assert result == [["0"]]
 
                         result = http_sql_query(
-                            "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 10"
+                            "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 10",
+                            token,
                         )
                         assert result == [["0"]]
 
                         result = http_sql_query(
-                            "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.mysql_wmr WHERE degree > 10"
+                            "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.mysql_wmr WHERE degree > 10",
+                            token,
                         )
                         assert result == [["0"]]
 
                         result = http_sql_query(
-                            "SELECT COUNT(DISTINCT count_star) FROM qa_canary_environment.public_loadgen.sales_product_product_category WHERE count_distinct_product_id < 0"
+                            "SELECT COUNT(DISTINCT count_star) FROM qa_canary_environment.public_loadgen.sales_product_product_category WHERE count_distinct_product_id < 0",
+                            token,
                         )
                         assert result == [["0"]]
 
                         result = http_sql_query(
-                            "SELECT * FROM qa_canary_environment.public_table.table_mv"
+                            "SELECT * FROM qa_canary_environment.public_table.table_mv",
+                            token,
                         )
                         assert result == [[f"{i * 100 + 99}"]]
 
                         result = http_sql_query(
-                            "SELECT min(c), max(c), count(*) FROM qa_canary_environment.public_table.table"
+                            "SELECT min(c), max(c), count(*) FROM qa_canary_environment.public_table.table",
+                            token,
                         )
                         assert result == [["0", f"{i * 100 + 99}", f"{(i + 1) * 100}"]]
 
