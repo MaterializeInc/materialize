@@ -2776,7 +2776,7 @@ pub fn encode_ts_metric<T: Codec64>(ts: &Antichain<T>) -> i64 {
     // taking advantage of the fact that in practice, timestamps in mz are
     // currently always a u64 (and if we switch them, it will be to an i64).
     // This means that for all values that mz would actually produce,
-    // interpreting the the encoded bytes as a little-endian i64 will work.
+    // interpreting the encoded bytes as a little-endian i64 will work.
     // Both of them impl PartialOrder, so in practice, there will always be
     // zero or one elements in the antichain.
     match ts.elements().first() {

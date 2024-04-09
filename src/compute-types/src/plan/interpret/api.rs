@@ -338,7 +338,7 @@ where
                             if res_value_new != self.ctx.bindings.get(id).unwrap().value {
                                 // Set the change flag.
                                 change = true;
-                                // Update the the context entry.
+                                // Update the context entry.
                                 let new_entry = ContextEntry::of_let_rec(res_value_new);
                                 self.ctx.bindings.insert(*id, new_entry);
                             }
@@ -626,7 +626,7 @@ where
                             if res_value_new != self.ctx.bindings.get(id).unwrap().value {
                                 // Set the change flag.
                                 change = true;
-                                // Update the the context entry.
+                                // Update the context entry.
                                 let new_entry = ContextEntry::of_let_rec(res_value_new);
                                 self.ctx.bindings.insert(*id, new_entry);
                             }

@@ -143,7 +143,7 @@ pub enum AdapterError {
     IdleInTransactionSessionTimeout,
     /// The transaction is in single-subscribe mode.
     SubscribeOnlyTransaction,
-    /// An error occurred in the the optimizer.
+    /// An error occurred in the optimizer.
     Optimizer(OptimizerError),
     /// A query depends on items which are not allowed to be referenced from the current cluster.
     UnallowedOnCluster {

@@ -16,7 +16,7 @@ This process of adding Protobuf-based serialization support for a new Rust type 
 1. Define a Protobuf message type `Proto$T` (a.k.a. *the Protobuf representation of `$T`*) and compile it to Rust with [`prost`](https://github.com/tokio-rs/prost).
 1. Implement a pair mappings that convert between `$T` and `Proto$T`.
 
-If `$T` needs to be added to `mz_expr::foo::bar`, the the source code of the `mz_expr` crate needs to be adapted as follows.
+If `$T` needs to be added to `mz_expr::foo::bar`, the source code of the `mz_expr` crate needs to be adapted as follows.
 
 - `expr` - crate root folder.
   - `build.rs` - contains `prost_build` instructions for compiling all `*.proto` files in the crate into `*.rs` source code.

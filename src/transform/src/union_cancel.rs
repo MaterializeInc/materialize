@@ -48,7 +48,7 @@ impl crate::Transform for UnionBranchCancellation {
 /// Result of the comparison of two branches of a union for cancellation
 /// purposes.
 enum BranchCmp {
-    /// The two branches are equivalent in the sense the the produce the
+    /// The two branches are equivalent in the sense the produce the
     /// same exact results.
     Equivalent,
     /// The two branches are equivalent, but one of them produces negated

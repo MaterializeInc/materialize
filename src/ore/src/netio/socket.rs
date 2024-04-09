@@ -122,7 +122,7 @@ pub struct UnixSocketAddr {
 impl UnixSocketAddr {
     /// Constructs a Unix domain socket address from the provided path.
     ///
-    /// Unlike the [`UnixSocketAddr::from_pathname`] method in the the standard
+    /// Unlike the [`UnixSocketAddr::from_pathname`] method in the standard
     /// library, `path` is required to be valid UTF-8.
     ///
     /// # Errors
