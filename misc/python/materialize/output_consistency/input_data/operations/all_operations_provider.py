@@ -36,6 +36,9 @@ from materialize.output_consistency.input_data.operations.jsonb_operations_provi
 from materialize.output_consistency.input_data.operations.number_operations_provider import (
     NUMERIC_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.set_operations_provider import (
+    SET_OPERATION_TYPES,
+)
 from materialize.output_consistency.input_data.operations.text_operations_provider import (
     TEXT_OPERATION_TYPES,
 )
@@ -48,6 +51,7 @@ ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
     itertools.chain(
         GENERIC_OPERATION_TYPES,
         EQUALITY_OPERATION_TYPES,
+        SET_OPERATION_TYPES,
         AGGREGATE_OPERATION_TYPES,
         BOOLEAN_OPERATION_TYPES,
         NUMERIC_OPERATION_TYPES,
