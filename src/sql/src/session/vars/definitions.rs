@@ -838,7 +838,7 @@ pub static LOGGING_FILTER: VarDefinition = VarDefinition::new_lazy(
 
 pub static OPENTELEMETRY_FILTER: VarDefinition = VarDefinition::new_lazy(
     "opentelemetry_filter",
-    lazy_value!(CloneableEnvFilter; || CloneableEnvFilter::from_str("off").expect("valid EnvFilter")),
+    lazy_value!(CloneableEnvFilter; || CloneableEnvFilter::from_str("info").expect("valid EnvFilter")),
     "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
     true,
 );
