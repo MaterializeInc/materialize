@@ -549,7 +549,6 @@ pub fn plan_explain_plan(
         let mut with_options = ExplainPlanOptionExtracted::try_from(with_options)?;
 
         if with_options.filter_pushdown {
-            scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
             // If filtering is disabled, explain plans should not include pushdown info.
             with_options.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
         }
