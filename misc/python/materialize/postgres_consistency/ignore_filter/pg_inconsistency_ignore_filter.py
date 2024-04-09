@@ -40,6 +40,7 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
     PreExecutionInconsistencyIgnoreFilterBase,
 )
 from materialize.output_consistency.input_data.operations.equality_operations_provider import (
+    TAG_EQUALITY,
     TAG_EQUALITY_ORDERING,
 )
 from materialize.output_consistency.input_data.operations.generic_operations_provider import (
@@ -213,7 +214,10 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             )
 
         if (
-            db_operation.is_tagged(TAG_EQUALITY_ORDERING)
+            (
+                db_operation.is_tagged(TAG_EQUALITY_ORDERING)
+                or db_operation.is_tagged(TAG_EQUALITY)
+            )
             and expression.args[0].resolve_return_type_category()
             == DataTypeCategory.NUMERIC
             and expression.args[1].resolve_return_type_category()
