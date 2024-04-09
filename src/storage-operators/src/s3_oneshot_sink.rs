@@ -149,19 +149,25 @@ pub fn copy_to<G, F>(
                             // and the subsequent replicas shouldn't error if the object is already deleted.
                             // TODO: Should we also write a manifest of all the files uploaded?
                             let client = mz_aws_util::s3::new_client(&sdk_config);
-                            let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
+                            let s3_key_manager =
+                                S3KeyManager::new(&sink_id, &connection_details.uri);
 
                             info!(%sink_id, %worker_id, "removing INCOMPLETE sentinel file");
-                            match mz_aws_util::s3::delete_object(
-                                &client,
-                                &s3_key_manager.bucket,
-                                &s3_key_manager.incomplete_sentinel_key(),
-                            )
+                            match mz_ore::task::spawn(|| "s3:delete_sentinel", {
+                                let client = client.clone();
+                                let bucket = s3_key_manager.bucket.clone();
+                                let key = s3_key_manager.incomplete_sentinel_key();
+                                async move {
+                                    mz_aws_util::s3::delete_object(&client, &bucket, &key).await
+                                }
+                            })
+                            .wait_and_assert_finished()
                             .await
                             {
                                 Ok(_) => break,
                                 Err(e) => {
-                                    info!(%sink_id, %worker_id, "error removing sentinel file: {}", e);
+                                    info!(%sink_id, %worker_id,
+                                          "error removing sentinel file: {}", e);
                                     res = Err(e.to_string());
                                     break;
                                 }
@@ -173,9 +179,10 @@ pub fn copy_to<G, F>(
                     // ended before all workers sent a completion signal, so leave
                     // the INCOMPLETE sentinel file in place.
                     None => {
-                        info!(%sink_id, %worker_id, "workers exited without successfully uploading");
-                        break
-                    },
+                        info!(%sink_id, %worker_id,
+                              "workers exited without successfully uploading");
+                        break;
+                    }
                 }
             }
         }
@@ -236,11 +243,13 @@ async fn handle_inputs_and_upload(
         info!(%sink_id, %worker_id, "verifying S3 bucket path is empty");
 
         let client = mz_aws_util::s3::new_client(sdk_config);
-        match mz_aws_util::s3::list_bucket_path(
-            &client,
-            &s3_key_manager.bucket,
-            s3_key_manager.path_prefix(),
-        )
+        match mz_ore::task::spawn(|| "s3:list_path", {
+            let client = client.clone();
+            let bucket = s3_key_manager.bucket.clone();
+            let prefix = s3_key_manager.path_prefix().to_string();
+            async move { mz_aws_util::s3::list_bucket_path(&client, &bucket, &prefix).await }
+        })
+        .wait_and_assert_finished()
         .await
         {
             Ok(Some(files)) => {
@@ -262,12 +271,13 @@ async fn handle_inputs_and_upload(
         // Write an INCOMPLETE sentinel file to the S3 bucket path to indicate that
         // the upload is in progress and is not yet complete.
         info!(%sink_id, %worker_id, "uploading INCOMPLETE sentinel file");
-        mz_aws_util::s3::upload_object(
-            &client,
-            &s3_key_manager.bucket,
-            &s3_key_manager.incomplete_sentinel_key(),
-            vec![],
-        )
+        mz_ore::task::spawn(|| "s3:upload_sentinel", {
+            let client = client.clone();
+            let bucket = s3_key_manager.bucket.clone();
+            let key = s3_key_manager.incomplete_sentinel_key();
+            async move { mz_aws_util::s3::upload_object(&client, &bucket, &key, vec![]).await }
+        })
+        .wait_and_assert_finished()
         .await?;
 
         // Send the signal to all workers to start the upload.
