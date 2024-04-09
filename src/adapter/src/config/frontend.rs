@@ -31,7 +31,7 @@ pub struct SystemParameterFrontend {
     /// This scopes down queries to a specific key.
     ld_ctx: ld::Context,
     /// A map from parameter names to LaunchDarkly feature keys
-    /// to use when populating the the [SynchronizedParameters]
+    /// to use when populating the [SynchronizedParameters]
     /// instance in [SystemParameterFrontend::pull].
     ld_key_map: BTreeMap<String, String>,
     /// Frontend metrics.

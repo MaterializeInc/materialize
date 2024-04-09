@@ -2079,7 +2079,7 @@ impl RowPacker<'_> {
     /// packer will produce an invalid row, the unpacking of which may
     /// trigger undefined behavior!
     ///
-    /// To find the byte offset of a datum boundary, inspect the the packer's
+    /// To find the byte offset of a datum boundary, inspect the packer's
     /// byte length by calling `packer.data().len()` after pushing the desired
     /// number of datums onto the packer.
     pub unsafe fn truncate(&mut self, pos: usize) {

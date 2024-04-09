@@ -338,7 +338,7 @@ impl Refines<()> for GtidState {
     fn summarize(_path: Self::Summary) -> <() as Timestamp>::Summary {}
 }
 
-/// This type is used to represent the the progress of each MySQL GTID 'source_id' in the
+/// This type is used to represent the progress of each MySQL GTID 'source_id' in the
 /// ingestion dataflow.
 ///
 /// A MySQL GTID consists of a source_id (UUID) and transaction_id (non-zero u64).

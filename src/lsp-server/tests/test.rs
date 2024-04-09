@@ -124,7 +124,7 @@ mod tests {
         test_query(query, None, req_client, resp_client).await;
     }
 
-    /// Asserts the the server can return completions varying the context
+    /// Asserts the server can return completions varying the context
     async fn test_completion(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
         let request = format!(
             r#"{{

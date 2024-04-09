@@ -31,7 +31,7 @@ pub struct PlanTrace<T> {
     /// A path of segments identifying the spans in the current ancestor-or-self
     /// chain. The current path is used when accumulating new `entries`.
     path: Mutex<String>,
-    /// The the first time when entering a span (None no span was entered yet).
+    /// The first time when entering a span (None no span was entered yet).
     start: Mutex<Option<std::time::Instant>>,
     /// A path of times at which the spans in the current ancestor-or-self chain
     /// were started. The duration since the last time is used when accumulating

@@ -1271,7 +1271,7 @@ fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErr
             .expect("reducing precision below max always succeeds");
         let mut integral_check = b.clone();
 
-        // `reduce` rounds to the the context's final digit when the number of
+        // `reduce` rounds to the context's final digit when the number of
         // digits in its argument exceeds its precision. We've contrived that to
         // happen by shrinking the context's precision by 1.
         cx.reduce(&mut integral_check);

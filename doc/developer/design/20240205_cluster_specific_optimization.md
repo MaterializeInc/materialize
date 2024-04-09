@@ -149,7 +149,7 @@ environment will be:
     enable the tested feature in the `CREATE CLUSTER` definition.
 3.  Create an `UNBILLED` replica for that cluster.
 4.  Ask the customer to replicate (a subset of) dataflow-backed catalog items
-    defined on the the original cluster to the experiment cluster.
+    defined on the original cluster to the experiment cluster.
 5.  Monitor and record observed differences between the dataflows running in the
     original cluster and the (modified) dataflows running in the experiment
     cluster.
@@ -169,7 +169,7 @@ Remember to document any dependencies that may need to break or change as a
 result of this work.
 -->
 
-In order to facilitate this workflow, we propose the the following changes
+In order to facilitate this workflow, we propose the following changes
 (discussed in detail below):
 
 -   Extensions to the `CREATE CLUSTER` syntax.

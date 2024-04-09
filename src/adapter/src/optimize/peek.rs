@@ -275,7 +275,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // Set the `as_of` and `until` timestamps for the dataflow.
         df_desc.set_as_of(timestamp_ctx.antichain());
 
-        // Use the the opportunity to name an `until` frontier that will prevent
+        // Use the opportunity to name an `until` frontier that will prevent
         // work we needn't perform. By default, `until` will be
         // `Antichain::new()`, which prevents no updates and is safe.
         //

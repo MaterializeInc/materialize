@@ -90,7 +90,7 @@ By default, the `csv.rs` source will form a `Datum::String` for each of the pres
 The source implementation can
 1. use `mfp.demand()` to determine which columns are required by the `mfp` instance,
 2. use `mfp.permute()` to change the column references to point to a new, dense set of column identifiers, and then
-3. only assemble values for those referenced columns and apply `mfp` to the the result.
+3. only assemble values for those referenced columns and apply `mfp` to the result.
 
 This idiom is especially valuable in situations where input columns may be more complicated, for example Avro metadata, which can involve expensive decoding to prepare, but which can be entirely skipped if none of the contents are referenced.
 
