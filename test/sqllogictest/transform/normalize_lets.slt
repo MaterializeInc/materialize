@@ -31,6 +31,8 @@ Explained Query:
               Constant
                 - (2)
 
+Target cluster: mz_introspection
+
 EOF
 
 ## Test a nested recursive query.
@@ -61,6 +63,8 @@ Explained Query:
           Union
             Get l1
             Get l0
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -101,6 +105,8 @@ Explained Query:
                 Filter (#0 > -5)
                   Get l0
 
+Target cluster: mz_introspection
+
 EOF
 
 statement ok
@@ -139,6 +145,8 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0 < 27))
 
+Target cluster: quickstart
+
 EOF
 
 ## Test consolidation of not-really nested recursive query.
@@ -161,6 +169,8 @@ Explained Query:
       Union
         Get l0
         Get l0
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -190,6 +200,8 @@ Explained Query:
     cte l0 =
       Distinct project=[#0] monotonic
         Get l0
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -263,6 +275,8 @@ Explained Query:
                 Filter (#0) IS NOT NULL
                   Get l0
 
+Target cluster: quickstart
+
 EOF
 
 #### Tests for RECURSION LIMIT
@@ -290,6 +304,8 @@ Explained Query:
           Constant
             - (1)
 
+Target cluster: mz_introspection
+
 EOF
 
 ## RECURSION LIMIT -- RETURN AT RECURSION LIMIT
@@ -315,6 +331,8 @@ Explained Query:
           Constant
             - (1)
 
+Target cluster: mz_introspection
+
 EOF
 
 ## RECURSION LIMIT -- ERROR AT RECURSION LIMIT
@@ -339,6 +357,8 @@ Explained Query:
               Get l0
           Constant
             - (1)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -369,6 +389,8 @@ Explained Query:
     cte [recursion_limit=5] l0 =
       Distinct project=[#0] monotonic
         Get l0
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -401,6 +423,8 @@ Explained Query:
       Distinct project=[#0] monotonic
         Get l0
 
+Target cluster: mz_introspection
+
 EOF
 
 ## ITERATION RECURSION -- consolidation of not-really nested recursive query.
@@ -424,6 +448,8 @@ Explained Query:
       Union
         Get l0
         Get l0
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -455,6 +481,8 @@ Explained Query:
           Union
             Get l1
             Get l0
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -525,6 +553,8 @@ Explained Query:
               ArrangeBy keys=[[#0]]
                 Filter (#0) IS NOT NULL
                   Get l0
+
+Target cluster: quickstart
 
 EOF
 

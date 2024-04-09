@@ -881,6 +881,8 @@ Explained Query:
     TopK limit=10000
       ReadStorage materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 statement ok
@@ -897,6 +899,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t_idx (fast path limit)
 
+Target cluster: quickstart
+
 EOF
 
 # Same as above, but the finishing would need to be modified (merge the TopK into the finishing), because the TopK's
@@ -911,6 +915,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -936,6 +942,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # A negative example for the TopK removal: The TopK has a different ordering key, so it shouldn't be removed.
@@ -949,6 +957,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -965,6 +975,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Trivial finishing. We could merge the TopK into the finishing, but we don't currently do this.
@@ -977,6 +989,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -993,6 +1007,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # 3 nested LIMITs, so TopK fusion is needed to be able to go to fast path.
@@ -1005,6 +1021,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t_idx (fast path limit)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1020,5 +1038,7 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF

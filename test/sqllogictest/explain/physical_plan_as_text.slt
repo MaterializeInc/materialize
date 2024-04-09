@@ -110,6 +110,8 @@ SELECT 1 / 0
 Explained Query:
   Error "division by zero"
 
+Target cluster: quickstart
+
 EOF
 
 # Test constant with two elements.
@@ -121,6 +123,8 @@ Explained Query:
   Constant
     - ((1, 2) x 2)
     - (3, 4)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -135,6 +139,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t_a_idx (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -154,6 +160,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # PassArrangements plan (identity transform on a raw input).
@@ -164,6 +172,8 @@ SELECT * FROM u
 Explained Query:
   Get::PassArrangements materialize.public.u
     raw=true
+
+Target cluster: quickstart
 
 EOF
 
@@ -184,6 +194,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # GetCollection plan (linear transform of a raw input).
@@ -198,6 +210,8 @@ Explained Query:
 Source materialize.public.u
   project=(#2, #3)
   map=((#0 + #1), 1)
+
+Target cluster: quickstart
 
 EOF
 
@@ -227,6 +241,8 @@ materialize.public.ov:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # MonotonicTopK plan.
@@ -246,6 +262,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -276,6 +294,8 @@ Source materialize.public.mv
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -326,6 +346,8 @@ Source materialize.public.mv
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test Mfp.
@@ -373,6 +395,8 @@ Source materialize.public.mv
 Used Indexes:
   - materialize.public.t_a_idx (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # Test FlatMap.
@@ -392,6 +416,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -413,6 +439,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -442,6 +470,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -493,6 +523,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test Reduce::Hierarchical (with GROUP BY).
@@ -517,6 +549,8 @@ materialize.public.hierarchical_group_by_mv:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -543,6 +577,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -591,6 +627,8 @@ materialize.public.hierarchical_global_mv:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -641,6 +679,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test Reduce::Basic (with GROUP BY).
@@ -670,6 +710,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -722,6 +764,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test Reduce::Collated (with GROUP BY).
@@ -755,6 +799,8 @@ materialize.public.collated_group_by_mv:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -790,6 +836,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -847,6 +895,8 @@ materialize.public.collated_global_mv:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -906,6 +956,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -922,6 +974,8 @@ materialize.public.t_a_idx:
     types=[integer?, integer?]
     Get::PassArrangements materialize.public.t
       raw=true
+
+Target cluster: quickstart
 
 EOF
 
@@ -951,6 +1005,8 @@ materialize.public.ov:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test EXPLAIN INDEX for an indexed view (based on a prior index)
@@ -972,6 +1028,8 @@ materialize.public.ov_b_idx:
 
 Used Indexes:
   - materialize.public.ov_a_idx (*** full scan ***, index export)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1061,6 +1119,8 @@ Source materialize.public.v
 
 Used Indexes:
   - materialize.public.t_a_idx (delta join 1st input (full scan))
+
+Target cluster: quickstart
 
 EOF
 
@@ -1159,6 +1219,8 @@ Used Indexes:
   - materialize.public.u_c_idx (*** full scan ***)
   - materialize.public.v_e_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test Join::Delta (star).
@@ -1230,6 +1292,8 @@ Used Indexes:
   - materialize.public.u_c_idx (delta join lookup)
   - materialize.public.v_e_idx (delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # Test #17348.
@@ -1268,6 +1332,8 @@ Explained Query:
 
 Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1317,6 +1383,8 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -1345,6 +1413,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1376,6 +1446,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1423,5 +1495,7 @@ Source materialize.public.mv
 
 Used Indexes:
   - materialize.public.t_a_idx (lookup)
+
+Target cluster: quickstart
 
 EOF

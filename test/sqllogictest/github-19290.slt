@@ -26,6 +26,8 @@ Explained Query:
       Get::PassArrangements materialize.public.lineitem
         raw=true
 
+Target cluster: quickstart
+
 EOF
 
 statement ok
@@ -42,5 +44,7 @@ Explained Query:
     TopK::MonotonicTop1 group_by=[#3] order_by=[#0 asc nulls_last] must_consolidate
       Get::PassArrangements materialize.public.lineitem
         raw=true
+
+Target cluster: quickstart
 
 EOF

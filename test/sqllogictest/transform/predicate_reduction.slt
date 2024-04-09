@@ -32,6 +32,8 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0 = 0))
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -43,6 +45,8 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -67,6 +71,8 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0 = 1))
 
+Target cluster: quickstart
+
 EOF
 
 query II
@@ -88,6 +94,8 @@ Filter (((boolean_to_integer((#0) IS NULL) - 1) = 0) AND ((#0) IS NULL OR ((bool
       - ()
     Get materialize.public.t1 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -95,6 +103,8 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE ((f1 is null)::
 ----
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 EOF
 
@@ -120,6 +130,8 @@ Source materialize.public.t2
   filter=(#2 AND case when #2 then ((1 / #0) > 0) else false end)
   map=(((#0 + #1) > 0))
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -134,6 +146,8 @@ Explained Query:
 Source materialize.public.t2
   filter=(#2 AND case when #2 then ((1 / #0) > 0) else false end)
   map=(((#0 + #1) > 0))
+
+Target cluster: quickstart
 
 EOF
 

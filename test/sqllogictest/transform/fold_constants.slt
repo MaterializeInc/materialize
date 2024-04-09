@@ -41,6 +41,8 @@ Explained Query:
         Constant // { arity: 0 }
           - (() x 1000000000)
 
+Target cluster: quickstart
+
 EOF
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/16195
@@ -113,6 +115,8 @@ Explained Query:
             - (51, 53)
             - (52, 54)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -141,5 +145,7 @@ Explained Query:
           Project (#1) // { arity: 1 }
             ReadStorage materialize.public.edges // { arity: 2 }
           Get l0 // { arity: 1 }
+
+Target cluster: quickstart
 
 EOF

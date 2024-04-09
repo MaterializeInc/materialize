@@ -76,6 +76,8 @@ Explained Query:
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 query II

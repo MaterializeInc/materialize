@@ -63,6 +63,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 query II
@@ -95,6 +97,8 @@ Source materialize.public.t1
   filter=((#0) IS NOT NULL)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -143,6 +147,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -185,6 +191,8 @@ Explained Query:
 
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -229,6 +237,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # count is never null, predicate removed
@@ -239,6 +249,8 @@ Explained Query:
   Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
     ReadStorage materialize.public.t1 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -248,6 +260,8 @@ Explained Query:
   Filter (#1) IS NOT NULL // { arity: 2 }
     Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -276,6 +290,8 @@ Source materialize.public.t1
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # outer-to-inner-join conversion allowed
@@ -302,6 +318,8 @@ Source materialize.public.t1
   filter=((#0) IS NOT NULL)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -350,6 +368,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # outer-to-inner-join conversion allowed
@@ -375,6 +395,8 @@ Source materialize.public.t1
   filter=((#0) IS NOT NULL)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -402,6 +424,8 @@ Source materialize.public.t1
   filter=((#0) IS NOT NULL)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -450,6 +474,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # outer join to inner join conversion not allowed
@@ -494,6 +520,8 @@ Explained Query:
 
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -540,6 +568,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # outer join to inner join conversion allowed
@@ -566,6 +596,8 @@ Source materialize.public.t1
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # outer join to inner join conversion allowed
@@ -590,6 +622,8 @@ Source materialize.public.t1
   filter=((#0) IS NOT NULL)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -660,6 +694,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -701,6 +737,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # if the count is removed, the outer join can be safely converted into an inner join
@@ -726,6 +764,8 @@ Source materialize.public.t1
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # regression test for #7047
@@ -749,6 +789,8 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((0 = integer_to_bigint(#0)))
+
+Target cluster: quickstart
 
 EOF
 
@@ -849,6 +891,8 @@ Explained Query:
             Filter (#1 = 6) // { arity: 2 }
               ReadStorage materialize.public.t3 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 statement ok
@@ -911,6 +955,8 @@ Explained Query:
             ReadStorage materialize.public.t2 // { arity: 1 }
           ArrangeBy keys=[[]] // { arity: 1 }
             ReadStorage materialize.public.t1 // { arity: 1 }
+
+Target cluster: quickstart
 
 EOF
 

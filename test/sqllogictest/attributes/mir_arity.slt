@@ -85,6 +85,8 @@ Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
   - materialize.public.u_d_idx (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 # a reduce with an aggregation.
@@ -97,6 +99,8 @@ Explained Query:
   Project (#1, #2) // { arity: 2 }
     Reduce group_by=[(#0 % 5)] aggregates=[sum((#0 * #1)), max(#1)] // { arity: 3 }
       ReadStorage materialize.public.v // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -123,6 +127,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.u_d_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -166,5 +172,7 @@ Source materialize.public.v
 
 Used Indexes:
   - materialize.public.u_d_idx (*** full scan ***, differential join)
+
+Target cluster: quickstart
 
 EOF

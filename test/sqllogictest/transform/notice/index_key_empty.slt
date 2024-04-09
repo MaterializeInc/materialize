@@ -41,6 +41,8 @@ materialize.public.t_idx_empty_key:
   ArrangeBy keys=[[]]
     ReadStorage materialize.public.t
 
+Target cluster: quickstart
+
 Notices:
   - Notice: Empty index key. The index will be completely skewed to one worker thread, which can lead to performance problems.
     Hint: CREATE DEFAULT INDEX is almost always better than an index with an empty key. (Except for cross joins with big inputs, which are better to avoid anyway.)

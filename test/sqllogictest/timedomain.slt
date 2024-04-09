@@ -218,6 +218,8 @@ Explained Query:
 Source mz_catalog.mz_views
   filter=((#2 = "u3"))
 
+Target cluster: quickstart
+
 EOF
 
 statement ok

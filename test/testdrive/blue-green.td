@@ -86,6 +86,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.blue.mv1_primary_idx (*** full scan ***)
 
+Target cluster: blue_serving
+
 > SET cluster TO quickstart;
 
 # Spin up a new stack.
@@ -109,6 +111,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.green.mv1_primary_idx (*** full scan ***)
+
+Target cluster: green_serving
 
 > SET cluster to defaut;
 
@@ -145,6 +149,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.blue.mv1_primary_idx (*** full scan ***)
 
+Target cluster: blue_serving
+
 > SELECT name FROM mz_schemas WHERE id = '${og-green-schema-id}';
 "blue"
 
@@ -170,3 +176,5 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.blue.mv1_primary_idx (*** full scan ***)
+
+Target cluster: blue_serving

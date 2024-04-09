@@ -75,6 +75,8 @@ Explained Query:
         Get::PassArrangements materialize.public.t
           raw=true
 
+Target cluster: quickstart
+
 EOF
 
 # Mfp on non-monotonic Get, must_consolidate
@@ -135,6 +137,8 @@ Explained Query:
 Source materialize.public.t
   filter=((1 = (#0 % 2)))
 
+Target cluster: quickstart
+
 EOF
 
 # FlatMap on non-monotonic Get, must_consolidate
@@ -193,6 +197,8 @@ Explained Query:
             project=(#1, #2)
           Get::PassArrangements materialize.public.t
             raw=true
+
+Target cluster: quickstart
 
 EOF
 
@@ -264,6 +270,8 @@ Explained Query:
           Get::Collection materialize.public.t
             filter=((0 = (#0 % 2)))
             raw=true
+
+Target cluster: quickstart
 
 EOF
 
@@ -341,6 +349,8 @@ Explained Query:
                 Get::Collection materialize.public.t
                   filter=((0 = (#0 % 2)))
                   raw=true
+
+Target cluster: quickstart
 
 EOF
 
@@ -437,6 +447,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_idx (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -541,6 +553,8 @@ Explained Query:
 Source materialize.public.t
   filter=((#0 = 5) AND (#1) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # Reduce, with aggregates, is an enforcer, no must_consolidate
@@ -604,6 +618,8 @@ Explained Query:
           Get::PassArrangements materialize.public.t
             raw=true
 
+Target cluster: quickstart
+
 EOF
 
 # Reduce, no aggregates, is an enforcer, no must_consolidate
@@ -662,6 +678,8 @@ Explained Query:
             project=(#1, #0)
           Get::PassArrangements materialize.public.t
             raw=true
+
+Target cluster: quickstart
 
 EOF
 
@@ -784,6 +802,8 @@ Explained Query:
 Source materialize.public.t
   filter=((6 = (#0 + 1)))
 
+Target cluster: quickstart
+
 EOF
 
 # Top-1 is an enforcer, no must_consolidate
@@ -841,6 +861,8 @@ Explained Query:
         TopK::MonotonicTop1 group_by=[#0] order_by=[#1 desc nulls_first] must_consolidate
           Get::PassArrangements materialize.public.t
             raw=true
+
+Target cluster: quickstart
 
 EOF
 
@@ -902,6 +924,8 @@ Explained Query:
           Get::PassArrangements materialize.public.t
             raw=true
 
+Target cluster: quickstart
+
 EOF
 
 # Top-1 can have no must_consolidate, not only min/max
@@ -948,6 +972,8 @@ Explained Query:
             project=(#1)
           Get::PassArrangements materialize.public.t
             raw=true
+
+Target cluster: quickstart
 
 EOF
 
@@ -1031,6 +1057,8 @@ Explained Query:
                 Get::PassArrangements materialize.public.t
                   raw=true
 
+Target cluster: quickstart
+
 EOF
 
 # Monotonic constant, no must_consolidate
@@ -1082,6 +1110,8 @@ Explained Query:
         FlatMap generate_series(1, 20000, 1)
           Constant
             - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -1165,5 +1195,7 @@ Explained Query:
               Get::Collection l0
                 filter=((#0 > 20000))
                 raw=true
+
+Target cluster: quickstart
 
 EOF

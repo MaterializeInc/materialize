@@ -38,6 +38,8 @@ Explained Query:
 Source materialize.public.foo
   filter=((#0 = 5))
 
+Target cluster: quickstart
+
 EOF
 
 query TR
@@ -58,6 +60,8 @@ Explained Query:
 
 Source materialize.public.foo
   filter=((#0 = 5))
+
+Target cluster: quickstart
 
 EOF
 
@@ -88,6 +92,8 @@ Source materialize.public.foo
 Source materialize.public.bar
   filter=((3 = abs(#0)))
 
+Target cluster: quickstart
+
 EOF
 
 query ITRITR
@@ -113,6 +119,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.foo_idx (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query TR
@@ -131,6 +139,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.foo_idx (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -156,6 +166,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.foo_idx2 (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 statement ok
@@ -177,6 +189,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.foo_idx3 (lookup)
   - materialize.public.bar_idx (differential join)
+
+Target cluster: quickstart
 
 EOF
 

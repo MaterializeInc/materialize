@@ -378,6 +378,8 @@ INSERT INTO table_a VALUES (5, 'five', 5);
 Explained Query (fast path):
   Constant <empty>
 
+Target cluster: quickstart
+
 # Can add tables with text columns
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_f WITH (TEXT COLUMNS [table_f.f2, table_f.f2]);
 contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.table_f.f2

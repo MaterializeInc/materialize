@@ -482,6 +482,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.message_messageid (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -580,6 +582,8 @@ Used Indexes:
   - materialize.public.message_hastag_tag_tagid (delta join lookup)
   - materialize.public.message_messageid (delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -670,6 +674,8 @@ Used Indexes:
   - materialize.public.message_hastag_tag_tagid (delta join lookup)
   - materialize.public.message_messageid (delta join 1st input (full scan))
   - materialize.public.message_containerforumid (delta join 1st input (full scan))
+
+Target cluster: quickstart
 
 EOF
 
@@ -822,6 +828,8 @@ Used Indexes:
   - materialize.public.message_creatorpersonid (*** full scan ***, delta join lookup)
   - materialize.public.top100popularforumsq04_id (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -928,6 +936,8 @@ Used Indexes:
   - materialize.public.message_hastag_tag_tagid (delta join lookup)
   - materialize.public.person_likes_message_personid (*** full scan ***)
   - materialize.public.message_messageid (*** full scan ***, delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1059,6 +1069,8 @@ Used Indexes:
   - materialize.public.message_messageid (delta join lookup)
   - materialize.public.popularityscoreq06_person2id (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -1163,6 +1175,8 @@ Used Indexes:
   - materialize.public.person_likes_message_messageid (differential join)
   - materialize.public.message_messageid (delta join lookup)
   - materialize.public.popularityscoreq06_person2id (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1274,6 +1288,8 @@ Used Indexes:
   - materialize.public.message_messageid (delta join lookup)
   - materialize.public.popularityscoreq06_person2id (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -1372,6 +1388,8 @@ Used Indexes:
   - materialize.public.message_hastag_tag_tagid (differential join, delta join lookup)
   - materialize.public.message_messageid (delta join lookup)
   - materialize.public.message_parentmessageid (delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1561,6 +1579,8 @@ Used Indexes:
   - materialize.public.message_messageid (delta join lookup)
   - materialize.public.message_creatorpersonid (delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -1612,6 +1632,8 @@ Used Indexes:
   - materialize.public.person_id (delta join 1st input (full scan))
   - materialize.public.message_messageid (*** full scan ***, delta join lookup)
   - materialize.public.message_creatorpersonid (delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1799,6 +1821,8 @@ Used Indexes:
   - materialize.public.message_hastag_tag_tagid (delta join lookup, delta join 1st input (full scan))
   - materialize.public.message_messageid (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -1892,6 +1916,8 @@ Used Indexes:
   - materialize.public.city_id (delta join lookup)
   - materialize.public.city_partofcountryid (delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -1969,6 +1995,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.person_id (*** full scan ***, differential join)
   - materialize.public.message_rootpostlanguage (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -2051,6 +2079,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.person_id (*** full scan ***)
   - materialize.public.message_messageid (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -2227,6 +2257,8 @@ Used Indexes:
   - materialize.public.person_likes_message_messageid (delta join lookup)
   - materialize.public.message_messageid (delta join lookup)
   - materialize.public.message_creatorpersonid (differential join, delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -2447,6 +2479,8 @@ Used Indexes:
   - materialize.public.message_messageid (differential join)
   - materialize.public.message_parentmessageid (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -2627,6 +2661,8 @@ Used Indexes:
   - materialize.public.person_knows_person_person1id (*** full scan ***, delta join 1st input (full scan))
   - materialize.public.person_knows_person_person2id (delta join 1st input (full scan))
   - materialize.public.message_messageid (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -3053,6 +3089,8 @@ Used Indexes:
   - materialize.public.person_knows_person_person2id (delta join 1st input (full scan))
   - materialize.public.message_messageid (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -3259,6 +3297,8 @@ Used Indexes:
   - materialize.public.message_hastag_tag_tagid (differential join)
   - materialize.public.message_messageid (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -3387,6 +3427,8 @@ Used Indexes:
   - materialize.public.message_hastag_tag_tagid (differential join)
   - materialize.public.message_messageid (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -3480,6 +3522,8 @@ Used Indexes:
   - materialize.public.person_hasinterest_tag_tagid (*** full scan ***)
   - materialize.public.person_knows_person_person1id (*** full scan ***, delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -3548,6 +3592,8 @@ materialize.public.pathq19:
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (delta join lookup)
   - materialize.public.message_messageid (*** full scan ***, delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -3672,6 +3718,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.person_locationcityid (lookup)
   - materialize.public.pathq19_src (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -3857,6 +3905,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.person_locationcityid (lookup)
   - materialize.public.pathq19_src (delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -4095,6 +4145,8 @@ Used Indexes:
   - materialize.public.person_locationcityid (lookup)
   - materialize.public.pathq19_src (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 ######################################################################
@@ -4219,6 +4271,8 @@ Used Indexes:
   - materialize.public.company_id (differential join)
   - materialize.public.pathq20_src (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 # without the unused src
@@ -4320,6 +4374,8 @@ Used Indexes:
   - materialize.public.person_workat_company_companyid (differential join)
   - materialize.public.company_id (differential join)
   - materialize.public.pathq20_src (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -4432,6 +4488,8 @@ Used Indexes:
   - materialize.public.person_workat_company_companyid (differential join)
   - materialize.public.company_id (differential join)
   - materialize.public.pathq20_src (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -4744,5 +4802,7 @@ Used Indexes:
   - materialize.public.person_workat_company_companyid (differential join)
   - materialize.public.company_id (differential join)
   - materialize.public.pathq20_src (differential join, delta join lookup)
+
+Target cluster: quickstart
 
 EOF

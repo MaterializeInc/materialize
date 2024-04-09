@@ -137,6 +137,8 @@ With
         - ()
       Get materialize.left_joins_raw.facts // { arity: 9 }
 
+Target cluster: quickstart
+
 EOF
 
 # An optimized lowering strategy for outer joins with equijoin ON predicates.
@@ -191,6 +193,8 @@ With
       Constant // { arity: 0 }
         - ()
       Get materialize.left_joins_raw.facts // { arity: 9 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -251,6 +255,8 @@ With
         - ()
       Get materialize.left_joins.outer // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 # ON predicates with non-trivial equi-join conjuncts are planned using the
@@ -308,6 +314,8 @@ With
       Constant // { arity: 0 }
         - ()
       Get materialize.left_joins.outer // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -367,6 +375,8 @@ With
       Constant // { arity: 0 }
         - ()
       Get materialize.left_joins.outer // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -431,6 +441,8 @@ With
         - ()
       Get materialize.left_joins.outer // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 # ON predicates with at least one equi-join conjunct are planned using the
@@ -493,6 +505,8 @@ With
       Constant // { arity: 0 }
         - ()
       Get materialize.left_joins.outer // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -557,6 +571,8 @@ With
       Constant // { arity: 0 }
         - ()
       Get materialize.left_joins.outer // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -633,6 +649,8 @@ With
       Constant // { arity: 0 }
         - ()
       Get materialize.left_joins.outer // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -746,6 +764,8 @@ With
         - ()
       Get materialize.left_joins.outer // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 # The following tests are for the EXPLAIN override of this
@@ -806,6 +826,8 @@ Explained Query:
 Source materialize.left_joins_raw.dim01
   filter=((#2{dim01_d02} < 24))
 
+Target cluster: quickstart
+
 EOF
 
 # Define the above statement as a view.
@@ -864,6 +886,8 @@ Explained Query:
 Source materialize.left_joins_raw.dim01
   filter=((#2{dim01_d02} < 24))
 
+Target cluster: quickstart
+
 EOF
 
 # EXPLAIN a CREATE INDEX with the feature turned in the EXPLAIN config.
@@ -908,6 +932,8 @@ materialize.public.v:
 
 Source materialize.left_joins_raw.dim01
   filter=((#2{dim01_d02} < 24))
+
+Target cluster: quickstart
 
 EOF
 
@@ -962,5 +988,7 @@ materialize.public.mv:
 
 Source materialize.left_joins_raw.dim01
   filter=((#2{dim01_d02} < 24))
+
+Target cluster: quickstart
 
 EOF

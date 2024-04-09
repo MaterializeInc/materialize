@@ -179,6 +179,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.test5_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 > SELECT * FROM test5
 b  c
 ------
@@ -205,6 +207,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx1 (*** full scan ***)
+
+Target cluster: quickstart
 
 > SELECT * from test5
 b  c

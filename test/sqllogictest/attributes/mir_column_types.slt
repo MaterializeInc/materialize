@@ -38,6 +38,8 @@ Explained Query:
     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
       ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
 
+Target cluster: quickstart
+
 EOF
 
 # Union that does propagate a null
@@ -50,6 +52,8 @@ Explained Query:
       ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
       ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -70,6 +74,8 @@ Explained Query:
             ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
       Constant // { types: "(bigint, text, date?)" }
         - (1, "hello", null)
+
+Target cluster: quickstart
 
 EOF
 
@@ -110,6 +116,8 @@ Explained Query:
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -145,5 +153,7 @@ Explained Query:
 
 Source materialize.public.v
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF

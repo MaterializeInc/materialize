@@ -128,6 +128,8 @@ Explained Query:
 Source materialize.public.preferred_fruits
   filter=((#0{person_id}) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # Outer context is a singleton literal collection.
@@ -170,6 +172,8 @@ Explained Query:
 Source materialize.public.preferred_fruits
   filter=((#0{person_id} = 1))
 
+Target cluster: quickstart
+
 EOF
 
 # More complex limit expression.
@@ -200,6 +204,8 @@ Explained Query:
     TopK group_by=[#0{state}] limit=integer_to_bigint((ascii(substr(#0{state}, 1, 1)) - 64)) // { arity: 2 }
       Project (#1, #0) // { arity: 2 }
         ReadStorage materialize.public.cities // { arity: 3 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -286,6 +292,8 @@ Explained Query:
 Source materialize.public.limits
   filter=((#0{sl}) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # Limit is a cast.
@@ -319,6 +327,8 @@ Explained Query:
       TopK limit=1 // { arity: 1 }
         Project (#0) // { arity: 1 }
           ReadStorage materialize.public.cities // { arity: 3 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -380,6 +390,8 @@ Explained Query:
       Project (#0, #1) // { arity: 2 }
         ReadStorage materialize.public.cities // { arity: 3 }
 
+Target cluster: quickstart
+
 EOF
 
 # Corner cases
@@ -401,6 +413,8 @@ SELECT s.state, c.name FROM
 ----
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 EOF
 
@@ -482,6 +496,8 @@ Explained Query:
     ArrangeBy keys=[[]] // { arity: 1 }
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.cities // { arity: 3 }
+
+Target cluster: quickstart
 
 EOF
 

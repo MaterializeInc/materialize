@@ -51,6 +51,8 @@ Explained Query:
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 ## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
@@ -90,6 +92,8 @@ Explained Query:
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -132,5 +136,7 @@ Explained Query:
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF

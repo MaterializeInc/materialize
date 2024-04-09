@@ -47,6 +47,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
 
+Target cluster: quickstart
+
 Notices:
   - Notice: Index materialize.public.idx_t1_a_b on t1(a, b) is too wide to use for literal equalities `a IN (1, 2)`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (a).
@@ -79,6 +81,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query IT rowsort
@@ -101,6 +105,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -135,6 +141,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -201,6 +209,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # `a = NULL` should NOT find the NULL in the table.
@@ -215,6 +225,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -236,6 +248,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -259,6 +273,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query IT
@@ -280,6 +296,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -311,6 +329,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t2_a_b_c (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -344,6 +364,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query IT
@@ -366,6 +388,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -393,6 +417,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t1_aa (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query I
@@ -414,6 +440,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_aa (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -440,6 +468,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_aa (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -468,6 +498,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t2_a (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -522,6 +554,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t1_b (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # More tricky tests for `remove_literal_constraints`
@@ -546,6 +580,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t1_b (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query IT
@@ -566,6 +602,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -590,6 +628,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -624,6 +664,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # Impossible predicates (exercise `remove_impossible_or_args`)
@@ -635,6 +677,8 @@ WHERE a = 3 AND a = 5
 Explained Query (fast path):
   Constant <empty>
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -643,6 +687,8 @@ WHERE a IN (1,2) AND a IN (3,4,5)
 ----
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 EOF
 
@@ -659,6 +705,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -671,6 +719,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -688,6 +738,8 @@ WHERE
 ----
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 EOF
 
@@ -717,6 +769,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.idx_t2_a (differential join)
   - materialize.public.idx_t1_b (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -752,6 +806,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.idx_t2_a (differential join)
   - materialize.public.idx_t1_b (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -790,6 +846,8 @@ Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
   - materialize.public.idx_t2_a (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query ITI rowsort
@@ -822,6 +880,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.foo_primary_idx (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -834,6 +894,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.foo_primary_idx (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -859,6 +921,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_foo_a (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query I rowsort
@@ -881,6 +945,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_foo_a (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query I rowsort
@@ -902,6 +968,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_foo_a (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -930,6 +998,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_foo_a_cast (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query IIIT rowsort
@@ -953,6 +1023,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_foo_v_cast (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -979,6 +1051,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_foo_a (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query IIIT rowsort
@@ -1004,6 +1078,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_foo_v (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query IIIT rowsort
@@ -1021,6 +1097,8 @@ WHERE a = 1000000;
 ----
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 EOF
 
@@ -1044,6 +1122,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t2_a_b_c (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/15696
@@ -1064,6 +1144,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.bar_expr_idx (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1091,6 +1173,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t3i0 (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query R rowsort
@@ -1114,6 +1198,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t3i0 (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query R rowsort
@@ -1135,6 +1221,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t3i0 (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1182,6 +1270,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.idx_t4_a_b_c (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1247,6 +1337,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.idx_t5_f1 (*** full scan ***, lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # Check literal constraints with LIMIT
@@ -1265,6 +1357,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1293,6 +1387,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1323,6 +1419,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
+
+Target cluster: quickstart
 
 EOF
 

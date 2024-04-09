@@ -50,6 +50,8 @@ Source materialize.public.foo
 Source materialize.public.bar
   filter=((#0 = 1))
 
+Target cluster: quickstart
+
 EOF
 
 query IIII
@@ -79,6 +81,8 @@ Source materialize.public.foo
   filter=((1 = (#0 % 2)))
 Source materialize.public.bar
   filter=((1 = (abs(#0) % 2)))
+
+Target cluster: quickstart
 
 EOF
 
@@ -114,6 +118,8 @@ Source materialize.public.foo
   filter=((#0 = 1))
 Source materialize.public.bar
   filter=((#0 = 1))
+
+Target cluster: quickstart
 
 EOF
 
@@ -164,6 +170,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.foo_idx (delta join 1st input (full scan))
   - materialize.public.bar_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -217,6 +225,8 @@ Used Indexes:
   - materialize.public.bar_idx (*** full scan ***)
   - materialize.public.baz_idx (delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query II
@@ -256,6 +266,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.foo_idx2 (differential join)
   - materialize.public.bar_idx2 (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -306,6 +318,8 @@ Used Indexes:
   - materialize.public.baz_idx (delta join lookup)
   - materialize.public.bar_idx2 (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query III
@@ -340,6 +354,8 @@ Used Indexes:
   - materialize.public.foo_idx (*** full scan ***)
   - materialize.public.bar_idx2 (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query II
@@ -370,6 +386,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.foo_idx (*** full scan ***)
   - materialize.public.bar_idx2 (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -417,6 +435,8 @@ Source materialize.public.baz
 Used Indexes:
   - materialize.public.foo_idx (*** full scan ***)
   - materialize.public.bar_idx2 (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -659,6 +679,8 @@ Used Indexes:
   - materialize.public.big_idx_j (delta join lookup)
   - materialize.public.big_idx_k (delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # IndexedFilter should
@@ -692,6 +714,8 @@ Used Indexes:
   - materialize.public.big_idx_a (delta join 1st input (full scan))
   - materialize.public.big_idx_c (delta join lookup)
   - materialize.public.big_idx_y (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -739,5 +763,7 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.big_idx_a (*** full scan ***, lookup)
+
+Target cluster: quickstart
 
 EOF

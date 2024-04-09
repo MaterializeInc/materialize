@@ -31,6 +31,8 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -44,6 +46,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -72,6 +76,8 @@ Explained Query:
           Get l0 // { arity: 3 }
           Map ((#0 % 2)) // { arity: 3 }
             ReadStorage materialize.public.t2 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -103,6 +109,8 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -157,5 +165,7 @@ Explained Query:
       Distinct project=[(#0 % 2)] // { arity: 1 }
         Project (#0) // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF

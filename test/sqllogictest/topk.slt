@@ -90,6 +90,8 @@ Explained Query:
     TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3 // { arity: 3 }
       ReadStorage materialize.public.cities // { arity: 3 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -117,6 +119,8 @@ Explained Query:
         TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3 // { arity: 3 }
           ReadStorage materialize.public.cities // { arity: 3 }
 
+Target cluster: quickstart
+
 EOF
 
 # Test that LIMIT 0 is optimized out
@@ -130,6 +134,8 @@ EXPLAIN WITH(arity, join implementations) SELECT state, COUNT(*) FROM (
 ----
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 EOF
 
@@ -150,6 +156,8 @@ Explained Query:
         Project (#1, #2) // { arity: 2 }
           ReadStorage materialize.public.cities // { arity: 3 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -163,5 +171,7 @@ Explained Query:
   Project (#1, #0) // { arity: 2 }
     TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 exp_group_size=1 // { arity: 3 }
       ReadStorage materialize.public.cities // { arity: 3 }
+
+Target cluster: quickstart
 
 EOF

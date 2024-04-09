@@ -107,4 +107,6 @@ Used Indexes:
   - materialize.public.i2 (delta join lookup)
   - materialize.public.i3 (delta join lookup)
 
+Target cluster: quickstart
+
 EOF

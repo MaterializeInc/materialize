@@ -83,6 +83,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.mv_counter_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 > SELECT 1
 1
 # Should return instantly since it only uses the index and we have selected serializable isolation

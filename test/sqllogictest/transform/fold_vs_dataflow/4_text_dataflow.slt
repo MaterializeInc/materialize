@@ -58,6 +58,8 @@ Explained Query:
                     Project ()
                       ReadStorage materialize.public.t_operator
 
+Target cluster: quickstart
+
 EOF
 
 # -------------------------------
@@ -129,5 +131,7 @@ Explained Query:
   Project (#6..=#22)
     Map ((#0 || #3), upper(#0), lower(#0), substr(#0, 1), replace(#0, #1, #2), position(#1, #0), split_string(#0, #1, 1), translate(#0, "C", "Z"), btrim(#4), ltrim(#4), btrim(#5), rtrim(#5), lpad(#0, 1), lpad(#0, 10), lpad(#0, 10, #1), regexp_match(#0, #1), regexp_match(#0, #2, "i"))
       ReadStorage materialize.public.t_using_dataflow_rendering
+
+Target cluster: quickstart
 
 EOF

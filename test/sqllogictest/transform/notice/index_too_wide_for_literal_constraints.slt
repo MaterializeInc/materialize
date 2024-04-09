@@ -44,6 +44,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
+Target cluster: quickstart
+
 Notices:
   - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `x = 5`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
@@ -67,6 +69,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
+Target cluster: quickstart
+
 Notices:
   - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `x = █`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
@@ -89,6 +93,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t6_idx_x_y (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # No notice
@@ -104,6 +110,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t6_idx_x_y_z (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -124,6 +132,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t6_idx_x (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # 2 notices. (No notice for the index on x, because it's not a subset).
@@ -139,6 +149,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Target cluster: quickstart
 
 Notices:
   - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 6`.
@@ -163,6 +175,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t6_idx_x (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # Notice only the (x,y,z) index.
@@ -178,6 +192,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Target cluster: quickstart
 
 Notices:
   - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `z = 7`.
@@ -201,6 +217,8 @@ materialize.public.mv1:
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Target cluster: quickstart
 
 Notices:
   - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 5`.
@@ -272,6 +290,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
+Target cluster: quickstart
+
 Notices:
   - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y IN (4, 8)`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
@@ -294,6 +314,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
+Target cluster: quickstart
+
 Notices:
   - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y IN (2, 5)`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y, z).
@@ -315,6 +337,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Target cluster: quickstart
 
 Notices:
   - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `z = 9`.
@@ -352,6 +376,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t1i2 (*** full scan ***)
+
+Target cluster: quickstart
 
 Notices:
   - Notice: Index materialize.public.t1i2 on t1(f2, f1) is too wide to use for literal equalities `f2 = 1`.

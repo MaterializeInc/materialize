@@ -45,4 +45,6 @@ Explained Query:
           Project (#0, #1) // { arity: 2 }
             Get l0 // { arity: 3 }
 
+Target cluster: quickstart
+
 EOF

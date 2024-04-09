@@ -39,6 +39,8 @@ Source materialize.public.x
 Source materialize.public.y
   filter=((#1) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 ## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
@@ -81,5 +83,7 @@ Source materialize.public.x
   filter=((#1) IS NOT NULL)
 Source materialize.public.y
   filter=((#1) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF

@@ -32,4 +32,6 @@ Explained Query:
         Map (row(#0, #1)) // { arity: 3 }
           ReadStorage materialize.public.t2 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF

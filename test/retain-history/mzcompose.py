@@ -170,6 +170,8 @@ def run_test_with_mv_on_table(c: Composition) -> None:
             Explained Query:
               ReadStorage materialize.public.retain_history_mv1
 
+            Target cluster: quickstart
+
             > SELECT mv1a.key, mv1b.key
               FROM retain_history_mv1 mv1a
               LEFT OUTER JOIN retain_history_mv1 mv1b

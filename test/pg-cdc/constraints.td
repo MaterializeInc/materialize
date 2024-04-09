@@ -66,9 +66,13 @@ ALTER TABLE unique_nullable REPLICA IDENTITY FULL;
 Explained Query (fast path):
   Constant <empty>
 
+Target cluster: quickstart
+
 ? EXPLAIN SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 #
 # Unique converted to keys
@@ -80,6 +84,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.pk_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 #
 # Unique converted to keys
 ? EXPLAIN SELECT DISTINCT f1, f2 FROM unique_not_null
@@ -89,6 +95,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.unique_not_null_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 #
 # Unique NOT converted to keys because values are nullable
@@ -100,3 +108,5 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.unique_nullable_primary_idx (*** full scan ***)
+
+Target cluster: quickstart

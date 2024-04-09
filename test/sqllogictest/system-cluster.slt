@@ -25,6 +25,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_databases_ind (*** full scan ***)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -38,6 +40,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_schemas_ind (*** full scan ***)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -49,6 +53,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_show_connections_ind (lookup)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -62,6 +68,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_tables_ind (lookup)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -73,6 +81,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_show_sources_ind (lookup)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -86,6 +96,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_views_ind (lookup)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -97,6 +109,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_show_materialized_views_ind (lookup)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -111,6 +125,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_materialized_views_ind (lookup)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -123,6 +139,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_show_indexes_ind (lookup)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -137,6 +155,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_indexes_ind (*** full scan ***)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -148,6 +168,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_show_sinks_ind (lookup)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -161,6 +183,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_types_ind (lookup)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -172,6 +196,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_show_all_objects_ind (lookup)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -187,6 +213,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_show_columns_ind (lookup)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -222,6 +250,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_cluster_replicas_ind (*** full scan ***)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -233,6 +263,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_show_cluster_replicas_ind (lookup)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -246,6 +278,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_secrets_ind (lookup)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -257,6 +291,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_indexes_ind (*** full scan ***)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -270,6 +306,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_roles_ind (*** full scan ***)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -281,6 +319,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_sources_ind (*** full scan ***)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -294,6 +334,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_sinks_ind (*** full scan ***)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -305,6 +347,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_materialized_views_ind (*** full scan ***)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -318,6 +362,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_object_dependencies_ind (*** full scan ***)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -330,6 +376,8 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_compute_dependencies_ind (*** full scan ***)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -341,6 +389,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_cluster_replica_history_ind (*** full scan ***)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -382,6 +432,8 @@ Used Indexes:
   - mz_internal.mz_cluster_replicas_ind (*** full scan ***)
   - mz_internal.mz_cluster_replica_sizes_ind (delta join lookup)
   - mz_internal.mz_cluster_replica_metrics_ind (delta join lookup)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -426,6 +478,8 @@ Used Indexes:
   - mz_internal.mz_sources_ind (*** full scan ***, differential join)
   - mz_internal.mz_source_statuses_ind (differential join)
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -449,6 +503,8 @@ Explained Query:
 
 Used Indexes:
   - mz_internal.mz_source_status_history_ind (lookup)
+
+Target cluster: mz_introspection
 
 EOF
 

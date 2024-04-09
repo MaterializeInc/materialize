@@ -32,6 +32,8 @@ Explained Query (fast path):
   Constant
     - ("a")
 
+Target cluster: mz_introspection
+
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": ["int", "null"]} , {"name": "f2", "type": ["int", "null"]}] }
 
 $ kafka-create-topic topic=top1

@@ -42,6 +42,8 @@ Finish order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 output=[#0..=#2]
       Map (#0, #1)
         Get materialize.public.sections
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -53,5 +55,7 @@ materialize.public.distinct_on_group_by_limit:
       Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
         Project (#0..=#2)
           ReadStorage materialize.public.sections
+
+Target cluster: quickstart
 
 EOF

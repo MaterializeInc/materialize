@@ -20,6 +20,8 @@ Explained Query:
   Project (#0) // { arity: 1 }
     ReadStorage materialize.public.t1 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -30,6 +32,8 @@ Explained Query:
     Map (row(#0, #0), record_get[1](#2)) // { arity: 4 }
       ReadStorage materialize.public.t1 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -38,6 +42,8 @@ EXPLAIN WITH(arity, join implementations) SELECT (COALESCE(record, ROW(NULL, NUL
 Explained Query:
   Project (#0) // { arity: 1 }
     ReadStorage materialize.public.t1 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -64,5 +70,7 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0 = 1) AND (#1 = 2))
+
+Target cluster: quickstart
 
 EOF

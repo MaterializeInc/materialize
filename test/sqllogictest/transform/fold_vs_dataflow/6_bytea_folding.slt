@@ -35,4 +35,6 @@ Explained Query (fast path):
   Constant
     - (0x414243446566, 0xeee277e6d22d9e69e87f0b7d4c0af495609ee7cfe688d8381e9de44a5931cb15eec497ebcdf73b2951574398aa9529262767d6619c83a95d8e452b1d4871ffec)
 
+Target cluster: quickstart
+
 EOF

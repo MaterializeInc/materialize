@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import re
 from random import Random
 from textwrap import dedent
 from typing import Any
@@ -19,6 +20,7 @@ from materialize.mzcompose.services.mysql import MySql
 
 class MySqlCdcBase:
     base_version: MzVersion
+    current_version: MzVersion
     wait: bool
     suffix: str
     repeats: int
@@ -176,65 +178,68 @@ class MySqlCdcBase:
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
+        sql = dedent(
+            f"""
+            $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
+            GRANT SELECT ON mysql_source_tableA{self.suffix} TO materialize
+            GRANT SELECT ON mysql_source_tableB{self.suffix} TO materialize
+            GRANT SELECT ON mysql_source_tableC{self.suffix} TO materialize
+
+            > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM mysql_source_tableA{self.suffix} GROUP BY f1;
+            A 800 {self.expects}
+            B 800 {self.expects}
+            C 700 {self.expects}
+            D 600 {self.expects}
+            E 500 {self.expects}
+            F 400 {self.expects}
+            G 300 {self.expects}
+            H 200 {self.expects}
+
+            > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM mysql_source_tableB{self.suffix} GROUP BY f1;
+            A 800 {self.expects}
+            B 800 {self.expects}
+            C 700 {self.expects}
+            D 600 {self.expects}
+            E 500 {self.expects}
+            F 400 {self.expects}
+            G 300 {self.expects}
+            H 200 {self.expects}
+
+            > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM mysql_source_tableC{self.suffix} GROUP BY f1;
+            A 800 {self.expects}
+            B 800 {self.expects}
+            C 700 {self.expects}
+            D 600 {self.expects}
+            E 500 {self.expects}
+            F 400 {self.expects}
+            G 300 {self.expects}
+            H 200 {self.expects}
+            """
+        )
+
+        if self.base_version >= MzVersion.parse_mz("v0.50.0-dev"):
+            sql += dedent(
                 f"""
-                $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
-                GRANT SELECT ON mysql_source_tableA{self.suffix} TO materialize
-                GRANT SELECT ON mysql_source_tableB{self.suffix} TO materialize
-                GRANT SELECT ON mysql_source_tableC{self.suffix} TO materialize
+                # Confirm that the primary key information has been propagated from MySQL
+                > SELECT key FROM (SHOW INDEXES ON mysql_source_tableA{self.suffix});
+                {{f1,f2}}
 
-                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM mysql_source_tableA{self.suffix} GROUP BY f1;
-                A 800 {self.expects}
-                B 800 {self.expects}
-                C 700 {self.expects}
-                D 600 {self.expects}
-                E 500 {self.expects}
-                F 400 {self.expects}
-                G 300 {self.expects}
-                H 200 {self.expects}
+                ? EXPLAIN SELECT DISTINCT f1, f2 FROM mysql_source_tableA{self.suffix};
+                Explained Query (fast path):
+                  Project (#0, #1)
+                    ReadIndex on=materialize.public.mysql_source_tablea{self.suffix} mysql_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
 
-                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM mysql_source_tableB{self.suffix} GROUP BY f1;
-                A 800 {self.expects}
-                B 800 {self.expects}
-                C 700 {self.expects}
-                D 600 {self.expects}
-                E 500 {self.expects}
-                F 400 {self.expects}
-                G 300 {self.expects}
-                H 200 {self.expects}
+                Used Indexes:
+                  - materialize.public.mysql_source_tablea{self.suffix}_primary_idx (*** full scan ***)
 
-                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM mysql_source_tableC{self.suffix} GROUP BY f1;
-                A 800 {self.expects}
-                B 800 {self.expects}
-                C 700 {self.expects}
-                D 600 {self.expects}
-                E 500 {self.expects}
-                F 400 {self.expects}
-                G 300 {self.expects}
-                H 200 {self.expects}
+                Target cluster: quickstart
                 """
             )
-            + (
-                dedent(
-                    f"""
-                    # Confirm that the primary key information has been propagated from MySQL
-                    > SELECT key FROM (SHOW INDEXES ON mysql_source_tableA{self.suffix});
-                    {{f1,f2}}
 
-                    ? EXPLAIN SELECT DISTINCT f1, f2 FROM mysql_source_tableA{self.suffix};
-                    Explained Query (fast path):
-                      Project (#0, #1)
-                        ReadIndex on=materialize.public.mysql_source_tablea{self.suffix} mysql_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
+        if self.current_version < MzVersion.parse_mz("v0.96.0-dev"):
+            sql = remove_target_cluster_from_explain(sql)
 
-                    Used Indexes:
-                      - materialize.public.mysql_source_tablea{self.suffix}_primary_idx (*** full scan ***)
-                    """
-                )
-                if self.base_version >= MzVersion.parse_mz("v0.50.0-dev")
-                else ""
-            )
-        )
+        return Testdrive(sql)
 
 
 @externally_idempotent(False)
@@ -367,3 +372,7 @@ class MySqlCdcMzNow(Check):
                 """
             )
         )
+
+
+def remove_target_cluster_from_explain(sql: str) -> str:
+    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)

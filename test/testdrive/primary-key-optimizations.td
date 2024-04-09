@@ -68,6 +68,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key2, key1 FROM t1;
 Explained Query (fast path):
   Project (#1, #0)
@@ -75,6 +77,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key2, key1, key2 FROM t1;
 Explained Query (fast path):
@@ -84,6 +88,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT key2, key1 FROM t1 GROUP BY key1, key2;
 Explained Query (fast path):
   Project (#1, #0)
@@ -91,6 +97,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT key2, key1 FROM t1 GROUP BY key1, key2, key2 || 'a';
 Explained Query (fast path):
@@ -100,6 +108,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key1, key2, nokey FROM t1;
 Explained Query (fast path):
   ReadIndex on=t1 t1_primary_idx=[*** full scan ***]
@@ -107,12 +117,16 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT key1, key2, nokey FROM t1 GROUP BY key1, key2, nokey;
 Explained Query (fast path):
   ReadIndex on=t1 t1_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT key1, key2 FROM t1 GROUP BY key1, key2 HAVING key1 = 'a';
 Explained Query (fast path):
@@ -122,6 +136,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # Optimization not possible - explicit distinct is present in planFor certain types of tests the 
 
@@ -134,6 +150,8 @@ Explained Query:
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key2 FROM t1;
 Explained Query:
   Distinct project=[#0]
@@ -142,6 +160,8 @@ Explained Query:
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key1, upper(key2) FROM t1;
 Explained Query:
@@ -152,6 +172,8 @@ Explained Query:
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key1, key2 || 'a' FROM t1;
 Explained Query:
   Distinct project=[#0, (#1 || "a")]
@@ -160,6 +182,8 @@ Explained Query:
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT key1 FROM t1 GROUP BY key1;
 Explained Query:
@@ -170,6 +194,8 @@ Explained Query:
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT key2 FROM t1 GROUP BY key2;
 Explained Query:
   Distinct project=[#0]
@@ -178,6 +204,8 @@ Explained Query:
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT COUNT(DISTINCT key1) FROM t1;
 Explained Query:
@@ -200,6 +228,8 @@ Explained Query:
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # Make sure that primary key information is inherited from the source
 
 > CREATE VIEW v1 AS SELECT * FROM t1;
@@ -212,6 +242,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 > CREATE VIEW v2 AS SELECT * FROM t1;
 > CREATE DEFAULT INDEX ON v2;
 
@@ -222,6 +254,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - v2_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # Make sure that having a DISTINCT or GROUP BY confers PK semantics on upstream views
 
@@ -235,6 +269,8 @@ Explained Query (fast path):
 Used Indexes:
   - distinct_view_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 > CREATE VIEW group_by_view AS SELECT nokey || 'a' AS f1 , nokey || 'b' AS f2 FROM t1 GROUP BY nokey || 'a', nokey || 'b';
 > CREATE DEFAULT INDEX ON group_by_view;
 
@@ -245,6 +281,8 @@ Explained Query (fast path):
 Used Indexes:
   - group_by_view_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # Redundant table is eliminated from an inner join using PK information
 
 ? EXPLAIN WITH(no notices) SELECT a1.* FROM t1 AS a1, t1 AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
@@ -254,6 +292,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT a1.* FROM v1 AS a1, v1 AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
 Explained Query (fast path):
   ReadIndex on=t1 t1_primary_idx=[*** full scan ***]
@@ -261,12 +301,16 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT a1.* FROM v2 AS a1, v2 AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
 Explained Query (fast path):
   ReadIndex on=v2 v2_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - v2_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # Declare a key constraint (PRIMARY KEY NOT ENFORCED); otherwise identical tests as above.
 
@@ -303,6 +347,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key2, key1 FROM t1_pkne;
 Explained Query (fast path):
   Project (#1, #0)
@@ -310,6 +356,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key2, key1, key2 FROM t1_pkne;
 Explained Query (fast path):
@@ -319,6 +367,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT key2, key1 FROM t1_pkne GROUP BY key1, key2;
 Explained Query (fast path):
   Project (#1, #0)
@@ -326,6 +376,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT key2, key1 FROM t1_pkne GROUP BY key1, key2, key2 || 'a';
 Explained Query (fast path):
@@ -335,6 +387,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key1, key2, nokey FROM t1_pkne;
 Explained Query (fast path):
   ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]
@@ -342,12 +396,16 @@ Explained Query (fast path):
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT key1, key2, nokey FROM t1_pkne GROUP BY key1, key2, nokey;
 Explained Query (fast path):
   ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT key1, key2 FROM t1_pkne GROUP BY key1, key2 HAVING key1 = 'a';
 Explained Query (fast path):
@@ -357,6 +415,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # Optimization not possible - explicit distinct is present in plan
 
@@ -369,6 +429,8 @@ Explained Query:
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key2 FROM t1_pkne;
 Explained Query:
   Distinct project=[#0] monotonic
@@ -377,6 +439,8 @@ Explained Query:
 
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key1, upper(key2) FROM t1_pkne;
 Explained Query:
@@ -387,6 +451,8 @@ Explained Query:
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT DISTINCT key1, key2 || 'a' FROM t1_pkne;
 Explained Query:
   Distinct project=[#0, (#1 || "a")] monotonic
@@ -395,6 +461,8 @@ Explained Query:
 
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT key1 FROM t1_pkne GROUP BY key1;
 Explained Query:
@@ -405,6 +473,8 @@ Explained Query:
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT key2 FROM t1_pkne GROUP BY key2;
 Explained Query:
   Distinct project=[#0] monotonic
@@ -413,6 +483,8 @@ Explained Query:
 
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT COUNT(DISTINCT key1) FROM t1_pkne;
 Explained Query:
@@ -435,6 +507,8 @@ Explained Query:
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # Make sure that primary key information is inherited from the source
 
 > CREATE VIEW v1_pkne AS SELECT * FROM t1_pkne;
@@ -447,6 +521,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 > CREATE VIEW v2_pkne AS SELECT * FROM t1_pkne;
 > CREATE DEFAULT INDEX ON v2_pkne;
 
@@ -457,6 +533,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - v2_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # Make sure that having a DISTINCT or GROUP BY confers PK semantics on upstream views
 
@@ -470,6 +548,8 @@ Explained Query (fast path):
 Used Indexes:
   - distinct_view_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 > CREATE VIEW group_by_view_pkne AS SELECT nokey || 'a' AS f1 , nokey || 'b' AS f2 FROM t1_pkne GROUP BY nokey || 'a', nokey || 'b';
 > CREATE DEFAULT INDEX ON group_by_view_pkne;
 
@@ -480,6 +560,8 @@ Explained Query (fast path):
 Used Indexes:
   - group_by_view_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # Redundant table is eliminated from an inner join using PK information
 
 ? EXPLAIN WITH(no notices) SELECT a1.* FROM t1_pkne AS a1, t1_pkne AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
@@ -489,6 +571,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT a1.* FROM v1_pkne AS a1, v1_pkne AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
 Explained Query (fast path):
   ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]
@@ -496,9 +580,13 @@ Explained Query (fast path):
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT a1.* FROM v2_pkne AS a1, v2_pkne AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
 Explained Query (fast path):
   ReadIndex on=v2_pkne v2_pkne_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - v2_pkne_primary_idx (*** full scan ***)
+
+Target cluster: quickstart

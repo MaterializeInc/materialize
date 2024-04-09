@@ -47,6 +47,8 @@ Used Indexes:
   - i1 (differential join)
   - i2 (differential join)
 
+Target cluster: quickstart
+
 > SELECT count(*) AS count FROM delta_join;
 count
 ----

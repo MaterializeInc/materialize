@@ -32,6 +32,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null = 1 AND (col_not_null = 1 AND col_null = 5);
 Explained Query (fast path):
   Project (#0, #1)
@@ -39,6 +41,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (lookup)
+
+Target cluster: quickstart
 
 # NULL-able expressions are dedupped
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null = 1 AND (col_null = 1 AND col_not_null = 5);
@@ -48,6 +52,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (lookup)
+
+Target cluster: quickstart
 
 # OR/disjunction at the top level
 
@@ -59,6 +65,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null IS NULL OR col_null IS NULL OR (col_null IS NULL AND col_not_null = 5);
 Explained Query (fast path):
   Filter (#0) IS NULL
@@ -66,6 +74,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL AND col_not_null = 5) OR (col_null IS NULL AND col_not_null = 6);
@@ -75,6 +85,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # OR/disjunction at the lower level
 
@@ -86,6 +98,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # Nested OR/disjunction
 
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL OR col_not_null = 5);
@@ -95,6 +109,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # A more complex expression
 
@@ -106,6 +122,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # More nesting
 
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null + col_not_null + col_not_null = 5 AND (col_not_null + col_not_null + col_not_null = 5);
@@ -115,6 +133,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # The common expression contains an AND/conjunction itself
 
@@ -126,6 +146,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # The common expression contains an OR/disjunction
 
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE ((col_not_null > 3) OR (col_not_null < 5)) OR ((col_not_null > 3) OR (col_not_null < 5));
@@ -136,11 +158,15 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # Use of a deterministic function
 
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null % 2 = 5 AND (col_not_null % 2 = 5 IS NULL);
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 # This is not optimized
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE (col_not_null % 2) = 1 AND (((col_not_null % 2) = 1) = TRUE);
@@ -151,6 +177,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # Column used on both sides of the expression
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE (col_not_null = col_not_null + 1) AND (col_not_null = col_not_null + 1);
 Explained Query (fast path):
@@ -159,6 +187,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # TODO (https://github.com/MaterializeInc/materialize/issues/6262):  Avoid simplifying mz_sleep.
 
@@ -174,6 +204,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # IN list inside the expression
 
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (2, 3);
@@ -183,6 +215,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # Partial matches
 
@@ -194,9 +228,13 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (4, 5);
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 # Expression inside an IN list
 
@@ -210,6 +248,8 @@ Explained Query (fast path):
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 # Not optimized in OR/disjunctions
 
 ? EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null = 1 OR TRUE IN (col_not_null = 1, col_not_null = 2);
@@ -221,3 +261,5 @@ Explained Query (fast path):
 
 Used Indexes:
   - t1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart

@@ -38,6 +38,8 @@ Explained Query:
   Constant // { types: "(integer)" }
     - (1)
 
+Target cluster: mz_introspection
+
 EOF
 
 # NULL literal is NULL-able
@@ -48,6 +50,8 @@ EXPLAIN WITH(types, no fast path) SELECT NULL;
 Explained Query:
   Constant // { types: "(text?)" }
     - (null)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -63,6 +67,8 @@ Explained Query:
     - (1)
     - (2)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -73,6 +79,8 @@ Explained Query:
   Constant // { types: "(integer?)" }
     - (null)
     - (1)
+
+Target cluster: quickstart
 
 EOF
 
@@ -89,6 +97,8 @@ Explained Query:
     Map (integer_to_bigint(#0), integer_to_bigint(#1)) // { types: "(integer?, integer, bigint?, bigint)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 #
@@ -103,6 +113,8 @@ Explained Query:
     Map ((#0) IS NULL, NOT(#2)) // { types: "(integer?, integer, boolean, boolean)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -113,6 +125,8 @@ Explained Query:
     Map ((#0) IS TRUE, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
       ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -122,6 +136,8 @@ Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
     Map ((#0) IS NULL, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
       ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -136,6 +152,8 @@ Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer, integer)" }
     Map ((#1 + #1), (#1 + 1), (#1 % #1), (#1 % 2)) // { types: "(integer?, integer, integer, integer, integer, integer)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -152,6 +170,8 @@ Explained Query:
     Map (greatest(#1), greatest(#1, #1), greatest(#1, #0), greatest(#0, #0)) // { types: "(integer?, integer, integer, integer, integer?, integer?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -162,6 +182,8 @@ Explained Query:
     Map (least(#1), least(#1, #1), least(#1, #0), least(#0, #0)) // { types: "(integer?, integer, integer, integer, integer?, integer?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -170,6 +192,8 @@ EXPLAIN WITH(types, no fast path) SELECT COALESCE(col_not_null), COALESCE(col_no
 Explained Query:
   Project (#1, #1, #1, #0) // { types: "(integer, integer, integer, integer?)" }
     ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -186,6 +210,8 @@ Explained Query:
     Map (case when (#0 = #1) then null else #0 end, error("invalid input syntax for type integer: invalid digit found in string: \"a\"")) // { types: "(integer?, integer, integer?, integer?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 #
@@ -200,6 +226,8 @@ Explained Query:
     Map ((#1 = 1)) // { types: "(integer?, integer, boolean)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -208,6 +236,8 @@ EXPLAIN WITH(types, no fast path) SELECT col_not_null AND col_not_null , col_not
 Explained Query:
   Project (#1, #1) // { types: "(boolean, boolean)" }
     ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -219,6 +249,8 @@ Explained Query:
     Map ((#0 AND #1), (#0 OR #1)) // { types: "(boolean?, boolean, boolean?, boolean?)" }
       ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -228,6 +260,8 @@ Explained Query:
   Project (#2, #3) // { types: "(boolean?, boolean)" }
     Map (NOT(#0), NOT(#1)) // { types: "(boolean?, boolean, boolean?, boolean)" }
       ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -242,6 +276,8 @@ Explained Query:
   Project (#2, #4..=#7) // { types: "(integer, double precision, double precision, double precision, integer)" }
     Map (abs(#1), integer_to_double(#1), log10f64(#3), roundf64(#3), cos(#3), (#1 << #1)) // { types: "(integer?, integer, integer, double precision, double precision, double precision, double precision, integer)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -271,6 +307,8 @@ Explained Query:
         Project (#1) // { types: "(integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 #
@@ -297,6 +335,8 @@ Explained Query:
         Project (#1) // { types: "(integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 #
@@ -311,6 +351,8 @@ Explained Query:
     Map ((#1 like #1), (#0 like #1), (#1 like #0)) // { types: "(text?, text, boolean, boolean?, boolean?)" }
       ReadStorage materialize.public.str_table // { types: "(text?, text)" }
 
+Target cluster: quickstart
+
 EOF
 
 # VARIADIC FUNCTIONS
@@ -322,6 +364,8 @@ Explained Query:
   Project (#2..=#5) // { types: "(text, text, text[]?, text)" }
     Map ((#1 || #1), substr(#1, 3, 2), regexp_match(#1, #1), lpad(#1, 3, #1)) // { types: "(text?, text, text, text, text[]?, text)" }
       ReadStorage materialize.public.str_table // { types: "(text?, text)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -352,6 +396,8 @@ Explained Query:
     Map (regexp_match["aaa", case_insensitive=false](#1), regexp_match("aaa", #1)) // { types: "(text?, text, text[]?, text[]?)" }
       ReadStorage materialize.public.str_table // { types: "(text?, text)" }
 
+Target cluster: quickstart
+
 EOF
 
 #
@@ -365,6 +411,8 @@ Explained Query:
   Project (#2..=#4) // { types: "(text, text, text)" }
     Map (split_string(#1, "a", 100), split_string("a", #1, 100), split_string("a", "a", text_to_integer(#1))) // { types: "(text?, text, text, text, text)" }
       ReadStorage materialize.public.str_table // { types: "(text?, text)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -380,6 +428,8 @@ Explained Query:
     Map ((#1 = 1), true, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -389,6 +439,8 @@ Explained Query:
   Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
     Map ((#1 != 1), false, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -422,6 +474,8 @@ Explained Query:
       Distinct project=[#0, #1] // { types: "(integer?, integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -451,6 +505,8 @@ Explained Query:
       Distinct project=[#0, #1] // { types: "(integer?, integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -479,6 +535,8 @@ Explained Query:
       Distinct project=[#0, #1] // { types: "(integer?, integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -488,6 +546,8 @@ Explained Query:
   Constant // { types: "(boolean, boolean?, boolean)" }
     - (true, null, true)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -496,6 +556,8 @@ EXPLAIN WITH(types, no fast path) SELECT 1 = SOME(VALUES(NULL::int), (1)), 1 = A
 Explained Query:
   Constant // { types: "(boolean, boolean?, boolean)" }
     - (true, null, true)
+
+Target cluster: quickstart
 
 EOF
 
@@ -561,6 +623,8 @@ Explained Query:
       Project (#1) // { types: "(integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 #
@@ -600,6 +664,8 @@ Explained Query:
       Project () // { types: "()" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 #
@@ -637,6 +703,8 @@ Explained Query:
           Filter (#1 = 1) // { types: "(integer?, integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -665,6 +733,8 @@ Explained Query:
     cte l0 =
       Project () // { types: "()" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -738,6 +808,8 @@ Explained Query:
           Filter (#1 = 1) // { types: "(integer?, integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 #
@@ -751,6 +823,8 @@ Explained Query:
     Map ((#0 - 00:00:01), (#1 - 00:00:01)) // { types: "(timestamp without time zone?, timestamp without time zone, timestamp without time zone?, timestamp without time zone)" }
       ReadStorage materialize.public.ts_table // { types: "(timestamp without time zone?, timestamp without time zone)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -760,6 +834,8 @@ Explained Query:
   Project (#2, #3) // { types: "(interval?, interval?)" }
     Map ((#0 - #1), (#1 - #0)) // { types: "(timestamp without time zone?, timestamp without time zone, interval?, interval?)" }
       ReadStorage materialize.public.ts_table // { types: "(timestamp without time zone?, timestamp without time zone)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -781,6 +857,8 @@ Explained Query:
       ArrangeBy keys=[[]] // { types: "(integer)" }
         Project (#1) // { types: "(integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -817,6 +895,8 @@ Explained Query:
         ArrangeBy keys=[[]] // { types: "(integer)" }
           Project (#1) // { types: "(integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -865,6 +945,8 @@ Explained Query:
       ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 #
@@ -885,6 +967,8 @@ Explained Query:
       Project (#1) // { types: "(integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -896,6 +980,8 @@ Explained Query:
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     Project (#0) // { types: "(integer?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -910,5 +996,7 @@ Explained Query:
   Project (#2) // { types: "(integer)" }
     Map (((#1 + 1) + 1)) // { types: "(integer?, integer, integer)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF

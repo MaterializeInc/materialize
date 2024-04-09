@@ -64,6 +64,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.wins_by_item (lookup)
 
+Target cluster: quickstart_tutorial
+
 > SELECT id, buyer, auction_id, amount, item, seller FROM winning_bids WHERE item = 'Best Pizza in Town' AND id < 100 ORDER BY bid_time DESC
 62 3016 6 77 "Best Pizza in Town" 2500
 46 2530 4 49 "Best Pizza in Town" 2822
