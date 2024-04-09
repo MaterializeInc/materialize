@@ -1289,10 +1289,29 @@ impl LazyPartStats {
     /// This does not cache the returned value, it decodes each time it's
     /// called.
     pub fn decode(&self) -> PartStats {
-        let key = self.key.decode().expect("valid proto");
-        PartStats {
-            key: key.into_rust().expect("valid stats"),
-        }
+        // These clones are not ideal, but we're only doing it while debugging a
+        // pesky panic.
+        let key_cloned = self.key.clone();
+        let key = self.key.decode();
+        let key = match key {
+            Ok(key) => key,
+            Err(e) => {
+                panic!(
+                    "cannot decode {:?} as ProtoStructStats: {:?}",
+                    key_cloned, e
+                );
+            }
+        };
+
+        let key_cloned = key.clone();
+        let key_decoded = key.into_rust();
+        let key_decoded = match key_decoded {
+            Ok(key_decoded) => key_decoded,
+            Err(e) => {
+                panic!("cannot convert {:?} into StructStats: {:?}", key_cloned, e);
+            }
+        };
+        PartStats { key: key_decoded }
     }
 }
 
