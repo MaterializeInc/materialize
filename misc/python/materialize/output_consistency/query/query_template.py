@@ -37,8 +37,10 @@ class QueryTemplate:
         storage_layout: ValueStorageLayout,
         contains_aggregations: bool,
         row_selection: DataRowSelection,
-        offset: int | None,
-        limit: int | None,
+        offset: int | None = None,
+        limit: int | None = None,
+        custom_db_object_name: str | None = None,
+        custom_order_expressions: list[Expression] | None = None,
     ) -> None:
         assert storage_layout != ValueStorageLayout.ANY
         self.expect_error = expect_error
@@ -49,6 +51,8 @@ class QueryTemplate:
         self.row_selection = row_selection
         self.offset = offset
         self.limit = limit
+        self.custom_db_object_name = custom_db_object_name
+        self.custom_order_expressions = custom_order_expressions
         self.disable_error_message_validation = not self.__can_compare_error_messages()
 
     def add_select_expression(self, expression: Expression) -> None:
@@ -64,8 +68,10 @@ class QueryTemplate:
         query_column_selection: QueryColumnByIndexSelection,
         override_db_object_name: str | None = None,
     ) -> str:
-        db_object_name = override_db_object_name or strategy.get_db_object_name(
-            self.storage_layout
+        db_object_name = (
+            override_db_object_name
+            or self.custom_db_object_name
+            or strategy.get_db_object_name(self.storage_layout)
         )
         space_separator = self._get_space_separator(output_format)
 
@@ -73,7 +79,7 @@ class QueryTemplate:
             query_column_selection, space_separator, strategy.sql_adjuster
         )
         where_clause = self._create_where_clause(strategy.sql_adjuster)
-        order_by_clause = self._create_order_by_clause()
+        order_by_clause = self._create_order_by_clause(strategy.sql_adjuster)
         limit_clause = self._create_limit_clause()
         offset_clause = self._create_offset_clause()
 
@@ -137,7 +143,16 @@ FROM{space_separator}{db_object_name}
             )
         return f"{ROW_INDEX_COL_NAME} IN ({row_index_string})"
 
-    def _create_order_by_clause(self) -> str:
+    def _create_order_by_clause(self, sql_adjuster: SqlDialectAdjuster) -> str:
+        if self.custom_order_expressions is not None:
+            order_by_specs_str = ", ".join(
+                [
+                    f"{expr.to_sql(sql_adjuster, True)} ASC"
+                    for expr in self.custom_order_expressions
+                ]
+            )
+            return f"ORDER BY {order_by_specs_str}"
+
         if (
             self.storage_layout == ValueStorageLayout.VERTICAL
             and not self.contains_aggregations

@@ -38,8 +38,8 @@ class ExpressionWithArgs(Expression):
         self,
         operation: DbOperationOrFunction,
         args: list[Expression],
-        is_aggregate: bool,
-        is_expect_error: bool,
+        is_aggregate: bool = False,
+        is_expect_error: bool = False,
     ):
         super().__init__(
             operation.derive_characteristics(args),
