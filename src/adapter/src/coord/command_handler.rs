@@ -57,7 +57,9 @@ use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
-use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
+use crate::coord::{
+    ConnMeta, Coordinator, Message, PendingTxn, PlanValidity, PurifiedStatementReady,
+};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
@@ -643,6 +645,7 @@ impl Coordinator {
                 let otel_ctx = OpenTelemetryContext::obtain();
                 let current_storage_configuration = self.controller.storage.config().clone();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
+                    let transient_revision = catalog.transient_revision();
                     let catalog = catalog.for_session(ctx.session());
 
                     // Checks if the session is authorized to purify a statement. Usually
@@ -657,21 +660,28 @@ impl Coordinator {
                         return ctx.retire(Err(e.into()));
                     }
 
-                    let result = mz_sql::pure::purify_statement(
+                    let (result, cluster_id) = mz_sql::pure::purify_statement(
                         catalog,
                         now,
                         stmt,
                         &current_storage_configuration,
                     )
-                    .await
-                    .map_err(|e| e.into());
+                    .await;
+                    let result = result.map_err(|e| e.into());
+                    let plan_validity = PlanValidity {
+                        transient_revision,
+                        dependency_ids: resolved_ids.0,
+                        cluster_id,
+                        replica_id: None,
+                        role_metadata: ctx.session().role_metadata().clone(),
+                    };
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
                     let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
                         PurifiedStatementReady {
                             ctx,
                             result,
                             params,
-                            resolved_ids,
+                            plan_validity,
                             original_stmt,
                             otel_ctx,
                         },

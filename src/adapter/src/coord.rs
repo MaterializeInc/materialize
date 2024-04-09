@@ -331,7 +331,7 @@ pub struct BackgroundWorkResult<T> {
     pub ctx: ExecuteContext,
     pub result: Result<T, AdapterError>,
     pub params: Params,
-    pub resolved_ids: ResolvedIds,
+    pub plan_validity: PlanValidity,
     pub original_stmt: Arc<Statement<Raw>>,
     pub otel_ctx: OpenTelemetryContext,
 }

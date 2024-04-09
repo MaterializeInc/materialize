@@ -445,7 +445,7 @@ impl Coordinator {
             ctx,
             result,
             params,
-            resolved_ids,
+            mut plan_validity,
             original_stmt,
             otel_ctx,
         }: PurifiedStatementReady,
@@ -453,7 +453,7 @@ impl Coordinator {
         otel_ctx.attach_as_parent();
 
         // Ensure that all dependencies still exist after purification, as a
-        // `DROP CONNECTION` may have sneaked in. If any have gone missing, we
+        // `DROP CONNECTION` or other `DROP` may have sneaked in. If any have gone missing, we
         // repurify the original statement. This will either produce a nice
         // "unknown connector" error, or pick up a new connector that has
         // replaced the dropped connector.
@@ -462,11 +462,7 @@ impl Coordinator {
         // because we always look up/populate a connection's state after
         // committing to the catalog, so are guaranteed to see the connection's
         // most recent version.
-        if !resolved_ids
-            .0
-            .iter()
-            .all(|id| self.catalog().try_get_entry(id).is_some())
-        {
+        if plan_validity.check(self.catalog()).is_err() {
             self.handle_execute_inner(original_stmt, params, ctx).await;
             return;
         }

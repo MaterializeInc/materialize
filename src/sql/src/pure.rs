@@ -19,6 +19,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use itertools::Itertools;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
+use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
@@ -231,23 +232,34 @@ pub async fn purify_statement(
     now: u64,
     stmt: Statement<Aug>,
     storage_configuration: &StorageConfiguration,
-) -> Result<
-    (
-        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-        Statement<Aug>,
-    ),
-    PlanError,
-> {
+) -> (
+    Result<
+        (
+            Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+            Statement<Aug>,
+        ),
+        PlanError,
+    >,
+    Option<ClusterId>,
+) {
     match stmt {
         Statement::CreateSource(stmt) => {
-            purify_create_source(catalog, now, stmt, storage_configuration).await
+            let cluster_id = stmt.in_cluster.as_ref().map(|cluster| cluster.id.clone());
+            (
+                purify_create_source(catalog, now, stmt, storage_configuration).await,
+                cluster_id,
+            )
         }
-        Statement::AlterSource(stmt) => {
-            purify_alter_source(catalog, stmt, storage_configuration).await
-        }
+        Statement::AlterSource(stmt) => (
+            purify_alter_source(catalog, stmt, storage_configuration).await,
+            None,
+        ),
         Statement::CreateSink(stmt) => {
-            let r = purify_create_sink(catalog, stmt, storage_configuration).await?;
-            Ok((vec![], r))
+            let cluster_id = stmt.in_cluster.as_ref().map(|cluster| cluster.id.clone());
+            match purify_create_sink(catalog, stmt, storage_configuration).await {
+                Ok(r) => (Ok((vec![], r)), cluster_id),
+                Err(e) => (Err(e), cluster_id),
+            }
         }
         o => unreachable!("{:?} does not need to be purified", o),
     }
