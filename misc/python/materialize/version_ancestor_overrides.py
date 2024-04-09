@@ -31,6 +31,12 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "FastPathFilterNoIndex":
+        # PR#26084 (Optimize OffsetList) increased wallclock
+        min_ancestor_mz_version_per_commit[
+            "2abcd90ac3201b0235ea41c5db81bdd931a0fda0"
+        ] = MzVersion.parse_mz("v0.96.0")
+
     if scenario_class_name == "ParallelDataflows":
         # PR#26020 (Stage flatmap execution to consolidate as it goes) significantly increased wallclock
         min_ancestor_mz_version_per_commit[
