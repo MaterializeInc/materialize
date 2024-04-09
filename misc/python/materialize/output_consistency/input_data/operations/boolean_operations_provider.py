@@ -20,30 +20,28 @@ from materialize.output_consistency.operation.operation import (
 
 BOOLEAN_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
-BOOLEAN_OPERATION_TYPES.append(
-    DbOperation(
-        "$ AND $",
-        [BooleanOperationParam(), BooleanOperationParam()],
-        BooleanReturnTypeSpec(),
-        # disable for Postgres because the evaluation order will be different
-        is_pg_compatible=False,
-    )
+AND_OPERATION = DbOperation(
+    "$ AND $",
+    [BooleanOperationParam(), BooleanOperationParam()],
+    BooleanReturnTypeSpec(),
+    # disable for Postgres because the evaluation order will be different
+    is_pg_compatible=False,
+)
+BOOLEAN_OPERATION_TYPES.append(AND_OPERATION)
+
+OR_OPERATION = DbOperation(
+    "$ OR $",
+    [BooleanOperationParam(), BooleanOperationParam()],
+    BooleanReturnTypeSpec(),
+    # disable for Postgres because the evaluation order will be different
+    is_pg_compatible=False,
 )
 
-BOOLEAN_OPERATION_TYPES.append(
-    DbOperation(
-        "$ OR $",
-        [BooleanOperationParam(), BooleanOperationParam()],
-        BooleanReturnTypeSpec(),
-        # disable for Postgres because the evaluation order will be different
-        is_pg_compatible=False,
-    )
-)
+BOOLEAN_OPERATION_TYPES.append(OR_OPERATION)
 
-BOOLEAN_OPERATION_TYPES.append(
-    DbOperation(
-        "NOT ($)",
-        [BooleanOperationParam()],
-        BooleanReturnTypeSpec(),
-    )
+NOT_OPERATION = DbOperation(
+    "NOT ($)",
+    [BooleanOperationParam()],
+    BooleanReturnTypeSpec(),
 )
+BOOLEAN_OPERATION_TYPES.append(NOT_OPERATION)
