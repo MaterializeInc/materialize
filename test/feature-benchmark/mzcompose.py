@@ -205,6 +205,7 @@ def run_one_scenario(
                 aggregation_class=make_aggregation_class(),
                 measure_memory=args.measure_memory,
                 default_size=size,
+                seed=common_seed,
             )
 
             if not scenario_class.can_run(mz_version):
