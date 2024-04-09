@@ -721,15 +721,17 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     pub fn begin_merge(
-        b1: &Self,
-        b2: &Self,
+        bs: &[Self],
         compaction_frontier: Option<AntichainRef<T>>,
     ) -> FuelingMerge<T> {
-        let mut since = b1.desc().since().join(b2.desc().since());
-        if let Some(compaction_frontier) = compaction_frontier {
-            since = since.join(&compaction_frontier.to_owned());
+        let mut since = Antichain::from_elem(T::minimum());
+        for b in bs {
+            since.join_assign(b.desc().since())
         }
-        let remaining_work = b1.len() + b2.len();
+        if let Some(compaction_frontier) = compaction_frontier {
+            since.join_assign(&compaction_frontier.to_owned());
+        }
+        let remaining_work = bs.iter().map(|x| x.len()).sum();
         FuelingMerge {
             since,
             remaining_work,
@@ -911,7 +913,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     /// should call `done` to extract the merged results.
     // TODO(benesch): rewrite to avoid usage of `as`.
     #[allow(clippy::as_conversions)]
-    fn work(&mut self, _: &SpineBatch<T>, _: &SpineBatch<T>, fuel: &mut isize) {
+    fn work(&mut self, _: &[SpineBatch<T>], fuel: &mut isize) {
         let used = std::cmp::min(*fuel as usize, self.remaining_work);
         self.remaining_work = self.remaining_work.saturating_sub(used);
         *fuel -= used as isize;
@@ -923,36 +925,37 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     /// not brought `fuel` to zero. Otherwise, the merge is still in progress.
     fn done(
         self,
-        b1: SpineBatch<T>,
-        b2: SpineBatch<T>,
+        bs: ArrayVec<SpineBatch<T>, BATCHES_PER_LEVEL>,
         log: &mut SpineLog<'_, T>,
-    ) -> SpineBatch<T> {
-        let id = SpineId(b1.id().0, b2.id().1);
+    ) -> Option<SpineBatch<T>> {
+        let first = bs.first()?;
+        let last = bs.last()?;
+        let id = SpineId(first.id().0, last.id().1);
         assert!(id.0 < id.1);
-        let lower = b1.desc().lower().clone();
-        let upper = b2.desc().upper().clone();
+        let lower = first.desc().lower().clone();
+        let upper = last.desc().upper().clone();
         let since = self.since;
 
         // Special case empty batches.
-        if b1.is_empty() && b2.is_empty() {
-            return SpineBatch::empty(id, lower, upper, since);
+        if bs.iter().all(SpineBatch::is_empty) {
+            return Some(SpineBatch::empty(id, lower, upper, since));
         }
 
         let desc = Description::new(lower, upper, since);
-        let len = b1.len() + b2.len();
+        let len = bs.iter().map(SpineBatch::len).sum();
 
         // Pre-size the merged_parts Vec. Benchmarking has shown that, at least
         // in the worst case, the double iteration is absolutely worth having
         // merged_parts pre-sized.
         let mut merged_parts_len = 0;
-        for b in [&b1, &b2] {
+        for b in &bs {
             match b {
                 SpineBatch::Merged(_) => merged_parts_len += 1,
                 SpineBatch::Fueled { parts, .. } => merged_parts_len += parts.len(),
             }
         }
         let mut merged_parts = Vec::with_capacity(merged_parts_len);
-        for b in [b1, b2] {
+        for b in bs {
             match b {
                 SpineBatch::Merged(b) => merged_parts.push(b),
                 SpineBatch::Fueled { mut parts, .. } => merged_parts.append(&mut parts),
@@ -968,12 +971,12 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
             });
         }
 
-        SpineBatch::Fueled {
+        Some(SpineBatch::Fueled {
             id,
             desc,
             len,
             parts: merged_parts,
-        }
+        })
     }
 }
 
@@ -1331,11 +1334,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         merging.push_batch(batch);
         if merging.batches.is_full() {
             let compaction_frontier = Some(self.since.borrow());
-            let fueling_merge = SpineBatch::begin_merge(
-                &merging.batches[0],
-                &merging.batches[1],
-                compaction_frontier,
-            );
+            let fueling_merge = SpineBatch::begin_merge(&merging.batches[..], compaction_frontier);
             merging.merge = Some(fueling_merge)
         }
     }
@@ -1547,15 +1546,14 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     /// There is the additional option of input batches.
     fn complete(&mut self, log: &mut SpineLog<'_, T>) -> Option<SpineBatch<T>> {
         let mut this = mem::take(self);
-        if let Some(merge) = this.merge {
-            let [a, b] = this.batches.into_inner().expect("full batch");
-            Some(merge.done(a, b, log))
-        } else {
-            assert!(
-                this.batches.len() <= 1,
-                "Multi-batch runs should have an in-progress merge!"
-            );
+        if this.batches.len() <= 1 {
             this.batches.pop()
+        } else {
+            // Merge the remaining batches, regardless of whether we have a fully fueled merge.
+            let merge = this
+                .merge
+                .unwrap_or_else(|| SpineBatch::begin_merge(&self.batches[..], None));
+            merge.done(this.batches, log)
         }
     }
 
@@ -1571,7 +1569,7 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     fn work(&mut self, fuel: &mut isize) {
         // We only perform work for merges in progress.
         if let Some(merge) = &mut self.merge {
-            merge.work(&self.batches[0], &self.batches[1], fuel)
+            merge.work(&self.batches[..], fuel)
         }
     }
 }
