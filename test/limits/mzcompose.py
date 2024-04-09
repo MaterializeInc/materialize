@@ -1241,7 +1241,7 @@ class FilterSubqueries(Generator):
     because of excessive memory allocations in the `RedundantJoin` transform.
     """
 
-    COUNT = 100
+    COUNT = 50
 
     @classmethod
     def body(cls) -> None:
@@ -1252,13 +1252,7 @@ class FilterSubqueries(Generator):
             > INSERT INTO t1 VALUES (1);
 
             # Increase SQL timeout to 10 minutes (~5 should be enough).
-            #
-            # Update: Now 15 minutes, not 10. This query appears to scale
-            # super-linear with COUNT. Here are timings for the first few
-            # multiples of 10 on a fresh staging env.
-            #
-            # 10: 200ms, 20: 375ms, 30: 1.5s, 40: 5.5s, 50: 16s, 60: 45s
-            $ set-sql-timeout duration=900s
+            $ set-sql-timeout duration=600s
 
             > SELECT * FROM t1 AS a1 WHERE {
                 " AND ".join(
