@@ -75,8 +75,8 @@ use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
 use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::oneshot;
 use tokio::sync::watch::{channel, Sender};
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamMap;
 use tracing::{debug, info, warn};
 
@@ -129,7 +129,8 @@ struct PendingCompactionCommand<T> {
 }
 
 /// A storage controller for a storage instance.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
 {
     /// The build information for this process.
@@ -179,6 +180,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
     pending_compaction_commands: Vec<PendingCompactionCommand<T>>,
+    /// Channel for sending table handle drops.
+    #[derivative(Debug = "ignore")]
+    pending_table_handle_drops_tx: mpsc::UnboundedSender<GlobalId>,
+    /// Channel for receiving table handle drops.
+    #[derivative(Debug = "ignore")]
+    pending_table_handle_drops_rx: mpsc::UnboundedReceiver<GlobalId>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -1115,6 +1122,42 @@ where
         Ok(())
     }
 
+    // Dropping a table takes roughly the following flow:
+    //
+    //   1. We remove the table from the persist table write worker.
+    //   2. The table removal is awaited in an async task.
+    //   3. A message is sent to the storage controller that the table has been removed from the
+    //      table write worker.
+    //   4. The controller drains all table drop messages during `process`.
+    //   5. `process` calls `drop_sources` with the dropped tables.
+    fn drop_tables(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+        ts: Self::Timestamp,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        assert!(
+            identifiers
+                .iter()
+                .all(|id| self.collections[id].description.is_table()),
+            "identifiers contain non-tables: {:?}",
+            identifiers
+                .iter()
+                .filter(|id| !self.collections[id].description.is_table())
+                .collect::<Vec<_>>()
+        );
+        let drop_notif = self
+            .persist_table_worker
+            .drop_handles(identifiers.clone(), ts);
+        let tx = self.pending_table_handle_drops_tx.clone();
+        mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
+            drop_notif.await;
+            for identifier in identifiers {
+                let _ = tx.send(identifier);
+            }
+        });
+        Ok(())
+    }
+
     fn drop_sources(
         &mut self,
         storage_metadata: &StorageMetadata,
@@ -1625,7 +1668,10 @@ where
     }
 
     #[instrument(level = "debug")]
-    async fn process(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+    async fn process(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+    ) -> Result<Option<Response<T>>, anyhow::Error> {
         let mut updated_frontiers = None;
         match self.stashed_response.take() {
             None => (),
@@ -1709,6 +1755,15 @@ where
         // IDs of sources (and subsources) whose statistics should be cleared.
         let mut source_statistics_to_drop = vec![];
 
+        // Process dropped tables in a single batch.
+        let mut dropped_table_ids = Vec::new();
+        while let Ok(dropped_id) = self.pending_table_handle_drops_rx.try_recv() {
+            dropped_table_ids.push(dropped_id);
+        }
+        if !dropped_table_ids.is_empty() {
+            self.drop_sources(storage_metadata, dropped_table_ids)?;
+        }
+
         // TODO(aljoscha): We could consolidate these before sending to
         // instances, but this seems fine for now.
         for compaction_command in self.pending_compaction_commands.drain(..) {
@@ -1744,8 +1799,8 @@ where
                 let drop_notif = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) if read_frontier.is_empty() => {
                         pending_collection_drops.push(id);
-                        // TODO(jkosh44) Batch all table drops into single call to `drop_handles`.
-                        Some(self.persist_table_worker.drop_handles(vec![id]))
+                        // Hacky, return an empty future so the IDs are finalized below.
+                        Some(async move {}.boxed())
                     }
                     DataSource::Webhook | DataSource::Introspection(_)
                         if read_frontier.is_empty() =>
@@ -2352,6 +2407,9 @@ where
         let (statistics_interval_sender, _) =
             channel(mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT);
 
+        let (pending_table_handle_drops_tx, pending_table_handle_drops_rx) =
+            tokio::sync::mpsc::unbounded_channel();
+
         Self {
             build_info,
             finalizable_shards: BTreeSet::new(),
@@ -2366,6 +2424,8 @@ where
             txns_metrics,
             stashed_response: None,
             pending_compaction_commands: vec![],
+            pending_table_handle_drops_tx,
+            pending_table_handle_drops_rx,
             collection_manager,
             collection_status_manager,
             introspection_ids,

@@ -511,7 +511,8 @@ impl Coordinator {
                 self.drop_sources(sources_to_drop);
             }
             if !tables_to_drop.is_empty() {
-                self.drop_sources(tables_to_drop);
+                let ts = self.get_local_write_ts().await;
+                self.drop_tables(tables_to_drop, ts.timestamp);
             }
             if !webhook_sources_to_restart.is_empty() {
                 self.restart_webhook_sources(webhook_sources_to_restart);
@@ -690,6 +691,16 @@ impl Coordinator {
         self.controller
             .storage
             .drop_sources(storage_metadata, sources)
+            .unwrap_or_terminate("cannot fail to drop sources");
+    }
+
+    fn drop_tables(&mut self, tables: Vec<GlobalId>, ts: Timestamp) {
+        for id in &tables {
+            self.drop_storage_read_policy(id);
+        }
+        self.controller
+            .storage
+            .drop_tables(tables, ts)
             .unwrap_or_terminate("cannot fail to drop sources");
     }
 

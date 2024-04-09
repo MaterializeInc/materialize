@@ -72,9 +72,14 @@ impl Coordinator {
                     self.message_command(cmd).instrument(span).await
                 }
                 Message::ControllerReady => {
-                    if let Some(m) = self
-                        .controller
-                        .process()
+                    let Coordinator {
+                        controller,
+                        catalog,
+                        ..
+                    } = self;
+                    let storage_metadata = catalog.state().storage_metadata();
+                    if let Some(m) = controller
+                        .process(storage_metadata)
                         .await
                         .expect("`process` never returns an error")
                     {

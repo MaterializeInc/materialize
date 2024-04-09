@@ -161,6 +161,14 @@ impl<T> CollectionDescription<T> {
             status_collection_id: None,
         }
     }
+
+    /// Returns true if `self` is a table, false otherwise.
+    pub fn is_table(&self) -> bool {
+        matches!(
+            self.data_source,
+            DataSource::Other(DataSourceOther::TableWrites)
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -400,6 +408,13 @@ pub trait StorageController: Debug {
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
+    /// Drops the read capability for the tables and allows their resources to be reclaimed.
+    fn drop_tables(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+        ts: Self::Timestamp,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     fn drop_sources(
         &mut self,
@@ -567,7 +582,10 @@ pub trait StorageController: Debug {
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    async fn process(&mut self) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
+    async fn process(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+    ) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
 
     /// Exposes the internal state of the data shard for debugging and QA.
     ///
