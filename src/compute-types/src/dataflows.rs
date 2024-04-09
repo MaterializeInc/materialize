@@ -208,6 +208,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     /// Returns true iff `id` is already imported.
     pub fn is_imported(&self, id: &GlobalId) -> bool {
         self.objects_to_build.iter().any(|bd| &bd.id == id)
+            || self.index_imports.keys().any(|i| i == id)
             || self.source_imports.keys().any(|i| i == id)
     }
 
