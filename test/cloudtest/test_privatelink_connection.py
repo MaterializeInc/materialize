@@ -13,7 +13,9 @@ import pytest
 from pg8000.dbapi import DatabaseError, ProgrammingError
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.cloudtest.util.common import retry
 from materialize.cloudtest.util.exists import exists, not_exists
+from materialize.ui import UIError
 
 
 def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
@@ -214,3 +216,63 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP CONNECTION privatelinkconn CASCADE")
 
     not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
+
+
+def test_background_drop_privatelink_connection(mz: MaterializeApplication) -> None:
+    # Ensure that privatelink connections are
+    # deleted in a background task
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET max_aws_privatelink_connections = 5",
+        port="internal",
+        user="mz_system",
+    )
+    create_connection_statement = dedent(
+        """\
+        CREATE CONNECTION privatelinkconn
+        TO AWS PRIVATELINK (
+            SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+            AVAILABILITY ZONES ('use1-az1', 'use1-az2')
+        )
+        """
+    )
+    mz.environmentd.sql(create_connection_statement)
+    aws_connection_id = mz.environmentd.sql_query(
+        "SELECT id FROM mz_connections WHERE name = 'privatelinkconn'"
+    )[0][0]
+    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=pause'")
+    mz.environmentd.sql("DROP CONNECTION privatelinkconn CASCADE")
+    exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
+    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=off'")
+    not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
+
+
+def test_retry_drop_privatelink_connection(mz: MaterializeApplication) -> None:
+    # Ensure that privatelink connections are
+    # deleted in a background task
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET max_aws_privatelink_connections = 5",
+        port="internal",
+        user="mz_system",
+    )
+    create_connection_statement = dedent(
+        """\
+        CREATE CONNECTION privatelinkconn
+        TO AWS PRIVATELINK (
+            SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+            AVAILABILITY ZONES ('use1-az1', 'use1-az2')
+        )
+        """
+    )
+    mz.environmentd.sql(create_connection_statement)
+    aws_connection_id = mz.environmentd.sql_query(
+        "SELECT id FROM mz_connections WHERE name = 'privatelinkconn'"
+    )[0][0]
+    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=return(failed)'")
+    mz.environmentd.sql("DROP CONNECTION privatelinkconn CASCADE")
+    exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
+    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=off'")
+    retry(
+        f=lambda: not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}"),
+        max_attempts=10,
+        exception_types=[UIError],
+    )

@@ -875,6 +875,9 @@ impl Coordinator {
                     let _ = Retry::default()
                         .max_duration(Duration::from_secs(60))
                         .retry_async(|_state| async {
+                            fail_point!("drop_vpc_endpoint", |r| {
+                                Err(anyhow::anyhow!("Fail point error {:?}", r))
+                            });
                             match cloud_resource_controller
                                 .delete_vpc_endpoint(vpc_endpoint)
                                 .await
