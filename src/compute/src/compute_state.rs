@@ -299,7 +299,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Ensure the state is consistent with the config before we initialize anything.
         self.compute_state.apply_worker_config();
 
-        self.initialize_logging(&config.logging);
+        self.initialize_logging(config.logging);
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
@@ -494,22 +494,22 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     /// Initializes timely dataflow logging and publishes as a view.
-    pub fn initialize_logging(&mut self, config: &LoggingConfig) {
+    pub fn initialize_logging(&mut self, config: LoggingConfig) {
         if self.compute_state.compute_logger.is_some() {
             panic!("dataflow server has already initialized logging");
         }
 
-        let (logger, traces) = logging::initialize(self.timely_worker, config);
+        let (logger, traces) = logging::initialize(self.timely_worker, &config);
 
-        // Install traces as maintained indexes
-        for (log, trace) in traces {
-            let id = config.index_logs[&log];
+        let mut log_index_ids = config.index_logs;
+        for (log, (trace, dataflow_index)) in traces {
+            // Install trace as maintained index.
+            let id = log_index_ids
+                .remove(&log)
+                .expect("`logging::initialize` does not invent logs");
             self.compute_state.traces.set(id, trace);
-        }
 
-        // Initialize compute and logging state for each logging index.
-        let index_ids = config.index_logs.values().copied();
-        for id in index_ids {
+            // Initialize compute and logging state for the logging index.
             let collection = CollectionState::new();
             let existing = self.compute_state.collections.insert(id, collection);
             if existing.is_some() {
@@ -519,12 +519,19 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 );
             }
 
+            logger.log(ComputeEvent::Export { id, dataflow_index });
             logger.log(ComputeEvent::Frontier {
                 id,
                 time: timely::progress::Timestamp::minimum(),
                 diff: 1,
             });
         }
+
+        // Sanity check.
+        assert!(
+            log_index_ids.is_empty(),
+            "failed to create requested logging indexes: {log_index_ids:?}",
+        );
 
         self.compute_state.compute_logger = Some(logger);
     }

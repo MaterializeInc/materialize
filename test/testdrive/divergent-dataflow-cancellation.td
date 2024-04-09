@@ -83,8 +83,11 @@ contains: canceling statement due to statement timeout
 > SELECT count(*) FROM mz_internal.mz_compute_error_counts_raw
 0
 
-> SELECT count(*) FROM mz_internal.mz_compute_exports_per_worker
-0
+# One export for each introspection arrangement.
+> SELECT count(*)
+  FROM mz_internal.mz_compute_exports_per_worker
+  WHERE worker_id = 0
+29
 
 # One frontier for each introspection arrangement.
 > SELECT count(*)

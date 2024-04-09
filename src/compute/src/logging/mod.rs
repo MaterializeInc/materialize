@@ -15,6 +15,7 @@ mod initialize;
 mod reachability;
 mod timely;
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
@@ -25,10 +26,11 @@ use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_repr::{Datum, Row, RowPacker, SharedRow, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowPacker, SharedRow, Timestamp};
 use mz_timely_util::activator::RcActivator;
 
 use crate::logging::compute::Logger as ComputeLogger;
+use crate::typedefs::RowRowAgent;
 
 pub use crate::logging::initialize::initialize;
 
@@ -202,4 +204,14 @@ impl PermutedRowPacker {
 
         (key_row, value_row)
     }
+}
+
+/// Information about a collection exported from a logging dataflow.
+struct LogCollection {
+    /// Trace handle providing access to the logged records.
+    trace: RowRowAgent<Timestamp, Diff>,
+    /// Token that should be dropped to drop this collection.
+    token: Rc<dyn Any>,
+    /// Index of the dataflow exporting this collection.
+    dataflow_index: usize,
 }
