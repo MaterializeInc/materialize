@@ -244,6 +244,11 @@ impl<T: Eq + Hash + Ord> ReadHoldsInner<T> {
             })
     }
 
+    /// Returns an iterator over all times at which a read hold exists.
+    pub fn times(&self) -> impl Iterator<Item = &Antichain<T>> {
+        self.holds.keys()
+    }
+
     /// Returns an iterator over all storage ids and the time at which their read hold exists.
     fn storage_ids(&self) -> impl Iterator<Item = (&Antichain<T>, &GlobalId)> {
         self.holds

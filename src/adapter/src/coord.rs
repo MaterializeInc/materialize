@@ -2273,7 +2273,7 @@ impl Coordinator {
             .acquire_read_holds(mz_repr::Timestamp::minimum(), &direct_dependencies, false)
             .expect("can acquire un-precise read holds");
 
-        let min_as_of = self.least_valid_read(&direct_dependencies);
+        let min_as_of = self.least_valid_read(&read_holds);
 
         // We must not select an `as_of` that is beyond any times that have not yet been written to
         // downstream storage collections (i.e., materialized views). If we would, we might skip

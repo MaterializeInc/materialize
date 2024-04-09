@@ -459,7 +459,7 @@ impl Coordinator {
                 let read_holds = coord
                     .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
                     .expect("can acquire read holds");
-                let since = coord.least_valid_read(&id_bundle);
+                let since = coord.least_valid_read(&read_holds);
                 df_desc.set_as_of(since);
 
                 // Emit notices.
