@@ -76,3 +76,12 @@ class EnumConstant(Expression):
 
     def collect_leaves(self) -> list[LeafExpression]:
         return []
+
+
+class StringConstant(EnumConstant):
+    def __init__(
+        self,
+        value: str,
+        characteristics: set[ExpressionCharacteristics] = set(),
+    ):
+        super().__init__(value, add_quotes=True, characteristics=characteristics)
