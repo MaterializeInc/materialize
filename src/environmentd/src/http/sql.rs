@@ -309,6 +309,7 @@ async fn forward_notices(
     let ws_notices = notices.into_iter().map(|notice| {
         WebSocketResponse::Notice(Notice {
             message: notice.to_string(),
+            code: notice.code().code().to_string(),
             severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),
@@ -485,6 +486,7 @@ pub enum WebSocketResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Notice {
     message: String,
+    code: String,
     severity: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -1303,6 +1305,7 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
         .into_iter()
         .map(|notice| Notice {
             message: notice.to_string(),
+            code: notice.code().code().to_string(),
             severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),

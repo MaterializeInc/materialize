@@ -3011,7 +3011,7 @@ fn test_github_20262() {
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
         r#"{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}"#,
         r#"{"type":"CommandComplete","payload":"COMMIT"}"#,
-        r#"{"type":"Notice","payload":{"message":"there is no transaction in progress","severity":"warning"}}"#,
+        r#"{"type":"Notice","payload":{"message":"there is no transaction in progress","code":"25P01","severity":"warning"}}"#,
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
         r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#,
         r#"{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
@@ -4008,6 +4008,7 @@ async fn test_startup_cluster_notice_with_http_options() {
     [
       {
         "message": "cluster \"i_do_not_exist\" does not exist",
+        "code": "01000",
         "severity": "notice",
         "hint": "Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS."
       }
