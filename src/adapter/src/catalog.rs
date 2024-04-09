@@ -23,8 +23,8 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventType, FullNameV1, ObjectType};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
-    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
-    BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
+    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTINS, BUILTIN_PREFIXES,
+    MZ_INTROSPECTION_CLUSTER,
 };
 use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState};
@@ -50,9 +50,8 @@ use mz_repr::{Diff, GlobalId, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogRecordField,
-    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem,
-    DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference, SessionCatalog,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogRole,
+    CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId, SessionCatalog,
     SystemObjectType,
 };
 use mz_sql::names::{
@@ -454,91 +453,6 @@ impl ConnectionResolver for ConnCatalog<'_> {
 }
 
 impl Catalog {
-    fn resolve_builtin_type(
-        builtin: &BuiltinType<NameReference>,
-        name_to_id_map: &BTreeMap<&str, GlobalId>,
-    ) -> BuiltinType<IdReference> {
-        let typ: CatalogType<IdReference> = match &builtin.details.typ {
-            CatalogType::AclItem => CatalogType::AclItem,
-            CatalogType::Array { element_reference } => CatalogType::Array {
-                element_reference: name_to_id_map[element_reference],
-            },
-            CatalogType::List {
-                element_reference,
-                element_modifiers,
-            } => CatalogType::List {
-                element_reference: name_to_id_map[element_reference],
-                element_modifiers: element_modifiers.clone(),
-            },
-            CatalogType::Map {
-                key_reference,
-                value_reference,
-                key_modifiers,
-                value_modifiers,
-            } => CatalogType::Map {
-                key_reference: name_to_id_map[key_reference],
-                value_reference: name_to_id_map[value_reference],
-                key_modifiers: key_modifiers.clone(),
-                value_modifiers: value_modifiers.clone(),
-            },
-            CatalogType::Range { element_reference } => CatalogType::Range {
-                element_reference: name_to_id_map[element_reference],
-            },
-            CatalogType::Record { fields } => CatalogType::Record {
-                fields: fields
-                    .into_iter()
-                    .map(|f| CatalogRecordField {
-                        name: f.name.clone(),
-                        type_reference: name_to_id_map[f.type_reference],
-                        type_modifiers: f.type_modifiers.clone(),
-                    })
-                    .collect(),
-            },
-            CatalogType::Bool => CatalogType::Bool,
-            CatalogType::Bytes => CatalogType::Bytes,
-            CatalogType::Char => CatalogType::Char,
-            CatalogType::Date => CatalogType::Date,
-            CatalogType::Float32 => CatalogType::Float32,
-            CatalogType::Float64 => CatalogType::Float64,
-            CatalogType::Int16 => CatalogType::Int16,
-            CatalogType::Int32 => CatalogType::Int32,
-            CatalogType::Int64 => CatalogType::Int64,
-            CatalogType::UInt16 => CatalogType::UInt16,
-            CatalogType::UInt32 => CatalogType::UInt32,
-            CatalogType::UInt64 => CatalogType::UInt64,
-            CatalogType::MzTimestamp => CatalogType::MzTimestamp,
-            CatalogType::Interval => CatalogType::Interval,
-            CatalogType::Jsonb => CatalogType::Jsonb,
-            CatalogType::Numeric => CatalogType::Numeric,
-            CatalogType::Oid => CatalogType::Oid,
-            CatalogType::PgLegacyChar => CatalogType::PgLegacyChar,
-            CatalogType::PgLegacyName => CatalogType::PgLegacyName,
-            CatalogType::Pseudo => CatalogType::Pseudo,
-            CatalogType::RegClass => CatalogType::RegClass,
-            CatalogType::RegProc => CatalogType::RegProc,
-            CatalogType::RegType => CatalogType::RegType,
-            CatalogType::String => CatalogType::String,
-            CatalogType::Time => CatalogType::Time,
-            CatalogType::Timestamp => CatalogType::Timestamp,
-            CatalogType::TimestampTz => CatalogType::TimestampTz,
-            CatalogType::Uuid => CatalogType::Uuid,
-            CatalogType::VarChar => CatalogType::VarChar,
-            CatalogType::Int2Vector => CatalogType::Int2Vector,
-            CatalogType::MzAclItem => CatalogType::MzAclItem,
-        };
-
-        BuiltinType {
-            name: builtin.name,
-            schema: builtin.schema,
-            oid: builtin.oid,
-            details: CatalogTypeDetails {
-                array_id: builtin.details.array_id,
-                typ,
-                pg_metadata: builtin.details.pg_metadata.clone(),
-            },
-        }
-    }
-
     /// Returns the catalog's transient revision, which starts at 1 and is
     /// incremented on every change. This is not persisted to disk, and will
     /// restart on every load.

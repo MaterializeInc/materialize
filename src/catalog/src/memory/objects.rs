@@ -2287,6 +2287,7 @@ pub enum StateUpdateKind {
     Cluster(durable::objects::Cluster),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
+    SystemObjectMapping(durable::objects::SystemObjectMapping),
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
     // TODO(jkosh44) Add all other object variants.

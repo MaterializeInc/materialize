@@ -807,6 +807,12 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     system_configuration,
                 ))
             }
+            StateUpdateKind::SystemObjectMapping(key, value) => {
+                let system_object_mapping = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SystemObjectMapping(
+                    system_object_mapping,
+                ))
+            }
             StateUpdateKind::SystemPrivilege(key, value) => {
                 let system_privilege = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SystemPrivilege(
@@ -820,7 +826,6 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::StorageUsage(_, _)
-            | StateUpdateKind::SystemObjectMapping(_, _)
             | StateUpdateKind::StorageCollectionMetadata(_, _)
             | StateUpdateKind::UnfinalizedShard(_, _)
             | StateUpdateKind::PersistTxnShard(_, _) => None,
