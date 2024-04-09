@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use aws_sdk_s3::config::Builder;
-use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use aws_types::sdk_config::SdkConfig;
 
@@ -47,37 +46,4 @@ pub async fn list_bucket_path(
                 .collect::<Result<Vec<String>, _>>()
         })
         .transpose()?)
-}
-
-/// Upload an object to an S3 bucket. `mz_aws_util::s3_uploader::S3MultiPartUploader`
-/// should be used instead for large files.
-pub async fn upload_object<T: Into<ByteStream>>(
-    client: &Client,
-    bucket: &str,
-    key: &str,
-    body: T,
-) -> Result<(), aws_sdk_s3::Error> {
-    client
-        .put_object()
-        .bucket(bucket)
-        .key(key)
-        .body(body.into())
-        .send()
-        .await?;
-    Ok(())
-}
-
-/// Delete an object by key from an S3 bucket.
-pub async fn delete_object(
-    client: &Client,
-    bucket: &str,
-    key: &str,
-) -> Result<(), aws_sdk_s3::Error> {
-    client
-        .delete_object()
-        .bucket(bucket)
-        .key(key)
-        .send()
-        .await?;
-    Ok(())
 }
