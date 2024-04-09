@@ -568,6 +568,7 @@ The closest competitors to Docker and Compose are [Kubernetes] and [Helm], but
 these are *more* complicated than Docker and Compose, as they're more focused on
 the enterprise-grade production deployment scenario.
 
+
 [Base32]: https://en.wikipedia.org/wiki/Base32
 [compose-ref]: https://docs.docker.com/compose/compose-file/
 [Docker Compose]: https://docs.docker.com/compose/
