@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+import re
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
@@ -101,86 +102,95 @@ class MaterializedViewsAssertNotNull(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
-                ! SELECT * FROM not_null_view1
-                contains: column "x" must not be null
+        sql = dedent(
+            """
+            ! SELECT * FROM not_null_view1
+            contains: column "x" must not be null
 
-                ! SELECT * FROM not_null_view2
-                contains: column "y" must not be null
+            ! SELECT * FROM not_null_view2
+            contains: column "y" must not be null
 
-                ! SELECT * FROM not_null_view3
-                contains: column "z" must not be null
+            ! SELECT * FROM not_null_view3
+            contains: column "z" must not be null
 
-                ! SELECT * FROM not_null_view1 WHERE x IS NOT NULL
-                contains: column "x" must not be null
+            ! SELECT * FROM not_null_view1 WHERE x IS NOT NULL
+            contains: column "x" must not be null
 
-                ! SELECT * FROM not_null_view2 WHERE y IS NOT NULL
-                contains: column "y" must not be null
+            ! SELECT * FROM not_null_view2 WHERE y IS NOT NULL
+            contains: column "y" must not be null
 
-                ! SELECT * FROM not_null_view3 WHERE z IS NOT NULL
-                contains: column "z" must not be null
+            ! SELECT * FROM not_null_view3 WHERE z IS NOT NULL
+            contains: column "z" must not be null
 
-                ! SELECT y FROM not_null_view1
-                contains: column "x" must not be null
+            ! SELECT y FROM not_null_view1
+            contains: column "x" must not be null
 
-                ! SELECT z FROM not_null_view2
-                contains: column "y" must not be null
+            ! SELECT z FROM not_null_view2
+            contains: column "y" must not be null
 
-                ! SELECT x FROM not_null_view3
-                contains: column "z" must not be null
+            ! SELECT x FROM not_null_view3
+            contains: column "z" must not be null
 
-                > DELETE FROM not_null_table WHERE x IS NULL;
+            > DELETE FROM not_null_table WHERE x IS NULL;
 
-                > SELECT * FROM not_null_view1
-                4 <null> 6
-                7 8 <null>
-                14 <null> 16
-                17 18 <null>
-                24 <null> 26
-                27 28 <null>
+            > SELECT * FROM not_null_view1
+            4 <null> 6
+            7 8 <null>
+            14 <null> 16
+            17 18 <null>
+            24 <null> 26
+            27 28 <null>
 
-                > DELETE FROM not_null_table WHERE y IS NULL;
+            > DELETE FROM not_null_table WHERE y IS NULL;
 
-                > SELECT * FROM not_null_view2
-                7 8 <null>
-                17 18 <null>
-                27 28 <null>
+            > SELECT * FROM not_null_view2
+            7 8 <null>
+            17 18 <null>
+            27 28 <null>
 
-                > DELETE FROM not_null_table WHERE z IS NULL;
+            > DELETE FROM not_null_table WHERE z IS NULL;
 
-                ? EXPLAIN SELECT * FROM not_null_view1 WHERE x IS NOT NULL
-                Explained Query:
-                  ReadStorage materialize.public.not_null_view1
+            ? EXPLAIN SELECT * FROM not_null_view1 WHERE x IS NOT NULL
+            Explained Query:
+              ReadStorage materialize.public.not_null_view1
 
-                ? EXPLAIN SELECT * FROM not_null_view2 WHERE y IS NOT NULL
-                Explained Query:
-                  ReadStorage materialize.public.not_null_view2
+            Target cluster: quickstart
 
-                ? EXPLAIN SELECT * FROM not_null_view3 WHERE z IS NOT NULL
-                Explained Query:
-                  ReadStorage materialize.public.not_null_view3
+            ? EXPLAIN SELECT * FROM not_null_view2 WHERE y IS NOT NULL
+            Explained Query:
+              ReadStorage materialize.public.not_null_view2
 
-                > SELECT * FROM not_null_view3
+            Target cluster: quickstart
 
-                > INSERT INTO not_null_table VALUES (NULL, 2, 3), (4, NULL, 6), (7, 8, NULL);
+            ? EXPLAIN SELECT * FROM not_null_view3 WHERE z IS NOT NULL
+            Explained Query:
+              ReadStorage materialize.public.not_null_view3
 
-                > INSERT INTO not_null_table VALUES (NULL, 12, 13), (14, NULL, 16), (17, 18, NULL);
+            Target cluster: quickstart
 
-                > INSERT INTO not_null_table VALUES (NULL, 22, 23), (24, NULL, 26), (27, 28, NULL);
+            > SELECT * FROM not_null_view3
 
-                ! SELECT * FROM not_null_view1
-                contains: column "x" must not be null
+            > INSERT INTO not_null_table VALUES (NULL, 2, 3), (4, NULL, 6), (7, 8, NULL);
 
-                ! SELECT * FROM not_null_view2
-                contains: column "y" must not be null
+            > INSERT INTO not_null_table VALUES (NULL, 12, 13), (14, NULL, 16), (17, 18, NULL);
 
-                ! SELECT * FROM not_null_view3
-                contains: column "z" must not be null
-           """
-            )
+            > INSERT INTO not_null_table VALUES (NULL, 22, 23), (24, NULL, 26), (27, 28, NULL);
+
+            ! SELECT * FROM not_null_view1
+            contains: column "x" must not be null
+
+            ! SELECT * FROM not_null_view2
+            contains: column "y" must not be null
+
+            ! SELECT * FROM not_null_view3
+            contains: column "z" must not be null
+            """
         )
+
+        if self.current_version < MzVersion.parse_mz("v0.96.0-dev"):
+            sql = remove_target_cluster_from_explain(sql)
+
+        return Testdrive(sql)
 
 
 class MaterializedViewsRefresh(Check):
@@ -297,3 +307,7 @@ class MaterializedViewsRefresh(Check):
            """
             )
         )
+
+
+def remove_target_cluster_from_explain(sql: str) -> str:
+    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)

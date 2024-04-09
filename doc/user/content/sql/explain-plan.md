@@ -35,10 +35,12 @@ The following three objects can be explained.
 Explained object | Description
 ------|-----
 **select_stmt** | Display a plan for an ad-hoc [`SELECT` statement](../select).
+**create_view** | Display a plan for a [`CREATE VIEW` statement](../create-view).
 **create_index** | Display a plan for a [`CREATE INDEX` statement](../create-index).
 **create_materialized_view** | Display a plan for a [`CREATE MATERIALIZED VIEW` statement](../create-materialized-view).
-**INDEX index_name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing index.
-**MATERIALIZED VIEW view_name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing materialized view.
+**VIEW name** | Display the `RAW` or `LOCALLY OPTIMIZED` plan for an existing view.
+**INDEX name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing index.
+**MATERIALIZED VIEW name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing materialized view.
 
 ### Output format
 
@@ -59,6 +61,7 @@ Plan Stage | Description
 ------|-----
 **RAW PLAN** | Display the raw plan.
 **DECORRELATED PLAN** | Display the decorrelated plan.
+**LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
 **OPTIMIZED PLAN** | _(Default)_ Display the optimized plan.
 **PHYSICAL PLAN** | Display the physical plan.
 
@@ -74,9 +77,13 @@ Modifier | Description
 **join implementations** | Render details about the implementation strategy of optimized MIR `Join` nodes.
 **keys** | Annotate each subplan with its unique keys.
 **node identifiers** | Annotate each subplan in a `PHYSICAL PLAN` with its node ID.
+**redacted** | Anonymize literals in the output.
+**timing** | Annotate the output with the optimization time.
 **types** | Annotate each subplan with its inferred type.
 **humanized expressions** | Render `EXPLAIN AS TEXT` output with human-readable column references in operator expressions. **Warning**: SQL-level aliasing is not considered when inferring column names, so the plan output might become ambiguous if you use this modifier.
 **filter pushdown** | **Private preview** For each source, include a `pushdown` field that explains which filters [can be pushed down](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+
+Note that most modifiers are currently only supported for the `AS TEXT` output.
 
 ## Details
 

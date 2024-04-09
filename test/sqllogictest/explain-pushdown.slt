@@ -25,6 +25,8 @@ Explained Query:
 Source materialize.public.numbers
   filter=((#0 > 10))
 
+Target cluster: quickstart
+
 EOF
 
 query error db error: ERROR: EXPLAIN FILTER PUSHDOWN is not supported

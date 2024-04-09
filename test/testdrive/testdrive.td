@@ -54,6 +54,8 @@ Explained Query:
     ArrangeBy keys=[[]]
       ReadStorage materialize.public.t1
 
+Target cluster: quickstart
+
 ! SELECT * FROM u1234;
 contains:unknown catalog item 'UID'
 

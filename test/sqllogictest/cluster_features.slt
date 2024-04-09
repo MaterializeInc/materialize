@@ -123,6 +123,8 @@ Source materialize.public.t2
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
 
+Target cluster: c1
+
 EOF
 
 # EXPLAIN mv2 in c2 (should be running with the feature flag turned off).
@@ -152,6 +154,8 @@ Source materialize.public.t2
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
+
+Target cluster: c2
 
 EOF
 
@@ -185,6 +189,8 @@ Source materialize.public.t2
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
 
+Target cluster: c1
+
 EOF
 
 # EXPLAIN REPLAN mv1 in c1 with an explain-level feature override (should be
@@ -215,6 +221,8 @@ Source materialize.public.t2
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
+
+Target cluster: c1
 
 EOF
 
@@ -255,6 +263,8 @@ Source materialize.public.t2
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
+
+Target cluster: c1
 
 EOF
 
@@ -314,6 +324,8 @@ Source materialize.public.t2
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
 
+Target cluster: c1
+
 EOF
 
 # EXPLAIN v in c2 (should be running with the feature flag turned off).
@@ -347,6 +359,8 @@ Source materialize.public.t2
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
+
+Target cluster: c2
 
 EOF
 
@@ -384,6 +398,8 @@ Source materialize.public.t2
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
 
+Target cluster: c1
+
 EOF
 
 # EXPLAIN REPLAN v in c1 with an explain-level feature override (should be
@@ -418,6 +434,8 @@ Source materialize.public.t2
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
+
+Target cluster: c1
 
 EOF
 
@@ -458,6 +476,8 @@ Source materialize.public.t2
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
+
+Target cluster: c1
 
 EOF
 
@@ -501,6 +521,8 @@ Source materialize.public.t2
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
 
+Target cluster: c1
+
 EOF
 
 statement ok
@@ -539,5 +561,7 @@ Source materialize.public.t2
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 Source materialize.public.t3
   filter=((#1) IS NOT NULL)
+
+Target cluster: c2
 
 EOF

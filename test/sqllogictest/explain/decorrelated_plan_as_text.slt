@@ -49,6 +49,8 @@ Project (#0)
     Constant
       - ()
 
+Target cluster: quickstart
+
 EOF
 
 # Test constant with two elements.
@@ -70,6 +72,8 @@ Union
       Constant
         - ()
 
+Target cluster: mz_introspection
+
 EOF
 
 # Test basic linear chains.
@@ -85,6 +89,8 @@ Project (#2, #3)
           - ()
         Get materialize.public.mv
 
+Target cluster: quickstart
+
 EOF
 
 # Test table functions in the select clause (FlatMap).
@@ -99,6 +105,8 @@ Project (#2)
         Constant
           - ()
         Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -123,6 +131,8 @@ Threshold
               - ()
             Get materialize.public.mv
 
+Target cluster: quickstart
+
 EOF
 
 # Test Threshold, Union, Distinct, Negate.
@@ -144,6 +154,8 @@ Threshold
             - ()
           Get materialize.public.mv
 
+Target cluster: quickstart
+
 EOF
 
 # Test Finish.
@@ -156,6 +168,8 @@ Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
     Constant
       - ()
     Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -191,6 +205,8 @@ With
           - ()
         Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 # Test Reduce (local).
@@ -207,6 +223,8 @@ Project (#3)
             Constant
               - ()
             Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -282,6 +300,8 @@ With
         Constant
           - ()
         Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -378,6 +398,8 @@ With
         - ()
       Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 # Test CrossJoin derived from a comma join without a predicate.
@@ -398,6 +420,8 @@ Project (#0, #2)
             - ()
           Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 # Test CrossJoin derived from an INNER JOIN with a trivial ON clause.
@@ -417,6 +441,8 @@ Project (#0, #2)
           Constant
             - ()
           Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -451,6 +477,8 @@ Project (#0, #2)
               - ()
             Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 # Test InnerJoin (ON syntax).
@@ -480,6 +508,8 @@ Project (#0, #2)
           Constant
             - ()
           Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -544,6 +574,8 @@ With
         - ()
       Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 # Test a single CTE.
@@ -568,6 +600,8 @@ With
           Constant
             - ()
           Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -656,6 +690,8 @@ With
       Constant
         - ()
       Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -748,6 +784,8 @@ With
         - ()
       Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -775,6 +813,8 @@ With
     Reduce aggregates=[count(*)]
       Constant
         - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -814,5 +854,7 @@ Explained Query:
 
 Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF

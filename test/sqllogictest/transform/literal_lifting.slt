@@ -49,6 +49,8 @@ Explained Query:
             Project (#1) // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 # Multiple bindings under `WITH MUTUALLY RECURSIVE`
@@ -88,5 +90,7 @@ Explained Query:
             ReadStorage materialize.public.t1 // { arity: 2 }
           Project (#1) // { arity: 1 }
             ReadStorage materialize.public.t1 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF

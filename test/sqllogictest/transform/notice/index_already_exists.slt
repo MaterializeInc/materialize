@@ -44,6 +44,8 @@ materialize.public.t_idx2:
 Used Indexes:
   - materialize.public.t_idx1 (plan root (no new arrangement), index export)
 
+Target cluster: quickstart
+
 Notices:
   - Notice: The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
     Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
@@ -64,6 +66,8 @@ materialize.public.t_idx2:
 
 Used Indexes:
   - materialize.public.t_idx1 (plan root (no new arrangement), index export)
+
+Target cluster: quickstart
 
 Notices:
   - Notice: The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
@@ -120,6 +124,8 @@ materialize.public.t_idx3:
 Used Indexes:
   - materialize.public.t_idx1 (plan root (no new arrangement), index export)
 
+Target cluster: quickstart
+
 Notices:
   - Notice: The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
     Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
@@ -161,6 +167,8 @@ materialize.public.t_idx3:
 
 Used Indexes:
   - [DELETED INDEX] (plan root (no new arrangement), index export)
+
+Target cluster: quickstart
 
 EOF
 

@@ -59,7 +59,8 @@ fn handle_explain(
         used_indexes: Default::default(),
         finishing: Default::default(),
         duration: Default::default(),
-        optimizer_notices: Vec::default(),
+        target_cluster: Default::default(),
+        optimizer_notices: Default::default(),
     };
 
     // Parse the relation, returning early on parse error.

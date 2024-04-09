@@ -47,4 +47,6 @@ Explained Query:
     cte l0 =
       Get l1
 
+Target cluster: quickstart
+
 EOF

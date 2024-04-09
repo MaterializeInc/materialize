@@ -41,6 +41,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -53,6 +55,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -67,6 +71,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -79,6 +85,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -93,6 +101,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -105,6 +115,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -119,6 +131,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -131,6 +145,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -150,6 +166,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -163,6 +181,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -178,6 +198,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -191,6 +213,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -206,6 +230,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -220,6 +246,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -233,6 +261,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -254,6 +284,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#1 = #2))
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -266,6 +298,8 @@ Explained Query:
 
 Source materialize.public.t2
   filter=((#0 = #1) AND (#1 = #2))
+
+Target cluster: quickstart
 
 EOF
 
@@ -280,6 +314,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#0 = #2) AND (#1 = #2))
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -291,6 +327,8 @@ Explained Query:
 
 Source materialize.public.t2
   filter=((#0 = #2) AND (#1 = #3))
+
+Target cluster: quickstart
 
 EOF
 
@@ -305,6 +343,8 @@ Explained Query:
 
 Source materialize.public.t2
   filter=((#0 = #2) AND (#1 = #3))
+
+Target cluster: quickstart
 
 EOF
 
@@ -324,6 +364,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#2 = #3))
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -337,6 +379,8 @@ Explained Query:
 
 Source materialize.public.t2
   filter=((#0 = #2))
+
+Target cluster: quickstart
 
 EOF
 
@@ -352,6 +396,8 @@ Explained Query:
 Source materialize.public.t2
   filter=((#0 = #2))
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -365,5 +411,7 @@ Explained Query:
 
 Source materialize.public.t2
   filter=((#0 = #1))
+
+Target cluster: quickstart
 
 EOF

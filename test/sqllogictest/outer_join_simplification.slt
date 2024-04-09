@@ -57,6 +57,8 @@ Explained Query:
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # Ensure LEFT JOIN is planned with only one join.
@@ -89,6 +91,8 @@ Explained Query:
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -129,6 +133,8 @@ Explained Query:
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -201,6 +207,8 @@ Explained Query:
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -287,6 +295,8 @@ Explained Query:
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # Record how we can push filters through left joins to their source.
@@ -334,6 +344,8 @@ Explained Query:
                       Constant
                         - (null)
 
+Target cluster: quickstart
+
 EOF
 
 ## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
@@ -377,6 +389,8 @@ Explained Query:
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # Manually written idempotent semijoin.
@@ -416,6 +430,8 @@ Explained Query:
                   Project (#0) // { keys: "()" }
                     Get l0 // { keys: "()" }
           Get l0 // { keys: "()" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -458,6 +474,8 @@ Explained Query:
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # Manually written idempotent semijoin.
@@ -495,6 +513,8 @@ Explained Query:
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -544,6 +564,8 @@ Explained Query:
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -602,6 +624,8 @@ Explained Query:
               Project (#0) // { keys: "()" }
                 Filter (#0) IS NOT NULL // { keys: "()" }
                   Get l1 // { keys: "()" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -674,6 +698,8 @@ Explained Query:
           Project (#0, #2)
             Get l2
 
+Target cluster: quickstart
+
 EOF
 
 # Test that LEFT JOIN inside WMR is planned with only one join.
@@ -723,6 +749,8 @@ Explained Query:
             Project (#0, #2) // { keys: "()" }
               Filter (#0) IS NOT NULL // { keys: "()" }
                 Get l1 // { keys: "()" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -774,6 +802,8 @@ Explained Query:
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # Ensure LEFT JOIN inside WMR is planned with only one join.
@@ -819,6 +849,8 @@ Explained Query:
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -908,6 +940,8 @@ Explained Query:
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # Ensure that when the info coming from the right side of a left join is not used, then the join is optimized out.
@@ -993,5 +1027,7 @@ Explained Query:
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF

@@ -19,5 +19,7 @@ materialize.public.mv:
   Constant
     - (1)
 
+Target cluster: quickstart
+
 EOF
 COMPLETE 1

@@ -56,6 +56,42 @@ SELECT * FROM t WHERE a IS NOT NULL;
 
 mode cockroach
 
+# Test target cluster selection for mz_system tables without transactions.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS TEXT FOR
+SELECT * FROM mz_views;
+----
+Explained Query:
+  ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_show_views_ind (*** full scan ***)
+
+Target cluster: mz_introspection
+
+EOF
+
+# Test target cluster selection for mz_system tables inside a transaction.
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t;
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS TEXT FOR
+SELECT * FROM mz_views;
+----
+Explained Query:
+  ReadStorage mz_catalog.mz_views
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+ROLLBACK
+
 # Test constant error.
 query T multiline
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
@@ -63,6 +99,8 @@ SELECT 1 / 0
 ----
 Explained Query (fast path):
   Error "division by zero"
+
+Target cluster: quickstart
 
 EOF
 
@@ -76,6 +114,8 @@ Explained Query (fast path):
     - ((1, 2) x 2)
     - (3, 4)
 
+Target cluster: mz_introspection
+
 EOF
 
 # Test introspection queries (index found based on cluster auto-routing).
@@ -88,6 +128,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_source_status_history_ind (*** full scan ***)
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -105,6 +147,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test basic linear chains (slow path).
@@ -121,6 +165,8 @@ Explained Query:
 Source materialize.public.mv
   filter=((#0 > 0) AND (#1 < 0) AND ((#0 + #1) > 0))
 
+Target cluster: quickstart
+
 EOF
 
 # Test table functions in the select clause (FlatMap).
@@ -135,6 +181,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -157,6 +205,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test Threshold, Union, Distinct, Negate.
@@ -176,6 +226,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test TopK.
@@ -190,6 +242,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test Finish.
@@ -203,6 +257,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -233,6 +289,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test Reduce (local).
@@ -248,6 +306,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -295,6 +355,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***, differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -362,6 +424,8 @@ Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
   - materialize.public.iv_b_idx (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 # Test outer joins (ON syntax).
@@ -410,6 +474,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test a single CTE.
@@ -434,6 +500,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test EXPLAIN INDEX for an indexed source
@@ -444,6 +512,8 @@ INDEX t_a_idx
 materialize.public.t_a_idx:
   ArrangeBy keys=[[#0]]
     ReadStorage materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -463,6 +533,8 @@ materialize.public.iv:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test EXPLAIN INDEX for an indexed view (based on a prior index)
@@ -477,6 +549,8 @@ materialize.public.iv_b_idx:
 Used Indexes:
   - materialize.public.iv_a_idx (*** full scan ***, index export)
 
+Target cluster: quickstart
+
 EOF
 
 # Test EXPLAIN INDEX for an indexed view where the index is exactly the same as a prior index.
@@ -490,6 +564,8 @@ materialize.public.iv_b_idx_2:
 
 Used Indexes:
   - materialize.public.iv_b_idx (plan root (no new arrangement), index export)
+
+Target cluster: quickstart
 
 Notices:
   - Notice: The current index is identical to materialize.public.iv_b_idx, which is also defined on iv(b).
@@ -559,6 +635,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***, differential join)
 
+Target cluster: quickstart
+
 EOF
 
 # Test cross join.
@@ -579,6 +657,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -611,6 +691,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -651,6 +733,8 @@ Used Indexes:
   - materialize.public.u_d_idx (delta join lookup)
   - materialize.public.v_e_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Test a differential join WITH(join implementations).
@@ -683,6 +767,8 @@ Used Indexes:
   - materialize.public.u_d_idx (delta join lookup)
   - materialize.public.v_e_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Create indexes required for delta join tests
@@ -714,6 +800,8 @@ Used Indexes:
   - materialize.public.v_e_idx (delta join lookup)
   - materialize.public.t_b_idx (delta join 1st input (full scan))
 
+Target cluster: quickstart
+
 EOF
 
 # Test a delta join WITH(join implementations).
@@ -744,6 +832,8 @@ Used Indexes:
   - materialize.public.v_e_idx (delta join lookup)
   - materialize.public.t_b_idx (delta join 1st input (full scan))
 
+Target cluster: quickstart
+
 EOF
 
 # Test an IndexedFilter join.
@@ -763,6 +853,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -787,6 +879,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_b_idx (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # Test an IndexedFilter join on fast path WITH(join implementations).
@@ -802,6 +896,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t_a_b_idx (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -841,6 +937,8 @@ Explained Query:
 
 Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -916,6 +1014,8 @@ Explained Query:
         Reduce aggregates=[lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0, 3, "default")), (#0 || #0)))]
           ReadStorage materialize.public.t1
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -929,6 +1029,8 @@ Explained Query:
       FlatMap unnest_list(#0)
         Reduce aggregates=[first_value[order_by=[#0 asc nulls_last] rows between 5 preceding and current row](row(row(row(#0), #0), (#0 || #0)))]
           ReadStorage materialize.public.t1
+
+Target cluster: quickstart
 
 EOF
 
@@ -976,6 +1078,8 @@ Source materialize.public.t
 Used Indexes:
   - materialize.public.u_c (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -999,6 +1103,8 @@ Source materialize.public.t
 
 Used Indexes:
   - materialize.public.u_d (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1033,6 +1139,8 @@ Used Indexes:
   - materialize.public.u_d (*** full scan ***)
   - materialize.public.t_a_idx_1 (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 # An index is used two times by the same (self) join. We should show a 1st input and a non-1st input usage.
@@ -1057,6 +1165,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx_1 (delta join lookup, delta join 1st input (full scan))
+
+Target cluster: quickstart
 
 EOF
 
@@ -1091,6 +1201,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***, differential join)
 
+Target cluster: quickstart
+
 EOF
 
 # An index exists that can't be used for the join because of having the wrong key.
@@ -1123,6 +1235,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1167,6 +1281,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_non_null_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # This has 1 more full scan than the previous test, because the join needs 2 different arrangements.
@@ -1197,6 +1313,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_non_null_a_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # An index is used in both a lookup and a full scan.
@@ -1215,6 +1333,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx_2 (*** full scan ***, lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1252,6 +1372,8 @@ Used Indexes:
   - materialize.public.t_a_idx_2 (lookup)
   - materialize.public.t_b_idx (*** full scan ***, lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # Fast path with a LIMIT and no ORDER BY. This is not a full scan.
@@ -1272,6 +1394,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.t_a_idx_1 (fast path limit)
 
+Target cluster: quickstart
+
 EOF
 
 # Same query without a LIMIT, so full scan
@@ -1289,6 +1413,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1310,6 +1436,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1340,5 +1468,7 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t4_idx_b (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF

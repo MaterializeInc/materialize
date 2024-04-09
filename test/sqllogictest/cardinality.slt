@@ -53,6 +53,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_x (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -67,6 +69,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_x (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -89,6 +93,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.cities_state (differential join)
   - materialize.public.state_state (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -122,6 +128,8 @@ Used Indexes:
   - materialize.public.t_x (differential join)
   - materialize.public.tt_x (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -137,6 +145,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.cities_name (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -172,6 +182,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_x (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 statement ok
@@ -193,6 +205,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_x (differential join)
   - materialize.public.tt_x (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -318,6 +332,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # regression test drawn from LDBC-BI query 15 for having a selectivity of 0
@@ -431,6 +447,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -592,5 +610,7 @@ Explained Query:
 Used Indexes:
   - materialize.public.t_x (delta join 1st input (full scan))
   - materialize.public.tt_x (delta join lookup)
+
+Target cluster: quickstart
 
 EOF

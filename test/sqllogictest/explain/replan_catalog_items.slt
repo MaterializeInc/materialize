@@ -51,6 +51,8 @@ Source materialize.public.t1
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
@@ -73,6 +75,8 @@ Source materialize.public.t1
   filter=((#1) IS NOT NULL)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -97,6 +101,8 @@ Source materialize.public.t2
 
 Used Indexes:
   - materialize.public.t1_y_idx (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -129,6 +135,8 @@ Source materialize.public.t2
 Used Indexes:
   - materialize.public.t1_y_idx (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
@@ -157,6 +165,8 @@ Source materialize.public.t2
 Used Indexes:
   - materialize.public.t1_y_idx (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 # EXPLAIN CREATE should differ from the above two.
@@ -170,6 +180,8 @@ materialize.public.v_x_idx:
 
 Used Indexes:
   - materialize.public.v_idx (plan root (no new arrangement), index export)
+
+Target cluster: quickstart
 
 Notices:
   - Notice: The current index is identical to materialize.public.v_idx, which is also defined on v(x).

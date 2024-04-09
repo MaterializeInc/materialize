@@ -344,6 +344,8 @@ Explained Query:
   Project (#0)
     ReadStorage materialize.public.bareformatconfluent
 
+Target cluster: quickstart
+
 > CREATE DEFAULT INDEX ON bareformatconfluent;
 
 ? EXPLAIN SELECT DISTINCT named FROM bareformatconfluent;
@@ -353,6 +355,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.bareformatconfluent_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 > CREATE CLUSTER envelope_none_with_key_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE envelope_none_with_key
@@ -373,6 +377,8 @@ Explained Query:
     Project (#0)
       ReadStorage materialize.public.envelope_none_with_key
 
+Target cluster: quickstart
+
 > CREATE DEFAULT INDEX ON envelope_none_with_key;
 
 ? EXPLAIN SELECT DISTINCT named FROM envelope_none_with_key;
@@ -383,3 +389,5 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.envelope_none_with_key_primary_idx (*** full scan ***)
+
+Target cluster: quickstart

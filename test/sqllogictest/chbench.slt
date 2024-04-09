@@ -274,6 +274,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.fk_orderline_order (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 02
@@ -366,6 +368,8 @@ Used Indexes:
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 03
@@ -415,6 +419,8 @@ Used Indexes:
   - materialize.public.fk_customer_district (*** full scan ***)
   - materialize.public.fk_order_customer (*** full scan ***)
   - materialize.public.fk_orderline_order (delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -468,6 +474,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.fk_order_customer (*** full scan ***)
   - materialize.public.fk_orderline_order (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -545,6 +553,8 @@ Used Indexes:
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 06
@@ -577,6 +587,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.fk_orderline_order (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -658,6 +670,8 @@ Used Indexes:
   - materialize.public.fk_stock_warehouse (*** full scan ***)
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -754,6 +768,8 @@ Used Indexes:
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 09
@@ -818,6 +834,8 @@ Used Indexes:
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 10
@@ -869,6 +887,8 @@ Used Indexes:
   - materialize.public.fk_order_customer (*** full scan ***)
   - materialize.public.fk_orderline_order (delta join lookup)
   - materialize.public.fk_nation_regionkey (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -928,6 +948,8 @@ Used Indexes:
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 12
@@ -964,6 +986,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.fk_order_customer (*** full scan ***)
   - materialize.public.fk_orderline_order (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1018,6 +1042,8 @@ Used Indexes:
   - materialize.public.fk_customer_district (*** full scan ***)
   - materialize.public.fk_order_customer (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 14
@@ -1060,6 +1086,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.fk_orderline_item (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1134,6 +1162,8 @@ Used Indexes:
   - materialize.public.fk_stock_warehouse (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 16
@@ -1201,6 +1231,8 @@ Used Indexes:
   - materialize.public.fk_stock_item (differential join)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 17
@@ -1263,6 +1295,8 @@ Source materialize.public.item
 Used Indexes:
   - materialize.public.fk_orderline_item (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 18
@@ -1305,6 +1339,8 @@ Used Indexes:
   - materialize.public.fk_customer_district (*** full scan ***)
   - materialize.public.fk_order_customer (*** full scan ***)
   - materialize.public.fk_orderline_order (delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1370,6 +1406,8 @@ Source materialize.public.item
 
 Used Indexes:
   - materialize.public.fk_orderline_item (differential join)
+
+Target cluster: quickstart
 
 Notices:
   - Notice: Index materialize.public.fk_orderline_order on orderline(ol_w_id, ol_d_id, ol_o_id) is too wide to use for literal equalities `ol_w_id IN (1, 2, 3, 4, 5)`.
@@ -1451,6 +1489,8 @@ Used Indexes:
   - materialize.public.fk_stock_warehouse (*** full scan ***)
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1545,6 +1585,8 @@ Used Indexes:
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Query 22
@@ -1621,5 +1663,7 @@ Explained Query:
 Used Indexes:
   - materialize.public.fk_customer_district (*** full scan ***)
   - materialize.public.fk_order_customer (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF

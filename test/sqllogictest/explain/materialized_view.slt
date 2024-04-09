@@ -30,6 +30,8 @@ materialize.public.mv:
 Source materialize.public.accounts
   filter=((#1 = 100))
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -48,6 +50,8 @@ materialize.public.mv:
 Source materialize.public.accounts
   filter=((#1 = 100))
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -59,6 +63,8 @@ materialize.public.mv:
 
 Source materialize.public.accounts
   filter=((#1 = 100))
+
+Target cluster: quickstart
 
 EOF
 
@@ -79,6 +85,8 @@ materialize.public.mv:
 Used Indexes:
   - materialize.public.accounts_balance_idx (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -106,6 +114,8 @@ materialize.public.mv:
 Used Indexes:
   - materialize.public.accounts_balance_idx (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 # rename the index
@@ -123,6 +133,8 @@ materialize.public.mv:
 
 Used Indexes:
   - materialize.public.accounts_balance_index (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -150,6 +162,8 @@ materialize.public.mv:
 
 Used Indexes:
   - materialize.public.accounts_balance_index (lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -170,6 +184,8 @@ materialize.public.mv:
 Used Indexes:
   - [DELETED INDEX] (lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -196,5 +212,7 @@ materialize.public.mv:
 
 Used Indexes:
   - [DELETED INDEX] (lookup)
+
+Target cluster: quickstart
 
 EOF

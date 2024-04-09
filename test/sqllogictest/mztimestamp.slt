@@ -28,6 +28,8 @@ Explained Query:
     Constant // { arity: 0 }
       - ()
 
+Target cluster: quickstart
+
 EOF
 
 query B

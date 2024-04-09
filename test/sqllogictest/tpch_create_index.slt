@@ -207,6 +207,8 @@ materialize.public.q01:
 Used Indexes:
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Create a default index on Q01 in order to ensure that the EXPLAIN CREATE INDEX
@@ -331,6 +333,8 @@ Used Indexes:
   - materialize.public.fk_partsupp_partkey (delta join lookup)
   - materialize.public.fk_partsupp_suppkey (delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -392,6 +396,8 @@ Used Indexes:
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.fk_lineitem_orderkey (delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -456,6 +462,8 @@ materialize.public.q04:
 Used Indexes:
   - materialize.public.pk_orders_orderkey (*** full scan ***, delta join 1st input (full scan))
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -537,6 +545,8 @@ Used Indexes:
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -583,6 +593,8 @@ materialize.public.q06:
 
 Used Indexes:
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -679,6 +691,8 @@ Used Indexes:
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.fk_lineitem_orderkey (delta join lookup)
   - materialize.public.fk_lineitem_suppkey (delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -782,6 +796,8 @@ Used Indexes:
   - materialize.public.fk_lineitem_partkey (delta join lookup)
   - materialize.public.fk_lineitem_suppkey (delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -868,6 +884,8 @@ Used Indexes:
   - materialize.public.fk_lineitem_suppkey (delta join lookup)
   - materialize.public.fk_lineitem_partsuppkey (delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -944,6 +962,8 @@ Used Indexes:
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.fk_lineitem_orderkey (delta join lookup)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1025,6 +1045,8 @@ Used Indexes:
   - materialize.public.fk_supplier_nationkey (delta join lookup)
   - materialize.public.fk_partsupp_suppkey (delta join 1st input (full scan))
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -1085,6 +1107,8 @@ materialize.public.q12:
 Used Indexes:
   - materialize.public.pk_orders_orderkey (differential join)
   - materialize.public.fk_lineitem_orderkey (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1162,6 +1186,8 @@ Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***, differential join)
   - materialize.public.fk_orders_custkey (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -1221,6 +1247,8 @@ materialize.public.q14:
 Used Indexes:
   - materialize.public.pk_part_partkey (differential join)
   - materialize.public.fk_lineitem_partkey (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1298,6 +1326,8 @@ materialize.public.q15:
 Used Indexes:
   - materialize.public.pk_supplier_suppkey (delta join 1st input (full scan))
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1392,6 +1422,8 @@ Used Indexes:
   - materialize.public.pk_supplier_suppkey (*** full scan ***)
   - materialize.public.fk_partsupp_partkey (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -1476,6 +1508,8 @@ materialize.public.q17:
 Used Indexes:
   - materialize.public.pk_part_partkey (differential join)
   - materialize.public.fk_lineitem_partkey (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1571,6 +1605,8 @@ Used Indexes:
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.fk_lineitem_orderkey (differential join, delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -1651,6 +1687,8 @@ materialize.public.q19:
 Used Indexes:
   - materialize.public.pk_part_partkey (differential join)
   - materialize.public.fk_lineitem_partkey (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1777,6 +1815,8 @@ Used Indexes:
   - materialize.public.fk_supplier_nationkey (differential join)
   - materialize.public.pk_partsupp_partkey_suppkey (*** full scan ***)
   - materialize.public.fk_lineitem_partsuppkey (differential join)
+
+Target cluster: quickstart
 
 EOF
 
@@ -1909,6 +1949,8 @@ Used Indexes:
   - materialize.public.fk_lineitem_orderkey (differential join, delta join lookup)
   - materialize.public.fk_lineitem_suppkey (delta join lookup)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -2024,5 +2066,7 @@ materialize.public.q22:
 Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***)
   - materialize.public.pk_orders_orderkey (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF

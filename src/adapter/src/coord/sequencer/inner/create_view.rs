@@ -191,18 +191,22 @@ impl Coordinator {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
+        let target_cluster = None; // Views don't have a target cluster.
+
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
                 view.raw_expr.clone(),
                 format,
                 &config,
                 &self.catalog().for_session(ctx.session()),
+                target_cluster,
             )?,
             ExplainStage::LocalPlan => explain_plan(
                 view.optimized_expr.as_inner().clone(),
                 format,
                 &config,
                 &self.catalog().for_session(ctx.session()),
+                target_cluster,
             )?,
             _ => {
                 coord_bail!("cannot EXPLAIN {} FOR VIEW", stage);
@@ -448,6 +452,7 @@ impl Coordinator {
             &config,
             &expr_humanizer,
             None,
+            None, // Views don't have a target cluster.
             Default::default(),
             stage,
             plan::ExplaineeStatementKind::CreateView,

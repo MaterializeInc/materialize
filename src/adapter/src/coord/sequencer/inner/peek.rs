@@ -605,6 +605,7 @@ impl Coordinator {
                                     validity,
                                     select_id: optimizer.select_id(),
                                     finishing: optimizer.finishing().clone(),
+                                    target_cluster_id: optimizer.cluster_id(),
                                     df_meta,
                                     explain_ctx,
                                 })
@@ -671,6 +672,7 @@ impl Coordinator {
                                 validity,
                                 select_id: optimizer.select_id(),
                                 finishing: optimizer.finishing().clone(),
+                                target_cluster_id: optimizer.cluster_id(),
                                 df_meta: Default::default(),
                                 explain_ctx,
                             })
@@ -901,9 +903,10 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         PeekStageExplainPlan {
-            df_meta,
             select_id,
             finishing,
+            target_cluster_id,
+            df_meta,
             explain_ctx:
                 ExplainPlanContext {
                     broken,
@@ -937,11 +940,14 @@ impl Coordinator {
             Some(finishing)
         };
 
+        let target_cluster = Some(self.catalog().get_cluster(target_cluster_id).name.as_str());
+
         let rows = optimizer_trace.into_rows(
             format,
             &config,
             &expr_humanizer,
             finishing,
+            target_cluster,
             df_meta,
             stage,
             plan::ExplaineeStatementKind::Select,

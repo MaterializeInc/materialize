@@ -1680,6 +1680,8 @@ Map (text_to_timestamp_with_time_zone("95143-12-31 23:59:59.123456789+06"))
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -1690,6 +1692,8 @@ Map (text_to_timestamp("95143-12-31 23:59:59.123456789+06"))
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -1699,6 +1703,8 @@ SELECT timestamp(3) '95143-12-31 23:59:59.123456789+06'::timestamp(6);
 Map (adjust_timestamp_precision(text_to_timestamp("95143-12-31 23:59:59.123456789+06")))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 

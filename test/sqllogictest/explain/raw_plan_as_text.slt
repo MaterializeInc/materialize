@@ -54,6 +54,8 @@ Project (#2, #1, #3)
     Filter (#0 > 0)
       Get materialize.public.mv
 
+Target cluster: quickstart
+
 EOF
 
 # Test table functions (CallTable).
@@ -62,6 +64,8 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT * FROM generate_series(1, 7)
 ----
 CallTable generate_series(1, 7, 1)
+
+Target cluster: quickstart
 
 EOF
 
@@ -80,6 +84,8 @@ Threshold
         Project (#1)
           Get materialize.public.mv
 
+Target cluster: quickstart
+
 EOF
 
 # Test virtual syntax (EXCEPT).
@@ -92,6 +98,8 @@ Except
     Get materialize.public.t
   Project (#1)
     Get materialize.public.mv
+
+Target cluster: quickstart
 
 EOF
 
@@ -106,6 +114,8 @@ ExceptAll
   Project (#1)
     Get materialize.public.mv
 
+Target cluster: quickstart
+
 EOF
 
 # Test Finish.
@@ -115,6 +125,8 @@ SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
 Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
   Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -128,6 +140,8 @@ Project (#2)
     Reduce aggregates=[min(#0), max(#0)]
       Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 # Test Reduce (local).
@@ -140,6 +154,8 @@ Project (#3)
     Reduce group_by=[#2] aggregates=[min(#0), max(#0)]
       Map (#1)
         Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -158,6 +174,8 @@ With
   cte l2 =
     Filter (#^1 > #1)
       Get materialize.public.mv
+
+Target cluster: quickstart
 
 EOF
 
@@ -182,6 +200,8 @@ Project (#2, #3)
           Filter (#1 = #^1)
             Get materialize.public.mv
 
+Target cluster: quickstart
+
 EOF
 
 # Test CrossJoin derived from a comma join without a predicate.
@@ -194,6 +214,8 @@ Project (#0, #2)
     Get materialize.public.t
     Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 # Test CrossJoin derived from an INNER JOIN with a trivial ON clause.
@@ -205,6 +227,8 @@ Project (#0, #2)
   CrossJoin
     Get materialize.public.t
     Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -226,6 +250,8 @@ Project (#0, #2)
         Get materialize.public.t
       Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 # Test InnerJoin (ON syntax).
@@ -242,6 +268,8 @@ Project (#0, #2)
       Get materialize.public.t
       Get materialize.public.t
     Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -260,6 +288,8 @@ Project (#0, #2)
       Get materialize.public.t
     Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 # Test a single CTE.
@@ -276,6 +306,8 @@ Project (#1)
       Project (#2)
         Map ((#0 * #1))
           Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -296,6 +328,8 @@ With
     Map (1)
       Constant
         - ()
+
+Target cluster: mz_introspection
 
 EOF
 
@@ -339,6 +373,8 @@ CrossJoin
     cte l0 =
       Reduce aggregates=[max((#^0 * #0))]
         Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -387,6 +423,8 @@ CrossJoin
       Reduce aggregates=[max((#^0 * #0))]
         Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -395,6 +433,8 @@ EXPLAIN RAW PLAN AS TEXT FOR SELECT COUNT(*);
 Reduce aggregates=[count(*)]
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -435,6 +475,8 @@ Explained Query:
 Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -445,6 +487,8 @@ FROM t;
 Project (#2)
   Map (lag(row(#1, 3, null)) over (order by []))
     Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -457,6 +501,8 @@ Project (#2)
   Map (lag(row(#1, 333, null)) over (order by []))
     Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -467,6 +513,8 @@ FROM t;
 Project (#2)
   Map (lag(row(#1, 333, null)) ignore nulls over (order by []))
     Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -489,6 +537,8 @@ Project (#1)
           Map (lag(row(#1, 3, null)) over (partition by [(#1 % 2), (#0 % 3)] order by [#0 desc nulls_first, -(#1) asc nulls_last, ((2 * #1) + #0) asc nulls_first]))
             Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 # Default frame is not printed (even when explicitly specified by the user).
@@ -502,6 +552,8 @@ Project (#2)
   Map (first_value(#1) over (partition by [(#1 % 6)] order by [(#1 + 33) asc nulls_last]))
     Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -514,6 +566,8 @@ Project (#2)
   Map (first_value(#1) over (partition by [(#1 % 6)] order by [(#1 + 33) asc nulls_last] rows between 2 preceding and current row))
     Get materialize.public.t
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -525,6 +579,8 @@ FROM t;
 Project (#2)
   Map (sum((#1 + 8)) over (partition by [(#1 % 6)] order by [(#1 + 33) desc nulls_first] rows between 2 preceding and 3 following))
     Get materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -550,6 +606,8 @@ With Mutually Recursive
         Map (7)
           Get l1
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -574,6 +632,8 @@ With Mutually Recursive [recursion_limit=5]
         Map (7)
           Get l1
 
+Target cluster: mz_introspection
+
 EOF
 
 query T multiline
@@ -597,5 +657,7 @@ With Mutually Recursive [recursion_limit=5, return_at_limit]
             - ()
         Map (7)
           Get l1
+
+Target cluster: mz_introspection
 
 EOF

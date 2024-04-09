@@ -38,6 +38,8 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM t1
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 query II
@@ -52,6 +54,8 @@ EXPLAIN WITH(arity, join implementations) SELECT a1.* FROM t1 AS a1 LEFT JOIN t1
 ----
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -73,6 +77,8 @@ Explained Query:
 Source materialize.public.t1
   filter=((#1 = 1))
 
+Target cluster: quickstart
+
 EOF
 
 query IIII
@@ -85,6 +91,8 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 EXCEPT ALL SELECT * F
 ----
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 EOF
 
@@ -100,6 +108,8 @@ Explained Query:
   Threshold // { arity: 2 }
     ReadStorage materialize.public.t1 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 query II
@@ -114,6 +124,8 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 EXCEPT ALL SELECT * F
 ----
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -131,6 +143,8 @@ Explained Query:
   Threshold // { arity: 2 }
     ReadStorage materialize.public.t2 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 query II
@@ -145,6 +159,8 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM t2 UNION ALL SELECT * FR
 Explained Query:
   Threshold // { arity: 2 }
     ReadStorage materialize.public.t2 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -166,6 +182,8 @@ Explained Query:
           ReadStorage materialize.public.t1 // { arity: 2 }
     ReadStorage materialize.public.t1 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 query II
@@ -185,6 +203,8 @@ Explained Query:
   Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
     ReadStorage materialize.public.t3 // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 query II
@@ -202,6 +222,8 @@ SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key);
 ----
 Explained Query:
   ReadStorage materialize.public.t3 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -221,6 +243,8 @@ SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key or (a1.
 ----
 Explained Query:
   ReadStorage materialize.public.t3 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -277,5 +301,7 @@ Explained Query:
         Project (#0)
           ReadStorage materialize.public.init
         Get l2
+
+Target cluster: quickstart
 
 EOF

@@ -21,4 +21,6 @@ EXPLAIN WITH(arity, join implementations) SELECT FROM t1 LEFT JOIN t2 ON TRUE WH
 Explained Query (fast path):
   Constant <empty>
 
+Target cluster: quickstart
+
 EOF

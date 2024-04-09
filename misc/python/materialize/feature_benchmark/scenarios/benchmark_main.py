@@ -641,6 +641,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.i_accumulable (*** full scan ***)
 
+Target cluster: idx_cluster
+
 > SELECT count(*) FROM accumulable;
   /* B */
 10000001
@@ -650,6 +652,9 @@ Used Indexes:
 
         if self._mz_version < MzVersion.parse_mz("v0.83.0-dev"):
             sql = remove_arity_information_from_explain(sql)
+
+        if self._mz_version < MzVersion.parse_mz("v0.96.0-dev"):
+            sql = remove_target_cluster_from_explain(sql)
 
         return Td(sql)
 
@@ -1823,6 +1828,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.i1 (*** full scan ***)
 
+Target cluster: idx_cluster
+
 > SELECT COUNT(*) FROM t1
   /* B */
 {self._n}
@@ -1832,11 +1839,18 @@ Used Indexes:
         if self._mz_version < MzVersion.parse_mz("v0.83.0-dev"):
             sql = remove_arity_information_from_explain(sql)
 
+        if self._mz_version < MzVersion.parse_mz("v0.96.0-dev"):
+            sql = remove_target_cluster_from_explain(sql)
+
         return Td(sql)
 
 
 def remove_arity_information_from_explain(sql: str) -> str:
     return re.sub(r" // { arity: \d+ }", "", sql)
+
+
+def remove_target_cluster_from_explain(sql: str) -> str:
+    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)
 
 
 class SwapSchema(Scenario):

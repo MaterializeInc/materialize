@@ -48,6 +48,7 @@ pub(crate) fn explain_dataflow<T>(
     format: ExplainFormat,
     config: &ExplainConfig,
     humanizer: &dyn ExprHumanizer,
+    target_cluster: Option<&str>,
     dataflow_metainfo: &DataflowMetainfo<Arc<OptimizerNotice>>,
 ) -> Result<String, AdapterError>
 where
@@ -69,6 +70,7 @@ where
         used_indexes,
         finishing: Default::default(),
         duration: Default::default(),
+        target_cluster,
         optimizer_notices,
     };
 
@@ -87,6 +89,7 @@ pub(crate) fn explain_plan<T>(
     format: ExplainFormat,
     config: &ExplainConfig,
     humanizer: &dyn ExprHumanizer,
+    target_cluster: Option<&str>,
 ) -> Result<String, AdapterError>
 where
     for<'a> Explainable<'a, T>: Explain<'a, Context = ExplainContext<'a>>,
@@ -97,6 +100,7 @@ where
         used_indexes: Default::default(),
         finishing: Default::default(),
         duration: Default::default(),
+        target_cluster,
         optimizer_notices: Default::default(),
     };
 

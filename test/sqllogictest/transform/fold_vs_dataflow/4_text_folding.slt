@@ -41,6 +41,8 @@ Explained Query:
 Source materialize.public.t_data
   filter=(ilike["%bCd%"](#0))
 
+Target cluster: quickstart
+
 EOF
 
 # -------------------------------
@@ -110,5 +112,7 @@ FROM v_using_constant_folding;
 Explained Query (fast path):
   Constant
     - ("ABCDefXX", "ABCDEF", "abcdef", "ABCDef", "ABcdef", 3, "AB", "ABZDef", "ABCDef", "ABCDef", "ABCDef", "ABCDef", "A", "    ABCDef", "CDCDABCDef", {"CD"}, {"CD"})
+
+Target cluster: quickstart
 
 EOF

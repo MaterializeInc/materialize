@@ -2618,6 +2618,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query I rowsort
@@ -2638,6 +2640,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query I rowsort
@@ -2655,6 +2659,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -2677,6 +2683,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query I rowsort
@@ -2695,6 +2703,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -2715,6 +2725,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query I rowsort
@@ -2733,6 +2745,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -2753,6 +2767,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query I rowsort
@@ -2772,6 +2788,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query I rowsort
@@ -2790,6 +2808,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -2812,6 +2832,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -2825,6 +2847,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -2837,6 +2861,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -2860,6 +2886,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Reducing multidimensional ListIndex when the list doesn't have enough complete layers,
@@ -2876,6 +2904,8 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 # Reducing multidimensional ListIndex when the list doesn't have enough complete layers,
@@ -2891,6 +2921,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -2918,5 +2950,7 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF

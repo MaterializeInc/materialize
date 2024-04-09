@@ -61,4 +61,6 @@ Explained Query:
                             TopK group_by=[#0] limit=1
                               ReadStorage materialize.public.t_using_dataflow_rendering
 
+Target cluster: quickstart
+
 EOF

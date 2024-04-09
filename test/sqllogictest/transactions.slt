@@ -937,6 +937,8 @@ Explained Query:
 Used Indexes:
   - mz_internal.mz_show_views_ind (*** full scan ***)
 
+Target cluster: mz_introspection
+
 EOF
 
 statement ok
@@ -968,6 +970,8 @@ Explained Query:
 
 Source mz_catalog.mz_views
   filter=((#2 = "u3"))
+
+Target cluster: quickstart
 
 EOF
 

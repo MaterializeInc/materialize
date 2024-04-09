@@ -93,6 +93,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.i1_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 > CREATE SOURCE non_dbz_data_indexed
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
@@ -119,6 +121,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.non_dbz_data_indexed_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 > CREATE VIEW i4 AS SELECT b+1 as c FROM i1;
 > CREATE DEFAULT INDEX ON i4;
 
@@ -140,6 +144,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.i4_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 > CREATE VIEW i6 AS SELECT c FROM v5;
 > CREATE DEFAULT INDEX ON i6;
 
@@ -160,6 +166,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.i6_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 > CREATE VIEW i8 AS SELECT * from (SELECT * FROM i1 UNION ALL SELECT * FROM i1);
 > CREATE DEFAULT INDEX ON i8;
@@ -184,6 +192,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.i9_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 > CREATE MATERIALIZED VIEW m1 AS SELECT b FROM non_dbz_data;
 
@@ -222,3 +232,5 @@ Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
     Get::PassArrangements materialize.public.m1
       raw=true
+
+Target cluster: quickstart

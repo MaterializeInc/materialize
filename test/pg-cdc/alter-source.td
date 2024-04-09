@@ -374,8 +374,11 @@ INSERT INTO table_a VALUES (5, 'five', 5);
 4 four 1
 5 five 5
 
-> EXPLAIN SELECT * FROM table_a WHERE f3 IS NULL;
-"Explained Query (fast path):\n  Constant <empty>\n"
+? EXPLAIN SELECT * FROM table_a WHERE f3 IS NULL;
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
 
 # Can add tables with text columns
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_f WITH (TEXT COLUMNS [table_f.f2, table_f.f2]);

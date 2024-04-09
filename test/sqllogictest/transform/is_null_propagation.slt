@@ -21,6 +21,8 @@ EXPLAIN WITH(arity, join implementations) SELECT FROM ( SELECT FROM t2 a1 RIGHT 
 Explained Query (fast path):
   Constant <empty>
 
+Target cluster: quickstart
+
 EOF
 
 # TODO missing !isnull(#0) in %1
@@ -41,6 +43,8 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -94,5 +98,7 @@ Explained Query:
     cte l0 =
       Project (#1) // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
