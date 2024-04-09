@@ -1611,6 +1611,20 @@ CREATE CLUSTER cluster (MANAGED, DISK = true)
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }, ClusterOption { name: Disk, value: Some(Value(Boolean(true))) }], features: [] })
 
 parse-statement
+CREATE CLUSTER cluster (MANAGED, DISK = true
+----
+error: Expected right parenthesis, found EOF
+CREATE CLUSTER cluster (MANAGED, DISK = true
+                                            ^
+
+parse-statement
+CREATE CLUSTER cluster MANAGED, DISK = true)
+----
+error: Expected end of statement, found right parenthesis
+CREATE CLUSTER cluster MANAGED, DISK = true)
+                                           ^
+
+parse-statement
 CREATE CLUSTER cluster INTROSPECTION INTERVAL '1'
 ----
 CREATE CLUSTER cluster (INTROSPECTION INTERVAL = '1')
