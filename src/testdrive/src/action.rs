@@ -108,6 +108,8 @@ pub struct Config {
     pub backoff_factor: f64,
     /// Should we skip coordinator and catalog consistency checks.
     pub consistency_checks: consistency::Level,
+    /// Whether to automatically rewrite wrong results instead of failing.
+    pub rewrite_results: bool,
 
     // === Materialize options. ===
     /// The pgwire connection parameters for the Materialize instance that
@@ -237,6 +239,21 @@ pub struct State {
     // === Fivetran state. ===
     fivetran_destination_url: String,
     fivetran_destination_files_path: String,
+
+    // === Rewrite state. ===
+    rewrite_results: bool,
+    /// Current file, results are replaced inline
+    pub rewrites: Vec<Rewrite>,
+    /// Start position of currently expected result
+    pub rewrite_pos_start: usize,
+    /// End position of currently expected result
+    pub rewrite_pos_end: usize,
+}
+
+pub struct Rewrite {
+    pub content: String,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl State {
@@ -976,6 +993,7 @@ pub async fn create_state(
         consistency_checks_adhoc_skip: false,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
+        rewrite_results: config.rewrite_results,
 
         // === Materialize state. ===
         materialize: materialize_state,
@@ -1013,6 +1031,10 @@ pub async fn create_state(
         // === Fivetran state. ===
         fivetran_destination_url: config.fivetran_destination_url.clone(),
         fivetran_destination_files_path: config.fivetran_destination_files_path.clone(),
+
+        rewrites: Vec::new(),
+        rewrite_pos_start: 0,
+        rewrite_pos_end: 0,
     };
     state.initialize_cmd_vars().await?;
     Ok((state, pgconn_task))

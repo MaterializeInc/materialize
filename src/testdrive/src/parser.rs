@@ -70,6 +70,8 @@ pub enum SqlOutput {
 pub struct SqlCommand {
     pub query: String,
     pub expected_output: SqlOutput,
+    pub expected_start: usize,
+    pub expected_end: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +272,7 @@ fn parse_version_constraint(
 fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
     let (_, line1) = line_reader.next().unwrap();
     let query = line1[1..].trim().to_owned();
+    let expected_start = line_reader.raw_pos;
     let line2 = slurp_one(line_reader);
     let line3 = slurp_one(line_reader);
     let mut column_names = None;
@@ -294,6 +297,8 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
                             num_values,
                             md5: captures[2].to_owned(),
                         },
+                        expected_start: 0,
+                        expected_end: 0,
                     })
                 }
                 Err(err) => {
@@ -310,17 +315,21 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
     while let Some((pos, line)) = slurp_one(line_reader) {
         expected_rows.push(split_line(pos, &line)?)
     }
+    let expected_end = line_reader.raw_pos;
     Ok(SqlCommand {
         query,
         expected_output: SqlOutput::Full {
             column_names,
             expected_rows,
         },
+        expected_start,
+        expected_end,
     })
 }
 
 fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
     let (_, line1) = line_reader.next().unwrap();
+    let expected_start = line_reader.raw_pos;
     // This is a bit of a hack to extract the next chunk of the file with
     // blank lines intact. Ideally the `LineReader` would expose the API we
     // need directly, but that would require a large refactor.
@@ -339,6 +348,7 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosErro
     // We parsed the multiline expected_output directly using line_reader.inner
     // above.
     slurp_all(line_reader);
+    let expected_end = line_reader.raw_pos;
 
     Ok(SqlCommand {
         query: line1[1..].trim().to_owned(),
@@ -346,6 +356,8 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosErro
             column_names: None,
             expected_rows: vec![vec![expected_output]],
         },
+        expected_start,
+        expected_end,
     })
 }
 
@@ -492,6 +504,7 @@ pub struct LineReader<'a> {
     src_line: usize,
     pos: usize,
     pos_map: BTreeMap<usize, (usize, usize)>,
+    raw_pos: usize,
 }
 
 impl<'a> LineReader<'a> {
@@ -504,6 +517,7 @@ impl<'a> LineReader<'a> {
             next: None,
             pos: 0,
             pos_map,
+            raw_pos: 0,
         }
     }
 
@@ -567,6 +581,7 @@ impl<'a> Iterator for LineReader<'a> {
                 }
                 let pos = self.pos;
                 self.pos += i;
+                self.raw_pos += i + 1; // Include \n character in count
                 self.pos_map.insert(self.pos, (self.src_line, 1));
                 self.inner = &self.inner[i + 1..];
                 return Some((pos, line));

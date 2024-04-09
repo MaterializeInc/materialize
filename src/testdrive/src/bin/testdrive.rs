@@ -113,6 +113,10 @@ struct Args {
     log_filter: EnvFilter,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
+    /// Automatically rewrite the testdrive file with the correct results when they are not as
+    /// expected
+    #[clap(long)]
+    rewrite_results: bool,
 
     // === Materialize options. ===
     /// materialize SQL connection string.
@@ -368,6 +372,7 @@ async fn main() {
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
         consistency_checks: args.consistency_checks,
+        rewrite_results: args.rewrite_results,
 
         // === Materialize options. ===
         materialize_pgconfig: args.materialize_url,
@@ -401,6 +406,11 @@ async fn main() {
         fivetran_destination_url: args.fivetran_destination_url,
         fivetran_destination_files_path: args.fivetran_destination_files_path,
     };
+
+    if args.junit_report.is_some() && args.rewrite_results {
+        eprintln!("--rewrite-results is not compatible with --junit-report");
+        process::exit(1);
+    }
 
     // Build the list of files to test.
     //
@@ -469,6 +479,10 @@ async fn main() {
     for file in files.into_iter().take(args.max_tests) {
         let start_time = Instant::now();
         let res = if file == Path::new("-") {
+            if args.rewrite_results {
+                eprintln!("--rewrite-results is not compatible with stdin files");
+                process::exit(1);
+            }
             mz_testdrive::run_stdin(&config).await
         } else {
             mz_testdrive::run_file(&config, &file).await

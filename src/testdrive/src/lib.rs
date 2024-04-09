@@ -12,12 +12,13 @@
 #![warn(missing_docs)]
 
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::Path;
 
 use action::Run;
 use anyhow::{anyhow, Context};
 use mz_ore::error::ErrorExt;
+use tempfile::NamedTempFile;
 use tracing::debug;
 
 use crate::action::ControlFlow;
@@ -68,7 +69,7 @@ pub async fn run_string(
     }
 
     let mut line_reader = LineReader::new(contents);
-    run_line_reader(config, &mut line_reader)
+    run_line_reader(config, &mut line_reader, contents, filename)
         .await
         .map_err(|e| {
             let location = e.pos.map(|pos| {
@@ -82,6 +83,8 @@ pub async fn run_string(
 pub(crate) async fn run_line_reader(
     config: &Config,
     line_reader: &mut LineReader<'_>,
+    contents: &str,
+    filename: Option<&Path>,
 ) -> Result<(), PosError> {
     // TODO(benesch): consider sharing state between files, to avoid
     // reconnections for every file. For now it's nice to not open any
@@ -161,6 +164,18 @@ pub(crate) async fn run_line_reader(
         }
     }
     state.clear_skip_consistency_checks();
+
+    if config.rewrite_results {
+        let mut f = NamedTempFile::new_in(filename.unwrap().parent().unwrap()).unwrap();
+        let mut pos = 0;
+        for rewrite in &state.rewrites {
+            write!(f, "{}", &contents[pos..rewrite.start]).expect("rewriting results");
+            write!(f, "{}", rewrite.content).expect("rewriting results");
+            pos = rewrite.end;
+        }
+        write!(f, "{}", &contents[pos..]).expect("rewriting results");
+        f.persist(filename.unwrap()).expect("rewriting results");
+    }
 
     if config.reset {
         drop(state);
