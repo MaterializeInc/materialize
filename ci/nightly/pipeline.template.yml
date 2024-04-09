@@ -322,7 +322,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: bounded-memory
-              args: ["--find-minimal-memory", "--memory-search-step=0.3"]
+              args: ["--find-minimal-memory", "--materialized-memory-search-step=0.3", "--clusterd-memory-search-step=0.3"]
 
   - group: Upsert
     key: upsert
