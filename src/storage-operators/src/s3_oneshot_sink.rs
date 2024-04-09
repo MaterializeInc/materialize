@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A sink operator that writes to s3.
+//! Uploads a consolidated collection to S3
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -29,23 +29,25 @@ use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::S3UploadInfo;
-use mz_timely_util::builder_async::{
-    AsyncInputHandle, AsyncOutputHandle, Disconnected, Event as AsyncEvent,
-    OperatorBuilder as AsyncOperatorBuilder,
-};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::operators::{Broadcast, Capability, ConnectLoop, Feedback};
+use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::Scope;
+use timely::dataflow::Stream;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::{debug, info};
 
 /// Copy the rows from the input collection to s3.
-/// `onetime_callback` is used to send the final count of rows uploaded to s3,
-/// or an error message if the operator failed.
+/// `worker_callback` is used to send the final count of rows uploaded to s3,
+/// or an error message if the operator failed. This is per-worker, and
+/// these responses are aggregated upstream by the compute client.
 /// `sink_id` is used to identify the sink for logging purposes and as a
 /// unique prefix for files created by the sink.
+///
+/// This renders 3 operators used to coordinate the upload:
+///   - initialization: confirms the S3 path is empty and writes any sentinel files
+///   - upload: uploads data to S3
+///   - completion: removes the sentinel file and calls the `worker_callback`
 pub fn copy_to<G, F>(
     input_collection: Collection<G, ((Row, u64), ()), Diff>,
     err_collection: Collection<G, ((DataflowError, u64), ()), Diff>,
@@ -55,297 +57,387 @@ pub fn copy_to<G, F>(
     aws_connection: AwsConnection,
     sink_id: GlobalId,
     connection_id: GlobalId,
-    onetime_callback: F,
+    worker_callback: F,
 ) where
     G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
 {
-    let mut scope = input_collection.scope();
+    let scope = input_collection.scope();
+
+    let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
+
+    let start_stream = render_initialization_operator(
+        scope.clone(),
+        connection_context.clone(),
+        aws_connection.clone(),
+        connection_id,
+        sink_id,
+        s3_key_manager.clone(),
+    );
+
+    let completion_stream = render_upload_operator(
+        scope.clone(),
+        connection_context.clone(),
+        aws_connection.clone(),
+        connection_id,
+        connection_details,
+        sink_id,
+        input_collection,
+        err_collection,
+        up_to,
+        start_stream,
+    );
+
+    render_completion_operator(
+        scope,
+        connection_context,
+        aws_connection,
+        connection_id,
+        sink_id,
+        s3_key_manager,
+        completion_stream,
+        worker_callback,
+    );
+}
+
+/// Renders the 'initialization' operator, which does work on the leader worker only.
+/// The leader worker checks the S3 path for the sink to ensure it's empty
+/// (aside from files written by other instances of this sink), and writes an INCOMPLETE
+/// sentinel file to indicate to the user that the upload is in-progress.
+///
+/// The INCOMPLETE sentinel is used to provide a single atomic operation that a user
+/// can wire up a notification on, to know when it is safe to start ingesting the
+/// data written by this sink to S3. Since the DeleteObject of the INCOMPLETE sentinel
+/// will only trigger one S3 notification, even if it's performed by multiple replicas
+/// it simplifies the user ergonomics by only having to listen for a single event
+/// (a PutObject sentinel would trigger once for each replica).
+///
+/// Returns a stream with a result object indicating the success or failure of the
+/// initialization operation.
+fn render_initialization_operator<G>(
+    scope: G,
+    connection_context: ConnectionContext,
+    aws_connection: AwsConnection,
+    connection_id: GlobalId,
+    sink_id: GlobalId,
+    s3_key_manager: S3KeyManager,
+) -> Stream<G, Result<(), String>>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
     let worker_id = scope.index();
     let num_workers = scope.peers();
-    let snapshot_leader_id = usize::cast_from((sink_id, "leader").hashed()) % num_workers;
-    let is_leader = worker_id == snapshot_leader_id;
+    let leader_id = usize::cast_from((sink_id, "initialization").hashed()) % num_workers;
+    let is_leader = worker_id == leader_id;
 
-    let mut builder = AsyncOperatorBuilder::new("CopyToS3".to_string(), scope.clone());
+    let mut builder =
+        AsyncOperatorBuilder::new("CopyToS3-initialization".to_string(), scope.clone());
 
-    let input_handle = builder.new_disconnected_input(&input_collection.inner, Pipeline);
-    let error_handle = builder.new_disconnected_input(&err_collection.inner, Pipeline);
-
-    // Signal mechanism from leader to all workers to start the upload after it has verified
-    // the integrity of the S3 bucket path.
-    // A `()` datum along this edge indicates success. A `[]` frontier indicates failure. Note that
-    // this is disconnected and has a `0` summary, as its unrelated to the frontier of the output.
-    let (start_handle, start_stream) = builder.new_output();
-    let (start_feedback_handle, start_feedback_stream) = scope.feedback(Default::default());
-    let start_input = builder.new_disconnected_input(&start_feedback_stream, Pipeline);
-    start_stream.broadcast().connect_loop(start_feedback_handle);
-
-    // Signal mechanism from workers to leader to indicate they have completed their uploads,
-    // so that the leader can perform any cleanup necessary.
-    // A `()` datum along this edge indicates success. A `[]` frontier indicates failure. Note that
-    // this is disconnected and has a `0` summary, as its unrelated to the frontier of the output.
-    let (mut completed_handle, completed_stream) = builder.new_output();
-    let (completed_feedback_handle, completed_feedback_stream) = scope.feedback(Default::default());
-    let mut completed_input = builder.new_disconnected_input(
-        &completed_feedback_stream,
-        Exchange::new(move |_| u64::cast_from(snapshot_leader_id)),
-    );
-    completed_stream
-        .broadcast()
-        .connect_loop(completed_feedback_handle);
+    let (mut start_handle, start_stream) = builder.new_output();
 
     builder.build(move |caps| async move {
-        let [start_signal_cap, completed_signal_cap] = caps.try_into().unwrap();
+        let [start_cap] = caps.try_into().unwrap();
 
-        let sdk_config = match aws_connection
-            .load_sdk_config(&connection_context, connection_id, InTask::Yes)
-            .await
-        {
-            Ok(sdk_config) => sdk_config,
-            Err(e) => {
-                onetime_callback(Err(e.to_string()));
-                return;
-            }
+        // fallible async block to use the `?` operator for convenience
+        let leader_work = async move {
+            info!(%sink_id, %worker_id, "s3 leader worker initialization");
+            let sdk_config = aws_connection
+                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                .await?;
+
+            let client = mz_aws_util::s3::new_client(&sdk_config);
+            let bucket = s3_key_manager.bucket.clone();
+            let path_prefix = s3_key_manager.path_prefix().to_string();
+            let incomplete_sentinel_key = s3_key_manager.incomplete_sentinel_key();
+
+            // Check that the S3 bucket path is empty before beginning the upload,
+            // and upload the INCOMPLETE sentinel file to the S3 path.
+            // Since we race against other replicas running the same sink we allow
+            // for objects to exist in the path if they were created by this sink
+            // (identified by the sink_id prefix).
+            // TODO: Add logic to determine if other replicas have already completed
+            // a full upload, to avoid writing the incomplete sentinel file again
+            // if the upload is already done.
+            mz_ore::task::spawn(|| "copytos3:initialization", async move {
+                if let Some(files) =
+                    mz_aws_util::s3::list_bucket_path(&client, &bucket, &path_prefix).await?
+                {
+                    let files = files
+                        .iter()
+                        .filter(|key| !s3_key_manager.is_sink_object(key))
+                        .collect::<Vec<_>>();
+                    if !files.is_empty() {
+                        Err(anyhow::anyhow!(
+                            "S3 bucket path is not empty, contains: {:?}",
+                            files
+                        ))?;
+                    }
+                };
+
+                debug!(%sink_id, %worker_id, "uploading INCOMPLETE sentinel file");
+                client
+                    .put_object()
+                    .bucket(bucket)
+                    .key(incomplete_sentinel_key)
+                    .send()
+                    .await?;
+
+                Ok::<(), anyhow::Error>(())
+            })
+            .wait_and_assert_finished()
+            .await?;
+            Ok::<(), anyhow::Error>(())
         };
 
-        // Run the logic to read from the input and error streams, and write to S3.
-        let mut res = handle_inputs_and_upload(
-            &sink_id,
-            &sdk_config,
-            &connection_details,
-            is_leader,
-            worker_id,
-            start_signal_cap,
-            start_handle,
-            start_input,
-            input_handle,
-            error_handle,
-            up_to,
-        )
-        .await
-        .map_err(|e| e.to_string());
-
-        // Perform cleanup tasks and send the final result to the onetime_callback. If the worker
-        // is the leader, we wait for all workers to complete their uploads and then remove
-        // the INCOMPLETE sentinel file (if it exists).
-        match res {
-            // If this worker successfully completed the upload, send a message to the leader
-            Ok(_) => completed_handle.give(&completed_signal_cap, ()).await,
-            Err(ref err) => info!(%sink_id, %worker_id, "failed to complete upload: {}", err),
-        }
-        drop(completed_signal_cap);
-
         if is_leader {
-            let mut worker_received_count = 0;
-            info!(%sink_id, %worker_id, "waiting to receive completed events from workers");
-            loop {
-                match completed_input.next().await {
-                    Some(AsyncEvent::Data(_ts, _data)) => {
-                        worker_received_count += 1;
-                        if worker_received_count == num_workers {
-                            // Remove the INCOMPLETE sentinel file to indicate that the upload is complete.
-                            // This will race against other replicas who are completing the same uploads,
-                            // such that the first replica to complete its uploads will delete the sentinel
-                            // and the subsequent replicas shouldn't error if the object is already deleted.
-                            // TODO: Should we also write a manifest of all the files uploaded?
-                            let client = mz_aws_util::s3::new_client(&sdk_config);
-                            let s3_key_manager =
-                                S3KeyManager::new(&sink_id, &connection_details.uri);
+            let res = leader_work.await.map_err(|e| e.to_string());
+            start_handle.give(&start_cap, res).await;
+        };
+    });
 
-                            info!(%sink_id, %worker_id, "removing INCOMPLETE sentinel file");
-                            match mz_ore::task::spawn(|| "s3:delete_sentinel", {
-                                let client = client.clone();
-                                let bucket = s3_key_manager.bucket.clone();
-                                let key = s3_key_manager.incomplete_sentinel_key();
-                                async move {
-                                    mz_aws_util::s3::delete_object(&client, &bucket, &key).await
-                                }
-                            })
-                            .wait_and_assert_finished()
-                            .await
-                            {
-                                Ok(_) => break,
-                                Err(e) => {
-                                    info!(%sink_id, %worker_id,
-                                          "error removing sentinel file: {}", e);
-                                    res = Err(e.to_string());
-                                    break;
-                                }
+    start_stream
+}
+
+/// Renders the 'completion' operator, which expects a `completion_stream`
+/// that it reads over a Pipeline edge such that it receives a single
+/// completion event per worker. Then forwards this result to the
+/// `worker_callback` after any cleanup work (see below).
+///
+/// On the leader worker, this operator waits to see the empty frontier for
+/// the completion_stream and then does some cleanup work before calling
+/// the callback.
+///
+/// This cleanup work removes the INCOMPLETE sentinel file (see description
+/// of `render_initialization_operator` for more details).
+fn render_completion_operator<G, F>(
+    scope: G,
+    connection_context: ConnectionContext,
+    aws_connection: AwsConnection,
+    connection_id: GlobalId,
+    sink_id: GlobalId,
+    s3_key_manager: S3KeyManager,
+    completion_stream: Stream<G, Result<u64, String>>,
+    worker_callback: F,
+) where
+    G: Scope<Timestamp = Timestamp>,
+    F: FnOnce(Result<u64, String>) -> () + 'static,
+{
+    let worker_id = scope.index();
+    let num_workers = scope.peers();
+    let leader_id = usize::cast_from((sink_id, "completion").hashed()) % num_workers;
+    let is_leader = worker_id == leader_id;
+
+    let mut builder = AsyncOperatorBuilder::new("CopyToS3-completion".to_string(), scope.clone());
+
+    let mut completion_input = builder.new_disconnected_input(&completion_stream, Pipeline);
+
+    builder.build(move |_| async move {
+        // fallible async block to use the `?` operator for convenience
+        let leader_cleanup_work = async move {
+            info!(%sink_id, %worker_id, "s3 leader worker completion");
+            let sdk_config = aws_connection
+                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                .await?;
+
+            let client = mz_aws_util::s3::new_client(&sdk_config);
+            let bucket = s3_key_manager.bucket.clone();
+            let incomplete_sentinel_key = s3_key_manager.incomplete_sentinel_key();
+
+            // Remove the INCOMPLETE sentinel file to indicate that the upload is complete.
+            // This will race against other replicas who are completing the same uploads,
+            // such that the first replica to complete its uploads will delete the sentinel
+            // and the subsequent replicas shouldn't error if the object is already deleted.
+            // TODO: Should we also write a manifest of all the files uploaded?
+            mz_ore::task::spawn(|| "copytos3:completion", async move {
+                debug!(%sink_id, %worker_id, "removing INCOMPLETE sentinel file");
+                client
+                    .delete_object()
+                    .bucket(bucket)
+                    .key(incomplete_sentinel_key)
+                    .send()
+                    .await?;
+                Ok::<(), anyhow::Error>(())
+            })
+            .wait_and_assert_finished()
+            .await?;
+            Ok::<u64, anyhow::Error>(0)
+        };
+
+        let mut res = None;
+        while let Some(event) = completion_input.next().await {
+            match event {
+                AsyncEvent::Data(_ts, data) => {
+                    for evt in data {
+                        // We only expect to receive one event on this stream
+                        assert!(
+                            res.is_none(),
+                            "unexpectedly received more than 1 event on the completion stream!"
+                        );
+
+                        // If we're not the leader or if the completion event is an error,
+                        // return immediately to the response callback.
+                        if !is_leader || evt.is_err() {
+                            worker_callback(evt);
+                            return;
+                        }
+                        // Store this event for the leader worker to use below
+                        res = Some(evt);
+                    }
+                }
+                AsyncEvent::Progress(frontier) => {
+                    if frontier.is_empty() && is_leader {
+                        // Once the leader sees the empty frontier, it knows that all workers
+                        // have completed their work and can proceed with cleanup steps
+                        assert!(is_leader, "non-leader did not receive a completion event");
+                        let cleanup_res = leader_cleanup_work.await;
+                        if cleanup_res.is_err() {
+                            // something errored while cleaning up
+                            worker_callback(cleanup_res.map_err(|e| e.to_string()));
+                        } else {
+                            match res {
+                                Some(res) if res.is_ok() => worker_callback(res),
+                                Some(_) => panic!("expected success result for leader"),
+                                None => panic!("leader did not receive a completion event"),
                             }
                         }
+                        return;
                     }
-                    Some(AsyncEvent::Progress(_)) => {}
-                    // At least one worker failed to complete the upload since the stream
-                    // ended before all workers sent a completion signal, so leave
-                    // the INCOMPLETE sentinel file in place.
-                    None => {
-                        info!(%sink_id, %worker_id,
-                              "workers exited without successfully uploading");
+                }
+            }
+        }
+        panic!("completion stream exited too early");
+    });
+}
+
+/// Renders the `upload operator`, which waits on the `start_stream` to ensure
+/// initialization is complete and then handles the uploads to S3.
+/// Returns a `completion_stream` which contains 1 event per worker of
+/// the result of the upload operation, either an error or the number of rows
+/// uploaded by the worker.
+fn render_upload_operator<G>(
+    scope: G,
+    connection_context: ConnectionContext,
+    aws_connection: AwsConnection,
+    connection_id: GlobalId,
+    connection_details: S3UploadInfo,
+    sink_id: GlobalId,
+    input_collection: Collection<G, ((Row, u64), ()), Diff>,
+    err_collection: Collection<G, ((DataflowError, u64), ()), Diff>,
+    up_to: Antichain<G::Timestamp>,
+    start_stream: Stream<G, Result<(), String>>,
+) -> Stream<G, Result<u64, String>>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let worker_id = scope.index();
+    let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
+
+    let mut input_handle = builder.new_disconnected_input(&input_collection.inner, Pipeline);
+    let mut error_handle = builder.new_disconnected_input(&err_collection.inner, Pipeline);
+
+    let (mut completion, completion_stream) = builder.new_output();
+    let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion);
+
+    builder.build(move |caps| async move {
+        let [completion_cap] = caps.try_into().unwrap();
+
+        // Drain all errors from the error stream, exiting if we encounter one
+        while let Some(event) = error_handle.next().await {
+            match event {
+                AsyncEvent::Data(_ts, data) => {
+                    for (((error, _), _), ts, _) in data {
+                        if !up_to.less_equal(&ts) {
+                            completion
+                                .give(&completion_cap, Err(error.to_string()))
+                                .await;
+                            return;
+                        }
+                    }
+                }
+                AsyncEvent::Progress(frontier) => {
+                    if PartialOrder::less_equal(&up_to, &frontier) {
+                        // No error, break from loop and proceed
                         break;
                     }
                 }
             }
         }
-        onetime_callback(res);
+
+        // Drain any events in the start stream, which will advance to the empty frontier after
+        // initialization is complete, and may contain a result from the leader worker.
+        // NOTE: This is being refactored in https://github.com/MaterializeInc/materialize/pull/26489/
+        while let Some(event) = start_handle.next().await {
+            match event {
+                AsyncEvent::Data(cap, data) => {
+                    for res in data {
+                        if res.is_err() {
+                            completion.give(&cap, res.map(|_| 0)).await;
+                            return;
+                        }
+                    }
+                }
+                AsyncEvent::Progress(_) => {}
+            }
+        }
+
+        // fallible async block to use the `?` operator for convenience
+        let res = async move {
+            let sdk_config = aws_connection
+                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                .await?;
+
+            // Map of an uploader per batch.
+            let mut s3_uploaders: BTreeMap<u64, CopyToS3Uploader> = BTreeMap::new();
+            let mut row_count = 0;
+            while let Some(event) = input_handle.next().await {
+                match event {
+                    AsyncEvent::Data(_ts, data) => {
+                        for (((row, batch), ()), ts, diff) in data {
+                            if !up_to.less_equal(&ts) {
+                                if diff < 0 {
+                                    Err(anyhow::anyhow!(
+                                        "Invalid data in source errors, saw retractions ({}) for \
+                                        row that does not exist",
+                                        diff * -1,
+                                    ))?;
+                                }
+                                row_count += u64::try_from(diff).unwrap();
+                                let uploader = s3_uploaders.entry(batch).or_insert_with(|| {
+                                    debug!(%sink_id, %worker_id, "handling batch: {}", batch);
+                                    CopyToS3Uploader::new(
+                                        sdk_config.clone(),
+                                        connection_details.clone(),
+                                        &sink_id,
+                                        batch,
+                                    )
+                                });
+                                for _ in 0..diff {
+                                    uploader.append_row(&row).await?;
+                                }
+                            }
+                        }
+                    }
+                    AsyncEvent::Progress(frontier) => {
+                        if PartialOrder::less_equal(&up_to, &frontier) {
+                            for uploader in s3_uploaders.values_mut() {
+                                uploader.flush().await?;
+                            }
+                            // We are done, send the final count.
+                            return Ok(row_count);
+                        }
+                    }
+                }
+            }
+            Ok::<u64, anyhow::Error>(row_count)
+        }
+        .await;
+
+        completion
+            .give(&completion_cap, res.map_err(|e| e.to_string()))
+            .await;
     });
-}
 
-/// The main operator logic that reads from the input and error streams, and writes to S3.
-/// This is split into a separate method to simplify error-handling.
-async fn handle_inputs_and_upload(
-    sink_id: &GlobalId,
-    sdk_config: &SdkConfig,
-    connection_details: &S3UploadInfo,
-    is_leader: bool,
-    worker_id: usize,
-    start_signal_cap: Capability<Timestamp>,
-    mut start_handle: AsyncOutputHandle<Timestamp, Vec<()>, TeeCore<Timestamp, Vec<()>>>,
-    mut start_input: AsyncInputHandle<Timestamp, Vec<()>, Disconnected>,
-    mut input_handle: AsyncInputHandle<
-        Timestamp,
-        Vec<(((Row, u64), ()), Timestamp, i64)>,
-        Disconnected,
-    >,
-    mut error_handle: AsyncInputHandle<
-        Timestamp,
-        Vec<(((DataflowError, u64), ()), Timestamp, i64)>,
-        Disconnected,
-    >,
-    up_to: Antichain<Timestamp>,
-) -> Result<u64, anyhow::Error> {
-    while let Some(event) = error_handle.next().await {
-        match event {
-            AsyncEvent::Data(_ts, data) => {
-                for (((error, _), _), ts, _) in data {
-                    if !up_to.less_equal(&ts) {
-                        Err(error)?;
-                    }
-                }
-            }
-            AsyncEvent::Progress(frontier) => {
-                if PartialOrder::less_equal(&up_to, &frontier) {
-                    // No error, break from loop and proceed
-                    break;
-                }
-            }
-        }
-    }
-
-    let s3_key_manager = S3KeyManager::new(sink_id, &connection_details.uri);
-
-    if is_leader {
-        // Check that the S3 bucket path is empty before beginning the upload.
-        // We check the S3 bucket path from a single worker to avoid a race
-        // between checking the path vs workers uploading objects to the path.
-        // We also race against other replicas running the same sink, so we allow
-        // for objects to exist in the path if they were created by this sink
-        // (identified by the sink_id prefix).
-        info!(%sink_id, %worker_id, "verifying S3 bucket path is empty");
-
-        let client = mz_aws_util::s3::new_client(sdk_config);
-        match mz_ore::task::spawn(|| "s3:list_path", {
-            let client = client.clone();
-            let bucket = s3_key_manager.bucket.clone();
-            let prefix = s3_key_manager.path_prefix().to_string();
-            async move { mz_aws_util::s3::list_bucket_path(&client, &bucket, &prefix).await }
-        })
-        .wait_and_assert_finished()
-        .await
-        {
-            Ok(Some(files)) => {
-                let files = files
-                    .iter()
-                    .filter(|key| !s3_key_manager.is_sink_object(key))
-                    .collect::<Vec<_>>();
-                if !files.is_empty() {
-                    Err(anyhow::anyhow!(
-                        "S3 bucket path is not empty, contains: {:?}",
-                        files
-                    ))?;
-                }
-            }
-            Err(e) => Err(e)?,
-            _ => {}
-        }
-
-        // Write an INCOMPLETE sentinel file to the S3 bucket path to indicate that
-        // the upload is in progress and is not yet complete.
-        info!(%sink_id, %worker_id, "uploading INCOMPLETE sentinel file");
-        mz_ore::task::spawn(|| "s3:upload_sentinel", {
-            let client = client.clone();
-            let bucket = s3_key_manager.bucket.clone();
-            let key = s3_key_manager.incomplete_sentinel_key();
-            async move { mz_aws_util::s3::upload_object(&client, &bucket, &key, vec![]).await }
-        })
-        .wait_and_assert_finished()
-        .await?;
-
-        // Send the signal to all workers to start the upload.
-        start_handle.give(&start_signal_cap, ()).await;
-        drop(start_signal_cap);
-    } else {
-        info!(%sink_id, %worker_id, "waiting for start signal from leader");
-        // Workers wait for the signal from the leader to start the upload.
-        drop(start_signal_cap);
-        loop {
-            match start_input.next().await {
-                Some(AsyncEvent::Data(_ts, _data)) => {
-                    // received the signal from the leader, break from loop and proceed
-                    break;
-                }
-                Some(AsyncEvent::Progress(_)) => continue,
-                None => {
-                    Err(anyhow::anyhow!(
-                        "Failed to receive start signal from leader"
-                    ))?;
-                }
-            }
-        }
-    }
-
-    // Map of an uploader per batch.
-    let mut s3_uploaders: BTreeMap<u64, CopyToS3Uploader> = BTreeMap::new();
-    let mut row_count = 0;
-    while let Some(event) = input_handle.next().await {
-        match event {
-            AsyncEvent::Data(_ts, data) => {
-                for (((row, batch), ()), ts, diff) in data {
-                    if !up_to.less_equal(&ts) {
-                        if diff < 0 {
-                            Err(anyhow::anyhow!(
-                                "Invalid data in source errors, saw retractions ({}) for \
-                                row that does not exist",
-                                diff * -1,
-                            ))?;
-                        }
-                        row_count += u64::try_from(diff).unwrap();
-                        let uploader = s3_uploaders.entry(batch).or_insert_with(|| {
-                            debug!(%sink_id, %worker_id, "handling batch: {}", batch);
-                            CopyToS3Uploader::new(
-                                sdk_config.clone(),
-                                connection_details.clone(),
-                                sink_id,
-                                batch,
-                            )
-                        });
-                        for _ in 0..diff {
-                            uploader.append_row(&row).await?;
-                        }
-                    }
-                }
-            }
-            AsyncEvent::Progress(frontier) => {
-                if PartialOrder::less_equal(&up_to, &frontier) {
-                    for uploader in s3_uploaders.values_mut() {
-                        uploader.flush().await?;
-                    }
-                    // We are done, send the final count.
-                    return Ok(row_count);
-                }
-            }
-        }
-    }
-    Ok(row_count)
+    completion_stream
 }
 
 /// Helper to manage object keys created by this sink based on the S3 URI provided
@@ -353,6 +445,7 @@ async fn handle_inputs_and_upload(
 /// Since there may be multiple compute replicas running their own copy of this sink
 /// we need to ensure the S3 keys are consistent such that we can detect when objects
 /// were created by an instance of this sink or not.
+#[derive(Clone)]
 struct S3KeyManager {
     pub bucket: String,
     object_key_prefix: String,
