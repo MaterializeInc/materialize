@@ -669,7 +669,7 @@ steps:
   - id: nightly-if-release
     label: Nightly for releases
     depends_on: devel-docker-tags
-    trigger: nightlies
+    trigger: nightly
     async: true
     build:
       commit: "$BUILDKITE_COMMIT"
@@ -684,7 +684,7 @@ steps:
     label: Nightly for risky PRs
     skip: "Temporary disabled until a cost/beneft analysis"
     depends_on: devel-docker-tags
-    trigger: nightlies
+    trigger: nightly
     async: true
     build:
       commit: "$BUILDKITE_COMMIT"

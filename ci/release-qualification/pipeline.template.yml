@@ -168,22 +168,22 @@ steps:
             args: [--max-joins=15, --explain-only, --runtime=6000]
       skip: "Reenable when #23451 is fixed"
 
-  - id: tests-preflight-check-rollback
-    label: Tests with preflight check and rollback
+  - id: test-preflight-check-rollback
+    label: Test with preflight check and rollback
     depends_on: []
     skip: "TODO(def-): Too complex to adapt for all mzcompose-based tests"
-    trigger: tests
+    trigger: test
     async: false
     build:
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
 
-  - id: nightlies-preflight-check-rollback
-    label: Nightlies with preflight check and rollback
+  - id: nightly-preflight-check-rollback
+    label: Nightly with preflight check and rollback
     depends_on: []
     skip: "TODO(def-): Too complex to adapt for all mzcompose-based tests"
-    trigger: nightlies
+    trigger: nightly
     async: false
     build:
       env:
