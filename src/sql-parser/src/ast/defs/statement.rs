@@ -3577,11 +3577,14 @@ impl<T: AstInfo> AstDisplay for RefreshOptionValue<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
 pub enum ClusterScheduleOptionValue {
     Manual,
-    Refresh,
+    Refresh {
+        rehydration_time_estimate: Option<IntervalValue>,
+    },
 }
 
 impl Default for ClusterScheduleOptionValue {
     fn default() -> Self {
+        // (Has to be consistent with `impl Default for ClusterSchedule`.)
         ClusterScheduleOptionValue::Manual
     }
 }
@@ -3592,8 +3595,15 @@ impl AstDisplay for ClusterScheduleOptionValue {
             ClusterScheduleOptionValue::Manual => {
                 f.write_str("MANUAL");
             }
-            ClusterScheduleOptionValue::Refresh => {
+            ClusterScheduleOptionValue::Refresh {
+                rehydration_time_estimate,
+            } => {
                 f.write_str("ON REFRESH");
+                if let Some(rehydration_time_estimate) = rehydration_time_estimate {
+                    f.write_str(" (REHYDRATION TIME ESTIMATE = '");
+                    f.write_node(rehydration_time_estimate);
+                    f.write_str(")");
+                }
             }
         }
     }

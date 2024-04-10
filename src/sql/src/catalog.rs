@@ -30,9 +30,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::{
-    ClusterScheduleOptionValue, Expr, Ident, QualifiedReplica, UnresolvedItemName,
-};
+use mz_sql_parser::ast::{Expr, Ident, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
 use mz_storage_types::sources::SourceDesc;
@@ -51,7 +49,7 @@ use crate::names::{
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
-use crate::plan::{query, PlanError, PlanNotice};
+use crate::plan::{query, ClusterSchedule, PlanError, PlanNotice};
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -537,7 +535,7 @@ pub trait CatalogCluster<'a> {
     fn managed_size(&self) -> Option<&str>;
 
     /// Returns the schedule of the cluster, if the cluster is a managed cluster.
-    fn schedule(&self) -> Option<&ClusterScheduleOptionValue>;
+    fn schedule(&self) -> Option<&ClusterSchedule>;
 }
 
 /// A cluster replica in a [`SessionCatalog`]

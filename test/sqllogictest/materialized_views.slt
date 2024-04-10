@@ -1176,7 +1176,7 @@ statement ok
 ALTER CLUSTER c_schedule_1 SET (MANAGED = true, SIZE = '1');
 
 statement ok
-ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH);
+ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '0 seconds'));
 
 # Setting some other cluster option in ALTER CLUSTER shouldn't change the SCHEDULE.
 # (The sleep is needed so that if the following ALTER erroneously sets the SCHEDULE to MANUAL, then we should be in a
@@ -1298,6 +1298,23 @@ SELECT mz_unsafe.mz_sleep(3);
 
 # Should stay off, because it was reset to manual.
 query I
-SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_3';
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_4';
 ----
 0
+
+## REHYDRATION TIME ESTIMATE
+
+statement error db error: ERROR: Expected literal string, found number "0"
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = 0));
+
+statement error db error: ERROR: REHYDRATION TIME ESTIMATE must be non\-negative; got: \-01:00:00
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '-1 hour'));
+
+statement error db error: ERROR: invalid input syntax for type interval: unknown units aaaa: "1 aaaa"
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 aaaa'));
+
+statement error db error: ERROR: REHYDRATION TIME ESTIMATE must not involve units larger than days
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 month'));
+
+statement error db error: ERROR: invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "1000000000000 days"
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1000000000000 days'));

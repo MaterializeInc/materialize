@@ -45,9 +45,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ClusterScheduleOptionValue, ConnectionOptionName,
-    CreateSourceSubsource, QualifiedReplica, TransactionIsolationLevel, TransactionMode, Value,
-    WithOptionValue,
+    AlterSourceAddSubsourceOption, ConnectionOptionName, CreateSourceSubsource, QualifiedReplica,
+    TransactionIsolationLevel, TransactionMode, Value, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
@@ -506,7 +505,7 @@ pub struct CreateClusterManagedPlan {
     pub compute: ComputeReplicaConfig,
     pub disk: bool,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
-    pub schedule: ClusterScheduleOptionValue,
+    pub schedule: ClusterSchedule,
 }
 
 #[derive(Debug)]
@@ -548,6 +547,23 @@ pub enum ReplicaConfig {
         internal: bool,
         billed_as: Option<String>,
     },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub enum ClusterSchedule {
+    /// The system won't automatically turn the cluster On or Off.
+    Manual,
+    /// The cluster will be On when a REFRESH materialized view on it needs to refresh.
+    /// `rehydration_time_estimate` determines how much time before a refresh to turn the
+    /// cluster On, so that it can rehydrate already before the refresh time.
+    Refresh { rehydration_time_estimate: Duration },
+}
+
+impl Default for ClusterSchedule {
+    fn default() -> Self {
+        // (Has to be consistent with `impl Default for ClusterScheduleOptionValue`.)
+        ClusterSchedule::Manual
+    }
 }
 
 #[derive(Debug)]
@@ -1544,7 +1560,7 @@ pub struct PlanClusterOption {
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
     pub disk: AlterOptionParameter<bool>,
-    pub schedule: AlterOptionParameter<ClusterScheduleOptionValue>,
+    pub schedule: AlterOptionParameter<ClusterSchedule>,
 }
 
 impl Default for PlanClusterOption {
