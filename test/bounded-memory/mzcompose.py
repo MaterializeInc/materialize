@@ -196,6 +196,9 @@ class KafkaScenario(Scenario):
         $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
         "${{kafka-ingest.iteration}}"
 
+        $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
+        "MMM"
+
         # Expect that only markers are left
         > SELECT * FROM v1;
         2
@@ -430,7 +433,7 @@ SCENARIOS = [
                 dedent(
                     f"""
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
-                    "${{kafka-ingest.iteration}}" {{"f1": "{i}{STRING_PAD}"}}
+                    "MMM" {{"f1": "{i}{STRING_PAD}"}}
                     """
                 )
                 for i in range(0, ITERATIONS)
@@ -439,14 +442,14 @@ SCENARIOS = [
         + KafkaScenario.END_MARKER
         + KafkaScenario.SOURCE
         + dedent(
-            f"""
+            """
             # Expect all ingested data + two MARKERs
             > SELECT * FROM v1;
-            {REPEAT + 2}
+            3
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
-        materialized_memory="4.5Gb",
+        materialized_memory="2Gb",
         clusterd_memory="3.5Gb",
     ),
     # Perform updates while the source is ingesting
