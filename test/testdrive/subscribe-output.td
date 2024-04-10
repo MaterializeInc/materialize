@@ -422,9 +422,43 @@ contains: column "invalid_key" does not exist
 > INSERT INTO t4 VALUES (1, 'foo', '30a7947e-4b38-46a4-b7c2-602ba62ce20b');
 
 > BEGIN;
-> DECLARE c4 CURSOR FOR SUBSCRIBE t4 ENVELOPE UPSERT (KEY (c, a));
+> DECLARE c4u CURSOR FOR SUBSCRIBE t4 ENVELOPE UPSERT (KEY (c, a));
 
-> FETCH 1 c4;
+> FETCH 1 c4u;
 <TIMESTAMP> upsert 30a7947e-4b38-46a4-b7c2-602ba62ce20b 1 foo
+
+$ postgres-execute connection=mz_system
+UPDATE t4 SET b = 'bar' WHERE a = 1
+
+> FETCH 1 c4u;
+<TIMESTAMP> upsert 30a7947e-4b38-46a4-b7c2-602ba62ce20b 1 bar
+
+$ postgres-execute connection=mz_system
+DELETE FROM t4 WHERE b = 'bar'
+
+> FETCH 1 c4u;
+<TIMESTAMP> delete 30a7947e-4b38-46a4-b7c2-602ba62ce20b 1 <null>
+
+> COMMIT;
+
+> INSERT INTO t4 VALUES (1, 'foo', '30a7947e-4b38-46a4-b7c2-602ba62ce20b');
+
+> BEGIN;
+> DECLARE c4d CURSOR FOR SUBSCRIBE t4 ENVELOPE DEBEZIUM (KEY (c, a));
+
+> FETCH 1 c4d;
+<TIMESTAMP> insert 30a7947e-4b38-46a4-b7c2-602ba62ce20b 1 <null> foo
+
+$ postgres-execute connection=mz_system
+UPDATE t4 SET b = 'bar' WHERE a = 1
+
+> FETCH 1 c4d;
+<TIMESTAMP> upsert 30a7947e-4b38-46a4-b7c2-602ba62ce20b 1 foo bar
+
+$ postgres-execute connection=mz_system
+DELETE FROM t4 WHERE b = 'bar'
+
+> FETCH 1 c4d;
+<TIMESTAMP> delete 30a7947e-4b38-46a4-b7c2-602ba62ce20b 1 bar <null>
 
 > COMMIT;

@@ -750,7 +750,8 @@ pub fn describe_subscribe(
                 desc = desc.with_column(column_name, column_ty);
             }
 
-            // Then add the remaining columns in the order from the original table.
+            // Then add the remaining columns in the order from the original
+            // table, filtering out the key columns since we added those above.
             for (mut name, mut ty) in relation_desc
                 .into_iter()
                 .filter(|(name, _ty)| !key_columns.contains(name))
