@@ -121,7 +121,6 @@ impl FronteggMockServer {
             .route(USER_PATH, get(handle_get_user).delete(handle_delete_user))
             .route(USER_CREATE_PATH, post(handle_create_user))
             .route(ROLES_PATH, get(handle_roles_request))
-
             .layer(middleware::from_fn_with_state(
                 Arc::clone(&context),
                 latency_middleware,
@@ -395,12 +394,19 @@ async fn handle_get_user(
     match users.iter().find(|(_, user)| user.id == Some(user_id)) {
         Some((_, user)) => {
             // Convert the stored role names in UserConfig to UserRole structs.
-            let roles: Vec<UserRole> = user.roles.iter().map(|role_name| {
-                role_mapping.get(role_name).cloned().unwrap_or_else(|| UserRole {
-                    id: "unknown".to_string(),
-                    name: role_name.to_string(),
+            let roles: Vec<UserRole> = user
+                .roles
+                .iter()
+                .map(|role_name| {
+                    role_mapping
+                        .get(role_name)
+                        .cloned()
+                        .unwrap_or_else(|| UserRole {
+                            id: "unknown".to_string(),
+                            name: role_name.to_string(),
+                        })
                 })
-            }).collect();
+                .collect();
 
             // Construct and return the UserResponse.
             let user_response = UserResponse {
@@ -413,7 +419,7 @@ async fn handle_get_user(
             };
 
             Json(user_response).into_response()
-        },
+        }
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -450,9 +456,17 @@ async fn handle_create_user(
     let user_id = Uuid::new_v4();
 
     // Translate role IDs to role names for storing in UserConfig
-    let role_names: Vec<String> = new_user.role_ids.as_ref().unwrap_or(&Vec::new()).iter().map(|role_id| {
-        role_mapping.get(role_id).map_or_else(|| role_id.clone(), |role| role.name.clone())
-    }).collect();
+    let role_names: Vec<String> = new_user
+        .role_ids
+        .as_ref()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|role_id| {
+            role_mapping
+                .get(role_id)
+                .map_or_else(|| role_id.clone(), |role| role.name.clone())
+        })
+        .collect();
 
     let user_config = UserConfig {
         id: Some(user_id),
@@ -470,12 +484,21 @@ async fn handle_create_user(
     users.insert(new_user.email.clone(), user_config);
 
     // Construct the roles for UserResponse using the mapping for ID and name
-    let user_roles: Vec<UserRole> = new_user.role_ids.as_ref().unwrap_or(&Vec::new()).iter().map(|role_id| {
-        role_mapping.get(role_id).cloned().unwrap_or_else(|| UserRole {
-            id: role_id.clone(),
-            name: role_id.clone(),
+    let user_roles: Vec<UserRole> = new_user
+        .role_ids
+        .as_ref()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|role_id| {
+            role_mapping
+                .get(role_id)
+                .cloned()
+                .unwrap_or_else(|| UserRole {
+                    id: role_id.clone(),
+                    name: role_id.clone(),
+                })
         })
-    }).collect();
+        .collect();
 
     // Create the UserResponse with the appropriate role details
     let user_response = UserResponse {
@@ -493,8 +516,14 @@ async fn handle_create_user(
 // https://docs.frontegg.com/reference/permissionscontrollerv2_getallroles
 async fn handle_roles_request(State(_context): State<Arc<Context>>) -> impl IntoResponse {
     let roles = vec![
-        UserRole { id: "1".to_string(), name: "Organization Admin".to_string() },
-        UserRole { id: "2".to_string(), name: "Organization Member".to_string() },
+        UserRole {
+            id: "1".to_string(),
+            name: "Organization Admin".to_string(),
+        },
+        UserRole {
+            id: "2".to_string(),
+            name: "Organization Member".to_string(),
+        },
     ];
 
     let response = UserRolesResponse {
@@ -587,7 +616,6 @@ pub struct UserCreate {
     pub role_ids: Option<Vec<String>>,
 }
 
-
 #[derive(Clone, Serialize, Deserialize)]
 pub struct UserRole {
     pub id: String,
@@ -641,7 +669,19 @@ struct RefreshToken<'a> {
 
 fn get_role_mapping() -> BTreeMap<String, UserRole> {
     let mut map = BTreeMap::new();
-    map.insert("1".to_string(), UserRole { id: "1".to_string(), name: "Organization Admin".to_string() });
-    map.insert("2".to_string(), UserRole { id: "2".to_string(), name: "Organization Member".to_string() });
+    map.insert(
+        "1".to_string(),
+        UserRole {
+            id: "1".to_string(),
+            name: "Organization Admin".to_string(),
+        },
+    );
+    map.insert(
+        "2".to_string(),
+        UserRole {
+            id: "2".to_string(),
+            name: "Organization Member".to_string(),
+        },
+    );
     map
 }
