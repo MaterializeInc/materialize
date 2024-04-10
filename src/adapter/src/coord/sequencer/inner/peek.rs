@@ -84,7 +84,7 @@ impl Coordinator {
                     .enable_broken_optimizer_trace();
                 ExplainContext::PlanInsightsNotice(OptimizerTrace::new(
                     broken_trace,
-                    ExplainStage::PlanInsights.path(),
+                    ExplainStage::PlanInsights.paths(),
                 ))
             }
             false => ExplainContext::None,
@@ -197,7 +197,7 @@ impl Coordinator {
             .catalog()
             .system_config()
             .enable_broken_optimizer_trace();
-        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.path());
+        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.paths());
 
         self.execute_peek_stage(
             ctx,

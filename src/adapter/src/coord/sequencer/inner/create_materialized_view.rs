@@ -136,7 +136,7 @@ impl Coordinator {
             .catalog()
             .system_config()
             .enable_broken_optimizer_trace();
-        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.path());
+        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
         let resolved_ids = ResolvedIds(Default::default());
@@ -193,7 +193,7 @@ impl Coordinator {
             .catalog()
             .system_config()
             .enable_broken_optimizer_trace();
-        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.path());
+        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.paths());
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,

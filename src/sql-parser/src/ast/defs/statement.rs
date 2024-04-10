@@ -22,6 +22,7 @@ use std::fmt;
 
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
+use smallvec::{smallvec, SmallVec};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
@@ -3745,16 +3746,16 @@ pub enum ExplainStage {
 
 impl ExplainStage {
     /// Return the tracing path that corresponds to a given stage.
-    pub fn path(&self) -> Option<&'static str> {
+    pub fn paths(&self) -> Option<SmallVec<[NamedPlan; 4]>> {
         use NamedPlan::*;
         match self {
-            Self::RawPlan => Some(Raw.path()),
-            Self::DecorrelatedPlan => Some(Decorrelated.path()),
-            Self::LocalPlan => Some(Local.path()),
-            Self::GlobalPlan => Some(Global.path()),
-            Self::PhysicalPlan => Some(Physical.path()),
+            Self::RawPlan => Some(smallvec![Raw]),
+            Self::DecorrelatedPlan => Some(smallvec![Decorrelated]),
+            Self::LocalPlan => Some(smallvec![Local]),
+            Self::GlobalPlan => Some(smallvec![Global]),
+            Self::PhysicalPlan => Some(smallvec![Physical]),
             Self::Trace => None,
-            Self::PlanInsights => None,
+            Self::PlanInsights => Some(smallvec![Raw, Global, FastPath]),
         }
     }
 
@@ -3790,6 +3791,7 @@ impl_display!(ExplainStage);
 
 /// An enum of named plans that identifies specific stages in an optimizer trace
 /// where these plans can be found.
+#[derive(Clone)]
 pub enum NamedPlan {
     Raw,
     Decorrelated,

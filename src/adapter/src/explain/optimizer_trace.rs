@@ -25,6 +25,7 @@ use mz_sql::plan::{self, HirRelationExpr, HirScalarExpr};
 use mz_sql_parser::ast::{ExplainStage, NamedPlan};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::RawOptimizerNotice;
+use smallvec::SmallVec;
 use tracing::dispatcher;
 use tracing_subscriber::prelude::*;
 
@@ -59,19 +60,20 @@ impl OptimizerTrace {
     /// The instance will only accumulate [`TraceEntry`] instances along
     /// the prefix of the given `path` if `path` is present, or it will
     /// accumulate all [`TraceEntry`] instances otherwise.
-    pub fn new(broken: bool, filter: Option<&'static str>) -> OptimizerTrace {
+    pub fn new(broken: bool, filter: Option<SmallVec<[NamedPlan; 4]>>) -> OptimizerTrace {
+        let filter = || filter.clone();
         if broken {
             let subscriber = DelegateSubscriber::default()
                 // Collect `explain_plan` types that are not used in the regular explain
                 // path, but are useful when instrumenting code for debugging purposes.
-                .with(PlanTrace::<String>::new(filter))
-                .with(PlanTrace::<HirScalarExpr>::new(filter))
-                .with(PlanTrace::<MirScalarExpr>::new(filter))
+                .with(PlanTrace::<String>::new(filter()))
+                .with(PlanTrace::<HirScalarExpr>::new(filter()))
+                .with(PlanTrace::<MirScalarExpr>::new(filter()))
                 // Collect `explain_plan` types that are used in the regular explain path.
-                .with(PlanTrace::<HirRelationExpr>::new(filter))
-                .with(PlanTrace::<MirRelationExpr>::new(filter))
-                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter))
-                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter))
+                .with(PlanTrace::<HirRelationExpr>::new(filter()))
+                .with(PlanTrace::<MirRelationExpr>::new(filter()))
+                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter()))
+                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter()))
                 // Don't filter for FastPathPlan entries (there can be at most one).
                 .with(PlanTrace::<FastPathPlan>::new(None))
                 .with(PlanTrace::<UsedIndexes>::new(None));
@@ -81,14 +83,14 @@ impl OptimizerTrace {
             let subscriber = tracing_subscriber::registry()
                 // Collect `explain_plan` types that are not used in the regular explain
                 // path, but are useful when instrumenting code for debugging purposes.
-                .with(PlanTrace::<String>::new(filter))
-                .with(PlanTrace::<HirScalarExpr>::new(filter))
-                .with(PlanTrace::<MirScalarExpr>::new(filter))
+                .with(PlanTrace::<String>::new(filter()))
+                .with(PlanTrace::<HirScalarExpr>::new(filter()))
+                .with(PlanTrace::<MirScalarExpr>::new(filter()))
                 // Collect `explain_plan` types that are used in the regular explain path.
-                .with(PlanTrace::<HirRelationExpr>::new(filter))
-                .with(PlanTrace::<MirRelationExpr>::new(filter))
-                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter))
-                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter))
+                .with(PlanTrace::<HirRelationExpr>::new(filter()))
+                .with(PlanTrace::<MirRelationExpr>::new(filter()))
+                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter()))
+                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter()))
                 // Don't filter for FastPathPlan entries (there can be at most one).
                 .with(PlanTrace::<FastPathPlan>::new(None))
                 .with(PlanTrace::<UsedIndexes>::new(None));
@@ -184,9 +186,12 @@ impl OptimizerTrace {
                 // For everything else, return the plan for the stage identified
                 // by the corresponding path.
 
-                let path = stage.path().ok_or_else(|| {
-                    AdapterError::Internal("explain stage unexpectedly missing path".into())
-                })?;
+                let path = stage
+                    .paths()
+                    .map(|path| path.into_element().path())
+                    .ok_or_else(|| {
+                        AdapterError::Internal("explain stage unexpectedly missing path".into())
+                    })?;
                 let mut traces = collect_all(format)?;
 
                 // For certain stages we want to return the resulting fast path

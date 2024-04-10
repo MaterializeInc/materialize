@@ -5733,6 +5733,7 @@ dependencies = [
  "mz-walkabout",
  "phf",
  "serde",
+ "smallvec",
  "thiserror",
  "tracing",
  "uncased",
