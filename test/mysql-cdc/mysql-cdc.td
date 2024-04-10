@@ -321,6 +321,24 @@ utf8_table            subsource <null>  <null>
 "space table"         subsource <null>  <null>
 таблица               subsource <null>  <null>
 
+> SELECT schema_name, table_name FROM mz_internal.mz_mysql_source_tables
+public          create
+public          pk_table
+public          large_text
+public          utf8_table
+public          nonpk_table
+public          types_table
+public          nulls_table
+public          multipart_pk
+public          "\"mixED_CAse\""
+public          "\"space table\""
+public          "\"таблица\""
+public          trailing_space_pk
+public          escaped_text_table
+public          trailing_space_nopk
+public          "\"\"\"literal_quotes\"\"\""
+conflict_schema conflict_table
+
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
 
