@@ -45,3 +45,6 @@ class DataType:
             string_value, self.internal_identifier, self.type_name
         )
         return f"{adjusted_string_value}::{self.get_type_name(sql_adjuster)}"
+
+    def __str__(self) -> str:
+        return self.type_name

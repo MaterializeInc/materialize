@@ -62,6 +62,8 @@ class RandomizedPicker:
     def convert_operation_relevance_to_number(
         self, relevance: OperationRelevance
     ) -> float:
+        if relevance == OperationRelevance.EXTREME_HIGH:
+            return 100
         if relevance == OperationRelevance.HIGH:
             return 0.8
         elif relevance == OperationRelevance.DEFAULT:
