@@ -1,16 +1,21 @@
 # Tuning Freshness on Materialized Views
 
 - Associated:
+  - Big tracking issue: [#26010 `REFRESH` options](https://github.com/MaterializeInc/materialize/issues/26010)
   - Main epics:
     - [#22878 [Epic] Refresh options for materialized views](https://github.com/MaterializeInc/materialize/issues/22878)
-    - [#23132 [Epic] Automated cluster pause/resume](https://github.com/MaterializeInc/materialize/issues/23132)
+    - [#25712 [Epic] Automatic cluster scheduling for REFRESH EVERY matviews](https://github.com/MaterializeInc/materialize/issues/25712)
   - Older issues:
     - [#13762: CREATE MATERIALIZED VIEW could support REFRESH modifiers](https://github.com/MaterializeInc/materialize/issues/13762)
     - [#6745: Consider WITH FREQUENCY option for sources, views, sinks.](https://github.com/MaterializeInc/materialize/issues/6745)
+    - [#21479: Support for static data collections](https://github.com/MaterializeInc/materialize/issues/21479)
   - Slack:
     - [channel #wg-tuning-freshness](https://materializeinc.slack.com/archives/C06535JL58R/p1699395646085619)
-    - [thread in #epd-sql-council](https://materializeinc.slack.com/archives/C063H5S7NKE/p1699543250405409)
-  - [Notion: Tuning REFRESH on MVs: UX](https://www.notion.so/materialize/Tuning-REFRESH-on-MVs-UX-1abbf85683364a1d997d77d7022ccd4f)
+    - [big design thread in #epd-sql-council](https://materializeinc.slack.com/archives/C063H5S7NKE/p1699543250405409)
+    - [`REHYDRATION TIME ESTIMATE` thread in #epd-sql-council](https://materializeinc.slack.com/archives/C063H5S7NKE/p1712165305916299)
+  - Notion:
+    - [Tuning REFRESH on MVs: UX](https://www.notion.so/materialize/Tuning-REFRESH-on-MVs-UX-1abbf85683364a1d997d77d7022ccd4f)
+    - [Compute meeting on automatic cluster scheduling](https://www.notion.so/materialize/Compute-meeting-on-automatic-cluster-scheduling-ce353b8af52e449d8784241c4a1c0585)
 
 ## TLDR
 
@@ -44,9 +49,9 @@ Criteria:
 
 3. The slowly updated results should be queryable together with other, normal objects. This is important because sometimes we might want to join the cold results with other objects that have normal refresh rates. Also, one important user needs a unified view of the hot and cold results, so we should be able to union them.
 
-4. We shouldn't hold back compaction of inputs (indexes most importantly, but also Persist) to the time of the last refresh. This is because a significant amount of time can pass between two consecutive refreshes, and therefore holding back compaction would lead to the buildup of significant amounts of in-memory state in input indexes.
+4. We shouldn't hold back compaction of inputs (indexes, most importantly, but also Persist) to the time of the last refresh. This is because a significant amount of time can pass between two consecutive refreshes, and therefore holding back compaction would lead to the buildup of significant amounts of in-memory state in input indexes.
 
-## Out of Scope
+## Scope and Limitations
 
 We are targeting the new refresh options only to materialized views, but not indexes for now. Note that one can create an index that is refreshed at a specified interval simply by creating a normal index on top of a `REFRESH EVERY <interval>` materialized view.
 
@@ -69,7 +74,7 @@ We propose providing users various `REFRESH` options on materialized views:
 CREATE MATERIALIZED VIEW ... [WITH (
   [REFRESH [=] {
     ON COMMIT
-    | EVERY <every_interval> [STARTING AT <start_timestamp>]
+    | EVERY <every_interval> [ALIGNED TO <aligned_to_timestamp>]
     | ON SCHEDULE '<cron>'
     | AT {CREATION | <timestamp>}
   }]+
@@ -80,7 +85,7 @@ For example:
 ```SQL
 CREATE MATERIALIZED VIEW mv1 WITH (
     REFRESH AT CREATION,
-    REFRESH EVERY '1 day' STARTING AT '2023-11-17 03:00'
+    REFRESH EVERY '1 day' ALIGNED TO '2023-11-17 03:00'
 ) AS SELECT ...
 ```
 
@@ -92,38 +97,39 @@ Some of the `REFRESH` options can be combined and/or supplied multiple times. (I
 
 This is the default when not supplying any options, i.e., our current behavior of refreshing the materialized view when any changes to our inputs are committed. (The term `REFRESH ON COMMIT` is present in various other database systems, so should be familiar to users.) It is an error to specify this together with any of the other `REFRESH` options.
 
-#### Refresh `EVERY <every_interval> [STARTING AT <start_timestamp>]`
+#### Refresh `EVERY <every_interval> [ALIGNED TO <aligned_to_timestamp>]`
 
 We'll refresh the materialized view periodically, with the specified interval, e.g., `1 day`.
 
-The purpose of `<start_timestamp>` is to specify the "phase". For example, users might want daily refreshes to happen outside business hours. `<start_timestamp>` is an absolute time, e.g., if today is `2023-11-16`, then I might want to create a daily refresh materialized view where the first of the periodic refreshes happen at `2023-11-17 03:00`, which will cause all later refreshes to also happen at `03:00`.
+The purpose of `<aligned_to_timestamp>` is to specify the "phase". For example, users might want daily refreshes to happen outside business hours. `<aligned_to_timestamp>` is an absolute time, e.g., if today is `2023-11-16`, then I might want to create a daily refresh materialized view where the first of the periodic refreshes happen at `2023-11-17 03:00`, which will cause all later refreshes to also happen at `03:00`.
 
-The default `<start_timestamp>` is `<mz_now>`.
+The default `<aligned_to_timestamp>` is `mz_now()` at the moment of creating the materialized view.
 
-It is allowed to specify `REFRESH EVERY` more than once. These can have different intervals and/or starting timestamps.
+It is allowed to specify `REFRESH EVERY` more than once. These can have different intervals and/or `ALIGNED TO` timestamps.
 
-If the specified `<start_timestamp>` is more than 1 `<every_interval>` away from the current time, then first of all we show a notice to the user, because this might be a typo, but then we do as the user instructed us, i.e., not do any refreshes before `<start_timestamp>`.
+Conceptually, refreshes extend infinitely to the past and future from the `<aligned_to_timestamp>`, but in practice the `least_valid_read` of the MV's input ID bundle constrains how far to the past they go. More formally, when considering the TVC of the MV, `REFRESH EVERY p ALIGNED TO a` means we have refreshes at `a + i*p`, where `i = -∞ .. ∞`. In practice, we have to project this to a pTVC, so `i` won’t actually start from `-∞`, but from some `s` such that `a + s*p` can actually be computed based on the input pTVCs. When `ALIGNED TO` is not given, `s` should usually be 0 (or smaller in case of custom compaction windows on inputs). This is because `a` defaults to the creation time of the MV, so for `s=0`, `a + s*p` will be simply the creation time of the MV, and it makes sense that any input pTVCs include the creation time of the MV at the moment of the creation of the MV. In the code, this is made sure by the combination of purification choosing `mz_now()` (the default of `ALIGNED TO`) to be the oracle read timestamp, and immediately grabbing read holds already in purification.
 
-We also need to carefully consider what happens with a `<start_timestamp>` that is in the past. This can be useful in two situations. First, the user shouldn't need to update her `<start_timestamp>` every time when redeploying the materialized view (e.g., through DBT). For example, let's say that on `2023-10-16` the user created an MV that is refreshed daily at 03:00, by specifying `STARTING AT 2023-10-17 03:00`. Let's say that now a month later on `2023-11-16` the user is making a small tweak in the definition of the MV, but wants to keep the same refresh schedule. If we didn't allow a `<start_timestamp>` in the past, the user would have to update her `<start_timestamp>` to be also a month later than before, i.e., `STARTING AT 2023-11-17 03:00`. However, instead I propose to simply accept the original `<start_timestamp>`, and ignore those refreshes that would happen in the past (or rather, ignore the refreshes that would happen further back in the past than our compaction window's beginning, as discussed in the next paragraph).
+We also need to carefully consider what happens with a `<aligned_to_timestamp>` that is in the past. This can be useful in two situations. First, the user shouldn't need to update her `<aligned_to_timestamp>` every time when redeploying the materialized view (e.g., through DBT). For example, let's say that on `2023-10-16` the user created an MV that is refreshed daily at 03:00, by specifying `ALIGNED TO 2023-10-17 03:00`. Let's say that now a month later on `2023-11-16` the user is making a small tweak in the definition of the MV, but wants to keep the same refresh schedule. If we didn't allow a `<aligned_to_timestamp>` in the past, the user would have to update her `<aligned_to_timestamp>` to be also a month later than before, i.e., `ALIGNED TO 2023-11-17 03:00`. However, instead I propose to simply accept the original `<aligned_to_timestamp>`, and ignore those refreshes that would happen before our `least_valid_read`.
 
-Another consideration for `<start_timestamp>`s in the past is that we'd like to be able to actually perform some refreshes in the past when the compaction window of the materialized view reaches to the past. For example, if a table has a compaction window of 30 days, and on this table the user creates a materialized view with a daily refresh, we should actually perform all the refreshes for these last 30 days. Note that currently, only some very special objects (so-called retained metrics objects) have non-default compaction windows (the default is currently 1 sec), so this consideration is not so important for now. However, in the future, we'll probably have user-configurable compaction windows, and then this consideration will become important.
+Another consideration for `<aligned_to_timestamp>`s in the past is that we'd like to be able to actually perform some refreshes in the past when the compaction window of the materialized view reaches to the past. For example, if a table has a compaction window of 30 days, and on this table the user creates a materialized view with a daily refresh, we should actually perform all the refreshes for these last 30 days.
 
-(An alternative design that would be perhaps more appealing from a conceptual point of view would be to extend refreshes infinitely both to the past and to the future from `<start_timestamp>`. However, then we couldn't really call the option `<start_timestamp>`, but would have to give it a more cryptic name, such as `<phase>`, and then we would have more explaining to do to users.)
+(We also [considered](https://materializeinc.slack.com/archives/C063H5S7NKE/p1699883928733719?thread_ts=1699543250.405409&cid=C063H5S7NKE) an alternative design, where instead of `ALIGNED TO` we would have had `STARTING AT`, where refreshes wouldn't have extended to the past. This would have made it possible to precisely control the time of the first refresh, e.g., the user could say that the MV should refresh every day, starting on Friday next week. But no one had a realistic use case for this, and having the theoretically more elegant ALIGNED TO had various minor advantages, so we consciously opted out of having this precise control for the time of the first refresh. But if someone comes up with a compelling use case for this at some point, I could still add STARTING AT with maybe a day of work.)
 
 #### Refresh `ON SCHEDULE '<cron>'`
 
-To support more complex refresh schedules, we'll also support [cron schedule expressions](https://cloud.google.com/scheduler/docs/configuring/cron-job-schedules). For example, the user whose needs prompted this work would like to have daily refreshes, but not on the weekends. While this is possible to express using `REFRESH EVERY <every_interval> [STARTING AT <start_timestamp>]`, it is quite cumbersome: one would need to specify a `REFRESH EVERY '7 days'` 5 times: for each of the weekdays when a refresh should happen.
+To support more complex refresh schedules, we'll also support [cron schedule expressions](https://cloud.google.com/scheduler/docs/configuring/cron-job-schedules). For example, the user whose needs prompted this work would like to have daily refreshes, but not on the weekends. While this is possible to express using `REFRESH EVERY <every_interval> [ALIGNED TO <aligned_to_timestamp>]`, it is quite cumbersome: one would need to specify a `REFRESH EVERY '7 days'` 5 times: for each of the weekdays when a refresh should happen.
 
 The implementation for refreshes scheduled by cron expressions will be similar to `REFRESH EVERY`, except for the determination of when the next refresh should happen.
 
 #### Refresh `AT {CREATION | <timestamp>}`
 
-We perform just one refresh of the MV at the specified time. (`REFRESH AT` can be given multiple times.) Note that if the only given refresh options are all `AT` options, then there will be a last refresh, after which the MV will never be refreshed again. This will allow for certain performance optimizations in dataflows that consume the MV as input (discussed in TODO).
+We perform just one refresh of the MV at the specified time. (`REFRESH AT` can be given multiple times.) Note that if the only given refresh options are all `AT` options, then there will be a last refresh, after which the MV will never be refreshed again. This will allow for certain performance optimizations in dataflows that consume the MV as input ([#23179](https://github.com/MaterializeInc/materialize/issues/23179), 
+[26571](https://github.com/MaterializeInc/materialize/issues/26571)).
 
-_Before the first refresh is performed, MVs are not queryable_ (queries will block until the first refresh completes), because their since will be initially set to the time of the first refresh. The first refresh can be a significant time away from the time of creating the MV. For example, the first refresh of an MV that is updated daily could be at night, while the MV is probably created during the day. In such cases, the user would have to wait a long time to actually start using the MV. To prevent this annoying situation, users might often want to add an extra refresh at the time of creation by specifying `REFRESH AT mz_now()`. A syntactic sugar for this is `REFRESH AT CREATION`. For example,
+_Before the first refresh is performed, MVs are not queryable_ (queries will block until the first refresh completes), because their `since` will be initially set to the time of the first refresh. The first refresh can be a significant time away from the time of creating the MV. For example, the first refresh of an MV that is updated daily could be at night, while the MV is probably created during the day. In such cases, the user would have to wait a long time to actually start using the MV. To prevent this annoying situation, users might often want to add an extra refresh at the time of creation by specifying `REFRESH AT mz_now()`. A syntactic sugar for this is `REFRESH AT CREATION`. For example,
 ```SQL
 CREATE MATERIALIZED VIEW mv1 WITH (
-    REFRESH EVERY '1 day' STARTING AT '2023-11-19 03:00',
+    REFRESH EVERY '1 day' ALIGNED TO '2023-11-19 03:00',
     REFRESH AT CREATION,
 ) AS SELECT ...`
 ```
@@ -161,24 +167,15 @@ Contrast the above behavior of upper to what _A._ alone would get us: With only 
 
 We still need to consider how the since frontier of the materialized view moves. Crucially, it shouldn't jump forward to near the time of the next refresh, because that would again preclude timestamp selection when querying the MV together with other objects, violating success criterion 3., because the since of the MV would be far ahead of the uppers of normal objects. When initially designing this feature, we mistakenly thought that without some further code modifications the since would jump forward to the next refresh because that is the since that the Compute controller would request on the MV: tailing the upper by 1 second (or more generally, by the compaction window of the MV). However, it turns out that the Adapter is keeping the sinces of all objects from jumping into the future in any case: The Coordinator is keeping read holds on all objects, and ticks these read holds forward every second. ([See `Coordinator::advance_timelines`](https://github.com/MaterializeInc/materialize/blob/b89d4961f8a8ccd172be2dc46f7b83bb00b9b871/src/adapter/src/coord/timeline.rs#L645).)
 
-TODO: wait, there was some new argument to not rely on the Adapter's read holds. Something about queries not exactly choosing the oracle read timestamps, so queries on the MV would be blocked for a little while. Or something like this. Ask Jan and/or Frank.
-
 A code modularity argument could be made for not relying on the Adapter to hold the sinces near the current time: One could say that the Compute Controller should be keeping sinces reasonable without relying on other components (the Adapter). However, I would counter this argument by saying that it is the Adapter's responsibility to keep sinces from moving into the future, because it's the Adapter that will be issuing the queries that need the sinces to be near the current time. Therefore, I'd say it's ok to rely on Adapter holding back the sinces from jumping far into the future.
 
 Note that the compaction of downstream objects, e.g. an index on the materialized view, will be similarly controlled by the Adapter, even if their uppers jump forward together with the materialized view.
-
-We need some refinements of the above around the last refresh, i.e., when there are only `REFRESH AT ...` given (possibly multiple times) (or `REFRESH AT CREATION`, which is purified to `REFRESH AT mz_now()`): Between the last two refreshes, we should round up the data timestamps to the last refresh, but jump the frontier to the empty antichain instead of to the time of the last refresh. Then, after the last refresh, we should eat all data that comes in. (Data coming to the Persist sink after the last refresh shouldn't happen much, because we turn of the replica forever after the last refresh is complete. However, turning the replica off is an asynchronous operation, so some data can reach the Persist sink before the replica shutdown completes.)
-
-#### Creation time `mz_now()`
-
-TODO:
-substitute join of the timestamp oracle and least_valid_read
 
 ## Further Requirements and Refinements (Now or Soon)
 
 ### Starting the Refresh Early
 
-TODO: user option to explicitly set how much earlier than the logical time we start the refresh
+TODO: update this section with the latest discussion on `REHYDRATION TIME ESTIMATE`.
 
 Notice that if we turn on the replica at exactly the moment when a refresh should happen, then the MV's upper will be stuck for the time that the refresh takes. This is because the upper would still be at the logical time of the refresh during most of the time of the replica's rehydration. (More specifically, until the replica is finished processing the input data whose timestamps are before the time of the refresh, which are rounded up to the time of the refresh.) This would violate success criterion 3. for the time of performing the refresh, because other objects' sinces would keep ticking forward, and would therefore have no overlap with our special materialized view's since-upper interval.
 
@@ -188,30 +185,18 @@ A proper fix would be to start up the replica a bit before the exact moment of t
 
 How do we know how much earlier than the refresh time should we turn on the replica, that is, how much time the refresh will take? In the first version of this feature, we can let the user set this explicitly by something like `REFRESH EVERY <interval> EARLY <interval>`. Later, we should record the times the refreshes take, and infer the time requirement of the next refresh based on earlier ones. Note that this will be complicated by the fact that we have different instance types [that have wildly differing CPU performance](https://materializeinc.slack.com/archives/CM7ATT65S/p1697816482502819).
 
-### Covering the Times Between Creating the MV and the First Refresh
-
-Consider what happens with the materialized view during the time between creating the materialized view and the first refresh. With the solution proposed so far, we would immediately move the upper of the materialized view to the first refresh time. The issue with this is that the materialized view is initially empty, and we would lock in this empty state until the first refresh. This means that querying the materialized view in this time range would always yield an empty result. Note that there was a recent fix for such an issue with sources; we shouldn't introduce now this problem in a new way.
-
-We could solve this as follows: When rounding up times, we would treat times not beyond the original `as_of` of the MV (i.e., the creation time of the MV) specially: we don't round them up, but keep them as it is. (These times should actually be only the `as_of` itself, as sources modify earlier times to the `as_of`.) This would mean that the materialized view's upper would move past the `as_of` only once it has managed to process all input data that happened no later than the creation of the materialized view. If we don't give a replica to the MV initially, then this would simply mean that queries would block on the MV until the first refresh completes. This would surely cause confusion for some users, so to make the user experience more convenient, we could also start up a replica right away when creating the MV, and keep it running until the initial snapshot is complete. This would allow users to examine the contents of the MV soon after creating it, i.e., they wouldn't have to wait until the time of the first refresh.
-
-Note that we currently don't store the original `as_of` of MVs (they get a new `as_of` when starting up a new replica or on envd restarts), so we'd need to store this somewhere for the above to work. I think we'll need to put the `as_of` in the catalog.
-
-A simpler way to ensure we never show an empty MV would be to advance the initial since to the first refresh time, so the MV only becomes readable after the first refresh. However, queries blocking on the MV would probably be almost as confusing as showing an empty MV, so this would be only a temporary solution.
-
-### Controlling the "Phase"
-
-Some users will probably want to control not just the refresh interval but also when exactly refreshes happen (the "phase"). For example, if the interval is 1 day, then maybe a user would want refreshes to happen outside business hours. Therefore, we should add an optional argument to `REFRESH EVERY` that specifies the exact time of the first refresh.
-
 ### Logical Times vs. Wall Clock Times
 
 Note that generally we can't guarantee that refreshes will happen at exactly the wall clock times specified by the user. For example, the system might be down due to scheduled maintenance at the time when a refresh should happen. However, we should still perform the refresh at the logical time specified by the user. In other words, each refresh should consider exactly the data whose timestamps were at most the refresh timestamp, even if the refresh happens a bit later in wall clock time. The proposed solution naturally satisfies this requirement, as the rounding up is performed on logical timestamps.
 
 ### Delta Join Tweaks
 
+TODO
+
 ## Possible Future Work
 
 - REFRESH ON DEMAND (and ALTER ...)
-- When we have custom compaction windows, make sure stuff works. E.g., `<start_timestamp>` in the past should actually start in the past.
+- When we have custom compaction windows, make sure stuff works. E.g., `<aligned_to_timestamp>` in the past should actually start in the past.
 
 ## Minimal Viable Prototype
 
@@ -268,14 +253,9 @@ As mentioned in the [scoping section](#out-of-scope), an alternative implementat
 
 ## Open questions
 
-### Special Clusters for `REFRESH EVERY` MVs
+### Automated Cluster Scheduling for `REFRESH EVERY` MVs
 
-I'm still thinking about how exactly to tie a `REFRESH EVERY` MV to the cluster whose replicas will be managed by the MV. There are several approaches:
-- These MVs would automatically manage not just replicas, but even their cluster. That is, the system would create a cluster when creating the MV, and drop the cluster when dropping the MV. (And this cluster could not be used for anything else.) The problem with this approach is that then certain cluster creation options (e.g, size) would have to be copied from `CREATE CLUSTER` to `CREATE MATERIALIZED VIEW`. I'm not sure how big of an issue this would be.
-- Another approach would be to create `REFRESH EVERY` MVs simply on the active cluster (as other, normal MVs), and the user would be expected to separately create a cluster manually. A further tweak could be to let the user specify a special option at cluster creation, which would make the system let only `REFRESH EVERY` MVs be created on this cluster (possibly only with the exact same refresh settings). This would avoid situations where a user accidentally creates some other, normal object on a cluster whose replicas are being managed by a `REFRESH EVERY` MV, and then this other object would unexpectedly also stop refreshing.
-- Alternatively (from Jan): Install `REFRESH EVERY` MVs on existing clusters like regular MVs, but automatically spin down cluster replicas only when the cluster has only idle `REFRESH EVERY` MVs. This also ties in well to a possible future auto-scaling feature where the controller would check if a replica has any work to do and spin it down otherwise.
-To prevent users from accidentally keeping their expensive refresh replica running, we could produce a notice when one creates a `REFRESH EVERY` MV on a cluster with other dataflows, or vice versa.
-- (from Nikhil) You don't specify `REFRESH EVERY` on materialized views. You instead specify a `MATERIALIZED VIEW REFRESH INTERVAL` on clusters, and that option automatically applies to all materialized views installed on that cluster.
+TODO: updated discussion
 
 ### System Catalog Updates
 
