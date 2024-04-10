@@ -180,6 +180,13 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#25937 (base64 decode with new line and tab)")
 
+        if db_function.function_name_in_lower_case == "translate" and expression.args[
+            1
+        ].has_any_characteristic(
+            {ExpressionCharacteristics.TEXT_WITH_SPECIAL_NON_SPACE_CHARS}
+        ):
+            return YesIgnore("#26553 (translate with special characters)")
+
         return NoIgnore()
 
     def _matches_problematic_operation_invocation(
