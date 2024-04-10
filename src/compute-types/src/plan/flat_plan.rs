@@ -655,6 +655,21 @@ impl<T> FlatPlan<T> {
     pub fn destruct(self) -> (BTreeMap<LirId, FlatPlanNode<T>>, LirId, Vec<LirId>) {
         (self.nodes, self.root, self.topological_order)
     }
+
+    /// Replace references to global IDs by the result of `func`.
+    pub fn replace_ids<F>(&mut self, mut func: F)
+    where
+        F: FnMut(GlobalId) -> GlobalId,
+    {
+        for node in self.nodes.values_mut() {
+            if let FlatPlanNode::Get {
+                id: Id::Global(id), ..
+            } = node
+            {
+                *id = func(*id);
+            }
+        }
+    }
 }
 
 impl<T: Clone> FlatPlan<T> {
