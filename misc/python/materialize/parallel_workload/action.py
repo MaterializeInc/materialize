@@ -57,7 +57,7 @@ from materialize.parallel_workload.database import (
     View,
     WebhookSource,
 )
-from materialize.parallel_workload.executor import Executor
+from materialize.parallel_workload.executor import Executor, Http
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.sqlsmith import known_errors
 
@@ -143,31 +143,35 @@ class FetchAction(Action):
 
     def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
-        # See https://github.com/MaterializeInc/materialize/issues/20474
-        exe.rollback() if self.rng.choice([True, False]) else exe.commit()
-        query = f"DECLARE c CURSOR FOR SUBSCRIBE {obj}"
+        http = self.rng.choice([True, False])
+        if http:
+            # See https://github.com/MaterializeInc/materialize/issues/20474
+            exe.rollback() if self.rng.choice([True, False]) else exe.commit()
+        query = f"SUBSCRIBE {obj}"
         if self.rng.choice([True, False]):
             envelope = "UPSERT" if self.rng.choice([True, False]) else "DEBEZIUM"
             columns = self.rng.sample(obj.columns, len(obj.columns))
             key = ", ".join(column.name(True) for column in columns)
             query += f" ENVELOPE {envelope} (KEY ({key}))"
-        exe.execute(query)
-        while True:
-            rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
-            timeout = self.rng.randrange(10)
-            query = f"FETCH {rows} c WITH (timeout='{timeout}s')"
-            exe.execute(query)
-            exe.cur.fetchall()
-            if self.rng.choice([True, False]):
-                break
-        exe.rollback() if self.rng.choice([True, False]) else exe.commit()
+        # if self.rng.choice([True, False]):
+        if False:  # Unsupported via this API
+            exe.execute(f"COPY ({query}) TO STDOUT", http=Http.YES)
+        else:
+            exe.execute(f"DECLARE c CURSOR FOR {query}", http=Http.NO)
+            while True:
+                rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
+                timeout = self.rng.randrange(10)
+                query = f"FETCH {rows} c WITH (timeout='{timeout}s')"
+                exe.execute(query, http=Http.NO, fetch=True)
+                if self.rng.choice([True, False]):
+                    break
+            exe.rollback() if self.rng.choice([True, False]) else exe.commit()
         return True
 
 
 class SelectOneAction(Action):
     def run(self, exe: Executor) -> bool:
-        exe.execute("SELECT 1", explainable=True)
-        exe.cur.fetchall()
+        exe.execute("SELECT 1", explainable=True, http=Http.MAYBE, fetch=True)
         return True
 
 
@@ -234,8 +238,7 @@ class SelectAction(Action):
 
         query += " LIMIT 1"
 
-        exe.execute(query, explainable=True)
-        exe.cur.fetchall()
+        exe.execute(query, explainable=True, http=Http.MAYBE, fetch=True)
         return True
 
 
@@ -313,80 +316,7 @@ class SQLsmithAction(Action):
         while not self.queries:
             self.refill_sqlsmith(exe)
         query = self.queries.pop()
-        exe.execute(query, explainable=True)
-        exe.cur.fetchall()
-        return True
-
-
-class HttpSelectAction(Action):
-    def run(self, exe: Executor) -> bool:
-        obj = self.rng.choice(exe.db.db_objects())
-        column = self.rng.choice(obj.columns)
-        obj2 = self.rng.choice(exe.db.db_objects_without_views())
-        obj_name = str(obj)
-        obj2_name = str(obj2)
-        columns = [
-            c
-            for c in obj2.columns
-            if c.data_type == column.data_type and c.data_type != TextTextMap
-        ]
-
-        join = obj_name != obj2_name and obj not in exe.db.views and columns
-
-        if join:
-            all_columns = list(obj.columns) + list(obj2.columns)
-        else:
-            all_columns = obj.columns
-
-        if self.rng.choice([True, False]):
-            expressions = ", ".join(
-                str(column)
-                for column in self.rng.sample(
-                    all_columns, k=self.rng.randint(1, len(all_columns))
-                )
-            )
-            if self.rng.choice([True, False]):
-                column1 = self.rng.choice(all_columns)
-                column2 = self.rng.choice(all_columns)
-                column3 = self.rng.choice(all_columns)
-                fns = ["COUNT"]
-                if column1.data_type in NUMBER_TYPES:
-                    fns.extend(["SUM", "AVG", "MAX", "MIN"])
-                window_fn = self.rng.choice(fns)
-                expressions += f", {window_fn}({column1}) OVER (PARTITION BY {column2} ORDER BY {column3})"
-        else:
-            expressions = "*"
-
-        query = f"SELECT {expressions} FROM {obj_name} "
-
-        if join:
-            column2 = self.rng.choice(columns)
-            query += f"JOIN {obj2_name} ON {column} = {column2}"
-
-        query += " LIMIT 1"
-
-        try:
-            result = requests.post(
-                f"http://{exe.db.host}:{exe.db.ports['http']}/api/sql",
-                data=json.dumps({"query": query}),
-                headers={"content-type": "application/json"},
-                timeout=self.rng.uniform(0, 10),
-            )
-            if result.status_code != 200:
-                raise QueryError(
-                    f"{result.status_code}: {result.text}", f"HTTP query: {query}"
-                )
-        except requests.exceptions.ReadTimeout:
-            return False
-        except requests.exceptions.ConnectionError:
-            # Expected when Mz is killed
-            if exe.db.scenario not in (
-                Scenario.Kill,
-                Scenario.TogglePersistTxn,
-                Scenario.BackupRestore,
-            ):
-                raise
-
+        exe.execute(query, explainable=True, http=Http.MAYBE, fetch=True)
         return True
 
 
@@ -416,7 +346,7 @@ class CopyToS3Action(Action):
             exe.db.s3_path += 1
         query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')"
 
-        exe.execute(query, explainable=False)
+        exe.execute(query, explainable=False, http=Http.NO, fetch=False)
         return True
 
 
@@ -465,7 +395,7 @@ class InsertAction(Action):
                 returning_exprs.append(column_names)
             if returning_exprs:
                 query += f" RETURNING {', '.join(returning_exprs)}"
-        exe.execute(query)
+        exe.execute(query, http=Http.MAYBE)
         table.num_rows += len(column_values)
         exe.insert_table = table.table_id
         return True
@@ -520,7 +450,7 @@ class UpdateAction(Action):
             query += f"map_length({column1.name(True)}) = map_length({column1.value(self.rng, True)})"
         else:
             query += f"{column1.name(True)} = {column1.value(self.rng, True)}"
-        exe.execute(query)
+        exe.execute(query, http=Http.MAYBE)
         exe.insert_table = table.table_id
         return True
 
@@ -544,7 +474,7 @@ class DeleteAction(Action):
                     query += (
                         f" AND {column.name(True)} = {column.value(self.rng, True)}"
                     )
-        exe.execute(query)
+        exe.execute(query, http=Http.MAYBE)
         exe.commit()
         result = exe.cur.rowcount
         table.num_rows -= result
@@ -561,7 +491,7 @@ class CommentAction(Action):
         else:
             query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng)}'"
 
-        exe.execute(query)
+        exe.execute(query, http=Http.MAYBE)
         return True
 
 
@@ -586,7 +516,7 @@ class CreateIndexAction(Action):
             index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
         query = f"CREATE INDEX {index} ON {obj} ({index_str})"
-        exe.execute(query)
+        exe.execute(query, http=Http.MAYBE)
         with exe.db.lock:
             exe.db.indexes.add(index)
         return True
@@ -603,7 +533,7 @@ class DropIndexAction(Action):
                 return False
 
             query = f"DROP INDEX {index}"
-            exe.execute(query)
+            exe.execute(query, http=Http.MAYBE)
             exe.db.indexes.remove(index)
             return True
 
@@ -641,7 +571,7 @@ class DropTableAction(Action):
                 return False
 
             query = f"DROP TABLE {table}"
-            exe.execute(query)
+            exe.execute(query, http=Http.MAYBE)
             exe.db.tables.remove(table)
         return True
 
@@ -659,7 +589,8 @@ class RenameTableAction(Action):
             table.rename += 1
             try:
                 exe.execute(
-                    f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}"
+                    f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}",
+                    http=Http.MAYBE,
                 )
             except:
                 table.rename -= 1
@@ -683,7 +614,8 @@ class RenameViewAction(Action):
             view.rename += 1
             try:
                 exe.execute(
-                    f"ALTER {'MATERIALIZED VIEW' if view.materialized else 'VIEW'} {old_name} RENAME TO {identifier(view.name())}"
+                    f"ALTER {'MATERIALIZED VIEW' if view.materialized else 'VIEW'} {old_name} RENAME TO {identifier(view.name())}",
+                    http=Http.MAYBE,
                 )
             except:
                 view.rename -= 1
@@ -707,7 +639,8 @@ class RenameSinkAction(Action):
             sink.rename += 1
             try:
                 exe.execute(
-                    f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}"
+                    f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}",
+                    http=Http.MAYBE,
                 )
             except:
                 sink.rename -= 1
@@ -745,7 +678,7 @@ class DropDatabaseAction(Action):
                 return False
 
             query = f"DROP DATABASE {db} RESTRICT"
-            exe.execute(query)
+            exe.execute(query, http=Http.MAYBE)
             exe.db.dbs.remove(db)
         return True
 
@@ -780,7 +713,7 @@ class DropSchemaAction(Action):
                 return False
 
             query = f"DROP SCHEMA {schema}"
-            exe.execute(query)
+            exe.execute(query, http=Http.MAYBE)
             exe.db.schemas.remove(schema)
         return True
 
@@ -803,7 +736,8 @@ class RenameSchemaAction(Action):
             schema.rename += 1
             try:
                 exe.execute(
-                    f"ALTER SCHEMA {old_name} RENAME TO {identifier(schema.name())}"
+                    f"ALTER SCHEMA {old_name} RENAME TO {identifier(schema.name())}",
+                    http=Http.MAYBE,
                 )
             except:
                 schema.rename -= 1
@@ -926,7 +860,7 @@ class DropViewAction(Action):
                 query = f"DROP MATERIALIZED VIEW {view}"
             else:
                 query = f"DROP VIEW {view}"
-            exe.execute(query)
+            exe.execute(query, http=Http.MAYBE)
             exe.db.views.remove(view)
         return True
 
@@ -963,7 +897,7 @@ class DropRoleAction(Action):
 
             query = f"DROP ROLE {role}"
             try:
-                exe.execute(query)
+                exe.execute(query, http=Http.MAYBE)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1015,7 +949,7 @@ class DropClusterAction(Action):
 
             query = f"DROP CLUSTER {cluster}"
             try:
-                exe.execute(query)
+                exe.execute(query, http=Http.MAYBE)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1048,7 +982,8 @@ class SwapClusterAction(Action):
 
             if self.rng.choice([True, False]):
                 exe.execute(
-                    f"ALTER CLUSTER {cluster1} SWAP WITH {identifier(cluster2.name())}"
+                    f"ALTER CLUSTER {cluster1} SWAP WITH {identifier(cluster2.name())}",
+                    http=Http.MAYBE,
                 )
             else:
                 try:
@@ -1083,7 +1018,7 @@ class SetClusterAction(Action):
                 return False
             cluster = self.rng.choice(exe.db.clusters)
         query = f"SET CLUSTER = {cluster}"
-        exe.execute(query)
+        exe.execute(query, http=Http.MAYBE)
         return True
 
 
@@ -1144,7 +1079,7 @@ class DropClusterReplicaAction(Action):
 
             query = f"DROP CLUSTER REPLICA {cluster}.{replica}"
             try:
-                exe.execute(query)
+                exe.execute(query, http=Http.MAYBE)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1173,7 +1108,7 @@ class GrantPrivilegesAction(Action):
 
             query = f"GRANT {privilege} ON {table} TO {role}"
             try:
-                exe.execute(query)
+                exe.execute(query, http=Http.MAYBE)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1202,7 +1137,7 @@ class RevokePrivilegesAction(Action):
 
             query = f"REVOKE {privilege} ON {table} FROM {role}"
             try:
-                exe.execute(query)
+                exe.execute(query, http=Http.MAYBE)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1302,7 +1237,9 @@ class CancelAction(Action):
                 break
         assert worker
         exe.execute(
-            f"SELECT pg_cancel_backend({pid})", extra_info=f"Canceling {worker}"
+            f"SELECT pg_cancel_backend({pid})",
+            extra_info=f"Canceling {worker}",
+            http=Http.MAYBE,
         )
         # Sleep less often to work around #22228 / #2392
         time.sleep(self.rng.uniform(1, 10))
@@ -1450,7 +1387,7 @@ class DropWebhookSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source}"
-            exe.execute(query)
+            exe.execute(query, http=Http.MAYBE)
             exe.db.webhook_sources.remove(source)
         return True
 
@@ -1512,7 +1449,7 @@ class DropKafkaSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source}"
-            exe.execute(query)
+            exe.execute(query, http=Http.MAYBE)
             exe.db.kafka_sources.remove(source)
             source.executor.mz_conn.close()
         return True
@@ -1579,7 +1516,7 @@ class DropMySqlSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source.executor.source}"
-            exe.execute(query)
+            exe.execute(query, http=Http.MAYBE)
             exe.db.mysql_sources.remove(source)
             source.executor.mz_conn.close()
         return True
@@ -1646,7 +1583,7 @@ class DropPostgresSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source.executor.source}"
-            exe.execute(query)
+            exe.execute(query, http=Http.MAYBE)
             exe.db.postgres_sources.remove(source)
             source.executor.mz_conn.close()
         return True
@@ -1703,7 +1640,7 @@ class DropKafkaSinkAction(Action):
                 return False
 
             query = f"DROP SINK {sink}"
-            exe.execute(query)
+            exe.execute(query, http=Http.MAYBE)
             exe.db.kafka_sinks.remove(sink)
         return True
 
@@ -1812,7 +1749,6 @@ read_action_list = ActionList(
         (SelectAction, 100),
         (SelectOneAction, 1),
         (SQLsmithAction, 30),
-        (HttpSelectAction, 100),
         (CopyToS3Action, 100),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 30),

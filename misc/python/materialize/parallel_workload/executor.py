@@ -7,13 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import random
 import threading
+from enum import Enum
 from typing import TYPE_CHECKING, TextIO
 
 import pg8000
+import requests
 
 from materialize.data_ingest.query_error import QueryError
+from materialize.parallel_workload.settings import Scenario
 
 if TYPE_CHECKING:
     from materialize.parallel_workload.database import Database
@@ -26,6 +30,12 @@ def initialize_logging() -> None:
     global logging, lock
     logging = open("parallel-workload-queries.log", "w")
     lock = threading.Lock()
+
+
+class Http(Enum):
+    NO = 0
+    MAYBE = 1
+    YES = 2
 
 
 class Executor:
@@ -84,15 +94,60 @@ class Executor:
             logging.flush()
 
     def execute(
-        self, query: str, extra_info: str = "", explainable: bool = False
+        self,
+        query: str,
+        extra_info: str = "",
+        explainable: bool = False,
+        http: Http = Http.NO,
+        fetch: bool = False,
     ) -> None:
+        is_http = (
+            http == Http.MAYBE and self.rng.choice([True, False])
+        ) or http == Http.YES
         if explainable and self.rng.choice([True, False]):
             query = f"EXPLAIN {query}"
         query += ";"
         extra_info_str = f" ({extra_info})" if extra_info else ""
-        self.log(f"{query}{extra_info_str}")
+        http_str = " (HTTP)" if is_http else ""
+        self.log(f"{query}{extra_info_str}{http_str}")
+        if not is_http:
+            try:
+                self.cur.execute(query)
+            except Exception as e:
+                raise QueryError(str(e), query)
+
+            self.action_run_since_last_commit_rollback = True
+
+            if fetch:
+                self.cur.fetchall()
+
+            return
+
         try:
-            self.cur.execute(query)
-        except Exception as e:
-            raise QueryError(str(e), query)
-        self.action_run_since_last_commit_rollback = True
+            result = requests.post(
+                f"http://{self.db.host}:{self.db.ports['http']}/api/sql",
+                data=json.dumps({"query": query}),
+                headers={"content-type": "application/json"},
+                timeout=self.rng.uniform(0, 10),
+            )
+            if result.status_code != 200:
+                raise QueryError(
+                    f"{result.status_code}: {result.text}", f"HTTP query: {query}"
+                )
+            r = result.json()["results"]
+            assert len(r) == 1, r
+            if "error" in r[0]:
+                raise QueryError(
+                    f"HTTP {r[0]['error']['code']}: {r[0]['error']['message']}\n{r[0]['error'].get('detail', '')}",
+                    query,
+                )
+        except requests.exceptions.ReadTimeout:
+            pass
+        except requests.exceptions.ConnectionError:
+            # Expected when Mz is killed
+            if self.db.scenario not in (
+                Scenario.Kill,
+                Scenario.TogglePersistTxn,
+                Scenario.BackupRestore,
+            ):
+                raise
