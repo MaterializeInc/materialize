@@ -733,22 +733,37 @@ pub fn describe_subscribe(
                 .collect_vec();
             let mut before_values_desc = RelationDesc::empty();
             let mut after_values_desc = RelationDesc::empty();
-            for (mut name, mut ty) in relation_desc.into_iter() {
-                if key_columns.contains(&name) {
-                    if progress {
-                        ty.nullable = true;
-                    }
-                    desc = desc.with_column(name, ty);
-                } else {
-                    ty.nullable = true;
-                    before_values_desc =
-                        before_values_desc.with_column(format!("before_{}", name), ty.clone());
-                    if debezium {
-                        name = format!("after_{}", name).into();
-                    }
-                    after_values_desc = after_values_desc.with_column(name, ty);
+
+            // Add the key columns in the order that they're specified.
+            for column_name in &key_columns {
+                let mut column_ty = relation_desc
+                    .get_by_name(column_name)
+                    .map(|(_pos, ty)| ty.clone())
+                    .ok_or_else(|| PlanError::UnknownColumn {
+                        table: None,
+                        column: column_name.clone(),
+                        similar: Box::new([]),
+                    })?;
+                if progress {
+                    column_ty.nullable = true;
                 }
+                desc = desc.with_column(column_name, column_ty);
             }
+
+            // Then add the remaining columns in the order from the original table.
+            for (mut name, mut ty) in relation_desc
+                .into_iter()
+                .filter(|(name, _ty)| !key_columns.contains(name))
+            {
+                ty.nullable = true;
+                before_values_desc =
+                    before_values_desc.with_column(format!("before_{}", name), ty.clone());
+                if debezium {
+                    name = format!("after_{}", name).into();
+                }
+                after_values_desc = after_values_desc.with_column(name, ty);
+            }
+
             if debezium {
                 desc = desc.concat(before_values_desc);
             }

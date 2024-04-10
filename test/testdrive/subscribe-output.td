@@ -414,3 +414,17 @@ contains: column "invalid_key" does not exist
 <TIMESTAMP> 1 3 4
 
 > COMMIT;
+
+# Subscribe with a query that uses two columns for upsert key.
+
+> CREATE TABLE t4 (a int, b text, c uuid);
+
+> INSERT INTO t4 VALUES (1, 'foo', '30a7947e-4b38-46a4-b7c2-602ba62ce20b');
+
+> BEGIN;
+> DECLARE c4 CURSOR FOR SUBSCRIBE t4 ENVELOPE UPSERT (KEY (c, a));
+
+> FETCH 1 c4;
+<TIMESTAMP> upsert 30a7947e-4b38-46a4-b7c2-602ba62ce20b 1 foo
+
+> COMMIT;
