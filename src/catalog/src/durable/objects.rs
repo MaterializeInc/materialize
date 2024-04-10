@@ -681,6 +681,21 @@ impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditLog {
+    pub event: VersionedEvent,
+}
+
+impl DurableType<AuditLogKey, ()> for AuditLog {
+    fn into_key_value(self) -> (AuditLogKey, ()) {
+        (AuditLogKey { event: self.event }, ())
+    }
+
+    fn from_key_value(key: AuditLogKey, _value: ()) -> Self {
+        Self { event: key.event }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageCollectionMetadata {
     pub id: GlobalId,
     pub shard: String,

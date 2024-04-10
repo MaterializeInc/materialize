@@ -759,6 +759,10 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
         }
 
         Ok(match kind {
+            StateUpdateKind::AuditLog(key, value) => {
+                let audit_log = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::AuditLog(audit_log))
+            }
             StateUpdateKind::Cluster(key, value) => {
                 let cluster = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Cluster(cluster))
@@ -801,6 +805,12 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let schema = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Schema(schema))
             }
+            StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                let storage_collection_metadata = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::StorageCollectionMetadata(
+                    storage_collection_metadata,
+                ))
+            }
             StateUpdateKind::SystemConfiguration(key, value) => {
                 let system_configuration = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SystemConfiguration(
@@ -819,12 +829,6 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     system_privilege,
                 ))
             }
-            StateUpdateKind::StorageCollectionMetadata(key, value) => {
-                let storage_collection_metadata = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::StorageCollectionMetadata(
-                    storage_collection_metadata,
-                ))
-            }
             StateUpdateKind::UnfinalizedShard(key, value) => {
                 let unfinalized_shard = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::UnfinalizedShard(
@@ -832,8 +836,7 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 ))
             }
             // TODO(jkosh44) Add conversions for valid variants.
-            StateUpdateKind::AuditLog(_, _)
-            | StateUpdateKind::Config(_, _)
+            StateUpdateKind::Config(_, _)
             | StateUpdateKind::Epoch(_)
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::Setting(_, _)
