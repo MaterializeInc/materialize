@@ -40,6 +40,7 @@ def get_multiple(
     results = []
 
     print(f"Starting to fetch data from Buildkite: {request_path}")
+    params["page"] = str(first_page)
 
     fetch_count = 0
     while True:
@@ -53,7 +54,7 @@ def get_multiple(
         if isinstance(result, dict) and result.get("message"):
             raise RuntimeError(f"Something went wrong! ({result['message']})")
 
-        params["page"] = str(int(params.get("page", "1")) + 1)
+        params["page"] = str(int(params["page"]) + 1)
 
         entry_count = len(result)
         created_at = result[-1]["created_at"]
