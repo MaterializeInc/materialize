@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+import random
 import re
 from math import ceil, floor
 from textwrap import dedent
@@ -227,6 +227,34 @@ class Insert(DML):
         )
 
 
+class ManySmallInserts(DML):
+    """Measure the time it takes for several small INSERT statements to return."""
+
+    def init(self) -> Action:
+        return self.table_ten()
+
+    def benchmark(self) -> MeasurementSource:
+        random.seed(self.seed())
+
+        statements = []
+        for _ in range(0, 10000):
+            statements.append(f"> INSERT INTO t1 VALUES ({random.randint(0, 100000)})")
+
+        insert_statements_str = "\n".join(statements)
+
+        return Td(
+            f"""
+> DROP TABLE IF EXISTS t1;
+
+> CREATE TABLE t1 (f1 INTEGER)
+  /* A */
+
+{insert_statements_str}
+  /* B */
+"""
+        )
+
+
 class InsertBatch(DML):
     """Measure the time it takes for a batch of INSERT statements to return."""
 
@@ -302,6 +330,46 @@ class Update(DML):
 1
 
 > UPDATE t1 SET f1 = f1 + {self.n()}
+  /* B */
+"""
+        )
+
+
+class ManySmallUpdates(DML):
+    """Measure the time it takes for several small UPDATE statements to return to client"""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                """
+> CREATE TABLE t1 (f1 INT, f2 INT);
+
+> CREATE DEFAULT INDEX ON t1;
+
+> INSERT INTO t1 SELECT generate_series(1, 10);
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        random.seed(self.seed())
+
+        statements = []
+        for _ in range(0, 10000):
+            statements.append(
+                f"> UPDATE t1 SET f1 = {random.randint(0, 100000)}, f2 = {random.randint(0, 100000)} WHERE f1 % 10 = {random.randint(0, 10)}"
+            )
+
+        update_statements_str = "\n".join(statements)
+
+        return Td(
+            f"""
+> SELECT 1
+  /* A */
+1
+
+{update_statements_str}
   /* B */
 """
         )

@@ -26,12 +26,15 @@ class RootScenario:
         MeasurementType.MEMORY: 0.10,
     }
 
-    def __init__(self, scale: float, mz_version: MzVersion, default_size: int) -> None:
+    def __init__(
+        self, scale: float, mz_version: MzVersion, default_size: int, seed: int
+    ) -> None:
         self._name = self.__class__.__name__
         self._scale = scale
         self._mz_version = mz_version
         self._n: int = int(10**scale)
         self._default_size = default_size
+        self._seed = seed
 
     @classmethod
     def can_run(cls, version: MzVersion) -> bool:
@@ -57,6 +60,9 @@ class RootScenario:
 
     def n(self) -> int:
         return self._n
+
+    def seed(self) -> int:
+        return self._seed
 
     @staticmethod
     def name_with_scale(class_: type["Scenario"], num: int, params_dict: dict) -> str:

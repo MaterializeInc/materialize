@@ -32,6 +32,7 @@ class Benchmark:
         termination_conditions: list[TerminationCondition],
         aggregation_class: type[Aggregation],
         default_size: int,
+        seed: int,
         scale: str | None = None,
         measure_memory: bool = True,
     ) -> None:
@@ -45,6 +46,7 @@ class Benchmark:
         self._performance_aggregation = aggregation_class()
         self._messages_aggregation = aggregation_class()
         self._default_size = default_size
+        self._seed = seed
 
         if measure_memory:
             self._memory_aggregation = aggregation_class()
@@ -62,7 +64,10 @@ class Benchmark:
 
         scenario_class = self._scenario
         scenario = scenario_class(
-            scale=scale, mz_version=self._mz_version, default_size=self._default_size
+            scale=scale,
+            mz_version=self._mz_version,
+            default_size=self._default_size,
+            seed=self._seed,
         )
         name = scenario.name()
 
