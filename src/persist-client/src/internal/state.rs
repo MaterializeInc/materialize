@@ -1569,13 +1569,13 @@ where
             ));
         }
 
-        let mut batches = Vec::new();
-        self.collections.trace.map_batches(|b| {
-            if PartialOrder::less_than(as_of, b.desc.lower()) {
-                return;
-            }
-            batches.push(b.clone());
-        });
+        let batches = self
+            .collections
+            .trace
+            .batches()
+            .filter(|b| !PartialOrder::less_than(as_of, b.desc.lower()))
+            .cloned()
+            .collect();
         Ok(batches)
     }
 
@@ -1594,18 +1594,15 @@ where
     pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Result<HollowBatch<T>, SeqNo> {
         // TODO: Avoid the O(n^2) here: `next_listen_batch` is called once per
         // batch and this iterates through all batches to find the next one.
-        let mut ret = Err(self.seqno);
-        self.collections.trace.map_batches(|b| {
-            if ret.is_ok() {
-                return;
-            }
-            if PartialOrder::less_equal(b.desc.lower(), frontier)
-                && PartialOrder::less_than(frontier, b.desc.upper())
-            {
-                ret = Ok(b.clone());
-            }
-        });
-        ret
+        self.collections
+            .trace
+            .batches()
+            .find(|b| {
+                PartialOrder::less_equal(b.desc.lower(), frontier)
+                    && PartialOrder::less_than(frontier, b.desc.upper())
+            })
+            .cloned()
+            .ok_or(self.seqno)
     }
 
     pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {

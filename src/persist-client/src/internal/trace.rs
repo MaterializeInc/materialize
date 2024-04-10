@@ -100,11 +100,7 @@ impl<T: PartialEq> PartialEq for Trace<T> {
 
         // Intentionally use HollowBatches for this comparison so we ignore
         // differences in spine layers.
-        let (mut self_batches, mut other_batches) = (Vec::new(), Vec::new());
-        self.map_batches(|b| self_batches.push(b));
-        other.map_batches(|b| other_batches.push(b));
-
-        self_batches == other_batches
+        self.batches().eq(other.batches())
     }
 }
 
@@ -369,42 +365,33 @@ impl<T> Trace<T> {
     }
 
     pub fn map_batches<'a, F: FnMut(&'a HollowBatch<T>)>(&'a self, mut f: F) {
-        self.spine.map_batches(move |b| match b {
-            SpineBatch::Merged(b) => f(&b.batch),
-            SpineBatch::Fueled { parts, .. } => {
-                for b in parts.iter() {
-                    f(&b.batch);
-                }
-            }
-        })
+        for batch in self.batches() {
+            f(batch);
+        }
     }
 
-    #[must_use]
-    pub fn batches(&self) -> impl IntoIterator<Item = &HollowBatch<T>> {
-        // It should be possible to do this without the Vec.
-        let mut batches = Vec::new();
-        self.map_batches(|b| batches.push(b));
-        batches
+    pub fn batches(&self) -> impl Iterator<Item = &HollowBatch<T>> {
+        self.spine
+            .spine_batches()
+            .flat_map(|b| match b {
+                SpineBatch::Merged(b) => std::slice::from_ref(b),
+                SpineBatch::Fueled { parts, .. } => parts.as_slice(),
+            })
+            .map(|b| &*b.batch)
     }
 
     pub fn num_spine_batches(&self) -> usize {
-        let mut ret = 0;
-        self.spine.map_batches(|_| ret += 1);
-        ret
+        self.spine.spine_batches().count()
     }
 
     #[cfg(test)]
     pub fn num_hollow_batches(&self) -> usize {
-        let mut ret = 0;
-        self.map_batches(|_| ret += 1);
-        ret
+        self.batches().count()
     }
 
     #[cfg(test)]
     pub fn num_updates(&self) -> usize {
-        let mut ret = 0;
-        self.map_batches(|b| ret += b.len);
-        ret
+        self.batches().map(|b| b.len).sum()
     }
 }
 
@@ -471,15 +458,16 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     pub(crate) fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
-        let mut reqs = Vec::new();
-        self.spine.map_batches(|b| match b {
-            SpineBatch::Merged(_) => {} // No-op.
-            SpineBatch::Fueled { desc, parts, .. } => reqs.push(FueledMergeReq {
-                desc: desc.clone(),
-                inputs: parts.clone(),
-            }),
-        });
-        reqs
+        self.spine
+            .spine_batches()
+            .filter_map(|b| match b {
+                SpineBatch::Merged(_) => None, // No-op.
+                SpineBatch::Fueled { desc, parts, .. } => Some(FueledMergeReq {
+                    desc: desc.clone(),
+                    inputs: parts.clone(),
+                }),
+            })
+            .collect()
     }
 
     // This is only called with the results of one `insert` and so the length of
@@ -983,17 +971,12 @@ struct Spine<T> {
 }
 
 impl<T> Spine<T> {
-    pub fn map_batches<'a, F: FnMut(&'a SpineBatch<T>)>(&'a self, mut f: F) {
-        for batch in self.merging.iter().rev() {
-            match batch {
-                MergeState::Double(batch1, batch2, _) => {
-                    f(batch1);
-                    f(batch2);
-                }
-                MergeState::Single(batch) => f(batch),
-                _ => {}
-            }
-        }
+    pub fn spine_batches(&self) -> impl Iterator<Item = &SpineBatch<T>> {
+        self.merging.iter().rev().flat_map(|m| match m {
+            MergeState::Vacant => None.into_iter().chain(None.into_iter()),
+            MergeState::Single(a) => Some(a).into_iter().chain(None.into_iter()),
+            MergeState::Double(a, b, _) => Some(a).into_iter().chain(Some(b).into_iter()),
+        })
     }
 }
 
@@ -1541,10 +1524,10 @@ pub mod datadriven {
 
     pub fn batches(datadriven: &TraceState, _args: DirectiveArgs) -> Result<String, anyhow::Error> {
         let mut s = String::new();
-        datadriven.trace.spine.map_batches(|b| {
+        for b in datadriven.trace.spine.spine_batches() {
             s.push_str(b.describe(true).as_str());
             s.push('\n');
-        });
+        }
         Ok(s)
     }
 
