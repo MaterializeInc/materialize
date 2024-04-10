@@ -100,11 +100,7 @@ impl<T: PartialEq> PartialEq for Trace<T> {
 
         // Intentionally use HollowBatches for this comparison so we ignore
         // differences in spine layers.
-        let (mut self_batches, mut other_batches) = (Vec::new(), Vec::new());
-        self.map_batches(|b| self_batches.push(b));
-        other.map_batches(|b| other_batches.push(b));
-
-        self_batches == other_batches
+        self.batches().eq(other.batches())
     }
 }
 
@@ -385,23 +381,17 @@ impl<T> Trace<T> {
     }
 
     pub fn num_spine_batches(&self) -> usize {
-        let mut ret = 0;
-        self.spine.map_batches(|_| ret += 1);
-        ret
+        self.spine.spine_batches().count()
     }
 
     #[cfg(test)]
     pub fn num_hollow_batches(&self) -> usize {
-        let mut ret = 0;
-        self.map_batches(|_| ret += 1);
-        ret
+        self.batches().count()
     }
 
     #[cfg(test)]
     pub fn num_updates(&self) -> usize {
-        let mut ret = 0;
-        self.map_batches(|b| ret += b.len);
-        ret
+        self.batches().map(|b| b.len).sum()
     }
 }
 
