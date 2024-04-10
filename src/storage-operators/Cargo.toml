@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
+parquet = { version = "51.0.0", default-features = false, features = ["async"] }
 async-stream = "0.3.3"
 aws-types = "1.1.1"
 bytesize = "1.1.0"
@@ -18,6 +19,7 @@ differential-dataflow = "0.12.0"
 futures = "0.3.25"
 http = "0.2.8"
 mz-aws-util = { path = "../aws-util" }
+mz-arrow-util = { path = "../arrow-util" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }

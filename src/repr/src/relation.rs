@@ -324,7 +324,6 @@ impl From<ColumnName> for mz_sql_parser::ast::Ident {
 /// A description of the shape of a relation.
 ///
 /// It bundles a [`RelationType`] with the name of each column in the relation.
-/// Individual column names are optional.
 ///
 /// # Examples
 ///

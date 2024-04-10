@@ -1,0 +1,17 @@
+[package]
+name = "mz-arrow-util"
+description = "Arrow / Parquet utility library."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.66"
+arrow = { version = "51.0.0", default-features = false }
+chrono = { version = "0.4.35", default-features = false, features = ["std"] }
+mz-repr = { path = "../repr" }
+mz-ore = { path = "../ore" }
