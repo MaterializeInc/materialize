@@ -369,22 +369,19 @@ impl<T> Trace<T> {
     }
 
     pub fn map_batches<'a, F: FnMut(&'a HollowBatch<T>)>(&'a self, mut f: F) {
-        self.spine.map_batches(move |b| match b {
-            SpineBatch::Merged(b) => f(&b.batch),
-            SpineBatch::Fueled { parts, .. } => {
-                for b in parts.iter() {
-                    f(&b.batch);
-                }
-            }
-        })
+        for batch in self.batches() {
+            f(batch);
+        }
     }
 
-    #[must_use]
-    pub fn batches(&self) -> impl IntoIterator<Item = &HollowBatch<T>> {
-        // It should be possible to do this without the Vec.
-        let mut batches = Vec::new();
-        self.map_batches(|b| batches.push(b));
-        batches
+    pub fn batches(&self) -> impl Iterator<Item = &HollowBatch<T>> {
+        self.spine
+            .spine_batches()
+            .flat_map(|b| match b {
+                SpineBatch::Merged(b) => std::slice::from_ref(b),
+                SpineBatch::Fueled { parts, .. } => parts.as_slice(),
+            })
+            .map(|b| &*b.batch)
     }
 
     pub fn num_spine_batches(&self) -> usize {
@@ -471,15 +468,16 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     pub(crate) fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
-        let mut reqs = Vec::new();
-        self.spine.map_batches(|b| match b {
-            SpineBatch::Merged(_) => {} // No-op.
-            SpineBatch::Fueled { desc, parts, .. } => reqs.push(FueledMergeReq {
-                desc: desc.clone(),
-                inputs: parts.clone(),
-            }),
-        });
-        reqs
+        self.spine
+            .spine_batches()
+            .filter_map(|b| match b {
+                SpineBatch::Merged(_) => None, // No-op.
+                SpineBatch::Fueled { desc, parts, .. } => Some(FueledMergeReq {
+                    desc: desc.clone(),
+                    inputs: parts.clone(),
+                }),
+            })
+            .collect()
     }
 
     // This is only called with the results of one `insert` and so the length of
@@ -1542,10 +1540,10 @@ pub mod datadriven {
 
     pub fn batches(datadriven: &TraceState, _args: DirectiveArgs) -> Result<String, anyhow::Error> {
         let mut s = String::new();
-        datadriven.trace.spine.map_batches(|b| {
+        for b in datadriven.trace.spine.spine_batches() {
             s.push_str(b.describe(true).as_str());
             s.push('\n');
-        });
+        }
         Ok(s)
     }
 
