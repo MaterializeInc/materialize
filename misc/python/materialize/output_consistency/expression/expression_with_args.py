@@ -52,8 +52,11 @@ class ExpressionWithArgs(Expression):
         self.return_type_spec = operation.return_type_spec
         self.args = args
 
+    def count_args(self) -> int:
+        return len(self.args)
+
     def has_args(self) -> bool:
-        return len(self.args) > 0
+        return self.count_args() > 0
 
     def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
         sql: str = self.pattern
