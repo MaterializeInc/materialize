@@ -2751,9 +2751,9 @@ impl Coordinator {
             }
             PlannedAlterRoleOption::Variable(variable) => {
                 // Get the variable to make sure it's valid and visible.
-                session
-                    .vars()
-                    .get(Some(catalog.system_vars()), variable.name())?;
+                let session_var = session.vars().inspect(variable.name())?;
+                // Return early if it's not visible.
+                session_var.visible(session.user(), Some(catalog.system_vars()))?;
 
                 let var_name = match variable {
                     PlannedRoleVariable::Set { name, value } => {
@@ -2767,6 +2767,9 @@ impl Coordinator {
                                     [val] => OwnedVarInput::Flat(val.clone()),
                                     vals => OwnedVarInput::SqlSet(vals.to_vec()),
                                 };
+                                // Make sure the input is valid.
+                                session_var.check(var.borrow())?;
+
                                 vars.insert(name.clone(), var);
                             }
                         };

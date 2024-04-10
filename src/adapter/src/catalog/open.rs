@@ -692,7 +692,7 @@ impl Catalog {
             }
             for (_id, role) in &catalog.state.roles_by_id {
                 if let Some(builtin_update) = catalog.state.pack_role_update(role.id, 1) {
-                    builtin_table_updates.push(builtin_update);
+                    builtin_table_updates.extend(builtin_update);
                 }
                 for group_id in role.membership.map.keys() {
                     builtin_table_updates.push(

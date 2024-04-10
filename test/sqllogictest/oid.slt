@@ -1052,3 +1052,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16941  mz_notices
 16942  mz_notices_redacted
 16943  mz_notices_ind
+16945  mz_role_parameters

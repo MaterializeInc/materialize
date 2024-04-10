@@ -983,6 +983,34 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Updates all [`Role`]s with ids matching the keys of `roles` in the transaction, to the
+    /// corresponding value in `roles`.
+    ///
+    /// Returns an error if any id in `roles` is not found.
+    ///
+    /// NOTE: On error, there still may be some roles updated in the transaction. It is
+    /// up to the called to either abort the transaction or commit.
+    pub fn update_roles(&mut self, roles: BTreeMap<RoleId, Role>) -> Result<(), CatalogError> {
+        let n = self.roles.update(|k, _v| {
+            if let Some(role) = roles.get(&k.id) {
+                let (_, new_role) = role.clone().into_key_value();
+                Some(new_role)
+            } else {
+                None
+            }
+        })?;
+        let n = usize::try_from(n).expect("Must be positive and fit in usize");
+
+        if n == roles.len() {
+            Ok(())
+        } else {
+            let update_role_ids: BTreeSet<_> = roles.into_keys().collect();
+            let role_ids: BTreeSet<_> = self.roles.items().keys().map(|k| k.id).collect();
+            let mut unknown = update_role_ids.difference(&role_ids);
+            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+        }
+    }
+
     /// Updates persisted mapping from system objects to global IDs and fingerprints. Each element
     /// of `mappings` should be (old-global-id, new-system-object-mapping).
     ///
