@@ -39,7 +39,7 @@ def ast_node_names:
     ((if type == "object"
       then [keys[] | select(test("[A-Z][a-z]*"))]
       else []
-      end) 
+      end)
      + [.[]? | ast_node_names]) | flatten | unique
 ;
 

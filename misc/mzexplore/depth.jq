@@ -12,10 +12,10 @@
 include "defs";
 
 def depth:
-    [if is_mir_relexpr then 1 else 0 end + 
+    [if is_mir_relexpr then 1 else 0 end +
      (if type == "object" or type == "array"
-      then .[]? | depth 
-      else 0 
+      then .[]? | depth
+      else 0
       end)
     ] | max
 ;
