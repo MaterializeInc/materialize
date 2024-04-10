@@ -102,7 +102,11 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        let broken_trace = self
+            .catalog()
+            .system_config()
+            .enable_broken_optimizer_trace();
+        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
         let resolved_ids = ResolvedIds(Default::default());
@@ -155,7 +159,11 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        let broken_trace = self
+            .catalog()
+            .system_config()
+            .enable_broken_optimizer_trace();
+        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.paths());
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,
@@ -439,8 +447,7 @@ impl Coordinator {
             let full_name = self.catalog().resolve_full_name(&name, None);
             let transient_items = btreemap! {
                 id => TransientItem::new(
-                    Some(full_name.to_string()),
-                    Some(full_name.item.to_string()),
+                    Some(full_name.into_parts()),
                     Some(column_names.iter().map(|c| c.to_string()).collect()),
                 )
             };

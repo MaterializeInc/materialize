@@ -1,0 +1,639 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Requires stable object IDs.
+reset-server
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a int)
+
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
+----
+{
+  "plans": {
+    "raw": {
+      "text": "Get materialize.public.t\n\nTarget cluster: quickstart\n",
+      "json": {
+        "Get": {
+          "id": {
+            "Global": {
+              "User": 1
+            }
+          },
+          "typ": {
+            "column_types": [
+              {
+                "scalar_type": "Int32",
+                "nullable": true
+              }
+            ],
+            "keys": []
+          }
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "Explained Query:\n  ReadStorage materialize.public.t\n\nTarget cluster: quickstart\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query",
+              "plan": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      }
+                    ],
+                    "keys": []
+                  },
+                  "access_strategy": "Persist"
+                }
+              }
+            }
+          ],
+          "sources": []
+        }
+      },
+      "fast_path": {
+        "text": "<unknown>",
+        "json": null
+      }
+    }
+  },
+  "insights": {
+    "imports": {
+      "u1": {
+        "name": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t"
+        },
+        "type": "storage"
+      }
+    }
+  }
+}
+EOF
+
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
+----
+{
+  "plans": {
+    "raw": {
+      "text": "CrossJoin\n  Get materialize.public.t\n  Get materialize.public.t\n\nTarget cluster: quickstart\n",
+      "json": {
+        "Join": {
+          "left": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "typ": {
+                "column_types": [
+                  {
+                    "scalar_type": "Int32",
+                    "nullable": true
+                  }
+                ],
+                "keys": []
+              }
+            }
+          },
+          "right": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "typ": {
+                "column_types": [
+                  {
+                    "scalar_type": "Int32",
+                    "nullable": true
+                  }
+                ],
+                "keys": []
+              }
+            }
+          },
+          "on": {
+            "Literal": [
+              {
+                "data": [
+                  2
+                ]
+              },
+              {
+                "scalar_type": "Bool",
+                "nullable": false
+              }
+            ]
+          },
+          "kind": "Inner"
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "Explained Query:\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadStorage materialize.public.t\n\nTarget cluster: quickstart\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query",
+              "plan": {
+                "Let": {
+                  "id": 0,
+                  "value": {
+                    "ArrangeBy": {
+                      "input": {
+                        "Get": {
+                          "id": {
+                            "Global": {
+                              "User": 1
+                            }
+                          },
+                          "typ": {
+                            "column_types": [
+                              {
+                                "scalar_type": "Int32",
+                                "nullable": true
+                              }
+                            ],
+                            "keys": []
+                          },
+                          "access_strategy": "Persist"
+                        }
+                      },
+                      "keys": [
+                        []
+                      ]
+                    }
+                  },
+                  "body": {
+                    "Join": {
+                      "inputs": [
+                        {
+                          "Get": {
+                            "id": {
+                              "Local": 0
+                            },
+                            "typ": {
+                              "column_types": [
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                }
+                              ],
+                              "keys": []
+                            },
+                            "access_strategy": "UnknownOrLocal"
+                          }
+                        },
+                        {
+                          "Get": {
+                            "id": {
+                              "Local": 0
+                            },
+                            "typ": {
+                              "column_types": [
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                }
+                              ],
+                              "keys": []
+                            },
+                            "access_strategy": "UnknownOrLocal"
+                          }
+                        }
+                      ],
+                      "equivalences": [],
+                      "implementation": {
+                        "Differential": [
+                          [
+                            0,
+                            [],
+                            {
+                              "unique_key": false,
+                              "key_length": 0,
+                              "arranged": false,
+                              "cardinality": null,
+                              "filters": {
+                                "literal_equality": false,
+                                "like": false,
+                                "is_null": false,
+                                "literal_inequality": 0,
+                                "any_filter": false
+                              },
+                              "input": 0
+                            }
+                          ],
+                          [
+                            [
+                              1,
+                              [],
+                              {
+                                "unique_key": false,
+                                "key_length": 0,
+                                "arranged": false,
+                                "cardinality": null,
+                                "filters": {
+                                  "literal_equality": false,
+                                  "like": false,
+                                  "is_null": false,
+                                  "literal_inequality": 0,
+                                  "any_filter": false
+                                },
+                                "input": 1
+                              }
+                            ]
+                          ]
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "sources": []
+        }
+      },
+      "fast_path": {
+        "text": "<unknown>",
+        "json": null
+      }
+    }
+  },
+  "insights": {
+    "imports": {
+      "u1": {
+        "name": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t"
+        },
+        "type": "storage"
+      }
+    }
+  }
+}
+EOF
+
+statement ok
+CREATE DEFAULT INDEX ON t
+
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
+----
+{
+  "plans": {
+    "raw": {
+      "text": "Get materialize.public.t\n\nTarget cluster: quickstart\n",
+      "json": {
+        "Get": {
+          "id": {
+            "Global": {
+              "User": 1
+            }
+          },
+          "typ": {
+            "column_types": [
+              {
+                "scalar_type": "Int32",
+                "nullable": true
+              }
+            ],
+            "keys": []
+          }
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "Explained Query:\n  ReadIndex on=t t_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.t_primary_idx (*** full scan ***)\n\nTarget cluster: quickstart\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query",
+              "plan": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      }
+                    ],
+                    "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 2
+                        },
+                        "FullScan"
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "sources": []
+        }
+      },
+      "fast_path": {
+        "text": "Explained Query (fast path):\n  ReadIndex on=materialize.public.t t_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.t_primary_idx (*** full scan ***)\n\nTarget cluster: quickstart\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query (fast path)",
+              "plan": {
+                "PeekExisting": [
+                  {
+                    "User": 1
+                  },
+                  {
+                    "User": 2
+                  },
+                  null,
+                  {
+                    "mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0
+                      ],
+                      "input_arity": 1
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "sources": []
+        }
+      }
+    }
+  },
+  "insights": {
+    "imports": {
+      "u2": {
+        "name": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t_primary_idx"
+        },
+        "type": "compute"
+      }
+    }
+  }
+}
+EOF
+
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
+----
+{
+  "plans": {
+    "raw": {
+      "text": "CrossJoin\n  Get materialize.public.t\n  Get materialize.public.t\n\nTarget cluster: quickstart\n",
+      "json": {
+        "Join": {
+          "left": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "typ": {
+                "column_types": [
+                  {
+                    "scalar_type": "Int32",
+                    "nullable": true
+                  }
+                ],
+                "keys": []
+              }
+            }
+          },
+          "right": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "typ": {
+                "column_types": [
+                  {
+                    "scalar_type": "Int32",
+                    "nullable": true
+                  }
+                ],
+                "keys": []
+              }
+            }
+          },
+          "on": {
+            "Literal": [
+              {
+                "data": [
+                  2
+                ]
+              },
+              {
+                "scalar_type": "Bool",
+                "nullable": false
+              }
+            ]
+          },
+          "kind": "Inner"
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "Explained Query:\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadIndex on=t t_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.t_primary_idx (*** full scan ***)\n\nTarget cluster: quickstart\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query",
+              "plan": {
+                "Let": {
+                  "id": 0,
+                  "value": {
+                    "ArrangeBy": {
+                      "input": {
+                        "Get": {
+                          "id": {
+                            "Global": {
+                              "User": 1
+                            }
+                          },
+                          "typ": {
+                            "column_types": [
+                              {
+                                "scalar_type": "Int32",
+                                "nullable": true
+                              }
+                            ],
+                            "keys": []
+                          },
+                          "access_strategy": {
+                            "Index": [
+                              [
+                                {
+                                  "User": 2
+                                },
+                                "FullScan"
+                              ]
+                            ]
+                          }
+                        }
+                      },
+                      "keys": [
+                        []
+                      ]
+                    }
+                  },
+                  "body": {
+                    "Join": {
+                      "inputs": [
+                        {
+                          "Get": {
+                            "id": {
+                              "Local": 0
+                            },
+                            "typ": {
+                              "column_types": [
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                }
+                              ],
+                              "keys": []
+                            },
+                            "access_strategy": "UnknownOrLocal"
+                          }
+                        },
+                        {
+                          "Get": {
+                            "id": {
+                              "Local": 0
+                            },
+                            "typ": {
+                              "column_types": [
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                }
+                              ],
+                              "keys": []
+                            },
+                            "access_strategy": "UnknownOrLocal"
+                          }
+                        }
+                      ],
+                      "equivalences": [],
+                      "implementation": {
+                        "Differential": [
+                          [
+                            0,
+                            [],
+                            {
+                              "unique_key": false,
+                              "key_length": 0,
+                              "arranged": false,
+                              "cardinality": null,
+                              "filters": {
+                                "literal_equality": false,
+                                "like": false,
+                                "is_null": false,
+                                "literal_inequality": 0,
+                                "any_filter": false
+                              },
+                              "input": 0
+                            }
+                          ],
+                          [
+                            [
+                              1,
+                              [],
+                              {
+                                "unique_key": false,
+                                "key_length": 0,
+                                "arranged": false,
+                                "cardinality": null,
+                                "filters": {
+                                  "literal_equality": false,
+                                  "like": false,
+                                  "is_null": false,
+                                  "literal_inequality": 0,
+                                  "any_filter": false
+                                },
+                                "input": 1
+                              }
+                            ]
+                          ]
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "sources": []
+        }
+      },
+      "fast_path": {
+        "text": "<unknown>",
+        "json": null
+      }
+    }
+  },
+  "insights": {
+    "imports": {
+      "u2": {
+        "name": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t_primary_idx"
+        },
+        "type": "compute"
+      }
+    }
+  }
+}
+EOF

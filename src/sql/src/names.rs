@@ -61,6 +61,20 @@ pub struct FullItemName {
     pub item: String,
 }
 
+impl FullItemName {
+    /// Converts the name into a string vector of its constituent parts:
+    /// database (if present), schema, and item.
+    pub fn into_parts(self) -> Vec<String> {
+        let mut parts = vec![];
+        if let RawDatabaseSpecifier::Name(name) = self.database {
+            parts.push(name);
+        }
+        parts.push(self.schema);
+        parts.push(self.item);
+        parts
+    }
+}
+
 impl fmt::Display for FullItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let RawDatabaseSpecifier::Name(database) = &self.database {

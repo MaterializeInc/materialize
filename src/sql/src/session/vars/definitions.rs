@@ -1204,6 +1204,13 @@ pub static REAL_TIME_RECENCY: VarDefinition = VarDefinition::new(
 )
 .with_feature_flag(&ALLOW_REAL_TIME_RECENCY);
 
+pub static EMIT_PLAN_INSIGHTS_NOTICE: VarDefinition = VarDefinition::new(
+    "emit_plan_insights_notice",
+    value!(bool; false),
+    "Boolean flag indicating whether to send a NOTICE with JSON-formatted plan insights before executing a SELECT statement (Materialize).",
+    false,
+);
+
 pub static EMIT_TIMESTAMP_NOTICE: VarDefinition = VarDefinition::new(
     "emit_timestamp_notice",
     value!(bool; false),
@@ -1918,6 +1925,13 @@ feature_flags!(
     {
         name: enable_explain_broken,
         desc: "EXPLAIN ... BROKEN <query> syntax",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_broken_optimizer_trace, // TODO: remove once the OptimizerTrace memory leaks are fixed.
+        desc: "Force `OptimizerTrace::new(true, ...)` construction everywhere",
         default: false,
         internal: true,
         enable_for_item_parsing: true,

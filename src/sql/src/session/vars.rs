@@ -370,6 +370,7 @@ impl SessionVars {
             &SERVER_VERSION_NUM,
             &SQL_SAFE_UPDATES,
             &REAL_TIME_RECENCY,
+            &EMIT_PLAN_INSIGHTS_NOTICE,
             &EMIT_TIMESTAMP_NOTICE,
             &EMIT_TRACE_ID_NOTICE,
             &AUTO_ROUTE_INTROSPECTION_QUERIES,
@@ -727,6 +728,11 @@ impl SessionVars {
     /// Returns the value of `real_time_recency` configuration parameter.
     pub fn real_time_recency(&self) -> bool {
         *self.expect_value(&REAL_TIME_RECENCY)
+    }
+
+    /// Returns the value of `emit_plan_insights_notice` configuration parameter.
+    pub fn emit_plan_insights_notice(&self) -> bool {
+        *self.expect_value(&EMIT_PLAN_INSIGHTS_NOTICE)
     }
 
     /// Returns the value of `emit_timestamp_notice` configuration parameter.

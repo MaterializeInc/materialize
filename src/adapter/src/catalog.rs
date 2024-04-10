@@ -3745,6 +3745,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
             .map(|name| name.item.clone())
     }
 
+    fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>> {
+        self.state
+            .entry_by_id
+            .get(&id)
+            .map(|entry| entry.name())
+            .map(|name| self.resolve_full_name(name).into_parts())
+    }
+
     fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
         use ScalarType::*;
 

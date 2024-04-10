@@ -133,6 +133,7 @@ pub enum AdapterNotice {
         var_name: Option<String>,
     },
     Welcome(String),
+    PlanInsights(String),
 }
 
 impl AdapterNotice {
@@ -195,6 +196,7 @@ impl AdapterNotice {
             AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
             AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
             AdapterNotice::Welcome(_) => Severity::Notice,
+            AdapterNotice::PlanInsights(_) => Severity::Notice,
         }
     }
 
@@ -287,6 +289,7 @@ impl AdapterNotice {
             AdapterNotice::PerReplicaLogRead { .. } => SqlState::WARNING,
             AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
         }
     }
 }
@@ -456,6 +459,7 @@ impl fmt::Display for AdapterNotice {
                 )
             }
             AdapterNotice::Welcome(message) => message.fmt(f),
+            AdapterNotice::PlanInsights(message) => message.fmt(f),
         }
     }
 }

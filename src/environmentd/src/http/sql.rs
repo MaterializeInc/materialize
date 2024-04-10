@@ -309,6 +309,7 @@ async fn forward_notices(
     let ws_notices = notices.into_iter().map(|notice| {
         WebSocketResponse::Notice(Notice {
             message: notice.to_string(),
+            code: notice.code().code().to_string(),
             severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),
@@ -485,6 +486,7 @@ pub enum WebSocketResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Notice {
     message: String,
+    code: String,
     severity: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -578,7 +580,7 @@ trait ResultSender: Send {
     /// Emits a streaming notice if the sender supports it.
     ///
     /// Does nothing if `SUPPORTS_STREAMING_NOTICES` is false.
-    async fn emit_streaming_notice(&mut self, _: AdapterNotice) -> Result<(), Error> {
+    async fn emit_streaming_notices(&mut self, _: Vec<AdapterNotice>) -> Result<(), Error> {
         unreachable!("streaming notices marked as unsupported")
     }
 }
@@ -831,8 +833,8 @@ impl ResultSender for WebSocket {
         true
     }
 
-    async fn emit_streaming_notice(&mut self, notice: AdapterNotice) -> Result<(), Error> {
-        forward_notices(self, [notice]).await
+    async fn emit_streaming_notices(&mut self, notices: Vec<AdapterNotice>) -> Result<(), Error> {
+        forward_notices(self, notices).await
     }
 }
 
@@ -845,7 +847,7 @@ where
     loop {
         tokio::select! {
             notice = client.session().recv_notice(), if S::SUPPORTS_STREAMING_NOTICES => {
-                sender.emit_streaming_notice(notice).await?;
+                sender.emit_streaming_notices(vec![notice]).await?;
             }
             e = sender.connection_error() => return Err(e),
             r = &mut f => return Ok(r),
@@ -1117,10 +1119,17 @@ async fn execute_stmt<S: ResultSender>(
         .map(|portal| portal.desc.clone())
         .expect("unnamed portal should be present");
 
-    let (res, execute_started) = match client
+    let res = client
         .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
-        .await
-    {
+        .await;
+
+    if S::SUPPORTS_STREAMING_NOTICES {
+        sender
+            .emit_streaming_notices(client.session().drain_notices())
+            .await?;
+    }
+
+    let (res, execute_started) = match res {
         Ok(res) => res,
         Err(e) => {
             return Ok(SqlResult::err(client, e).into());
@@ -1303,6 +1312,7 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
         .into_iter()
         .map(|notice| Notice {
             message: notice.to_string(),
+            code: notice.code().code().to_string(),
             severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),

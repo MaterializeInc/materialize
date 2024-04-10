@@ -534,6 +534,9 @@ pub struct PeekStageFinish {
     source_ids: BTreeSet<GlobalId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
+    /// When present, an optimizer trace to be used for emitting a plan insights
+    /// notice.
+    plan_insights_optimizer_trace: Option<OptimizerTrace>,
     global_lir_plan: optimize::peek::GlobalLirPlan,
 }
 
@@ -637,6 +640,9 @@ pub enum ExplainContext {
     None,
     /// The `EXPLAIN <level> PLAN FOR <explainee>` version of the statement.
     Plan(ExplainPlanContext),
+    /// Generate a notice containing the `EXPLAIN PLAN INSIGHTS` output
+    /// alongside the query's normal output.
+    PlanInsightsNotice(OptimizerTrace),
     /// `EXPLAIN FILTER PUSHDOWN`
     Pushdown,
 }
@@ -646,13 +652,15 @@ impl ExplainContext {
     /// [`tracing::Dispatch`] and set it as default, returning the resulting
     /// guard in a `Some(guard)` option.
     fn dispatch_guard(&self) -> Option<tracing::subscriber::DefaultGuard> {
-        match self {
-            ExplainContext::Plan(explain_ctx) => {
-                let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
-                Some(tracing::dispatcher::set_default(&dispatch))
-            }
+        let optimizer_trace = match self {
+            ExplainContext::Plan(explain_ctx) => Some(&explain_ctx.optimizer_trace),
+            ExplainContext::PlanInsightsNotice(optimizer_trace) => Some(optimizer_trace),
             _ => None,
-        }
+        };
+        optimizer_trace.map(|optimizer_trace| {
+            let dispatch = tracing::Dispatch::from(optimizer_trace);
+            tracing::dispatcher::set_default(&dispatch)
+        })
     }
 }
 

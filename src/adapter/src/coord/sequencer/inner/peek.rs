@@ -7,11 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use futures::stream::FuturesOrdered;
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use futures::stream::FuturesOrdered;
 use http::Uri;
 use itertools::Either;
 use maplit::btreemap;
@@ -23,6 +23,7 @@ use mz_ore::{instrument, task};
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, Row, RowArena, Timestamp};
+use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::{CatalogCluster, SessionCatalog};
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
@@ -75,6 +76,20 @@ impl Coordinator {
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
+        let explain_ctx = match ctx.session().vars().emit_plan_insights_notice() {
+            true => {
+                let broken_trace = self
+                    .catalog()
+                    .system_config()
+                    .enable_broken_optimizer_trace();
+                ExplainContext::PlanInsightsNotice(OptimizerTrace::new(
+                    broken_trace,
+                    ExplainStage::PlanInsights.paths(),
+                ))
+            }
+            false => ExplainContext::None,
+        };
+
         self.execute_peek_stage(
             ctx,
             OpenTelemetryContext::obtain(),
@@ -82,7 +97,7 @@ impl Coordinator {
                 plan,
                 target_cluster,
                 copy_to_ctx: None,
-                explain_ctx: ExplainContext::None,
+                explain_ctx,
             }),
         )
         .await;
@@ -177,7 +192,12 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        // executing the optimizer pipeline.
+        let broken_trace = self
+            .catalog()
+            .system_config()
+            .enable_broken_optimizer_trace();
+        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.paths());
 
         self.execute_peek_stage(
             ctx,
@@ -610,6 +630,19 @@ impl Coordinator {
                                     explain_ctx,
                                 })
                             }
+                            ExplainContext::PlanInsightsNotice(optimizer_trace) => {
+                                PeekStage::Finish(PeekStageFinish {
+                                    validity,
+                                    plan,
+                                    id_bundle,
+                                    target_replica,
+                                    source_ids,
+                                    determination,
+                                    optimizer,
+                                    plan_insights_optimizer_trace: Some(optimizer_trace),
+                                    global_lir_plan,
+                                })
+                            }
                             ExplainContext::None => PeekStage::Finish(PeekStageFinish {
                                 validity,
                                 plan,
@@ -618,6 +651,7 @@ impl Coordinator {
                                 source_ids,
                                 determination,
                                 optimizer,
+                                plan_insights_optimizer_trace: None,
                                 global_lir_plan,
                             }),
                             ExplainContext::Pushdown => {
@@ -771,6 +805,7 @@ impl Coordinator {
             source_ids,
             determination,
             optimizer,
+            plan_insights_optimizer_trace,
             global_lir_plan,
         }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -781,6 +816,23 @@ impl Coordinator {
         let source_arity = typ.arity();
 
         self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
+
+        let target_cluster = Some(
+            self.catalog()
+                .get_cluster(optimizer.cluster_id())
+                .name
+                .as_str(),
+        );
+
+        if let Some(trace) = plan_insights_optimizer_trace {
+            let insights = trace.into_plan_insights(
+                &self.catalog().for_session(session),
+                Some(plan.finishing),
+                target_cluster,
+                df_meta,
+            )?;
+            session.add_notice(AdapterNotice::PlanInsights(insights));
+        }
 
         let planned_peek = PlannedPeek {
             plan: peek_plan,
@@ -926,8 +978,7 @@ impl Coordinator {
         let expr_humanizer = {
             let transient_items = btreemap! {
                 select_id => TransientItem::new(
-                    Some(GlobalId::Explain.to_string()),
-                    Some(GlobalId::Explain.to_string()),
+                    Some(vec![GlobalId::Explain.to_string()]),
                     Some(desc.iter_names().map(|c| c.to_string()).collect()),
                 )
             };

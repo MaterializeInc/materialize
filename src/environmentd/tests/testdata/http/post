@@ -47,7 +47,7 @@ http
 {"query":"create view if not exists v as select 1"}
 ----
 200 OK
-{"results":[{"ok":"CREATE VIEW","notices":[{"message":"view \"v\" already exists, skipping","severity":"notice"}]}]}
+{"results":[{"ok":"CREATE VIEW","notices":[{"message":"view \"v\" already exists, skipping","code":"42710","severity":"notice"}]}]}
 
 # Multiple CREATEs do not work.
 http

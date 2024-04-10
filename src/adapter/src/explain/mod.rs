@@ -26,6 +26,7 @@ use crate::AdapterError;
 
 pub(crate) mod fast_path;
 pub(crate) mod hir;
+pub(crate) mod insights;
 pub(crate) mod lir;
 pub(crate) mod mir;
 pub(crate) mod optimizer_trace;

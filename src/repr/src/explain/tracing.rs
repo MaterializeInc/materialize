@@ -20,6 +20,7 @@ use tracing_core::{Event, Interest, Metadata};
 use tracing_subscriber::{field, layer, Registry};
 
 use crate::explain::UsedIndexes;
+use smallvec::SmallVec;
 
 /// A tracing layer used to accumulate a sequence of explainable plans.
 #[allow(missing_debug_implementations)]
@@ -27,7 +28,7 @@ pub struct PlanTrace<T> {
     /// A specific concrete path to find in this trace. If present,
     /// [`PlanTrace::push`] will only collect traces if the current path is a
     /// prefix of find.
-    filter: Option<&'static str>,
+    filter: Option<SmallVec<[NamedPlan; 4]>>,
     /// A path of segments identifying the spans in the current ancestor-or-self
     /// chain. The current path is used when accumulating new `entries`.
     path: Mutex<String>,
@@ -213,7 +214,7 @@ where
 impl<S, T> layer::Filter<S> for PlanTrace<T>
 where
     S: subscriber::Subscriber,
-    T: 'static,
+    T: 'static + Clone,
 {
     fn enabled(&self, meta: &Metadata<'_>, _cx: &layer::Context<'_, S>) -> bool {
         self.is_enabled(meta)
@@ -228,10 +229,10 @@ where
     }
 }
 
-impl<T: 'static> PlanTrace<T> {
+impl<T: 'static + Clone> PlanTrace<T> {
     /// Create a new trace for plans of type `T` that will only accumulate
     /// [`TraceEntry`] instances along the prefix of the given `path`.
-    pub fn new(filter: Option<&'static str>) -> Self {
+    pub fn new(filter: Option<SmallVec<[NamedPlan; 4]>>) -> Self {
         Self {
             filter,
             path: Mutex::new(String::with_capacity(256)),
@@ -255,6 +256,12 @@ impl<T: 'static> PlanTrace<T> {
     pub fn drain_as_vec(&self) -> Vec<TraceEntry<T>> {
         let mut entries = self.entries.lock().expect("entries shouldn't be poisoned");
         entries.split_off(0)
+    }
+
+    /// Retrieve the trace data collected so far while leaving it in place.
+    pub fn collect_as_vec(&self) -> Vec<TraceEntry<T>> {
+        let entries = self.entries.lock().expect("entries shouldn't be poisoned");
+        (*entries).clone()
     }
 
     /// Find and return a clone of the [`TraceEntry`] for the given `path`.
@@ -299,9 +306,9 @@ impl<T: 'static> PlanTrace<T> {
     fn current_path(&self) -> Option<String> {
         let path = self.path.lock().expect("path shouldn't be poisoned");
         let path = path.as_str();
-        match self.filter {
-            Some(find) => {
-                if path == find {
+        match self.filter.as_ref() {
+            Some(named_paths) => {
+                if named_paths.iter().any(|named| path == named.path()) {
                     Some(path.to_owned())
                 } else {
                     None

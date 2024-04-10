@@ -281,6 +281,10 @@ pub fn describe_explain_plan(
                 .with_column("Path", ScalarType::String.nullable(false))
                 .with_column("Plan", ScalarType::String.nullable(false));
         }
+        ExplainStage::PlanInsights => {
+            let name = "Plan Insights";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
+        }
     };
 
     Ok(
