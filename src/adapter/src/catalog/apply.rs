@@ -10,17 +10,27 @@
 //! Logic related to applying updates from a [`mz_catalog::durable::DurableCatalogState`] to a
 //! [`CatalogState`].
 
-use crate::catalog::CatalogState;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
+
+use mz_catalog::builtin::BUILTIN_LOG_LOOKUP;
 use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_catalog::memory::objects::{Database, Role, Schema, StateUpdate, StateUpdateKind};
+use mz_catalog::memory::objects::{
+    Cluster, ClusterReplica, ClusterReplicaProcessStatus, Database, Role, Schema, StateUpdate,
+    StateUpdateKind,
+};
+use mz_compute_client::controller::ComputeReplicaConfig;
+use mz_controller::clusters::{ClusterStatus, ReplicaConfig, ReplicaLogging};
+use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
+use mz_ore::now::to_datetime;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::Diff;
 use mz_sql::names::{QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_sql::session::vars::{VarError, VarInput};
-use std::collections::BTreeMap;
-use std::fmt::Debug;
 use tracing::warn;
+
+use crate::catalog::CatalogState;
 
 impl CatalogState {
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
@@ -66,6 +76,13 @@ impl CatalogState {
             }
             StateUpdateKind::SystemConfiguration(system_configuration) => {
                 self.apply_system_configuration_update(system_configuration, diff)
+            }
+            StateUpdateKind::Cluster(cluster) => self.apply_cluster_update(cluster, diff),
+            StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
+                self.apply_introspection_source_index_update(introspection_source_index, diff)
+            }
+            StateUpdateKind::ClusterReplica(cluster_replica) => {
+                self.apply_cluster_replica_update(cluster_replica, diff)
             }
             StateUpdateKind::Comment(comment) => self.apply_comment_update(comment, diff),
         }
@@ -209,6 +226,125 @@ impl CatalogState {
     }
 
     #[instrument(level = "debug")]
+    fn apply_cluster_update(&mut self, cluster: mz_catalog::durable::Cluster, diff: Diff) {
+        apply(
+            &mut self.clusters_by_id,
+            cluster.id,
+            || Cluster {
+                name: cluster.name.clone(),
+                id: cluster.id,
+                bound_objects: BTreeSet::new(),
+                log_indexes: BTreeMap::new(),
+                replica_id_by_name_: BTreeMap::new(),
+                replicas_by_id_: BTreeMap::new(),
+                owner_id: cluster.owner_id,
+                privileges: PrivilegeMap::from_mz_acl_items(cluster.privileges),
+                config: cluster.config.into(),
+            },
+            diff,
+        );
+        apply(
+            &mut self.clusters_by_name,
+            cluster.name,
+            || cluster.id,
+            diff,
+        );
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_introspection_source_index_update(
+        &mut self,
+        introspection_source_index: mz_catalog::durable::IntrospectionSourceIndex,
+        diff: Diff,
+    ) {
+        // TODO(jkosh44) There may be some old deleted logs stored durably that no longer
+        // exists. For now we ignore them, but we should clean them up.
+        if let Some(log) = BUILTIN_LOG_LOOKUP.get(introspection_source_index.name.as_str()) {
+            match diff {
+                1 => {
+                    self.insert_introspection_source_index(
+                        introspection_source_index.cluster_id,
+                        log,
+                        introspection_source_index.index_id,
+                        introspection_source_index.oid,
+                    );
+                }
+                -1 => {
+                    self.drop_item(introspection_source_index.index_id);
+                }
+                _ => unreachable!("invalid diff: {diff}"),
+            }
+            let cluster = self
+                .clusters_by_id
+                .get_mut(&introspection_source_index.cluster_id)
+                .expect("catalog out of sync");
+            apply(
+                &mut cluster.log_indexes,
+                log.variant,
+                || introspection_source_index.index_id,
+                diff,
+            );
+        }
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_cluster_replica_update(
+        &mut self,
+        cluster_replica: mz_catalog::durable::ClusterReplica,
+        diff: Diff,
+    ) {
+        let cluster = self
+            .clusters_by_id
+            .get(&cluster_replica.cluster_id)
+            .expect("catalog out of sync");
+        let azs = cluster.availability_zones();
+        let location = self
+            .concretize_replica_location(cluster_replica.config.location, &vec![], azs)
+            .expect("catalog in unexpected state");
+        let cluster = self
+            .clusters_by_id
+            .get_mut(&cluster_replica.cluster_id)
+            .expect("catalog out of sync");
+        apply(
+            &mut cluster.replicas_by_id_,
+            cluster_replica.replica_id,
+            || {
+                let logging = ReplicaLogging {
+                    log_logging: cluster_replica.config.logging.log_logging,
+                    interval: cluster_replica.config.logging.interval,
+                };
+                let config = ReplicaConfig {
+                    location,
+                    compute: ComputeReplicaConfig { logging },
+                };
+                ClusterReplica {
+                    name: cluster_replica.name.clone(),
+                    cluster_id: cluster_replica.cluster_id,
+                    replica_id: cluster_replica.replica_id,
+                    process_status: (0..config.location.num_processes())
+                        .map(|process_id| {
+                            let status = ClusterReplicaProcessStatus {
+                                status: ClusterStatus::NotReady(None),
+                                time: to_datetime((self.config.now)()),
+                            };
+                            (u64::cast_from(process_id), status)
+                        })
+                        .collect(),
+                    config,
+                    owner_id: cluster_replica.owner_id,
+                }
+            },
+            diff,
+        );
+        apply(
+            &mut cluster.replica_id_by_name_,
+            cluster_replica.name,
+            || cluster_replica.replica_id,
+            diff,
+        );
+    }
+
+    #[instrument(level = "debug")]
     fn apply_comment_update(&mut self, comment: mz_catalog::durable::Comment, diff: Diff) {
         match diff {
             1 => {
@@ -242,7 +378,7 @@ impl CatalogState {
 fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: impl FnOnce() -> V, diff: Diff)
 where
     K: Ord + Debug,
-    V: PartialEq + Eq + Debug,
+    V: PartialEq + Debug,
 {
     if diff == 1 {
         let prev = map.insert(key, value());

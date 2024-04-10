@@ -145,7 +145,7 @@ impl From<Role> for durable::Role {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct Cluster {
     pub name: String,
     pub id: ClusterId,
@@ -249,6 +249,14 @@ impl Cluster {
             .insert(to_name, replica_id)
             .is_none());
     }
+
+    /// Returns the availability zones of this cluster, if they exist.
+    pub fn availability_zones(&self) -> Option<&[String]> {
+        match &self.config.variant {
+            ClusterVariant::Managed(managed) => Some(&managed.availability_zones),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
 }
 
 impl From<Cluster> for durable::Cluster {
@@ -263,7 +271,7 @@ impl From<Cluster> for durable::Cluster {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct ClusterReplica {
     pub name: String,
     pub cluster_id: ClusterId,
@@ -309,7 +317,7 @@ impl From<ClusterReplica> for durable::ClusterReplica {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ClusterReplicaProcessStatus {
     pub status: ClusterStatus,
     pub time: DateTime<Utc>,
@@ -2276,6 +2284,9 @@ pub enum StateUpdateKind {
     DefaultPrivilege(durable::objects::DefaultPrivilege),
     SystemPrivilege(MzAclItem),
     SystemConfiguration(durable::objects::SystemConfiguration),
+    Cluster(durable::objects::Cluster),
+    IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
+    ClusterReplica(durable::objects::ClusterReplica),
     Comment(durable::objects::Comment),
     // TODO(jkosh44) Add all other object variants.
 }

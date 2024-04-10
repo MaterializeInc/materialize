@@ -1229,50 +1229,7 @@ impl CatalogState {
     ) {
         let mut log_indexes = BTreeMap::new();
         for (log, index_id, oid) in introspection_source_indexes {
-            let source_name = FullItemName {
-                database: RawDatabaseSpecifier::Ambient,
-                schema: log.schema.into(),
-                item: log.name.into(),
-            };
-            let index_name = format!("{}_{}_primary_idx", log.name, id);
-            let mut index_name = QualifiedItemName {
-                qualifiers: ItemQualifiers {
-                    database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
-                },
-                item: index_name.clone(),
-            };
-            index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
-            let index_item_name = index_name.item.clone();
-            let log_id = self.resolve_builtin_log(log);
-            self.insert_item(
-                index_id,
-                oid,
-                index_name,
-                CatalogItem::Index(Index {
-                    on: log_id,
-                    keys: log
-                        .variant
-                        .index_by()
-                        .into_iter()
-                        .map(MirScalarExpr::Column)
-                        .collect(),
-                    create_sql: index_sql(
-                        index_item_name,
-                        id,
-                        source_name,
-                        &log.variant.desc(),
-                        &log.variant.index_by(),
-                    ),
-                    conn_id: None,
-                    resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
-                    cluster_id: id,
-                    is_retained_metrics_object: false,
-                    custom_logical_compaction_window: None,
-                }),
-                MZ_SYSTEM_ROLE_ID,
-                PrivilegeMap::default(),
-            );
+            self.insert_introspection_source_index(id, log, index_id, oid);
             log_indexes.insert(log.variant.clone(), index_id);
         }
 
@@ -1291,6 +1248,59 @@ impl CatalogState {
             },
         );
         assert!(self.clusters_by_name.insert(name, id).is_none());
+    }
+
+    pub(super) fn insert_introspection_source_index(
+        &mut self,
+        cluster_id: ClusterId,
+        log: &'static BuiltinLog,
+        index_id: GlobalId,
+        oid: u32,
+    ) {
+        let source_name = FullItemName {
+            database: RawDatabaseSpecifier::Ambient,
+            schema: log.schema.into(),
+            item: log.name.into(),
+        };
+        let index_name = format!("{}_{}_primary_idx", log.name, cluster_id);
+        let mut index_name = QualifiedItemName {
+            qualifiers: ItemQualifiers {
+                database_spec: ResolvedDatabaseSpecifier::Ambient,
+                schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
+            },
+            item: index_name.clone(),
+        };
+        index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
+        let index_item_name = index_name.item.clone();
+        let log_id = self.resolve_builtin_log(log);
+        self.insert_item(
+            index_id,
+            oid,
+            index_name,
+            CatalogItem::Index(Index {
+                on: log_id,
+                keys: log
+                    .variant
+                    .index_by()
+                    .into_iter()
+                    .map(MirScalarExpr::Column)
+                    .collect(),
+                create_sql: index_sql(
+                    index_item_name,
+                    cluster_id,
+                    source_name,
+                    &log.variant.desc(),
+                    &log.variant.index_by(),
+                ),
+                conn_id: None,
+                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
+                cluster_id,
+                is_retained_metrics_object: false,
+                custom_logical_compaction_window: None,
+            }),
+            MZ_SYSTEM_ROLE_ID,
+            PrivilegeMap::default(),
+        );
     }
 
     pub(super) fn rename_cluster(&mut self, id: ClusterId, to_name: String) {
