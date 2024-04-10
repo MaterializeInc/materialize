@@ -999,18 +999,17 @@ where
 
         // Validate sources have `since.less_equal(as_of)`.
         for source_id in dataflow.source_imports.keys() {
-            let since = &self
-                .storage_controller
-                .collection(*source_id)
-                .map_err(|_| DataflowCreationError::CollectionMissing(*source_id))?
-                .read_capabilities
-                .frontier();
-            if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
-                Err(DataflowCreationError::SinceViolation(*source_id))?;
-            }
+            // We cannot assert on the _current_ implied capability/since of
+            // depended-upon storage collections. Their frontiers might move
+            // along concurrently. Our only hope is that our callers put in
+            // place the right read holds, which prevents sinces from advancing.
+            //
+            // Below, where we install read holds using
+            // update_read_capabilities, that call will fail if someone messed
+            // up the read holds.
 
             storage_dependencies.push(*source_id);
-            replica_write_frontier.join_assign(&since.to_owned());
+            replica_write_frontier.join_assign(as_of);
         }
 
         // Validate indexes have `since.less_equal(as_of)`.
@@ -1311,17 +1310,29 @@ where
         target_replica: Option<ReplicaId>,
         peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
-        let since = match &peek_target {
-            PeekTarget::Index { .. } => self.compute.collection(id)?.read_capabilities.frontier(),
-            PeekTarget::Persist { .. } => self
-                .storage_controller
-                .collection(id)
-                .map_err(|_| PeekError::CollectionMissing(id))?
-                .implied_capability
-                .borrow(),
-        };
-        if !since.less_equal(&timestamp) {
-            return Err(PeekError::SinceViolation(id));
+        match &peek_target {
+            PeekTarget::Index { .. } => {
+                let since = self
+                    .compute
+                    .collection(id)?
+                    .read_capabilities
+                    .frontier()
+                    .to_owned();
+
+                if !since.less_equal(&timestamp) {
+                    return Err(PeekError::SinceViolation(id));
+                }
+            }
+            PeekTarget::Persist { .. } => {
+                // We cannot assert on the _current_ implied capability/since of
+                // depended-upon storage collections. Their frontiers might move
+                // along concurrently. Our only hope is that our callers put in
+                // place the right read holds, which prevents sinces from
+                // advancing.
+                //
+                // Other parts of the code will fail if someone messed up the
+                // read holds.
+            }
         }
 
         if let Some(target) = target_replica {
