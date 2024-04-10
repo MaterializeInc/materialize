@@ -91,7 +91,7 @@ def run(
     )
     system_conn.autocommit = True
     with system_conn.cursor() as system_cur:
-        system_exe = Executor(rng, system_cur, database)
+        system_exe = Executor(rng, system_cur, None, database)
         system_exe.execute(
             f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 10 + num_threads}"
         )
@@ -141,7 +141,7 @@ def run(
         conn.autocommit = True
         with conn.cursor() as cur:
             assert composition
-            database.create(Executor(rng, cur, database), composition)
+            database.create(Executor(rng, cur, None, database), composition)
         conn.close()
 
     workers = []
@@ -192,7 +192,7 @@ def run(
         thread = threading.Thread(
             name=thread_name,
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", database),
+            args=(host, ports["materialized"], ports["http"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -366,7 +366,7 @@ def run(
     with conn.cursor() as cur:
         # Dropping the database also releases the long running connections
         # used by database objects.
-        database.drop(Executor(rng, cur, database))
+        database.drop(Executor(rng, cur, None, database))
 
         # Make sure all unreachable connections are closed too
         gc.collect()

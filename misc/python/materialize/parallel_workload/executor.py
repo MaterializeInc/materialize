@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, TextIO
 
 import pg8000
 import requests
+import websocket
 
 from materialize.data_ingest.query_error import QueryError
 from materialize.parallel_workload.settings import Scenario
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
 logging: TextIO | None
 lock: threading.Lock
+websocket.enableTrace(True)
 
 
 def initialize_logging() -> None:
@@ -41,6 +43,7 @@ class Http(Enum):
 class Executor:
     rng: random.Random
     cur: pg8000.Cursor
+    ws: websocket.WebSocket | None
     pg_pid: int
     # Used by INSERT action to prevent writing into different tables in the same transaction
     insert_table: int | None
@@ -50,9 +53,16 @@ class Executor:
     last_log: str
     action_run_since_last_commit_rollback: bool
 
-    def __init__(self, rng: random.Random, cur: pg8000.Cursor, db: "Database"):
+    def __init__(
+        self,
+        rng: random.Random,
+        cur: pg8000.Cursor,
+        ws: websocket.WebSocket | None,
+        db: "Database",
+    ):
         self.rng = rng
         self.cur = cur
+        self.ws = ws
         self.db = db
         self.pg_pid = -1
         self.insert_table = None
@@ -60,6 +70,7 @@ class Executor:
         self.rollback_next = True
         self.last_log = ""
         self.action_run_since_last_commit_rollback = False
+        self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -68,17 +79,25 @@ class Executor:
         self.insert_table = None
         try:
             self.log("commit")
-            self.cur._c.commit()
+            if self.use_ws:
+                self.execute("commit")
+            else:
+                self.cur._c.commit()
         except Exception as e:
             raise QueryError(str(e), "commit")
+        self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
     def rollback(self) -> None:
         self.insert_table = None
         try:
             self.log("rollback")
-            self.cur._c.rollback()
+            if self.use_ws:
+                self.execute("rollback")
+            else:
+                self.cur._c.rollback()
         except Exception as e:
             raise QueryError(str(e), "rollback")
+        self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
     def log(self, msg: str) -> None:
         global logging, lock
@@ -112,14 +131,20 @@ class Executor:
         self.log(f"{query}{extra_info_str}{http_str}")
         if not is_http:
             try:
-                self.cur.execute(query)
+                if self.use_ws and self.ws:
+                    self.ws.send(json.dumps({"queries": [{"query": query}]}))
+                else:
+                    self.cur.execute(query)
             except Exception as e:
                 raise QueryError(str(e), query)
 
             self.action_run_since_last_commit_rollback = True
 
             if fetch:
-                self.cur.fetchall()
+                if self.use_ws and self.ws:
+                    self.ws.recv()
+                else:
+                    self.cur.fetchall()
 
             return
 

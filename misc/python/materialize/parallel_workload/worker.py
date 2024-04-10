@@ -7,12 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import random
 import threading
 import time
 from collections import Counter, defaultdict
 
 import pg8000
+import websocket
 
 from materialize.data_ingest.query_error import QueryError
 from materialize.mzcompose.composition import Composition
@@ -59,13 +61,32 @@ class Worker:
         self.failed_query_error = None
         self.exe = None
 
-    def run(self, host: str, port: int, user: str, database: Database) -> None:
+    def run(
+        self, host: str, pg_port: int, http_port: int, user: str, database: Database
+    ) -> None:
         self.conn = pg8000.connect(
-            host=host, port=port, user=user, database="materialize"
+            host=host, port=pg_port, user=user, database="materialize"
         )
         self.conn.autocommit = self.autocommit
         cur = self.conn.cursor()
-        self.exe = Executor(self.rng, cur, database)
+        thread_name = threading.current_thread().getName()
+        ws = websocket.WebSocket()
+        ws.connect(f"ws://{host}:{http_port}/api/experimental/sql", origin=thread_name)
+        ws.send(
+            json.dumps(
+                {
+                    "options": {
+                        "application_name": thread_name,
+                        "max_query_result_size": "1000000",
+                        "cluster": "default",
+                        "database": "materialize",
+                        "search_path": "public",
+                    }
+                }
+            )
+        )
+        ws.recv()
+        self.exe = Executor(self.rng, cur, ws, database)
         self.exe.set_isolation("SERIALIZABLE")
         cur.execute("SET auto_route_introspection_queries TO false")
         cur.execute("SELECT pg_backend_pid()")
@@ -116,3 +137,5 @@ class Worker:
                     raise
 
         self.exe.cur._c.close()
+        if self.exe.ws:
+            self.exe.ws.close()

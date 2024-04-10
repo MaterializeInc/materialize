@@ -10,6 +10,7 @@
 import datetime
 import json
 import random
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -17,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import pg8000
 import requests
+import websocket
 from pg8000.native import identifier
 
 import materialize.parallel_workload.database
@@ -143,7 +145,8 @@ class FetchAction(Action):
 
     def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
-        http = self.rng.choice([True, False])
+        # Unsupported via this API
+        http = False  # self.rng.choice([True, False])
         if http:
             # See https://github.com/MaterializeInc/materialize/issues/20474
             exe.rollback() if self.rng.choice([True, False]) else exe.commit()
@@ -153,8 +156,7 @@ class FetchAction(Action):
             columns = self.rng.sample(obj.columns, len(obj.columns))
             key = ", ".join(column.name(True) for column in columns)
             query += f" ENVELOPE {envelope} (KEY ({key}))"
-        # if self.rng.choice([True, False]):
-        if False:  # Unsupported via this API
+        if http:
             exe.execute(f"COPY ({query}) TO STDOUT", http=Http.YES)
         else:
             exe.execute(f"DECLARE c CURSOR FOR {query}", http=Http.NO)
@@ -1172,6 +1174,33 @@ class ReconnectAction(Action):
             else:
                 user = "materialize"
             conn = exe.cur._c
+
+        if exe.ws:
+            try:
+                exe.ws.close()
+            except:
+                pass
+
+            thread_name = threading.current_thread().getName()
+            exe.ws = websocket.WebSocket()
+            http_port = exe.db.ports["http"]
+            exe.ws.connect(
+                f"ws://{host}:{http_port}/api/experimental/sql", origin=thread_name
+            )
+            exe.ws.send(
+                json.dumps(
+                    {
+                        "options": {
+                            "application_name": thread_name,
+                            "max_query_result_size": "1000000",
+                            "cluster": "default",
+                            "database": "materialize",
+                            "search_path": "public",
+                        }
+                    }
+                )
+            )
+            print(exe.ws.recv())
 
         try:
             exe.cur.close()
