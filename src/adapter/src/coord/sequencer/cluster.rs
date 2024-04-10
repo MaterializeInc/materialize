@@ -117,12 +117,13 @@ impl Coordinator {
 
         self.ensure_valid_azs(availability_zones.iter())?;
 
-        let allowed_replica_sizes = &self
-            .catalog()
-            .system_config()
-            .allowed_cluster_replica_sizes();
-        self.catalog
-            .ensure_valid_replica_size(allowed_replica_sizes, &size)?;
+        let role_id = session.role_metadata().current_role;
+        self.catalog.ensure_valid_replica_size(
+            &self
+                .catalog()
+                .get_role_allowed_cluster_sizes(&Some(role_id)),
+            &size,
+        )?;
 
         // Eagerly validate the `max_replicas_per_cluster` limit.
         // `catalog_transact` will do this validation too, but allocating
@@ -196,8 +197,7 @@ impl Coordinator {
                 location,
                 &self
                     .catalog()
-                    .system_config()
-                    .allowed_cluster_replica_sizes(),
+                    .get_role_allowed_cluster_sizes(&Some(owner_id)),
                 azs,
             )?,
             compute: ComputeReplicaConfig { logging },
@@ -321,13 +321,13 @@ impl Coordinator {
                 ReplicaLogging::default()
             };
 
+            let role_id = session.role_metadata().current_role;
             let config = ReplicaConfig {
                 location: self.catalog().concretize_replica_location(
                     location,
                     &self
                         .catalog()
-                        .system_config()
-                        .allowed_cluster_replica_sizes(),
+                        .get_role_allowed_cluster_sizes(&Some(role_id)),
                     None,
                 )?,
                 compute: ComputeReplicaConfig { logging },
@@ -450,13 +450,13 @@ impl Coordinator {
             ReplicaLogging::default()
         };
 
+        let role_id = session.role_metadata().current_role;
         let config = ReplicaConfig {
             location: self.catalog().concretize_replica_location(
                 location,
                 &self
                     .catalog()
-                    .system_config()
-                    .allowed_cluster_replica_sizes(),
+                    .get_role_allowed_cluster_sizes(&Some(role_id)),
                 // Planning ensures all replicas in this codepath
                 // are unmanaged.
                 None,
@@ -717,12 +717,11 @@ impl Coordinator {
             },
         ) = (&config, &new_config);
 
-        let allowed_replica_sizes = &self
-            .catalog()
-            .system_config()
-            .allowed_cluster_replica_sizes();
-        self.catalog
-            .ensure_valid_replica_size(allowed_replica_sizes, new_size)?;
+        let role_id = session.map(|s| s.role_metadata().current_role);
+        self.catalog.ensure_valid_replica_size(
+            &self.catalog().get_role_allowed_cluster_sizes(&role_id),
+            new_size,
+        )?;
 
         let mut create_cluster_replicas = vec![];
 
