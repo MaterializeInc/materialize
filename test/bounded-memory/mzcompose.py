@@ -232,7 +232,8 @@ SCENARIOS = [
             {ITERATIONS * REPEAT}
             """
         ),
-        clusterd_memory="3.6Gb",
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     PgCdcScenario(
         name="pg-cdc-update",
@@ -274,6 +275,8 @@ SCENARIOS = [
             0
             """
         ),
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     PgCdcScenario(
         name="pg-cdc-large-tx",
@@ -336,7 +339,8 @@ SCENARIOS = [
             {ITERATIONS * REPEAT}
             """
         ),
-        clusterd_memory="3.6Gb",
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     MySqlCdcScenario(
         name="mysql-cdc-update",
@@ -380,6 +384,8 @@ SCENARIOS = [
             0
             """
         ),
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     MySqlCdcScenario(
         name="mysql-cdc-large-tx",
@@ -411,6 +417,7 @@ SCENARIOS = [
             {int(ITERATIONS * 20) * int(REPEAT / 24)}
             """
         ),
+        materialized_memory="4.5Gb",
         clusterd_memory="8.0Gb",
         disabled=True,
     ),
@@ -439,6 +446,8 @@ SCENARIOS = [
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     # Perform updates while the source is ingesting
     KafkaScenario(
@@ -466,6 +475,8 @@ SCENARIOS = [
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     # Perform inserts+deletes while the source is ingesting
     KafkaScenario(
@@ -496,6 +507,8 @@ SCENARIOS = [
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="table-insert-delete",
@@ -534,6 +547,8 @@ SCENARIOS = [
            0
            """
         ),
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="table-index-hydration",
@@ -628,7 +643,7 @@ SCENARIOS = [
             10000001
             """
         ),
-        materialized_memory="9.5Gb",
+        materialized_memory="8.5Gb",
         clusterd_memory="3.5Gb",
     ),
     KafkaScenario(
@@ -675,7 +690,8 @@ SCENARIOS = [
             "${{kafka-ingest.iteration}}"
             """
         ),
-        materialized_memory="10Gb",
+        materialized_memory="7.2Gb",
+        clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="table-aggregate",
@@ -727,7 +743,8 @@ SCENARIOS = [
             true
             """
         ),
-        clusterd_memory="7Gb",
+        materialized_memory="4.5Gb",
+        clusterd_memory="5.5Gb",
     ),
     Scenario(
         name="table-outer-join",
@@ -783,6 +800,8 @@ SCENARIOS = [
             true
             """
         ),
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
 ]
 
