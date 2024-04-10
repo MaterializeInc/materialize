@@ -68,8 +68,25 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             let dyncfgs = [
                 {
-                    // Placeholder default configuration until inline writes PR.
-                    mz_dyncfg::ConfigUpdates::default()
+                    // Inline writes disabled
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_inline_writes_single_max_bytes", ::mz_dyncfg::ConfigVal::Usize(0));
+                    x.add_dynamic("persist_inline_writes_total_max_bytes", ::mz_dyncfg::ConfigVal::Usize(0));
+                    x
+                },
+                {
+                    // Inline writes enabled
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_inline_writes_single_max_bytes", ::mz_dyncfg::ConfigVal::Usize(4 * 1024));
+                    x.add_dynamic("persist_inline_writes_total_max_bytes", ::mz_dyncfg::ConfigVal::Usize(1024 * 1024));
+                    x
+                },
+                {
+                    // Stress inline writes backpressure
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_inline_writes_single_max_bytes", ::mz_dyncfg::ConfigVal::Usize(4 * 1024));
+                    x.add_dynamic("persist_inline_writes_total_max_bytes", ::mz_dyncfg::ConfigVal::Usize(0));
+                    x
                 },
             ];
 

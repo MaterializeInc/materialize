@@ -12,6 +12,7 @@
 #[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -322,6 +323,15 @@ impl StateVersions {
                 shard_metrics
                     .live_writers
                     .set(u64::cast_from(new_state.collections.writers.len()));
+                shard_metrics
+                    .rewrite_part_count
+                    .set(u64::cast_from(size_metrics.rewrite_part_count));
+                shard_metrics
+                    .inline_part_count
+                    .set(u64::cast_from(size_metrics.inline_part_count));
+                shard_metrics
+                    .inline_part_bytes
+                    .set(u64::cast_from(size_metrics.inline_part_bytes));
                 Ok((CaSResult::Committed, new))
             }
             CaSResult::ExpectationMismatch => {
@@ -1118,22 +1128,33 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         assert_eq!(inc_lower, full_lower);
         assert_eq!(inc_upper, full_upper);
 
+        fn part_unique<T: Hash>(x: &BatchPart<T>) -> String {
+            match x {
+                BatchPart::Hollow(x) => x.key.to_string(),
+                BatchPart::Inline {
+                    updates,
+                    ts_rewrite,
+                } => {
+                    let mut h = DefaultHasher::new();
+                    updates.hash(&mut h);
+                    ts_rewrite.as_ref().map(|x| x.elements()).hash(&mut h);
+                    h.finish().to_string()
+                }
+            }
+        }
+
         // Check that the overall set of parts contained in both representations is the same.
         let inc_parts: HashSet<_> = self
             .inc_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| match x {
-                BatchPart::Hollow(x) => &x.key,
-            })
+            .map(part_unique)
             .collect();
         let full_parts = self
             .full_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| match x {
-                BatchPart::Hollow(x) => &x.key,
-            })
+            .map(part_unique)
             .collect();
         assert_eq!(inc_parts, full_parts);
 

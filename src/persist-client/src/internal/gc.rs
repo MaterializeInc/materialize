@@ -471,6 +471,7 @@ where
                             BatchPart::Hollow(x) => {
                                 assert_eq!(batch_parts_to_delete.get(&x.key), None)
                             }
+                            BatchPart::Inline { .. } => {}
                         }
                     }
                 }

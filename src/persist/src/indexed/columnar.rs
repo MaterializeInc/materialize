@@ -15,8 +15,12 @@ use std::sync::Arc;
 use std::{cmp, fmt};
 
 use arrow2::types::Index;
+use bytes::Bytes;
+use mz_ore::bytes::MaybeLgBytes;
 use mz_ore::lgbytes::MetricsRegion;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
+use crate::gen::persist::ProtoColumnarRecords;
 use crate::metrics::ColumnarMetrics;
 
 pub mod arrow;
@@ -86,9 +90,9 @@ const BYTES_PER_KEY_VAL_OFFSET: usize = 4;
 #[derive(Clone, PartialEq)]
 pub struct ColumnarRecords {
     len: usize,
-    key_data: Arc<MetricsRegion<u8>>,
+    key_data: MaybeLgBytes,
     key_offsets: Arc<MetricsRegion<i32>>,
-    val_data: Arc<MetricsRegion<u8>>,
+    val_data: MaybeLgBytes,
     val_offsets: Arc<MetricsRegion<i32>>,
     timestamps: Arc<MetricsRegion<i64>>,
     diffs: Arc<MetricsRegion<i64>>,
@@ -110,8 +114,8 @@ impl ColumnarRecords {
     /// The number of logical bytes in the represented data, excluding offsets
     /// and lengths.
     pub fn goodbytes(&self) -> usize {
-        (*self.key_data).as_ref().len()
-            + (*self.val_data).as_ref().len()
+        self.key_data.as_ref().len()
+            + self.val_data.as_ref().len()
             + 8 * (*self.timestamps).as_ref().len()
             + 8 * (*self.diffs).as_ref().len()
     }
@@ -132,9 +136,9 @@ impl ColumnarRecords {
         // obvious.
         ColumnarRecordsRef {
             len: self.len,
-            key_data: (*self.key_data).as_ref(),
+            key_data: self.key_data.as_ref(),
             key_offsets: (*self.key_offsets).as_ref(),
-            val_data: (*self.val_data).as_ref(),
+            val_data: self.val_data.as_ref(),
             val_offsets: (*self.val_offsets).as_ref(),
             timestamps: (*self.timestamps).as_ref(),
             diffs: (*self.diffs).as_ref(),
@@ -464,9 +468,9 @@ impl ColumnarRecordsBuilder {
         // `heap_region` method instead. Revisit if that changes.
         let ret = ColumnarRecords {
             len: self.len,
-            key_data: Arc::new(metrics.lgbytes_arrow.heap_region(self.key_data)),
+            key_data: MaybeLgBytes::Bytes(Bytes::from(self.key_data)),
             key_offsets: Arc::new(metrics.lgbytes_arrow.heap_region(self.key_offsets)),
-            val_data: Arc::new(metrics.lgbytes_arrow.heap_region(self.val_data)),
+            val_data: MaybeLgBytes::Bytes(Bytes::from(self.val_data)),
             val_offsets: Arc::new(metrics.lgbytes_arrow.heap_region(self.val_offsets)),
             timestamps: Arc::new(metrics.lgbytes_arrow.heap_region(self.timestamps)),
             diffs: Arc::new(metrics.lgbytes_arrow.heap_region(self.diffs)),
@@ -480,6 +484,42 @@ impl ColumnarRecordsBuilder {
         (key_bytes_len + BYTES_PER_KEY_VAL_OFFSET)
             + (value_bytes_len + BYTES_PER_KEY_VAL_OFFSET)
             + (2 * size_of::<u64>()) // T and D
+    }
+}
+
+impl ColumnarRecords {
+    /// See [RustType::into_proto].
+    pub fn into_proto(&self) -> ProtoColumnarRecords {
+        ProtoColumnarRecords {
+            len: self.len.into_proto(),
+            key_offsets: (*self.key_offsets).as_ref().to_vec(),
+            key_data: Bytes::copy_from_slice(self.key_data.as_ref()),
+            val_offsets: (*self.val_offsets).as_ref().to_vec(),
+            val_data: Bytes::copy_from_slice(self.val_data.as_ref()),
+            timestamps: (*self.timestamps).as_ref().to_vec(),
+            diffs: (*self.diffs).as_ref().to_vec(),
+        }
+    }
+
+    /// See [RustType::from_proto].
+    pub fn from_proto(
+        lgbytes: &ColumnarMetrics,
+        proto: ProtoColumnarRecords,
+    ) -> Result<Self, TryFromProtoError> {
+        let ret = ColumnarRecords {
+            len: proto.len.into_rust()?,
+            key_offsets: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.key_offsets)),
+            key_data: MaybeLgBytes::Bytes(proto.key_data),
+            val_offsets: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.val_offsets)),
+            val_data: MaybeLgBytes::Bytes(proto.val_data),
+            timestamps: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.timestamps)),
+            diffs: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.diffs)),
+        };
+        let () = ret
+            .borrow()
+            .validate()
+            .map_err(TryFromProtoError::InvalidPersistState)?;
+        Ok(ret)
     }
 }
 

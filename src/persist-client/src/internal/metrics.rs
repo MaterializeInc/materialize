@@ -96,6 +96,8 @@ pub struct Metrics {
     pub tasks: TasksMetrics,
     /// Metrics for columnar data encoding and decoding.
     pub columnar: ColumnarMetrics,
+    /// Metrics for inline writes.
+    pub inline: InlineMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -153,6 +155,7 @@ impl Metrics {
             blob_cache_mem: BlobMemCache::new(registry),
             tasks: TasksMetrics::new(registry),
             columnar,
+            inline: InlineMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob,
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
@@ -692,6 +695,7 @@ pub struct BatchWriteMetrics {
     pub(crate) step_columnar_encoding: Counter,
     pub(crate) step_stats: Counter,
     pub(crate) step_part_writing: Counter,
+    pub(crate) step_inline: Counter,
 }
 
 impl BatchWriteMetrics {
@@ -731,6 +735,10 @@ impl BatchWriteMetrics {
             step_part_writing: registry.register(metric!(
                 name: format!("mz_persist_{}_step_part_writing", name),
                 help: format!("blocking time spent writing parts for {} updates", name),
+            )),
+            step_inline: registry.register(metric!(
+                name: format!("mz_persist_{}_step_inline", name),
+                help: format!("time spent encoding {} inline batches", name)
             )),
         }
     }
@@ -1209,7 +1217,10 @@ pub struct ShardsMetrics {
     backpressure_emitted_bytes: IntCounterVec,
     backpressure_last_backpressured_bytes: UIntGaugeVec,
     backpressure_retired_bytes: IntCounterVec,
-    rewrite_part_count: mz_ore::metrics::UIntGaugeVec,
+    rewrite_part_count: UIntGaugeVec,
+    inline_part_count: UIntGaugeVec,
+    inline_part_bytes: UIntGaugeVec,
+    inline_backpressure_count: IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1399,6 +1410,21 @@ impl ShardsMetrics {
                 help: "count of batch parts with rewrites by shard",
                 var_labels: ["shard", "name"],
             )),
+            inline_part_count: registry.register(metric!(
+                name: "mz_persist_shard_inline_part_count",
+                help: "count of parts inline in shard metadata",
+                var_labels: ["shard", "name"],
+            )),
+            inline_part_bytes: registry.register(metric!(
+                name: "mz_persist_shard_inline_part_bytes",
+                help: "total size of parts inline in shard metadata",
+                var_labels: ["shard", "name"],
+            )),
+            inline_backpressure_count: registry.register(metric!(
+                name: "mz_persist_shard_inline_backpressure_count",
+                help: "count of CaA attempts retried because of inline backpressure",
+                var_labels: ["shard", "name"],
+            )),
             shards,
         }
     }
@@ -1477,6 +1503,9 @@ pub struct ShardMetrics {
         Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
     pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
     pub rewrite_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub inline_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub inline_part_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub inline_backpressure_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1588,7 +1617,16 @@ impl ShardMetrics {
             ),
             rewrite_part_count: shards_metrics
                 .rewrite_part_count
-                .get_delete_on_drop_gauge(vec![shard, name.to_string()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            inline_part_count: shards_metrics
+                .inline_part_count
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            inline_part_bytes: shards_metrics
+                .inline_part_bytes
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            inline_backpressure_count: shards_metrics
+                .inline_backpressure_count
+                .get_delete_on_drop_counter(vec![shard, name.to_string()]),
         }
     }
 
@@ -2216,6 +2254,8 @@ pub struct PushdownMetrics {
     pub(crate) parts_fetched_bytes: IntCounter,
     pub(crate) parts_audited_count: IntCounter,
     pub(crate) parts_audited_bytes: IntCounter,
+    pub(crate) parts_inline_count: IntCounter,
+    pub(crate) parts_inline_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
     pub part_stats: PartStatsMetrics,
@@ -2247,6 +2287,14 @@ impl PushdownMetrics {
             parts_audited_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_audited_bytes",
                 help: "total size of parts fetched only for pushdown audit",
+            )),
+            parts_inline_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_inline_count",
+                help: "count of parts not fetched because they were inline",
+            )),
+            parts_inline_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_inline_bytes",
+                help: "total size of parts not fetched because they were inline",
             )),
             parts_stats_trimmed_count: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_count",
@@ -2760,6 +2808,29 @@ impl TasksMetrics {
         let heartbeat_read = TaskMetrics::new("heartbeat_read");
         registry.register_collector(heartbeat_read.clone());
         TasksMetrics { heartbeat_read }
+    }
+}
+
+#[derive(Debug)]
+pub struct InlineMetrics {
+    pub(crate) part_commit_count: IntCounter,
+    pub(crate) part_commit_bytes: IntCounter,
+    pub(crate) backpressure: BatchWriteMetrics,
+}
+
+impl InlineMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        InlineMetrics {
+            part_commit_count: registry.register(metric!(
+                name: "mz_persist_inline_part_commit_count",
+                help: "count of inline parts committed to state",
+            )),
+            part_commit_bytes: registry.register(metric!(
+                name: "mz_persist_inline_part_commit_bytes",
+                help: "total size of of inline parts committed to state",
+            )),
+            backpressure: BatchWriteMetrics::new(registry, "inline_backpressure"),
+        }
     }
 }
 
