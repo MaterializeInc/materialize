@@ -207,6 +207,8 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
 
 /// Checks if the provided `shard_id` is a tombstone, returning an error if it's not.
 async fn check_shard_tombstoned(state: &State, shard_id: &str) -> Result<(), anyhow::Error> {
+    println!("$ check-shard-tombstoned {shard_id}");
+
     let (Some(consensus_uri), Some(blob_uri)) =
         (&state.persist_consensus_url, &state.persist_blob_url)
     else {
@@ -241,7 +243,7 @@ async fn check_shard_tombstoned(state: &State, shard_id: &str) -> Result<(), any
 
             let result = match inspect_state {
                 Ok(state) if state.is_tombstone() => RetryResult::Ok(()),
-                Ok(state) if state.should_retry() => {
+                Ok(state) => {
                     if retry_state.i == 0 {
                         print!("shard isn't tombstoned; sleeping to see if it gets cleaned up.");
                     }
@@ -253,9 +255,6 @@ async fn check_shard_tombstoned(state: &State, shard_id: &str) -> Result<(), any
                     std::io::stdout().flush().expect("flushing stdout");
 
                     RetryResult::RetryableErr(anyhow!("non-tombstone state: {state:?}"))
-                }
-                Result::Ok(state) => {
-                    RetryResult::FatalErr(anyhow!("non-tombstone state: {state:?}"))
                 }
                 Result::Err(e) => RetryResult::FatalErr(e),
             };
@@ -278,13 +277,6 @@ struct ShardState {
 }
 
 impl ShardState {
-    /// It can take the storage-controller a few moments to cleanup and drop it's state. Signal
-    /// that we might be cleaning up is if the controller still has a critical since shard.
-    fn should_retry(&self) -> bool {
-        let controller_id = mz_persist_client::PersistClient::CONTROLLER_CRITICAL_SINCE.to_string();
-        self.critical_readers.contains_key(&controller_id)
-    }
-
     /// Returns if this shard is currently a tombstsone.
     fn is_tombstone(&self) -> bool {
         self.upper.is_empty()
