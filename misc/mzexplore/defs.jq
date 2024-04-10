@@ -37,7 +37,7 @@ def is_mir_relexpr:
 
 def ast_node_names:
     ((if type == "object"
-      then [keys[] | select(test("[A-Z][a-z]*"))]
+      then [keys[] | select(test("^[A-Z][A-Za-z]*$"))]
       else []
       end)
      + [.[]? | ast_node_names]) | flatten | unique
