@@ -1021,7 +1021,7 @@ where
             }
 
             storage_dependencies.push(*source_id);
-            replica_input_frontier.join_assign(&since.to_owned());
+            replica_input_frontier.join_assign(&since);
         }
 
         // Validate indexes have `since.less_equal(as_of)`.
