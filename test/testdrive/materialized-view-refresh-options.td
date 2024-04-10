@@ -10,6 +10,9 @@
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_refresh_every_mvs = true
 
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_cluster_schedule_refresh = true
+
 > CREATE DATABASE materialized_view_refresh_options;
 > SET DATABASE = materialized_view_refresh_options;
 
@@ -383,4 +386,143 @@ true
   WHERE name = 'mv10';
 true
 
+# ----------------------------------------
+# Automated cluster scheduling for REFRESH
+# ----------------------------------------
+
+> CREATE CLUSTER scheduled_cluster (SIZE = '1', SCHEDULE = ON REFRESH);
+
+# No MV yet, so the cluster should be turned off.
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
+0
+
+> CREATE MATERIALIZED VIEW mv11
+  IN CLUSTER scheduled_cluster
+  WITH (REFRESH = EVERY '8 sec')
+  AS SELECT count(*) FROM t2;
+
+# The cluster should be turned on at some point.
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
+1
+
+# And then the cluster should compute MV results.
+> SELECT * FROM mv11;
+4
+
+# The cluster should be turned off at some point.
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
+0
+
+# We should have a "drop" in `mz_audit_events`
+> SELECT count(*) > 0
+  FROM mz_audit_events
+  WHERE
+    event_type = 'drop' AND
+    object_type = 'cluster-replica' AND
+    (details->'cluster_name')::text = '"scheduled_cluster"' AND
+    user IS NULL;
+true
+
+> DELETE FROM t2;
+
+# The cluster should be turned on at some point again.
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
+1
+
+# And then the cluster should compute MV results again.
+> SELECT * FROM mv11;
+0
+
+# We should have a "create" in `mz_audit_events`
+> SELECT count(*) > 0
+  FROM mz_audit_events
+  WHERE
+    event_type = 'create' AND
+    object_type = 'cluster-replica' AND
+    (details->'cluster_name')::text = '"scheduled_cluster"' AND
+    user IS NULL;
+true
+
+# Things should keep working if we switch from managed to unmanaged cluster and then back.
+> ALTER CLUSTER scheduled_cluster SET (MANAGED = false, SCHEDULE = MANUAL);
+> ALTER CLUSTER scheduled_cluster SET (MANAGED = true, SIZE = '1', SCHEDULE = ON REFRESH);
+
+> INSERT INTO t2 VALUES (64);
+
+> SELECT * FROM mv11;
+1
+
+## When we create an MV whose first refresh is in the far future, we should immediately turn on the cluster briefly, so
+## that the Persist shard's write frontier moves from 0 to the first refresh time.
+
+> CREATE CLUSTER scheduled_cluster_2 (SIZE = '1', SCHEDULE = ON REFRESH);
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster_2';
+0
+
+> CREATE MATERIALIZED VIEW mv12
+  IN CLUSTER scheduled_cluster_2
+  WITH (REFRESH AT '3000-01-01 23:59')
+  AS SELECT sum(y) FROM t2;
+
+# The MV's write frontier should move away from 0.
+> SELECT f.write_frontier > 0
+  FROM mz_internal.mz_frontiers f
+  JOIN mz_materialized_views m ON (m.id = f.object_id)
+  WHERE m.name = 'mv12'
+true
+
+# But then the cluster should turn off.
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster_2';
+0
+
+## Unbilled replicas.
+## - The auto scheduling won't create or drop unbilled replicas.
+## - But unbilled replicas can affect the auto scheduling: If a cluster has an unbilled replica at the moment when a
+##   refresh should happen, the unbilled replica might complete the refresh before the auto scheduling has a chance to
+##   create a replica. (However, it's not guaranteed that an unbilled replica will prevent the auto scheduling from
+##   creating a replica.)
+
+# Creating an unbilled replica on a `SCHEDULE = ON REFRESH` cluster shouldn't blow things up.
+
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-execute connection=mz_system
+CREATE CLUSTER REPLICA scheduled_cluster.unbilled SIZE '2-2', BILLED AS 'free', INTERNAL;
+
+> INSERT INTO t2 VALUES (200);
+
+> SELECT * FROM mv11;
+2
+
+# Unbilled is not auto-dropped.
+
+> SELECT r.name
+  FROM mz_catalog.mz_cluster_replicas r, mz_catalog.mz_clusters c
+  WHERE c.id = r.cluster_id AND c.name = 'scheduled_cluster';
+unbilled
+
+> SELECT mz_unsafe.mz_sleep(3);
+<null>
+
+> SELECT r.name
+  FROM mz_catalog.mz_cluster_replicas r, mz_catalog.mz_clusters c
+  WHERE c.id = r.cluster_id AND c.name = 'scheduled_cluster';
+unbilled
+
+# Things continue normally after the unbilled is (manually) dropped.
+
+$ postgres-execute connection=mz_system
+DROP CLUSTER REPLICA scheduled_cluster.unbilled;
+
+> INSERT INTO t2 VALUES (99);
+
+> SELECT * FROM mv11;
+3
+
+# ----------------------------------------
+# Cleanup
+# ----------------------------------------
+
 > DROP DATABASE materialized_view_refresh_options;
+> DROP CLUSTER refresh_cluster;
+> DROP CLUSTER scheduled_cluster;
+> DROP CLUSTER scheduled_cluster_2;

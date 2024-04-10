@@ -135,6 +135,7 @@ use crate::plan::{
     WebhookValidation,
 };
 use crate::session::vars;
+use crate::session::vars::ENABLE_CLUSTER_SCHEDULE_REFRESH;
 use crate::session::vars::ENABLE_REFRESH_EVERY_MVS;
 
 mod connection;
@@ -3497,6 +3498,11 @@ pub fn describe_create_cluster(
     Ok(StatementDesc::new(None))
 }
 
+// WARNING:
+// DO NOT set any `Default` value here using the built-in mechanism of `generate_extracted_config`!
+// These options are also used in ALTER CLUSTER, where not giving an option means that the value of
+// that option stays the same. If you were to give a default value here, then not giving that option
+// to ALTER CLUSTER would always reset the value of that option to the default.
 generate_extracted_config!(
     ClusterOption,
     (AvailabilityZones, Vec<String>),
@@ -3507,11 +3513,7 @@ generate_extracted_config!(
     (Replicas, Vec<ReplicaDefinition<Aug>>),
     (ReplicationFactor, u32),
     (Size, String),
-    (
-        Schedule,
-        ClusterScheduleOptionValue,
-        Default(Default::default())
-    )
+    (Schedule, ClusterScheduleOptionValue)
 );
 
 generate_extracted_config!(
@@ -3552,6 +3554,8 @@ pub fn plan_create_cluster(
         }
     }
 
+    let schedule = schedule.unwrap_or(ClusterScheduleOptionValue::Manual);
+
     if managed {
         if replicas.is_some() {
             sql_bail!("REPLICAS not supported for managed clusters");
@@ -3568,7 +3572,18 @@ pub fn plan_create_cluster(
             introspection_debugging.unwrap_or(false),
         )?;
 
-        let replication_factor = replication_factor.unwrap_or(1);
+        let replication_factor = if matches!(schedule, ClusterScheduleOptionValue::Manual) {
+            replication_factor.unwrap_or(1)
+        } else {
+            scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
+            if replication_factor.is_some() {
+                sql_bail!("REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL");
+            }
+            // If we have a non-trivial schedule, then let's not have any replicas initially,
+            // to avoid quickly going back and forth if the schedule doesn't want a replica
+            // initially.
+            0
+        };
         let availability_zones = availability_zones.unwrap_or_default();
 
         if !availability_zones.is_empty() {
@@ -4751,8 +4766,24 @@ pub fn plan_alter_cluster(
                     if replica_defs.is_some() {
                         sql_bail!("REPLICAS not supported for managed clusters");
                     }
+                    if schedule.is_some()
+                        && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
+                    {
+                        scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
+                    }
 
                     if let Some(replication_factor) = replication_factor {
+                        if schedule.is_some()
+                            && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
+                        {
+                            sql_bail!("REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL");
+                        }
+                        if let Some(current_schedule) = cluster.schedule() {
+                            if !matches!(current_schedule, ClusterScheduleOptionValue::Manual) {
+                                sql_bail!("REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL");
+                            }
+                        }
+
                         let internal_replica_count =
                             cluster.replicas().iter().filter(|r| r.internal()).count();
                         let hypothetical_replica_count =
@@ -4789,8 +4820,21 @@ pub fn plan_alter_cluster(
                     if disk.is_some() {
                         sql_bail!("DISK not supported for unmanaged clusters");
                     }
-                    if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
+                    if schedule.is_some()
+                        && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
+                    {
                         sql_bail!("cluster schedules other than MANUAL are not supported for unmanaged clusters");
+                    }
+                    if let Some(current_schedule) = cluster.schedule() {
+                        if !matches!(current_schedule, ClusterScheduleOptionValue::Manual)
+                            && schedule.is_none()
+                        {
+                            sql_bail!(
+                                "when switching a cluster to unmanaged, if the managed \
+                                cluster's SCHEDULE is anything other than MANUAL, you have to \
+                                explicitly set the SCHEDULE to MANUAL"
+                            );
+                        }
                     }
                 }
             }
@@ -4858,7 +4902,9 @@ pub fn plan_alter_cluster(
             if !replicas.is_empty() {
                 options.replicas = AlterOptionParameter::Set(replicas);
             }
-            options.schedule = AlterOptionParameter::Set(schedule);
+            if let Some(schedule) = schedule {
+                options.schedule = AlterOptionParameter::Set(schedule);
+            }
         }
         AlterClusterAction::ResetOptions(reset_options) => {
             use AlterOptionParameter::Reset;

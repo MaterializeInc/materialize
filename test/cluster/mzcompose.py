@@ -3391,10 +3391,12 @@ def workflow_test_refresh_mv_restart(
     1a. Restart just after a refresh, and then check after the next refresh that things still work.
     1b. Same as above, but turn off the replica before the restart, and then turn it back on after the restart.
     1c. Same as 1a, but with the MV reading from an index.
+    1i. Same as 1a, but on an auto-scheduled cluster.
 
     2a. Kill envd, sleep through a refresh time, then bring up envd and check that we recover.
     2b. Same as 2a, but manipulate replicas as in 1b.
     2c. Same as 2a but with the MV reading from an index.
+    2i. Same as 2a, but on an auto-scheduled cluster.
 
     3d. No replica while creating the MV, restart envd, and then create a replica
     3e. Same as 3d but with the MV reading from an index.
@@ -3423,6 +3425,7 @@ def workflow_test_refresh_mv_restart(
         Materialized(
             additional_system_parameter_defaults={
                 "enable_refresh_every_mvs": "true",
+                "enable_cluster_schedule_refresh": "true",
             },
         ),
         Testdrive(no_reset=True),
@@ -3436,6 +3439,7 @@ def workflow_test_refresh_mv_restart(
 
             > CREATE CLUSTER cluster_ac SIZE '1';
             > CREATE CLUSTER cluster_b SIZE '1';
+            > CREATE CLUSTER cluster_auto_scheduled (SIZE '1', SCHEDULE = ON REFRESH);
 
             > CREATE MATERIALIZED VIEW mv_a
               IN CLUSTER cluster_ac
@@ -3455,12 +3459,19 @@ def workflow_test_refresh_mv_restart(
               WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
               SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
+            > CREATE MATERIALIZED VIEW mv_i
+              IN CLUSTER cluster_auto_scheduled
+              WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
+              SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
             # Let's wait for the MVs' initial refresh to complete.
             > SELECT * FROM mv_a;
             100
             > SELECT * FROM mv_b;
             100
             > SELECT * FROM mv_c;
+            100
+            > SELECT * FROM mv_i;
             100
 
             > INSERT INTO t VALUES (1000);
@@ -3478,6 +3489,8 @@ def workflow_test_refresh_mv_restart(
             > SELECT * FROM mv_b;
             1100
             > SELECT * FROM mv_c;
+            1100
+            > SELECT * FROM mv_i;
             1100
             """
         )

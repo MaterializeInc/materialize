@@ -2100,6 +2100,13 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
             _ => None,
         }
     }
+
+    fn schedule(&self) -> Option<&ClusterScheduleOptionValue> {
+        match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged { schedule, .. }) => Some(schedule),
+            _ => None,
+        }
+    }
 }
 
 impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {

@@ -1122,6 +1122,7 @@ macro_rules! impl_value_for_simple {
 
 impl_value_for_simple!(i32, "integer");
 impl_value_for_simple!(u32, "unsigned integer");
+impl_value_for_simple!(u64, "64-bit unsigned integer");
 impl_value_for_simple!(usize, "unsigned integer");
 impl_value_for_simple!(f64, "double-precision floating-point number");
 

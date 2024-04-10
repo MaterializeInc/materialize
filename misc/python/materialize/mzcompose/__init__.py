@@ -77,6 +77,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_rbac_checks": "true",
     "enable_reduce_mfp_fusion": "true",
     "enable_refresh_every_mvs": "true",
+    "enable_cluster_schedule_refresh": "true",
     "enable_sink_doc_on_option": "true",
     "enable_statement_lifecycle_logging": "true",
     "enable_table_keys": "true",

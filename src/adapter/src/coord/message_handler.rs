@@ -211,6 +211,12 @@ impl Coordinator {
                         )
                         .await;
                 }
+                Message::CheckSchedulingPolicies => {
+                    self.check_scheduling_policies().await;
+                }
+                Message::SchedulingDecisions(decisions) => {
+                    self.handle_scheduling_decisions(decisions).await;
+                }
             }
         }
         .instrument(span)

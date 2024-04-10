@@ -1538,6 +1538,16 @@ pub mod cluster_scheduling {
         "Always provisions a replica with disk, regardless of `DISK` DDL option.",
         true,
     );
+
+    const DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL: Duration = Duration::from_secs(3);
+
+    pub static CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL: VarDefinition = VarDefinition::new(
+        "cluster_check_scheduling_policies_interval",
+        value!(Duration; DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL),
+        "How often policies are invoked to automatically start/stop clusters, e.g., \
+            for REFRESH EVERY materialized views.",
+        true,
+    );
 }
 
 /// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
@@ -2006,7 +2016,14 @@ feature_flags!(
     },
     {
         name: enable_refresh_every_mvs,
-        desc: "REFRESH EVERY materialized views",
+        desc: "REFRESH EVERY and REFRESH AT materialized views",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_cluster_schedule_refresh,
+        desc: "`SCHEDULE = ON REFRESH` cluster option",
         default: false,
         internal: true,
         enable_for_item_parsing: true,
