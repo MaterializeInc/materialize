@@ -60,7 +60,9 @@ REGEX_PARAM = EnumConstantOperationParam(
     [".*", "A+", "[ab]"], add_quotes=True, invalid_value="ab("
 )
 
-REGEX_FLAG_PARAM = EnumConstantOperationParam(["i"], add_quotes=True, optional=True)
+REGEX_FLAG_PARAM = EnumConstantOperationParam(
+    ["i", "g"], add_quotes=True, optional=True
+)
 
 TEXT_TRIM_SPEC_PARAM = EnumConstantOperationParam(
     ["BOTH ", "LEADING", "TRAILING"],

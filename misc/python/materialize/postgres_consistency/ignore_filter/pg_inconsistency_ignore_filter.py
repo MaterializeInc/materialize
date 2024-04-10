@@ -160,6 +160,11 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 {ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR}
             ):
                 return YesIgnore("#23605: regexp with backslash")
+            if expression.count_args() == 4:
+                regex_flag = expression.args[3]
+                assert isinstance(regex_flag, EnumConstant)
+                if regex_flag.value == "g":
+                    return YesIgnore("Strange Postgres behavior (see PR 26526)")
 
         if db_function.function_name_in_lower_case == "nullif":
             type_arg0 = expression.args[0].try_resolve_exact_data_type()
