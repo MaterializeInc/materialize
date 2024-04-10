@@ -32,9 +32,26 @@ pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::ne
     during shard finalization",
 );
 
+/// Rules for enriching the `client.id` property of Kafka clients with
+/// additional data.
+///
+/// The configuration value must be a JSON array of objects containing keys
+/// named `pattern` and `payload`, both of type string. Rules are checked in the
+/// order they are defined. The rule's pattern must be a regular expression
+/// understood by the Rust `regex` crate. If the rule's pattern matches the
+/// address of any broker in the connection, then the payload is appended to the
+/// client ID. A rule's payload is always prefixed with `-`, to separate it from
+/// the preceding data in the client ID.
+pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<String> = Config::new(
+    "kafka_client_id_enrichment_rules",
+    "[]",
+    "Rules for enriching the `client.id` property of Kafka clients with additional data.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
+        .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
 }

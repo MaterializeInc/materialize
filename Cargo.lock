@@ -6081,6 +6081,7 @@ dependencies = [
  "protobuf-src",
  "rand",
  "rdkafka",
+ "regex",
  "serde",
  "serde_json",
  "thiserror",
