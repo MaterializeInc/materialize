@@ -53,9 +53,9 @@ class Scenario:
     name: str
     pre_restart: str
     post_restart: str
+    materialized_memory: str
+    clusterd_memory: str
     disabled: bool = False
-    materialized_memory: str = "5Gb"
-    clusterd_memory: str = "3.5Gb"
 
 
 class PgCdcScenario(Scenario):
