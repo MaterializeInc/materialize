@@ -276,7 +276,7 @@ impl Catalog {
                     };
                     add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
                     add_new_builtin_introspection_source_migration(&mut txn)?;
-                    add_new_builtin_cluster_replicas_migration(&state, &mut txn, &cluster_sizes)?;
+                    add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
                     add_new_builtin_roles_migration(&mut txn)?;
                 }
                 builtin_item_ids
