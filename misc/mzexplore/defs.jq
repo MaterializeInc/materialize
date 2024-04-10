@@ -16,6 +16,33 @@ def typename(expr):
     end
 ;
 
+def is_mir_relexpr:
+  type == "object" and
+  (   has("Get")
+   or has("Constant")
+   or has("Let")
+   or has("LetRec")
+   or has("Project")
+   or has("Map")
+   or has("FlatMap")
+   or has("Filter")
+   or has("Join")
+   or has("Reduce")
+   or has("TopK")
+   or has("Negate")
+   or has("Threshold")
+   or has("Union")
+   or has("ArrangeBy"))
+;
+
+def ast_node_names:
+    ((if type == "object"
+      then [keys[] | select(test("[A-Z][a-z]*"))]
+      else []
+      end) 
+     + [.[]? | ast_node_names]) | flatten | unique
+;
+
 def iscall(expr):
     expr | type == "object" and (has("CallVariadic") or has("CallBinary") or has("CallUnary"))
 ;
