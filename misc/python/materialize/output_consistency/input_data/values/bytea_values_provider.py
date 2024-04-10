@@ -24,6 +24,13 @@ BYTEA_DATA_TYPE_WITH_VALUES.add_raw_value(
     "EMPTY",
     {ExpressionCharacteristics.TEXT_EMPTY},
 )
+# space character
 BYTEA_DATA_TYPE_WITH_VALUES.add_raw_value("'\\x20'", "VAL_SPACE", set())
+# text 'hello'
 BYTEA_DATA_TYPE_WITH_VALUES.add_raw_value("'\\x68656c6c6f'", "VAL_1", set())
-BYTEA_DATA_TYPE_WITH_VALUES.add_raw_value("'\\x68656c6c6f20f09f918b'", "VAL_2", set())
+# text 'hello' with space and emoticon
+BYTEA_DATA_TYPE_WITH_VALUES.add_raw_value(
+    "'\\x68656c6c6f20f09f918b'",
+    "VAL_2",
+    {ExpressionCharacteristics.TEXT_WITH_SPECIAL_NON_SPACE_CHARS},
+)
