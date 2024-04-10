@@ -123,8 +123,7 @@ The implementation for refreshes scheduled by cron expressions will be similar t
 
 #### Refresh `AT {CREATION | <timestamp>}`
 
-We perform just one refresh of the MV at the specified time. (`REFRESH AT` can be given multiple times.) Note that if the only given refresh options are all `AT` options, then there will be a last refresh, after which the MV will never be refreshed again. This will allow for certain performance optimizations in dataflows that consume the MV as input ([#23179](https://github.com/MaterializeInc/materialize/issues/23179), 
-[26571](https://github.com/MaterializeInc/materialize/issues/26571)).
+We perform just one refresh of the MV at the specified time. (`REFRESH AT` can be given multiple times.) Note that if the only given refresh options are all `AT` options, then there will be a last refresh, after which the MV will never be refreshed again. This will allow for certain performance optimizations in dataflows that consume the MV as input ([#23179](https://github.com/MaterializeInc/materialize/issues/23179), [26571](https://github.com/MaterializeInc/materialize/issues/26571)).
 
 _Before the first refresh is performed, MVs are not queryable_ (queries will block until the first refresh completes), because their `since` will be initially set to the time of the first refresh. The first refresh can be a significant time away from the time of creating the MV. For example, the first refresh of an MV that is updated daily could be at night, while the MV is probably created during the day. In such cases, the user would have to wait a long time to actually start using the MV. To prevent this annoying situation, users might often want to add an extra refresh at the time of creation by specifying `REFRESH AT mz_now()`. A syntactic sugar for this is `REFRESH AT CREATION`. For example,
 ```SQL
@@ -249,29 +248,34 @@ This approach would need similar replica management as the proposed solution, bu
 
 As mentioned in the [scoping section](#out-of-scope), an alternative implementation that would cover also intermediate refresh intervals would be to suspend the replica process and save its entire state to S3 and a local disk cache, and restore it when a refresh is needed. [There are existing techniques for saving process state, e.g., CRIU.](https://faun.pub/kubernetes-checkpointing-a-definitive-guide-33dd1a0310f6) However, this would be a much bigger project than the proposed solution.
 
-### Perform initial refresh at the initial since
+## Automated Cluster Scheduling for `REFRESH` MVs
 
-## Open questions
+TODO: write down the updated discussion
 
-### Automated Cluster Scheduling for `REFRESH EVERY` MVs
+## Introspection / Observability
 
-TODO: updated discussion
+For showing the `REFRESH` options of each materialized view, I'll create a new table in `mz_internal` called `mz_materialized_view_refresh_strategies`, which will have a row for each non-trivial refresh option of each MV. The columns will be `(materialized_view_id text, type text, interval interval, aligned_to timestamptz, at timestamptz)`. In `type` we would show either one of the strings "every", "at", or "on-commit". From those columns that show details of a particular refresh option, only those columns will have a non-null value that are relevant for the refresh option that the row is about: a `REFRESH EVERY` would be non-null in `interval` and `aligned_to`, a `REFRESH AT` would be non-null in `at`. A `REFRESH ON COMMIT` would be null in all the detail columns.
 
-### System Catalog Updates
+For showing the previous and next refresh of each MV, I'm planning to create a new table in `mz_internal` called `mz_materialized_view_refreshes (materialized_view_id text, last_completed_refresh timestamptz, next_refresh timestamptz)`. I'm thinking to update it in the Compute Controller in a somewhat similar way as hydration state is updated. However, hydration state is per replica, but `mz_materialized_view_refreshes` will be per collection. Therefore, we'll create a new `CollectionIntrospection` struct (similar to `HydrationState`), which will live in `CollectionState`, and will be responsible for sending `mz_materialized_view_refreshes` updates through an `introspection_tx` channel, and retracting the values when dropped.
 
-Some updates and additions to the system catalog will ensure users can monitor and understand their materialized views with refresh modifiers. They include:
+The values in `mz_materialized_view_refreshes` will be calculated as follows:
+- `next_refresh` will usually be the write frontier of the MV's storage collection, unless:
+  - The write frontier is before or at the `as_of`. This happens when the first refresh hasn't completed yet, in which case we need to figure out the first refresh: we'll call `RefreshSchedule::round_up_timestamp` on the MV's `as_of`.
+  - The write frontier is `[]`. This happens when the MV is after its last refresh, and will never be refreshed again. We could represent this simply with a `NULL`.
+- `last_completed_refresh` is roughly `RefreshSchedule::round_down_timestamp(next_refresh - 1)`, plus special handling for the `[]` write frontier case. (`round_down_timestamp` will be a new function, which will be the same as `round_up_timestamp`, but backwards.)
 
-* **A new table `mz_materialized_view_refresh_history`.** 
-    - Refresh ID determined by the scheduled timestamp. 
-    - [Nikhil recommends] writing the next pending refresh for each materialized view. We can use this later for auto-scheduled clusters to derive `next_scheduled_create` on the cluster level.
-    - Open question for how this table will be cleaned up.
-* **Changes to `mz_materialized_views`.** 
-    - A new column for `REFRESH` capturing refresh parameters e.g. `on-commit`, etc. 
-    - [From Nikhil] The REFRESH option can be specified multiple times. That needs to be captured somehow. Possibly via type text list and possibly via a separate table that you join in (if we wanted to keep things more normalized).
-    - [From Nikhil] Plausibly the right answer here is mz_materialized_view_refreshes (materialized_view_id text, interval interval, interval_aligned_to timestamptz, at timestamp, on_schedule text), with the idea that EVERY … ALIGNED TO fills in the interval and interval_aligned_to columns and NULLs out the rest, AT fills in the AT column and nulls out the rest, and ON SCHEDULE fills out the on_schedule column and nulls out the rest, and there is one such row per REFRESH option specified. The absence of any rows for a given matview in mz_materialized_view_refreshes implies REFRESH ON COMMIT.
+For seeing whether the last refresh is being late, the user can run `EXPLAIN TIMESTAMP` in `STRICT SERIALIZABLE` mode, and look at can respond immediately. If it's false, then the last refresh's completion is overdue. Another way to get the same information would be to check if `mz_materialized_view_refreshes.next_refresh < now()`.
 
-To give full visibility into the resources used to update a view, additional changes may be needed to `mz_clusters` and other cluster/cluster replica tables once [`SCHEDULE = AUTO` is in place for clusters](https://github.com/MaterializeInc/materialize/issues/23132), but we'll table those for a separate design doc.
+For showing cluster schedules, I'll create a table in `mz_internal` called `mz_cluster_schedules`. This will be similar to `mz_materialized_view_refresh_strategies` in that it will allow for multiple `SCHEDULE =` options on a cluster by having one row for each schedule option of each cluster. This would currently be only either `SCHEDULE = ON REFRESH` or `SCHEDULE = MANUAL`. Columns would be `(cluster_id text, type text, refresh_rehydration_time_estimate interval)`. In `type`, we would currently have either "manual" (the default), or "on-refresh". (Eventually, we'll probably also want a `next_scheduled_turn_on`, but this doesn't seem so urgent. It will get more important when we'll be choosing the warmup time automatically.)
+
+For seeing whether a cluster is currently turned on, the user can simply look at `mz_cluster_replicas`, because we currently turn clusters On/Off by just creating/dropping replicas. We might also add a builtin view for showing this information in a more focused way.
+
+For the automatic cluster scheduling history, the user can look at `mz_audit_events`. This has a `details` column, which is a JSON blob, where I'm planning to add the `reason` for turning on a cluster, i.e., which materialized views were in need of a refresh. (See Nikhil's comment [here](https://github.com/MaterializeInc/materialize/pull/26401#pullrequestreview-1981986544).) There is also the `mz_cluster_replica_history` view, which takes its info from `mz_audit_events`, and presents the info in a nicer form. I could add a new reason column to this view. Also note that the `reason` could also be prepared to show reasons from other policies: it could itself be a collection of key-value pairs, where the keys are policy names (e.g., refresh), and the values have policy-specific structures. For refresh, it could be a list of the materialized view IDs that made us turn the cluster on.
+
+We'll also want to show rehydration times from the last several refreshes, to help users set the `REHYDRATION TIME ESTIMATE` of clusters. I'm thinking to create a new table `mz_internal.mz_compute_hydration_history (replica_id text, rehydration_time interval)`, which would have one row for each replica creation, and it would show the time it took to rehydrate the replica when it was created. (The user can join this with `mz_cluster_replica_history` to know which cluster the replica belonged to, replica size, etc.) Btw. this doesn't need to be constrained to clusters involving `REFRESH` MVs; this info seems generally useful for any compute cluster. If we want to make it even more useful generally, we might want to add one row not just for each replica creation, but also each replica restart, so that we'll show the rehydrations that happen at system upgrade restarts. In this case, we'll probably need also a `time` column, and then `(replica_id, time)` would be a composite key. For this general version, we might have to truncate the relation to keep it from growing too big.
+
+We might want to also track the time it takes to actually perform a refresh, assuming that the replica is already hydrated. This will often take <1 sec, but if the MV's storage is big and/or there are many changes, then it might take more.
 
 ## Rollout
 
-I plan to first implement the feature without automatically turning replicas on and off, and release the feature in this half-finished state behind a feature flag. At this point, we can already show the feature to the customer whose needs prompted this work, and they can validate it to some degree. At this point, the user will need to manually manage the replicas, but hopefully a full implementation with automatic replica management can follow in 1-2 weeks.
+I plan to first implement the feature without automatically turning replicas on and off, and release the feature in this half-finished state behind a feature flag. At this point, we can already show the feature to the customer whose needs prompted this work, and they can validate it to some degree. At this point, the user will need to manually manage the replicas. Update: this is done, the user is using it in their prototype, managing replicas with GitHub Actions at hardcoded times.
