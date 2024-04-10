@@ -37,8 +37,8 @@ pub struct S3MultiPartUploader {
     config: S3MultiPartUploaderConfig,
     // The s3 bucket.
     bucket: String,
-    // The s3 path/key of the file being uploaded.
-    path: String,
+    // The s3 key of the file being uploaded.
+    key: String,
     // The upload ID for the ongoing multi part upload.
     upload_id: String,
     // State to keep track of the part number and the etags returned from AWS.
@@ -157,7 +157,7 @@ impl S3MultiPartUploader {
     pub async fn try_new(
         sdk_config: &SdkConfig,
         bucket: String,
-        path: String,
+        key: String,
         config: S3MultiPartUploaderConfig,
     ) -> Result<S3MultiPartUploader, S3MultiPartUploadError> {
         // Validate the config
@@ -167,7 +167,7 @@ impl S3MultiPartUploader {
         let res = client
             .create_multipart_upload()
             .bucket(&bucket)
-            .key(&path)
+            .key(&key)
             .send()
             .await?;
         let upload_id = res
@@ -179,7 +179,7 @@ impl S3MultiPartUploader {
         Ok(S3MultiPartUploader {
             client,
             bucket,
-            path,
+            key,
             upload_id,
             part_count: 0,
             etags: Default::default(),
@@ -243,7 +243,7 @@ impl S3MultiPartUploader {
         self.client
             .complete_multipart_upload()
             .bucket(&self.bucket)
-            .key(&self.path)
+            .key(&self.key)
             .upload_id(self.upload_id.clone())
             .multipart_upload(
                 CompletedMultipartUpload::builder()
@@ -300,7 +300,7 @@ impl S3MultiPartUploader {
             .client
             .upload_part()
             .bucket(&self.bucket)
-            .key(&self.path)
+            .key(&self.key)
             .upload_id(self.upload_id.clone())
             .part_number(next_part_number)
             .body(ByteStream::from(data))
@@ -364,7 +364,7 @@ mod tests {
     use super::*;
     use crate::{defaults, s3};
 
-    fn s3_bucket_path_for_test() -> Option<(String, String)> {
+    fn s3_bucket_key_for_test() -> Option<(String, String)> {
         let bucket = match std::env::var("MZ_S3_UPLOADER_TEST_S3_BUCKET") {
             Ok(bucket) => bucket,
             Err(_) => {
@@ -376,8 +376,8 @@ mod tests {
         };
 
         let prefix = Uuid::new_v4().to_string();
-        let path = format!("cargo_test/{}/file", prefix);
-        Some((bucket, path))
+        let key = format!("cargo_test/{}/file", prefix);
+        Some((bucket, key))
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
@@ -385,14 +385,14 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     async fn multi_part_upload_success() -> Result<(), S3MultiPartUploadError> {
         let sdk_config = defaults().load().await;
-        let (bucket, path) = match s3_bucket_path_for_test() {
+        let (bucket, key) = match s3_bucket_key_for_test() {
             Some(tuple) => tuple,
             None => return Ok(()),
         };
 
         let config = S3MultiPartUploaderConfig::default();
         let mut uploader =
-            S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), path.clone(), config).await?;
+            S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), key.clone(), config).await?;
 
         let expected_data = "onetwothree";
         uploader.buffer_chunk(b"one").await?;
@@ -410,7 +410,7 @@ mod tests {
         let uploaded_object = s3_client
             .get_object()
             .bucket(bucket)
-            .key(path)
+            .key(key)
             .part_number(1) // fetching a particular part, so that the `parts_count` is populated in the result
             .send()
             .await
@@ -434,7 +434,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     async fn multi_part_upload_buffer() -> Result<(), S3MultiPartUploadError> {
         let sdk_config = defaults().load().await;
-        let (bucket, path) = match s3_bucket_path_for_test() {
+        let (bucket, key) = match s3_bucket_key_for_test() {
             Some(tuple) => tuple,
             None => return Ok(()),
         };
@@ -444,7 +444,7 @@ mod tests {
             file_size_limit: ByteSize::mib(10).as_u64(),
         };
         let mut uploader =
-            S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), path.clone(), config).await?;
+            S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), key.clone(), config).await?;
 
         // Adding a chunk of 6MiB, should trigger an upload part since part_size_limit is 5MiB
         let expected_data = vec![97; 6291456]; // 6MiB
@@ -470,7 +470,7 @@ mod tests {
         let uploaded_object = s3_client
             .get_object()
             .bucket(bucket)
-            .key(path)
+            .key(key)
             .send()
             .await
             .unwrap();
@@ -490,14 +490,14 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     async fn multi_part_upload_error() -> Result<(), S3MultiPartUploadError> {
         let sdk_config = defaults().load().await;
-        let (bucket, path) = match s3_bucket_path_for_test() {
+        let (bucket, key) = match s3_bucket_key_for_test() {
             Some(tuple) => tuple,
             None => return Ok(()),
         };
 
         let config = Default::default();
         let uploader =
-            S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), path.clone(), config).await?;
+            S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), key.clone(), config).await?;
 
         // Calling finish without adding any data should error
         let err = uploader.finish().await.unwrap_err();

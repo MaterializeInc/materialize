@@ -733,6 +733,7 @@ impl Run for PosCommand {
                     }
                     "psql-execute" => psql::run_execute(builtin, state).await,
                     "s3-verify-data" => s3::run_verify_data(builtin, state).await,
+                    "s3-verify-keys" => s3::run_verify_keys(builtin, state).await,
                     "schema-registry-publish" => schema_registry::run_publish(builtin, state).await,
                     "schema-registry-verify" => schema_registry::run_verify(builtin, state).await,
                     "schema-registry-wait" => schema_registry::run_wait(builtin, state).await,
