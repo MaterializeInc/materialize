@@ -1487,7 +1487,6 @@ fn add_new_builtin_roles_migration(
 }
 
 fn add_new_builtin_cluster_replicas_migration(
-    state: &CatalogState,
     txn: &mut Transaction<'_>,
     builtin_cluster_sizes: &BuiltinBootstrapClusterSizes,
 ) -> Result<(), AdapterError> {
@@ -1522,10 +1521,7 @@ fn add_new_builtin_cluster_replicas_migration(
 
             let replica_id = txn.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
             let replica_id = ReplicaId::System(replica_id);
-            let mut config = builtin_cluster_replica_config(replica_size);
-            let azs = cluster.availability_zones();
-            let location = state.concretize_replica_location(config.location, &Vec::new(), azs)?;
-            config.location = location.into();
+            let config = builtin_cluster_replica_config(replica_size);
             txn.insert_cluster_replica(
                 cluster.id,
                 replica_id,
