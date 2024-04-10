@@ -23,8 +23,8 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::StatementEndedExecutionReason;
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
-    RowsFuture,
+    verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
+    PeekResponseUnary, RowsFuture,
 };
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
@@ -1788,40 +1788,12 @@ where
             match batch {
                 FetchResult::Rows(None) => break,
                 FetchResult::Rows(Some(mut batch_rows)) => {
-                    // Verify the first row is of the expected type. This is often good enough to
-                    // find problems. Notably it failed to find #6304 when "FETCH 2" was used in a
-                    // test, instead we had to use "FETCH 1" twice.
-                    if let [row, ..] = batch_rows.as_slice() {
-                        let datums = row.unpack();
-                        let col_types = &row_desc.typ().column_types;
-                        if datums.len() != col_types.len() {
-                            let msg = format!(
-                                        "internal error: row descriptor has {} columns but row has {} columns",
-                                        col_types.len(),
-                                        datums.len(),
-                                    );
-                            return self
-                                .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, msg.clone()))
-                                .await
-                                .map(|state| (state, SendRowsEndedReason::Errored { error: msg }));
-                        }
-                        for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
-                            if !d.is_instance_of(t) {
-                                let msg = format!(
-                                    "internal error: column {} is not of expected type {:?}: {:?}",
-                                    i, t, d
-                                );
-                                return self
-                                    .error(ErrorResponse::error(
-                                        SqlState::INTERNAL_ERROR,
-                                        msg.clone(),
-                                    ))
-                                    .await
-                                    .map(|state| {
-                                        (state, SendRowsEndedReason::Errored { error: msg })
-                                    });
-                            }
-                        }
+                    if let Err(err) = verify_datum_desc(&row_desc, &batch_rows) {
+                        let msg = err.to_string();
+                        return self
+                            .error(err.into_response(Severity::Error))
+                            .await
+                            .map(|state| (state, SendRowsEndedReason::Errored { error: msg }));
                     }
 
                     // If wait_once is true: the first time this fn is called it blocks (same as
