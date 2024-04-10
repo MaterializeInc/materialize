@@ -182,10 +182,10 @@ busy cluster means your query might be blocked by some other processing going
 on, taking longer to return. As an example, if you issue a lot of
 resource-intensive queries at once, that might spike the CPU.
 
-The measure of cluster busyness is CPU. You can see the CPU by going to
-Materialize console at https://console.materialize.com/, clicking
-the **"Clusters"** tab in the nav bar, and clicking into the cluster. You can
-also grab CPU usage from the system catalog using SQL:
+The measure of cluster busyness is CPU. You can monitor CPU usage in the
+[Materialize console](https://console.materialize.com/) by clicking
+the **"Clusters"** tab in the navigation bar, and clicking into the cluster.
+You can also grab CPU usage from the system catalog using SQL:
 
 ```sql
 SELECT cru.cpu_percent
@@ -257,5 +257,27 @@ query.
 If your query was not the root cause, you can wait for the other activity on the
 cluster to stop and memory/CPU to go down, or switch to a different cluster.
 
-If you've gone through the dataflow troubleshooting and do not want to make
-any changes to your query, consider [sizing up your cluster](/sql/create-cluster/#size). A larger size cluster will provision more memory and CPU resources.
+If you've gone through the dataflow troubleshooting and do not want to make any
+changes to your query, consider [sizing up your cluster](/sql/create-cluster/#size).
+A larger size cluster will provision more memory and CPU resources.
+
+## How do I troubleshoot slow queries?
+
+Materialize stores a (sampled) log of the SQL statements that are issued against
+your Materialize region in the last **three days**, along with various metadata
+about these statements. You can access this log via the **"Query history"** tab
+in the [Materialize console](https://console.materialize.com/). You can filter
+and sort statements by type, duration, and other dimensions.
+
+This data is also available via the
+[mz_internal.mz_recent_activity_log](/sql/system-catalog/mz_internal/#mz_recent_activity_log)
+catalog table.
+
+It's important to note that the default (and max) sample rate for most
+Materialize organizations is 99%, which means that not all statements will be
+captured in the log. The sampling rate is not user-configurable, and may change
+at any time.
+
+If you're looking for a complete audit history, use the [mz_audit_events](/sql/system-catalog/mz_catalog/#mz_audit_events)
+catalog table, which records all DDL commands issued against your Materialize
+region.
