@@ -127,6 +127,11 @@ class Action:
 class FetchAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                "is not of expected type",  # TODO(def-) Remove when #26549 is fixed
+            ]
+        )
         if exe.db.complexity == Complexity.DDL:
             result.extend(
                 [
@@ -141,6 +146,11 @@ class FetchAction(Action):
         # See https://github.com/MaterializeInc/materialize/issues/20474
         exe.rollback() if self.rng.choice([True, False]) else exe.commit()
         query = f"DECLARE c CURSOR FOR SUBSCRIBE {obj}"
+        if self.rng.choice([True, False]):
+            envelope = "UPSERT" if self.rng.choice([True, False]) else "DEBEZIUM"
+            columns = self.rng.sample(obj.columns, len(obj.columns))
+            key = ", ".join(column.name(True) for column in columns)
+            query += f" ENVELOPE {envelope} (KEY ({key}))"
         exe.execute(query)
         while True:
             rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
@@ -362,7 +372,6 @@ class HttpSelectAction(Action):
                 headers={"content-type": "application/json"},
                 timeout=self.rng.uniform(0, 10),
             )
-            print(result.status_code)
             if result.status_code != 200:
                 raise QueryError(
                     f"{result.status_code}: {result.text}", f"HTTP query: {query}"
