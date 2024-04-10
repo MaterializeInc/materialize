@@ -25,6 +25,8 @@ EXPRESSION_PLACEHOLDER = "$"
 
 
 class OperationRelevance(Enum):
+    # for testing
+    EXTREME_HIGH = 1
     HIGH = 2
     DEFAULT = 3
     LOW = 4
