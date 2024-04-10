@@ -172,7 +172,7 @@ pub struct TracingCliArgs {
         long,
         env = "STARTUP_OPENTELEMETRY_FILTER",
         requires = "opentelemetry-endpoint",
-        default_value = "off"
+        default_value = "info"
     )]
     pub startup_opentelemetry_filter: CloneableEnvFilter,
     /// Additional key-value pairs to send with all opentelemetry traces.
