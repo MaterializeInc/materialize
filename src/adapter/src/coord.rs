@@ -1534,12 +1534,6 @@ impl Coordinator {
 
                     if let Some(waiting_on_this_dependent) = entries_awaiting_dependent.remove(&id)
                     {
-                        mz_ore::soft_assert_no_log! {{
-                            let subsources =  entry.subsources();
-                            let w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
-                            w.iter().all(|w| subsources.contains(w))
-                        }, "expect that items are exactly source's subsources"}
-
                         // Re-enqueue objects and continue.
                         for entry in
                             std::iter::once(entry).chain(waiting_on_this_dependent.into_iter())

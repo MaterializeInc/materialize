@@ -489,13 +489,17 @@ impl CatalogState {
         let object_id = ObjectId::Item(item_id);
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
-            for dependent_id in self.get_entry(&item_id).used_by() {
+            let entry = self.get_entry(&item_id);
+            for dependent_id in entry.used_by() {
                 dependents.extend_from_slice(&self.item_dependents(*dependent_id, seen));
             }
-            for subsource_id in self.get_entry(&item_id).subsources() {
-                dependents.extend_from_slice(&self.item_dependents(subsource_id, seen));
-            }
             dependents.push(object_id);
+            // We treat the progress collection as if it depends on the source
+            // for dropping. We have additional code in planning to create a
+            // kind of special-case "CASCADE" for this dependency.
+            if let Some(progress_id) = entry.progress_id() {
+                dependents.extend_from_slice(&self.item_dependents(progress_id, seen));
+            }
         }
         dependents
     }

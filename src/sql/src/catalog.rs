@@ -624,9 +624,6 @@ pub trait CatalogItem {
     /// Reports whether this catalog item is a progress source.
     fn is_progress_source(&self) -> bool;
 
-    /// If this catalog item is a source, it return the IDs of its subsources.
-    fn subsources(&self) -> BTreeSet<GlobalId>;
-
     /// If this catalog item is a source, it return the IDs of its progress collection.
     fn progress_id(&self) -> Option<GlobalId>;
 

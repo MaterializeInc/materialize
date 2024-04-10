@@ -4137,10 +4137,10 @@ impl Coordinator {
                     });
                 ops.extend(dependent_index_ops);
 
-                // Alter owner cascades down to sub-sources and progress collections.
+                // Alter owner cascades down to progress collections.
                 let dependent_subsources =
                     entry
-                        .subsources()
+                        .progress_id()
                         .into_iter()
                         .map(|id| catalog::Op::UpdateOwner {
                             id: ObjectId::Item(id),

@@ -4385,10 +4385,10 @@ pub fn plan_drop_owned(
     for item in scx.catalog.get_items() {
         if role_ids.contains(&item.owner_id()) {
             if !cascade {
-                // When this item gets dropped it will also drop its subsources, so we need to
+                // When this item gets dropped it will also drop its progress source, so we need to
                 // check the users of those.
                 for sub_item in item
-                    .subsources()
+                    .progress_id()
                     .iter()
                     .map(|id| scx.catalog.get_item(id))
                     .chain(iter::once(item))

@@ -1517,36 +1517,6 @@ impl CatalogEntry {
         self.item().is_progress_source()
     }
 
-    /// Returns the `GlobalId` of all of this entry's subsources.
-    pub fn subsources(&self) -> BTreeSet<GlobalId> {
-        match &self.item() {
-            CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => ingestion
-                    .source_exports
-                    .keys()
-                    .filter(|id| id != &&self.id)
-                    .copied()
-                    .chain(std::iter::once(ingestion.remap_collection_id))
-                    .collect(),
-                DataSourceDesc::IngestionExport { .. }
-                | DataSourceDesc::Introspection(_)
-                | DataSourceDesc::Webhook { .. }
-                | DataSourceDesc::Progress
-                | DataSourceDesc::Source => BTreeSet::new(),
-            },
-            CatalogItem::Table(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::Index(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => BTreeSet::new(),
-        }
-    }
-
     /// Returns the `GlobalId` of all of this entry's progress ID.
     pub fn progress_id(&self) -> Option<GlobalId> {
         match &self.item() {
@@ -2306,10 +2276,6 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn is_progress_source(&self) -> bool {
         self.is_progress_source()
-    }
-
-    fn subsources(&self) -> BTreeSet<GlobalId> {
-        self.subsources()
     }
 
     fn progress_id(&self) -> Option<GlobalId> {
