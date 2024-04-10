@@ -78,9 +78,12 @@ impl Coordinator {
 
         let explain_ctx = match ctx.session().vars().emit_plan_insights_notice() {
             true => {
-                let broken = false;
+                let broken_trace = self
+                    .catalog()
+                    .system_config()
+                    .enable_broken_optimizer_trace();
                 ExplainContext::PlanInsightsNotice(OptimizerTrace::new(
-                    broken,
+                    broken_trace,
                     ExplainStage::PlanInsights.path(),
                 ))
             }
@@ -189,7 +192,12 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        // executing the optimizer pipeline.
+        let broken_trace = self
+            .catalog()
+            .system_config()
+            .enable_broken_optimizer_trace();
+        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.path());
 
         self.execute_peek_stage(
             ctx,
