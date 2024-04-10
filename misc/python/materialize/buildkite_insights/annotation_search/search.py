@@ -27,6 +27,7 @@ from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_FAILED_BUILD_STATES,
     BUILDKITE_RELEVANT_FAILED_BUILD_STEP_STATES,
 )
+from materialize.buildkite_insights.buildkite_api.generic_api import RateLimitExceeded
 from materialize.buildkite_insights.cache import annotations_cache, builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
@@ -158,6 +159,8 @@ def main(
     else:
         build_states = []
 
+    # do not try to continue with incomplete data in case of an exceeded rate limit because fetching the annotations
+    # will anyway most likely fail
     if pipeline_slug == "*":
         builds_data = builds_cache.get_or_query_builds_for_all_pipelines(
             fetch_builds_mode,
@@ -190,13 +193,17 @@ def main(
         if only_one_result_per_build:
             max_entries_to_print = 1
 
-        matches_in_build = search_build(
-            build,
-            pattern,
-            use_regex=use_regex,
-            fetch_mode=fetch_annotations_mode,
-            max_entries_to_print=max_entries_to_print,
-        )
+        try:
+            matches_in_build = search_build(
+                build,
+                pattern,
+                use_regex=use_regex,
+                fetch_mode=fetch_annotations_mode,
+                max_entries_to_print=max_entries_to_print,
+            )
+        except RateLimitExceeded:
+            print("Aborting due to exceeded rate limit!")
+            return
 
         if only_one_result_per_build:
             matches_in_build = min(1, matches_in_build)
