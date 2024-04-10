@@ -5469,6 +5469,7 @@ dependencies = [
  "prost-build",
  "serde",
  "serde_json",
+ "timely",
  "uuid",
  "workspace-hack",
 ]
