@@ -29,11 +29,14 @@ use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 /// Initialize logging dataflows.
 ///
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
-/// retrieving logged records.
+/// retrieving logged records as well as the index of the exporting dataflow.
 pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-) -> (super::compute::Logger, BTreeMap<LogVariant, TraceBundle>) {
+) -> (
+    super::compute::Logger,
+    BTreeMap<LogVariant, (TraceBundle, usize)>,
+) {
     let interval_ms = std::cmp::max(1, config.interval.as_millis())
         .try_into()
         .expect("must fit");
@@ -88,26 +91,26 @@ struct LoggingContext<'a, A: Allocate> {
 }
 
 impl<A: Allocate + 'static> LoggingContext<'_, A> {
-    fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
-        let mut traces = BTreeMap::new();
-        traces.extend(super::timely::construct(
+    fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, (TraceBundle, usize)> {
+        let mut collections = BTreeMap::new();
+        collections.extend(super::timely::construct(
             self.worker,
             self.config,
             self.t_event_queue.clone(),
             Rc::clone(&self.shared_state),
         ));
-        traces.extend(super::reachability::construct(
+        collections.extend(super::reachability::construct(
             self.worker,
             self.config,
             self.r_event_queue.clone(),
         ));
-        traces.extend(super::differential::construct(
+        collections.extend(super::differential::construct(
             self.worker,
             self.config,
             self.d_event_queue.clone(),
             Rc::clone(&self.shared_state),
         ));
-        traces.extend(super::compute::construct(
+        collections.extend(super::compute::construct(
             self.worker,
             self.config,
             self.c_event_queue.clone(),
@@ -125,12 +128,15 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         // TODO(vmarcos): If we introduce introspection sources that would match
         // type specialization for keys, we'd need to ensure that type specialized
         // variants reach the map below (issue #22398).
-        traces
+        collections
             .into_iter()
-            .map(|(log, (trace, token))| {
-                let bundle = TraceBundle::new(SpecializedTraceHandle::RowRow(trace), errs.clone())
-                    .with_drop(token);
-                (log, bundle)
+            .map(|(log, collection)| {
+                let bundle = TraceBundle::new(
+                    SpecializedTraceHandle::RowRow(collection.trace),
+                    errs.clone(),
+                )
+                .with_drop(collection.token);
+                (log, (bundle, collection.dataflow_index))
             })
             .collect()
     }
