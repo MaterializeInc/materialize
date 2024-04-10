@@ -203,7 +203,11 @@ def execute_workload(
         while sleep_time < 60:
             conn.autocommit = True
             with conn.cursor() as cur:
-                cur.execute(f"SELECT * FROM {executor.table} ORDER BY {order_str}")
+                try:
+                    cur.execute(f"SELECT * FROM {executor.table} ORDER BY {order_str}")
+                except:
+                    print(f"Comparing against {type(executor).__name__} failed")
+                    raise
                 actual_result = cur.fetchall()
             conn.autocommit = False
             if actual_result == expected_result:
