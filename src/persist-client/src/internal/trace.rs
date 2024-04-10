@@ -984,16 +984,17 @@ struct Spine<T> {
 
 impl<T> Spine<T> {
     pub fn map_batches<'a, F: FnMut(&'a SpineBatch<T>)>(&'a self, mut f: F) {
-        for batch in self.merging.iter().rev() {
-            match batch {
-                MergeState::Double(batch1, batch2, _) => {
-                    f(batch1);
-                    f(batch2);
-                }
-                MergeState::Single(batch) => f(batch),
-                _ => {}
-            }
+        for batch in self.spine_batches() {
+            f(batch);
         }
+    }
+
+    pub fn spine_batches(&self) -> impl Iterator<Item = &SpineBatch<T>> {
+        self.merging.iter().rev().flat_map(|m| match m {
+            MergeState::Vacant => None.into_iter().chain(None.into_iter()),
+            MergeState::Single(a) => Some(a).into_iter().chain(None.into_iter()),
+            MergeState::Double(a, b, _) => Some(a).into_iter().chain(Some(b).into_iter()),
+        })
     }
 }
 
