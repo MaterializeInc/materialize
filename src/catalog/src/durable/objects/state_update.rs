@@ -811,6 +811,12 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     storage_collection_metadata,
                 ))
             }
+            StateUpdateKind::StorageUsage(key, value) => {
+                let storage_usage = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::StorageUsage(
+                    storage_usage,
+                ))
+            }
             StateUpdateKind::SystemConfiguration(key, value) => {
                 let system_configuration = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SystemConfiguration(
@@ -835,12 +841,11 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     unfinalized_shard,
                 ))
             }
-            // TODO(jkosh44) Add conversions for valid variants.
+            // Not exposed to higher layers.
             StateUpdateKind::Config(_, _)
             | StateUpdateKind::Epoch(_)
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::Setting(_, _)
-            | StateUpdateKind::StorageUsage(_, _)
             | StateUpdateKind::PersistTxnShard(_, _) => None,
         })
     }

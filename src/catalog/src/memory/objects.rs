@@ -2291,7 +2291,7 @@ pub enum StateUpdateKind {
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
     AuditLog(durable::objects::AuditLog),
-    // TODO(jkosh44) Add all other object variants.
+    StorageUsage(durable::objects::StorageUsage),
     // Storage updates.
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),

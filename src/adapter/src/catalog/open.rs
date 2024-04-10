@@ -309,6 +309,7 @@ impl Catalog {
                     StateUpdateKind::Item(_) => item_updates.push(update),
                     StateUpdateKind::Comment(_)
                     | StateUpdateKind::AuditLog(_)
+                    | StateUpdateKind::StorageUsage(_)
                     | StateUpdateKind::StorageCollectionMetadata(_)
                     | StateUpdateKind::UnfinalizedShard(_) => post_item_updates.push(update),
                 }
@@ -543,10 +544,20 @@ impl Catalog {
                     boot_ts,
                     wait_for_consolidation,
                 )
-                .await?;
-            for event in storage_usage_events {
-                builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
-            }
+                .await?
+                .into_iter()
+                .map(|metric| StateUpdate {
+                    kind: StateUpdateKind::StorageUsage(
+                        mz_catalog::durable::objects::StorageUsage { metric },
+                    ),
+                    diff: 1,
+                })
+                .collect();
+            builtin_table_updates.extend(
+                catalog
+                    .state
+                    .generate_builtin_table_updates(storage_usage_events),
+            );
 
             for ip in &catalog.state.egress_ips {
                 builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
