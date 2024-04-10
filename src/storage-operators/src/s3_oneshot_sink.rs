@@ -138,6 +138,10 @@ where
     builder.build(move |caps| async move {
         let [start_cap] = caps.try_into().unwrap();
 
+        if !is_leader {
+            return;
+        }
+
         // fallible async block to use the `?` operator for convenience
         let leader_work = async move {
             info!(%sink_id, %worker_id, "s3 leader worker initialization");
@@ -168,8 +172,8 @@ where
                         .collect::<Vec<_>>();
                     if !files.is_empty() {
                         Err(anyhow::anyhow!(
-                            "S3 bucket path is not empty, contains: {:?}",
-                            files
+                            "S3 bucket path is not empty, contains {} objects",
+                            files.len()
                         ))?;
                     }
                 };
@@ -189,10 +193,8 @@ where
             Ok::<(), anyhow::Error>(())
         };
 
-        if is_leader {
-            let res = leader_work.await.map_err(|e| e.to_string());
-            start_handle.give(&start_cap, res).await;
-        };
+        let res = leader_work.await.map_err(|e| e.to_string());
+        start_handle.give(&start_cap, res).await;
     });
 
     start_stream
@@ -233,79 +235,53 @@ fn render_completion_operator<G, F>(
 
     builder.build(move |_| async move {
         // fallible async block to use the `?` operator for convenience
-        let leader_cleanup_work = async move {
-            info!(%sink_id, %worker_id, "s3 leader worker completion");
-            let sdk_config = aws_connection
-                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
-                .await?;
-
-            let client = mz_aws_util::s3::new_client(&sdk_config);
-            let bucket = s3_key_manager.bucket.clone();
-            let incomplete_sentinel_key = s3_key_manager.incomplete_sentinel_key();
-
-            // Remove the INCOMPLETE sentinel file to indicate that the upload is complete.
-            // This will race against other replicas who are completing the same uploads,
-            // such that the first replica to complete its uploads will delete the sentinel
-            // and the subsequent replicas shouldn't error if the object is already deleted.
-            // TODO: Should we also write a manifest of all the files uploaded?
-            mz_ore::task::spawn(|| "copytos3:completion", async move {
-                debug!(%sink_id, %worker_id, "removing INCOMPLETE sentinel file");
-                client
-                    .delete_object()
-                    .bucket(bucket)
-                    .key(incomplete_sentinel_key)
-                    .send()
-                    .await?;
-                Ok::<(), anyhow::Error>(())
-            })
-            .wait_and_assert_finished()
-            .await?;
-            Ok::<u64, anyhow::Error>(0)
-        };
-
-        let mut res = None;
-        while let Some(event) = completion_input.next().await {
-            match event {
-                AsyncEvent::Data(_ts, data) => {
-                    for evt in data {
-                        // We only expect to receive one event on this stream
+        let fallible_logic = async move {
+            let mut row_count = None;
+            while let Some(event) = completion_input.next().await {
+                if let AsyncEvent::Data(_ts, data) = event {
+                    for result in data {
                         assert!(
-                            res.is_none(),
+                            row_count.is_none(),
                             "unexpectedly received more than 1 event on the completion stream!"
                         );
-
-                        // If we're not the leader or if the completion event is an error,
-                        // return immediately to the response callback.
-                        if !is_leader || evt.is_err() {
-                            worker_callback(evt);
-                            return;
-                        }
-                        // Store this event for the leader worker to use below
-                        res = Some(evt);
-                    }
-                }
-                AsyncEvent::Progress(frontier) => {
-                    if frontier.is_empty() && is_leader {
-                        // Once the leader sees the empty frontier, it knows that all workers
-                        // have completed their work and can proceed with cleanup steps
-                        assert!(is_leader, "non-leader did not receive a completion event");
-                        let cleanup_res = leader_cleanup_work.await;
-                        if cleanup_res.is_err() {
-                            // something errored while cleaning up
-                            worker_callback(cleanup_res.map_err(|e| e.to_string()));
-                        } else {
-                            match res {
-                                Some(res) if res.is_ok() => worker_callback(res),
-                                Some(_) => panic!("expected success result for leader"),
-                                None => panic!("leader did not receive a completion event"),
-                            }
-                        }
-                        return;
+                        row_count = Some(result.map_err(|e| anyhow!(e))?);
                     }
                 }
             }
-        }
-        panic!("completion stream exited too early");
+            let row_count = row_count.expect("did not receive completion event");
+
+            if is_leader {
+                debug!(%sink_id, %worker_id, "s3 leader worker completion");
+                let sdk_config = aws_connection
+                    .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                    .await?;
+
+                let client = mz_aws_util::s3::new_client(&sdk_config);
+                let bucket = s3_key_manager.bucket.clone();
+                let incomplete_sentinel_key = s3_key_manager.incomplete_sentinel_key();
+
+                // Remove the INCOMPLETE sentinel file to indicate that the upload is complete.
+                // This will race against other replicas who are completing the same uploads,
+                // such that the first replica to complete its uploads will delete the sentinel
+                // and the subsequent replicas shouldn't error if the object is already deleted.
+                // TODO: Should we also write a manifest of all the files uploaded?
+                mz_ore::task::spawn(|| "copytos3:completion", async move {
+                    debug!(%sink_id, %worker_id, "removing INCOMPLETE sentinel file");
+                    client
+                        .delete_object()
+                        .bucket(bucket)
+                        .key(incomplete_sentinel_key)
+                        .send()
+                        .await?;
+                    Ok::<(), anyhow::Error>(())
+                })
+                .wait_and_assert_finished()
+                .await?;
+            }
+            Ok::<u64, anyhow::Error>(row_count)
+        };
+
+        worker_callback(fallible_logic.await.map_err(|e| e.to_string()));
     });
 }
 
@@ -395,11 +371,11 @@ where
                         for (((row, batch), ()), ts, diff) in data {
                             if !up_to.less_equal(&ts) {
                                 if diff < 0 {
-                                    Err(anyhow::anyhow!(
+                                    anyhow::bail!(
                                         "Invalid data in source errors, saw retractions ({}) for \
                                         row that does not exist",
                                         diff * -1,
-                                    ))?;
+                                    )
                                 }
                                 row_count += u64::try_from(diff).unwrap();
                                 let uploader = s3_uploaders.entry(batch).or_insert_with(|| {
