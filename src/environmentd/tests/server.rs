@@ -1178,7 +1178,7 @@ fn test_storage_usage_collection_interval() {
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Wait for the initial storage usage collection to occur.
-    let timestamp = wait_for_next_collection(&mut client, DateTime::<Utc>::MIN_UTC);
+    let mut timestamp = wait_for_next_collection(&mut client, DateTime::<Utc>::MIN_UTC);
 
     // Create a table with no data.
     client
@@ -1194,14 +1194,19 @@ fn test_storage_usage_collection_interval() {
     assert_eq!(pre_create_storage_usage, 0);
 
     // Test that the storage usage for the table is nonzero after it is created
-    // (there is some overhead even for empty tables). We wait out two storage
+    // (there is some overhead even for empty tables). We wait multiple storage
     // collection intervals (here and below) because the next storage collection
     // may have been concurrent with the previous operation.
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let post_create_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
-    info!(%post_create_storage_usage);
-    assert!(post_create_storage_usage > 0);
+    let post_create_storage_usage = Retry::default().max_tries(10).retry(|_| {
+        timestamp = wait_for_next_collection(&mut client, timestamp);
+        let post_create_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+        info!(%post_create_storage_usage);
+        if post_create_storage_usage > 0 {
+            Ok(post_create_storage_usage)
+        } else {
+            Err(format!("expected non-zero post create storage usage, found: {post_create_storage_usage}"))
+        }
+    }).unwrap();
 
     // Insert some data into the table.
     for _ in 0..3 {
@@ -1211,21 +1216,36 @@ fn test_storage_usage_collection_interval() {
     }
 
     // Test that the storage usage for the table is larger than it was before.
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let after_insert_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
-    info!(%after_insert_storage_usage);
-    assert!(after_insert_storage_usage > post_create_storage_usage);
+    Retry::default().max_tries(10).retry(|_| {
+        timestamp = wait_for_next_collection(&mut client, timestamp);
+        let after_insert_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+        info!(%after_insert_storage_usage);
+        if after_insert_storage_usage > post_create_storage_usage {
+            Ok(())
+        } else {
+            Err(format!("expected insert storage usage, {after_insert_storage_usage}, to be higher than pre insert storage usage of {post_create_storage_usage}"))
+        }
+    }).unwrap();
 
     // Drop the table.
     client.batch_execute("DROP TABLE usage_test").unwrap();
 
     // Test that the storage usage is reported as zero.
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let after_drop_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
-    info!(%after_drop_storage_usage);
-    assert_eq!(after_drop_storage_usage, 0);
+    Retry::default()
+        .max_tries(10)
+        .retry(|_| {
+            timestamp = wait_for_next_collection(&mut client, timestamp);
+            let after_drop_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+            info!(%after_drop_storage_usage);
+            if after_drop_storage_usage == 0 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "expected zero storage usage after drop, found {after_drop_storage_usage}"
+                ))
+            }
+        })
+        .unwrap();
 }
 
 #[mz_ore::test]
