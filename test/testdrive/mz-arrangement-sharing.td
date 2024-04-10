@@ -762,7 +762,6 @@ CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEB
 "Arrange Compute(DataflowCurrent)"
 "Arrange Compute(ErrorCount)"
 "Arrange Compute(FrontierCurrent)"
-"Arrange Compute(FrontierDelay)"
 "Arrange Compute(ImportFrontierCurrent)"
 "Arrange Compute(PeekCurrent)"
 "Arrange Compute(PeekDuration)"

@@ -544,14 +544,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 6  allocations  numeric
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_delays_histogram' ORDER BY position
-----
-1  export_id  text
-2  import_id  text
-3  delay_ns  uint8
-4  count  numeric
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_error_counts' ORDER BY position
 ----
 1  export_id  text
@@ -746,9 +738,6 @@ mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
 mz_comments
-mz_compute_delays_histogram
-mz_compute_delays_histogram_per_worker
-mz_compute_delays_histogram_raw
 mz_compute_dependencies
 mz_compute_error_counts
 mz_compute_error_counts_per_worker
