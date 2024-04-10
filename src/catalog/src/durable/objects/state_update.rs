@@ -819,6 +819,18 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     system_privilege,
                 ))
             }
+            StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                let storage_collection_metadata = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::StorageCollectionMetadata(
+                    storage_collection_metadata,
+                ))
+            }
+            StateUpdateKind::UnfinalizedShard(key, value) => {
+                let unfinalized_shard = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::UnfinalizedShard(
+                    unfinalized_shard,
+                ))
+            }
             // TODO(jkosh44) Add conversions for valid variants.
             StateUpdateKind::AuditLog(_, _)
             | StateUpdateKind::Config(_, _)
@@ -826,8 +838,6 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::StorageUsage(_, _)
-            | StateUpdateKind::StorageCollectionMetadata(_, _)
-            | StateUpdateKind::UnfinalizedShard(_, _)
             | StateUpdateKind::PersistTxnShard(_, _) => None,
         })
     }

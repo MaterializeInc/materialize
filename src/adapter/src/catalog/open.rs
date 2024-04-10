@@ -290,7 +290,7 @@ impl Catalog {
             let mut cluster_updates = Vec::new();
             let mut builtin_item_updates = Vec::new();
             let mut item_updates = Vec::new();
-            let mut comment_updates = Vec::new();
+            let mut post_item_updates = Vec::new();
             for update in txn.get_updates() {
                 match update.kind {
                     StateUpdateKind::Role(_)
@@ -304,7 +304,9 @@ impl Catalog {
                     | StateUpdateKind::ClusterReplica(_) => cluster_updates.push(update),
                     StateUpdateKind::SystemObjectMapping(system_object_mapping) => builtin_item_updates.push((system_object_mapping, update.diff)),
                     StateUpdateKind::Item(_) => item_updates.push(update),
-                    StateUpdateKind::Comment(_) => comment_updates.push(update),
+                    StateUpdateKind::Comment(_)
+                    | StateUpdateKind::StorageCollectionMetadata(_)
+                    | StateUpdateKind::UnfinalizedShard(_)=> post_item_updates.push(update),
                 }
             }
 
@@ -394,7 +396,7 @@ impl Catalog {
                 state.apply_updates_for_bootstrap(item_updates)?;
             }
 
-            state.apply_updates_for_bootstrap(comment_updates)?;
+            state.apply_updates_for_bootstrap(post_item_updates)?;
 
             // Migrate builtin items.
             let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
@@ -419,8 +421,6 @@ impl Catalog {
                 &mut txn,
                 &mut builtin_migration_metadata,
             )?;
-
-            state.update_storage_metadata(&txn);
 
             txn.commit().await?;
             Ok((

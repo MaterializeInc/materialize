@@ -680,6 +680,48 @@ impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageCollectionMetadata {
+    pub id: GlobalId,
+    pub shard: String,
+}
+
+impl DurableType<StorageCollectionMetadataKey, StorageCollectionMetadataValue>
+    for StorageCollectionMetadata
+{
+    fn into_key_value(self) -> (StorageCollectionMetadataKey, StorageCollectionMetadataValue) {
+        (
+            StorageCollectionMetadataKey { id: self.id },
+            StorageCollectionMetadataValue { shard: self.shard },
+        )
+    }
+
+    fn from_key_value(
+        key: StorageCollectionMetadataKey,
+        value: StorageCollectionMetadataValue,
+    ) -> Self {
+        Self {
+            id: key.id,
+            shard: value.shard,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnfinalizedShard {
+    pub shard: String,
+}
+
+impl DurableType<UnfinalizedShardKey, ()> for UnfinalizedShard {
+    fn into_key_value(self) -> (UnfinalizedShardKey, ()) {
+        (UnfinalizedShardKey { shard: self.shard }, ())
+    }
+
+    fn from_key_value(key: UnfinalizedShardKey, _value: ()) -> Self {
+        Self { shard: key.shard }
+    }
+}
+
 // Structs used internally to represent on-disk state.
 
 /// A snapshot of the current on-disk state.
