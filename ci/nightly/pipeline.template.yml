@@ -1230,7 +1230,7 @@ steps:
       - id: rqg-banking
         label: "RQG banking workload"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-small
         plugins:
