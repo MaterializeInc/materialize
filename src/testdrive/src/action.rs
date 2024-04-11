@@ -867,79 +867,25 @@ pub async fn create_state(
 
     let materialize_catalog_config = config.materialize_catalog_config.clone();
 
-    let (materialize_state, pgconn_task) = {
-        let materialize_url = util::postgres::config_url(&config.materialize_pgconfig)?;
-        let materialize_internal_url =
-            util::postgres::config_url(&config.materialize_internal_pgconfig)?;
+    let materialize_url = util::postgres::config_url(&config.materialize_pgconfig)?;
+    info!("Connecting to {}", materialize_url.as_str());
+    let (pgclient, pgconn) = Retry::default()
+        .max_duration(config.default_timeout)
+        .retry_async_canceling(|_| async move {
+            let mut pgconfig = config.materialize_pgconfig.clone();
+            pgconfig.connect_timeout(config.default_timeout);
+            let tls = make_tls(&pgconfig)?;
+            pgconfig.connect(tls).await.map_err(|e| anyhow!(e))
+        })
+        .await?;
 
-        info!("Connecting to {}", materialize_url.as_str());
-        let (pgclient, pgconn) = Retry::default()
-            .max_duration(config.default_timeout)
-            .retry_async_canceling(|_| async move {
-                let mut pgconfig = config.materialize_pgconfig.clone();
-                pgconfig.connect_timeout(config.default_timeout);
-                let tls = make_tls(&pgconfig)?;
-                pgconfig.connect(tls).await.map_err(|e| anyhow!(e))
-            })
-            .await?;
-        let pgconn_task = task::spawn(|| "pgconn_task", pgconn).map(|join| {
-            join.expect("pgconn_task unexpectedly canceled")
-                .context("running SQL connection")
-        });
-        for (key, value) in &config.materialize_params {
-            pgclient
-                .batch_execute(&format!("SET {key} = {value}"))
-                .await
-                .context("setting session parameter")?;
-        }
+    let pgconn_task = task::spawn(|| "pgconn_task", pgconn).map(|join| {
+        join.expect("pgconn_task unexpectedly canceled")
+            .context("running SQL connection")
+    });
 
-        let materialize_user = config
-            .materialize_pgconfig
-            .get_user()
-            .expect("testdrive URL must contain user")
-            .to_string();
-
-        let materialize_sql_addr = format!(
-            "{}:{}",
-            materialize_url.host_str().unwrap(),
-            materialize_url.port().unwrap()
-        );
-        let materialize_http_addr = format!(
-            "{}:{}",
-            materialize_url.host_str().unwrap(),
-            config.materialize_http_port
-        );
-        let materialize_internal_sql_addr = format!(
-            "{}:{}",
-            materialize_internal_url.host_str().unwrap(),
-            materialize_internal_url.port().unwrap()
-        );
-        let materialize_internal_http_addr = format!(
-            "{}:{}",
-            materialize_internal_url.host_str().unwrap(),
-            config.materialize_internal_http_port
-        );
-        let environment_id = pgclient
-            .query_one("SELECT mz_environment_id()", &[])
-            .await?
-            .get::<_, String>(0)
-            .parse()
-            .context("parsing environment ID")?;
-
-        let materialize_state = MaterializeState {
-            catalog_config: materialize_catalog_config,
-            sql_addr: materialize_sql_addr,
-            use_https: config.materialize_use_https,
-            http_addr: materialize_http_addr,
-            internal_sql_addr: materialize_internal_sql_addr,
-            internal_http_addr: materialize_internal_http_addr,
-            user: materialize_user,
-            pgclient,
-            environment_id,
-        };
-
-        (materialize_state, pgconn_task)
-    };
+    let materialize_state =
+        create_materialize_state(&config, materialize_catalog_config, pgclient).await?;
 
     let schema_registry_url = config.schema_registry_url.to_owned();
 
@@ -1061,4 +1007,68 @@ pub async fn create_state(
     };
     state.initialize_cmd_vars().await?;
     Ok((state, pgconn_task))
+}
+
+async fn create_materialize_state(
+    config: &&Config,
+    materialize_catalog_config: Option<CatalogConfig>,
+    pgclient: tokio_postgres::Client,
+) -> Result<MaterializeState, anyhow::Error> {
+    let materialize_url = util::postgres::config_url(&config.materialize_pgconfig)?;
+    let materialize_internal_url =
+        util::postgres::config_url(&config.materialize_internal_pgconfig)?;
+
+    for (key, value) in &config.materialize_params {
+        pgclient
+            .batch_execute(&format!("SET {key} = {value}"))
+            .await
+            .context("setting session parameter")?;
+    }
+
+    let materialize_user = config
+        .materialize_pgconfig
+        .get_user()
+        .expect("testdrive URL must contain user")
+        .to_string();
+
+    let materialize_sql_addr = format!(
+        "{}:{}",
+        materialize_url.host_str().unwrap(),
+        materialize_url.port().unwrap()
+    );
+    let materialize_http_addr = format!(
+        "{}:{}",
+        materialize_url.host_str().unwrap(),
+        config.materialize_http_port
+    );
+    let materialize_internal_sql_addr = format!(
+        "{}:{}",
+        materialize_internal_url.host_str().unwrap(),
+        materialize_internal_url.port().unwrap()
+    );
+    let materialize_internal_http_addr = format!(
+        "{}:{}",
+        materialize_internal_url.host_str().unwrap(),
+        config.materialize_internal_http_port
+    );
+    let environment_id = pgclient
+        .query_one("SELECT mz_environment_id()", &[])
+        .await?
+        .get::<_, String>(0)
+        .parse()
+        .context("parsing environment ID")?;
+
+    let materialize_state = MaterializeState {
+        catalog_config: materialize_catalog_config,
+        sql_addr: materialize_sql_addr,
+        use_https: config.materialize_use_https,
+        http_addr: materialize_http_addr,
+        internal_sql_addr: materialize_internal_sql_addr,
+        internal_http_addr: materialize_internal_http_addr,
+        user: materialize_user,
+        pgclient,
+        environment_id,
+    };
+
+    Ok(materialize_state)
 }
