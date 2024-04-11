@@ -354,7 +354,7 @@ Field     | Type       | Meaning
 ### `mz_role_parameters`
 
 The `mz_role_parameters` table contains a row for each (role, configuration parameter) pair, where
-a default configuration parameter value value has been set for that pair.
+a default configuration parameter value has been set for that pair.
 See [ALTER ROLE ... SET](/sql/alter-role/#alter_role_set) on setting default configuration
 parameter values per role.
 

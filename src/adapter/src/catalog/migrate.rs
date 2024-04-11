@@ -20,8 +20,6 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::session::user::SYSTEM_USER;
-use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
@@ -244,7 +242,6 @@ pub(crate) fn durable_migrate(
 ) -> Result<(), anyhow::Error> {
     let boot_ts = boot_ts.into();
     catalog_fix_system_cluster_replica_ids_v_0_95_0(tx, boot_ts)?;
-    catalog_remove_invalid_role_vars_v_0_96_0(tx, boot_ts)?;
     Ok(())
 }
 
@@ -328,53 +325,5 @@ fn catalog_fix_system_cluster_replica_ids_v_0_95_0(
             tx.insert_audit_log_events([remove_event, create_event]);
         }
     }
-    Ok(())
-}
-
-/// Before v0.96.0 we accidentally allowed invalid values to be provided as role variable defaults.
-/// This migrate unsets any of those invalid values, which silently failed to get set anyways.
-fn catalog_remove_invalid_role_vars_v_0_96_0(
-    tx: &mut Transaction,
-    _boot_ts: EpochMillis,
-) -> Result<(), anyhow::Error> {
-    static BUILD_INFO: mz_build_info::BuildInfo = mz_build_info::build_info!();
-
-    let roles_to_migrate: BTreeMap<_, _> = tx
-        .get_roles()
-        .filter_map(|mut role| {
-            // Create an empty SessionVars just so we can check if a var is valid.
-            let session_vars = SessionVars::new_unchecked(&BUILD_INFO, SYSTEM_USER.clone());
-
-            // Iterate over all of the variable defaults for this role.
-            let mut invalid_roles_vars = BTreeMap::new();
-            for (name, value) in &role.vars.map {
-                // If one does not exist or its value is invalid, then mark it for removal.
-                let Ok(session_var) = session_vars.inspect(name) else {
-                    invalid_roles_vars.insert(name.clone(), value.clone());
-                    continue;
-                };
-                if session_var.check(value.borrow()).is_err() {
-                    invalid_roles_vars.insert(name.clone(), value.clone());
-                }
-            }
-
-            // If the role has no invalid values, nothing to do!
-            if invalid_roles_vars.is_empty() {
-                return None;
-            }
-
-            tracing::info!(?role, ?invalid_roles_vars, "removing invalid role vars");
-
-            // Otherwise, remove the variables from the role and return it to be updated.
-            for (name, _value) in invalid_roles_vars {
-                role.vars.map.remove(&name);
-            }
-            Some(role)
-        })
-        .map(|role| (role.id, role))
-        .collect();
-
-    tx.update_roles(roles_to_migrate)?;
-
     Ok(())
 }

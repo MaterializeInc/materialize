@@ -146,14 +146,10 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_role_update(
-        &self,
-        id: RoleId,
-        diff: Diff,
-    ) -> Option<Vec<BuiltinTableUpdate>> {
+    pub(super) fn pack_role_update(&self, id: RoleId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         match id {
             // PUBLIC role should not show up in mz_roles.
-            RoleId::Public => None,
+            RoleId::Public => vec![],
             id => {
                 let role = self.get_role(&id);
                 let role_update = BuiltinTableUpdate {
@@ -179,12 +175,11 @@ impl CatalogState {
                     let result = session_vars_reference
                         .inspect(name)
                         .and_then(|var| var.check(val.borrow()));
-                    let formatted_val = match result {
-                        Ok(val) => val,
-                        Err(err) => {
-                            tracing::error!(?name, ?val, ?err, "found invalid role default var");
-                            continue;
-                        }
+                    let Ok(formatted_val) = result else {
+                        // Note: all variables should have been validated by this point, so we
+                        // shouldn't ever hit this.
+                        tracing::error!(?name, ?val, ?result, "found invalid role default var");
+                        continue;
                     };
 
                     let role_var_update = BuiltinTableUpdate {
@@ -198,7 +193,8 @@ impl CatalogState {
                     };
                     updates.push(role_var_update);
                 }
-                Some(updates)
+
+                updates
             }
         }
     }

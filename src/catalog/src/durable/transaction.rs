@@ -1007,7 +1007,7 @@ impl<'a> Transaction<'a> {
             let update_role_ids: BTreeSet<_> = roles.into_keys().collect();
             let role_ids: BTreeSet<_> = self.roles.items().keys().map(|k| k.id).collect();
             let mut unknown = update_role_ids.difference(&role_ids);
-            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+            Err(SqlCatalogError::UnknownRole(unknown.join(", ")).into())
         }
     }
 
