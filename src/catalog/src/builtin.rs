@@ -56,6 +56,8 @@ use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATI
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
+use crate::durable::objects::SystemObjectDescription;
+
 pub const BUILTIN_PREFIXES: &[&str] = &["mz_", "pg_", "external_"];
 const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
 
@@ -7186,6 +7188,25 @@ pub mod BUILTINS {
 
 pub static BUILTIN_LOG_LOOKUP: Lazy<BTreeMap<&'static str, &'static BuiltinLog>> =
     Lazy::new(|| BUILTINS::logs().map(|log| (log.name, log)).collect());
+/// Keys are builtin object description, values are the builtin index when sorted by dependency and
+/// the builtin itself.
+pub static BUILTIN_LOOKUP: Lazy<
+    BTreeMap<SystemObjectDescription, (usize, &'static Builtin<NameReference>)>,
+> = Lazy::new(|| {
+    BUILTINS::iter()
+        .enumerate()
+        .map(|(idx, builtin)| {
+            (
+                SystemObjectDescription {
+                    schema_name: builtin.schema().to_string(),
+                    object_type: builtin.catalog_item_type(),
+                    object_name: builtin.name().to_string(),
+                },
+                (idx, builtin),
+            )
+        })
+        .collect()
+});
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`

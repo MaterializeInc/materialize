@@ -63,9 +63,9 @@ use mz_repr::{GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole,
-    CatalogSchema, CatalogTypeDetails, EnvironmentId, IdReference, NameReference, SessionCatalog,
-    SystemObjectType, TypeReference,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId,
+    IdReference, NameReference, SessionCatalog, SystemObjectType, TypeReference,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
@@ -1665,7 +1665,104 @@ impl CatalogState {
     pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> GlobalId {
         let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
         let schema = &self.ambient_schemas_by_id[schema_id];
-        schema.items[builtin.name()].clone()
+        match builtin.catalog_item_type() {
+            CatalogItemType::Type => schema.types[builtin.name()].clone(),
+            CatalogItemType::Func => schema.functions[builtin.name()].clone(),
+            CatalogItemType::Table
+            | CatalogItemType::Source
+            | CatalogItemType::Sink
+            | CatalogItemType::View
+            | CatalogItemType::MaterializedView
+            | CatalogItemType::Index
+            | CatalogItemType::Secret
+            | CatalogItemType::Connection => schema.items[builtin.name()].clone(),
+        }
+    }
+
+    /// Resolve a [`BuiltinType<NameReference>`] to a [`BuiltinType<IdReference>`].
+    pub fn resolve_builtin_type_references(
+        &self,
+        builtin: &BuiltinType<NameReference>,
+    ) -> BuiltinType<IdReference> {
+        let typ: CatalogType<IdReference> = match &builtin.details.typ {
+            CatalogType::AclItem => CatalogType::AclItem,
+            CatalogType::Array { element_reference } => CatalogType::Array {
+                element_reference: self.get_system_type(element_reference).id,
+            },
+            CatalogType::List {
+                element_reference,
+                element_modifiers,
+            } => CatalogType::List {
+                element_reference: self.get_system_type(element_reference).id,
+                element_modifiers: element_modifiers.clone(),
+            },
+            CatalogType::Map {
+                key_reference,
+                value_reference,
+                key_modifiers,
+                value_modifiers,
+            } => CatalogType::Map {
+                key_reference: self.get_system_type(key_reference).id,
+                value_reference: self.get_system_type(value_reference).id,
+                key_modifiers: key_modifiers.clone(),
+                value_modifiers: value_modifiers.clone(),
+            },
+            CatalogType::Range { element_reference } => CatalogType::Range {
+                element_reference: self.get_system_type(element_reference).id,
+            },
+            CatalogType::Record { fields } => CatalogType::Record {
+                fields: fields
+                    .into_iter()
+                    .map(|f| CatalogRecordField {
+                        name: f.name.clone(),
+                        type_reference: self.get_system_type(f.type_reference).id,
+                        type_modifiers: f.type_modifiers.clone(),
+                    })
+                    .collect(),
+            },
+            CatalogType::Bool => CatalogType::Bool,
+            CatalogType::Bytes => CatalogType::Bytes,
+            CatalogType::Char => CatalogType::Char,
+            CatalogType::Date => CatalogType::Date,
+            CatalogType::Float32 => CatalogType::Float32,
+            CatalogType::Float64 => CatalogType::Float64,
+            CatalogType::Int16 => CatalogType::Int16,
+            CatalogType::Int32 => CatalogType::Int32,
+            CatalogType::Int64 => CatalogType::Int64,
+            CatalogType::UInt16 => CatalogType::UInt16,
+            CatalogType::UInt32 => CatalogType::UInt32,
+            CatalogType::UInt64 => CatalogType::UInt64,
+            CatalogType::MzTimestamp => CatalogType::MzTimestamp,
+            CatalogType::Interval => CatalogType::Interval,
+            CatalogType::Jsonb => CatalogType::Jsonb,
+            CatalogType::Numeric => CatalogType::Numeric,
+            CatalogType::Oid => CatalogType::Oid,
+            CatalogType::PgLegacyChar => CatalogType::PgLegacyChar,
+            CatalogType::PgLegacyName => CatalogType::PgLegacyName,
+            CatalogType::Pseudo => CatalogType::Pseudo,
+            CatalogType::RegClass => CatalogType::RegClass,
+            CatalogType::RegProc => CatalogType::RegProc,
+            CatalogType::RegType => CatalogType::RegType,
+            CatalogType::String => CatalogType::String,
+            CatalogType::Time => CatalogType::Time,
+            CatalogType::Timestamp => CatalogType::Timestamp,
+            CatalogType::TimestampTz => CatalogType::TimestampTz,
+            CatalogType::Uuid => CatalogType::Uuid,
+            CatalogType::VarChar => CatalogType::VarChar,
+            CatalogType::Int2Vector => CatalogType::Int2Vector,
+            CatalogType::MzAclItem => CatalogType::MzAclItem,
+        };
+
+        BuiltinType {
+            name: builtin.name,
+            schema: builtin.schema,
+            oid: builtin.oid,
+            details: CatalogTypeDetails {
+                array_id: builtin.details.array_id,
+                typ,
+                pg_metadata: builtin.details.pg_metadata.clone(),
+            },
+        }
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {

@@ -48,7 +48,7 @@ use crate::durable::objects::{
     SystemPrivilegesKey, SystemPrivilegesValue, UnfinalizedShardKey,
 };
 use crate::durable::{
-    CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
+    CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
     AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
@@ -1408,14 +1408,6 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
-    pub fn get_comments(&self) -> impl Iterator<Item = Comment> {
-        self.comments
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
     pub fn get_system_object_mappings(&self) -> impl Iterator<Item = SystemObjectMapping> {
         self.system_gid_mapping
             .items()
@@ -1498,6 +1490,10 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_updates(
                 &self.comments,
                 StateUpdateKind::Comment,
+            ))
+            .chain(get_collection_updates(
+                &self.system_gid_mapping,
+                StateUpdateKind::SystemObjectMapping,
             ))
             .chain(get_collection_updates(&self.items, StateUpdateKind::Item))
             .map(|kind| StateUpdate { kind, diff: 1 })

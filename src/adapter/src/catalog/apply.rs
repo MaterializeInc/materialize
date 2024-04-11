@@ -14,26 +14,30 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::str::FromStr;
 
-use mz_catalog::builtin::BUILTIN_LOG_LOOKUP;
+use mz_catalog::builtin::{Builtin, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    Cluster, ClusterReplica, ClusterReplicaProcessStatus, Database, Role, Schema, StateUpdate,
-    StateUpdateKind,
+    CatalogItem, Cluster, ClusterReplica, ClusterReplicaProcessStatus, DataSourceDesc, Database,
+    Func, Log, Role, Schema, Source, StateUpdate, StateUpdateKind, Table, Type,
 };
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{ClusterStatus, ReplicaConfig, ReplicaLogging};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
+use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::{Diff, GlobalId};
-use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogSchema};
+use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogSchema, CatalogType};
 use mz_sql::names::{
-    ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier,
+    ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
     SchemaSpecifier,
 };
-use mz_sql::plan;
+use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{VarError, VarInput};
+use mz_sql::{plan, rbac};
+use mz_sql_parser::ast::Expr;
+use mz_storage_types::sources::Timeline;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tracing::warn;
@@ -238,6 +242,10 @@ impl CatalogState {
             }
             StateUpdateKind::ClusterReplica(cluster_replica) => {
                 self.apply_cluster_replica_update(cluster_replica, diff);
+                Ok(None)
+            }
+            StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
+                self.apply_system_object_mapping_update(system_object_mapping, diff);
                 Ok(None)
             }
             StateUpdateKind::Item(item) => self.apply_item_update(item, diff),
@@ -502,6 +510,236 @@ impl CatalogState {
             || cluster_replica.replica_id,
             diff,
         );
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_system_object_mapping_update(
+        &mut self,
+        system_object_mapping: mz_catalog::durable::SystemObjectMapping,
+        diff: Diff,
+    ) {
+        assert_eq!(diff, 1, "TODO(jkosh44) should get fenced");
+        let builtin = BUILTIN_LOOKUP
+            .get(&system_object_mapping.description)
+            .expect("missing builtin")
+            .1;
+        let id = system_object_mapping.unique_identifier.id;
+        let schema_id = self.ambient_schemas_by_name[builtin.schema()];
+        let name = QualifiedItemName {
+            qualifiers: ItemQualifiers {
+                database_spec: ResolvedDatabaseSpecifier::Ambient,
+                schema_spec: SchemaSpecifier::Id(schema_id),
+            },
+            item: builtin.name().into(),
+        };
+        match builtin {
+            Builtin::Log(log) => {
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Source,
+                    MZ_SYSTEM_ROLE_ID,
+                )];
+                acl_items.extend_from_slice(&log.access);
+                self.insert_item(
+                    id,
+                    log.oid,
+                    name.clone(),
+                    CatalogItem::Log(Log {
+                        variant: log.variant.clone(),
+                        has_storage_collection: false,
+                    }),
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::from_mz_acl_items(acl_items),
+                );
+            }
+
+            Builtin::Table(table) => {
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Table,
+                    MZ_SYSTEM_ROLE_ID,
+                )];
+                acl_items.extend_from_slice(&table.access);
+
+                self.insert_item(
+                    id,
+                    table.oid,
+                    name.clone(),
+                    CatalogItem::Table(Table {
+                        create_sql: None,
+                        desc: table.desc.clone(),
+                        defaults: vec![Expr::null(); table.desc.arity()],
+                        conn_id: None,
+                        resolved_ids: ResolvedIds(BTreeSet::new()),
+                        custom_logical_compaction_window: table.is_retained_metrics_object.then(
+                            || {
+                                self.system_config()
+                                    .metrics_retention()
+                                    .try_into()
+                                    .expect("invalid metrics retention")
+                            },
+                        ),
+                        is_retained_metrics_object: table.is_retained_metrics_object,
+                    }),
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::from_mz_acl_items(acl_items),
+                );
+            }
+            Builtin::Index(index) => {
+                let mut item = self
+                    .parse_item(
+                        id,
+                        &index.create_sql(),
+                        None,
+                        index.is_retained_metrics_object,
+                        if index.is_retained_metrics_object { Some(self.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "internal error: failed to load bootstrap index:\n\
+                                    {}\n\
+                                    error:\n\
+                                    {:?}\n\n\
+                                    make sure that the schema name is specified in the builtin index's create sql statement.",
+                            index.name, e
+                        )
+                    });
+                let CatalogItem::Index(_) = &mut item else {
+                    panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
+                };
+
+                self.insert_item(
+                    id,
+                    index.oid,
+                    name,
+                    item,
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::default(),
+                );
+            }
+            Builtin::View(view) => {
+                let item = self
+                    .parse_item(
+                        id,
+                        &view.create_sql(),
+                        None,
+                        false,
+                        None,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "internal error: failed to load bootstrap view:\n\
+                                {}\n\
+                                error:\n\
+                                {:?}\n\n\
+                                make sure that the schema name is specified in the builtin view's create sql statement.",
+                            view.name, e
+                        )
+                    });
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::View,
+                    MZ_SYSTEM_ROLE_ID,
+                )];
+                acl_items.extend_from_slice(&view.access);
+
+                self.insert_item(
+                    id,
+                    view.oid,
+                    name,
+                    item,
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::from_mz_acl_items(acl_items),
+                );
+            }
+
+            // Note: Element types must be loaded before array types.
+            Builtin::Type(typ) => {
+                let typ = self.resolve_builtin_type_references(typ);
+                if let CatalogType::Array { element_reference } = typ.details.typ {
+                    let entry = self.get_entry_mut(&element_reference);
+                    let item_type = match &mut entry.item {
+                        CatalogItem::Type(item_type) => item_type,
+                        _ => unreachable!("types can only reference other types"),
+                    };
+                    item_type.details.array_id = Some(id);
+                }
+
+                // Assert that no built-in types are record types so that we don't
+                // need to bother to build a description. Only record types need
+                // descriptions.
+                let desc = None;
+                assert!(!matches!(typ.details.typ, CatalogType::Record { .. }));
+                let schema_id = self.resolve_system_schema(typ.schema);
+
+                self.insert_item(
+                    id,
+                    typ.oid,
+                    QualifiedItemName {
+                        qualifiers: ItemQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(schema_id),
+                        },
+                        item: typ.name.to_owned(),
+                    },
+                    CatalogItem::Type(Type {
+                        create_sql: None,
+                        details: typ.details.clone(),
+                        desc,
+                        resolved_ids: ResolvedIds(BTreeSet::new()),
+                    }),
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::from_mz_acl_items(vec![
+                        rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Type),
+                        rbac::owner_privilege(mz_sql::catalog::ObjectType::Type, MZ_SYSTEM_ROLE_ID),
+                    ]),
+                );
+            }
+
+            Builtin::Func(func) => {
+                // This OID is never used. `func` has a `Vec` of implementations and
+                // each implementation has its own OID. Those are the OIDs that are
+                // actually used by the system.
+                let oid = INVALID_OID;
+                self.insert_item(
+                    id,
+                    oid,
+                    name.clone(),
+                    CatalogItem::Func(Func { inner: func.inner }),
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::default(),
+                );
+            }
+
+            Builtin::Source(coll) => {
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Source,
+                    MZ_SYSTEM_ROLE_ID,
+                )];
+                acl_items.extend_from_slice(&coll.access);
+
+                self.insert_item(
+                    id,
+                    coll.oid,
+                    name.clone(),
+                    CatalogItem::Source(Source {
+                        create_sql: None,
+                        data_source: DataSourceDesc::Introspection(coll.data_source),
+                        desc: coll.desc.clone(),
+                        timeline: Timeline::EpochMilliseconds,
+                        resolved_ids: ResolvedIds(BTreeSet::new()),
+                        custom_logical_compaction_window: coll.is_retained_metrics_object.then(
+                            || {
+                                self.system_config()
+                                    .metrics_retention()
+                                    .try_into()
+                                    .expect("invalid metrics retention")
+                            },
+                        ),
+                        is_retained_metrics_object: coll.is_retained_metrics_object,
+                    }),
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::from_mz_acl_items(acl_items),
+                );
+            }
+        }
     }
 
     /// Applies an item update to `self`.

@@ -10,14 +10,16 @@
 //! Logic related to opening a [`Catalog`].
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
+use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin::{
-    Builtin, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
-    BUILTIN_ROLES,
+    Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_LOOKUP,
+    BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -29,8 +31,7 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, DefaultPrivileges, Func, Log, Source,
-    StateUpdate, StateUpdateKind, Table, Type,
+    CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges, StateUpdate, StateUpdateKind,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -41,27 +42,20 @@ use mz_ore::cast::{usize_to_u64, CastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
-use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogType,
-    NameReference, RoleMembership, RoleVars,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
-use mz_sql::names::{
-    ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
-    SchemaSpecifier,
-};
-use mz_sql::rbac;
+use mz_sql::names::{QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId};
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::Expr;
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_types::sources::Timeline;
 use timely::Container;
 use tracing::{info, warn, Instrument};
 use uuid::Uuid;
@@ -106,12 +100,6 @@ impl BuiltinMigrationMetadata {
             user_create_ops: Vec::new(),
         }
     }
-}
-
-struct BootstrapSystemIds {
-    // Invariant: Sorted by dependency order.
-    all_builtins: Vec<(&'static Builtin<NameReference>, GlobalId)>,
-    migrated_builtins: Vec<GlobalId>,
 }
 
 #[derive(Debug)]
@@ -174,10 +162,8 @@ impl CatalogItemRebuilder {
 
 impl Catalog {
     /// Initializes a CatalogState. Separate from [`Catalog::open`] to avoid depending on state
-    /// external to a [mz_catalog::durable::DurableCatalogState] (for example: no [mz_secrets::SecretsReader]).
-    ///
-    /// The passed in `previous_ts` must be the highest read timestamp for
-    /// [Timeline::EpochMilliseconds] known across all timestamp oracles.
+    /// external to a [mz_catalog::durable::DurableCatalogState]
+    /// (for example: no [mz_secrets::SecretsReader]).
     ///
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
@@ -248,7 +234,7 @@ impl Catalog {
             let mut txn = storage.transaction().await?;
 
             // Migrate/update durable data before we start loading the in-memory catalog.
-            let builtin_item_ids = {
+            let migrated_builtins = {
                 migrate::durable_migrate(&mut txn, config.boot_ts)?;
                 // Overwrite and persist selected parameter values in `remote_system_parameters` that
                 // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
@@ -263,7 +249,7 @@ impl Catalog {
                     txn.set_persist_txn_tables(state.system_config().persist_txn_tables())?;
                 }
                 // Add any new builtin objects and remove old ones.
-                let builtin_item_ids = add_new_remove_old_builtin_items_migration(&mut txn)?;
+                let migrated_builtins = add_new_remove_old_builtin_items_migration(&mut txn)?;
                 if !is_read_only {
                     let cluster_sizes = BuiltinBootstrapClusterSizes {
                         system_cluster: config.builtin_system_cluster_replica_size,
@@ -277,7 +263,7 @@ impl Catalog {
                     add_new_builtin_roles_migration(&mut txn)?;
                     remove_invalid_config_param_role_defaults_migration(&mut txn)?;
                 }
-                builtin_item_ids
+                migrated_builtins
             };
 
             // Seed the in-memory catalog with values that don't come from the durable catalog.
@@ -302,10 +288,11 @@ impl Catalog {
             // builtin objects into the right spots.
             let mut pre_cluster_updates = Vec::new();
             let mut cluster_updates = Vec::new();
+            let mut builtin_item_updates = Vec::new();
             let mut item_updates = Vec::new();
             let mut comment_updates = Vec::new();
             for update in txn.get_updates() {
-                match &update.kind {
+                match update.kind {
                     StateUpdateKind::Role(_)
                     | StateUpdateKind::Database(_)
                     | StateUpdateKind::Schema(_)
@@ -315,231 +302,73 @@ impl Catalog {
                     StateUpdateKind::Cluster(_)
                     | StateUpdateKind::IntrospectionSourceIndex(_)
                     | StateUpdateKind::ClusterReplica(_) => cluster_updates.push(update),
+                    StateUpdateKind::SystemObjectMapping(system_object_mapping) => builtin_item_updates.push((system_object_mapping, update.diff)),
                     StateUpdateKind::Item(_) => item_updates.push(update),
                     StateUpdateKind::Comment(_) => comment_updates.push(update),
                 }
             }
 
-            state.apply_updates_for_bootstrap(pre_cluster_updates)?;
+            // Sort builtin item updates by dependency.
+            let builtin_item_updates = builtin_item_updates.into_iter()
+                .map(|(system_object_mapping, diff)| {
+                    let idx = BUILTIN_LOOKUP.get(&system_object_mapping.description).expect("missing builtin").0;
+                    (idx, system_object_mapping, diff)
+                })
+                .sorted_by_key(|(idx, _, _)| *idx)
+                .map(|(_, system_object_mapping, diff)| (system_object_mapping, diff));
 
-            // Load all builtin types.
-            let (builtin_types, builtin_non_types): (Vec<_>, Vec<_>) = builtin_item_ids
-                .all_builtins
-                .into_iter()
-                .partition(|(builtin, _)| matches!(builtin, Builtin::Type(_)));
-            let type_id_map = builtin_types
-                .into_iter()
-                .map(|(builtin, id)| (builtin.name(), id))
-                .collect();
-            Catalog::load_builtin_types(&mut state, &type_id_map)?;
-
-            let id_fingerprint_map: BTreeMap<GlobalId, String> = builtin_non_types
-                .iter()
-                .map(|(builtin, id)| (*id, builtin.fingerprint()))
-                .collect();
-            let (builtin_indexes, builtin_non_indexes): (Vec<_>, Vec<_>) = builtin_non_types
-                .into_iter()
-                .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
-
-            // Load all builtins except types and indexes.
-            {
-                let span = tracing::span!(tracing::Level::DEBUG, "builtin_non_indexes");
-                let _enter = span.enter();
-                for (builtin, id) in builtin_non_indexes {
-                    let schema_id = state.ambient_schemas_by_name[builtin.schema()];
-                    let name = QualifiedItemName {
-                        qualifiers: ItemQualifiers {
-                            database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(schema_id),
-                        },
-                        item: builtin.name().into(),
-                    };
-                    match builtin {
-                        Builtin::Log(log) => {
-                            let mut acl_items = vec![rbac::owner_privilege(
-                                mz_sql::catalog::ObjectType::Source,
-                                MZ_SYSTEM_ROLE_ID,
-                            )];
-                            acl_items.extend_from_slice(&log.access);
-                            state.insert_item(
-                                id,
-                                log.oid,
-                                name.clone(),
-                                CatalogItem::Log(Log {
-                                    variant: log.variant.clone(),
-                                    has_storage_collection: false,
-                                }),
-                                MZ_SYSTEM_ROLE_ID,
-                                PrivilegeMap::from_mz_acl_items(acl_items),
-                            );
-                        }
-
-                        Builtin::Table(table) => {
-                            let mut acl_items = vec![rbac::owner_privilege(
-                                mz_sql::catalog::ObjectType::Table,
-                                MZ_SYSTEM_ROLE_ID,
-                            )];
-                            acl_items.extend_from_slice(&table.access);
-
-                            state.insert_item(
-                                id,
-                                table.oid,
-                                name.clone(),
-                                CatalogItem::Table(Table {
-                                    create_sql: None,
-                                    desc: table.desc.clone(),
-                                    defaults: vec![Expr::null(); table.desc.arity()],
-                                    conn_id: None,
-                                    resolved_ids: ResolvedIds(BTreeSet::new()),
-                                    custom_logical_compaction_window: table
-                                        .is_retained_metrics_object
-                                        .then(|| state.system_config().metrics_retention().try_into().expect("invalid metrics retention")),
-                                    is_retained_metrics_object: table.is_retained_metrics_object,
-                                }),
-                                MZ_SYSTEM_ROLE_ID,
-                                PrivilegeMap::from_mz_acl_items(acl_items),
-                            );
-                        }
-                        Builtin::Index(_) => {
-                            unreachable!("handled later once clusters have been created")
-                        }
-                        Builtin::View(view) => {
-                            let item = state
-                                .parse_item(
-                                    id,
-                                    &view.create_sql(),
-                                    None,
-                                    false,
-                                    None,
-                                )
-                                .unwrap_or_else(|e| {
-                                    panic!(
-                                        "internal error: failed to load bootstrap view:\n\
-                                        {}\n\
-                                        error:\n\
-                                        {:?}\n\n\
-                                        make sure that the schema name is specified in the builtin view's create sql statement.",
-                                        view.name, e
-                                    )
-                                });
-                            let mut acl_items = vec![rbac::owner_privilege(
-                                mz_sql::catalog::ObjectType::View,
-                                MZ_SYSTEM_ROLE_ID,
-                            )];
-                            acl_items.extend_from_slice(&view.access);
-
-                            state.insert_item(
-                                id,
-                                view.oid,
-                                name,
-                                item,
-                                MZ_SYSTEM_ROLE_ID,
-                                PrivilegeMap::from_mz_acl_items(acl_items),
-                            );
-                        }
-
-                        Builtin::Type(_) => unreachable!("loaded separately"),
-
-                        Builtin::Func(func) => {
-                            // This OID is never used. `func` has a `Vec` of implementations and
-                            // each implementation has its own OID. Those are the OIDs that are
-                            // actually used by the system.
-                            let oid = INVALID_OID;
-                            state.insert_item(
-                                id,
-                                oid,
-                                name.clone(),
-                                CatalogItem::Func(Func { inner: func.inner }),
-                                MZ_SYSTEM_ROLE_ID,
-                                PrivilegeMap::default(),
-                            );
-                        }
-
-                        Builtin::Source(coll) => {
-                            let mut acl_items = vec![rbac::owner_privilege(
-                                mz_sql::catalog::ObjectType::Source,
-                                MZ_SYSTEM_ROLE_ID,
-                            )];
-                            acl_items.extend_from_slice(&coll.access);
-
-                            state.insert_item(
-                                id,
-                                coll.oid,
-                                name.clone(),
-                                CatalogItem::Source(Source {
-                                    create_sql: None,
-                                    data_source: DataSourceDesc::Introspection(coll.data_source),
-                                    desc: coll.desc.clone(),
-                                    timeline: Timeline::EpochMilliseconds,
-                                    resolved_ids: ResolvedIds(BTreeSet::new()),
-                                    custom_logical_compaction_window: coll
-                                        .is_retained_metrics_object
-                                        .then(|| state.system_config().metrics_retention().try_into().expect("invalid metrics retention")),
-                                    is_retained_metrics_object: coll.is_retained_metrics_object,
-                                }),
-                                MZ_SYSTEM_ROLE_ID,
-                                PrivilegeMap::from_mz_acl_items(acl_items),
-                            );
-                        }
+            let mut builtin_type_updates = Vec::new();
+            let mut other_builtin_updates = Vec::new();
+            let mut builtin_view_updates = Vec::new();
+            let mut builtin_index_updates = Vec::new();
+            for (builtin_item_update, diff) in builtin_item_updates {
+                match &builtin_item_update.description.object_type {
+                    CatalogItemType::Type => builtin_type_updates.push(StateUpdate {
+                        kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                        diff,
+                    }),
+                    CatalogItemType::Index => builtin_index_updates.push(StateUpdate {
+                        kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                        diff,
+                    }),
+                    CatalogItemType::View | CatalogItemType::MaterializedView => {
+                        builtin_view_updates.push(StateUpdate {
+                            kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                            diff,
+                        })
                     }
+                    CatalogItemType::Table
+                    | CatalogItemType::Source
+                    | CatalogItemType::Sink
+                    | CatalogItemType::Func
+                    | CatalogItemType::Secret
+                    | CatalogItemType::Connection => other_builtin_updates.push(StateUpdate {
+                        kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                        diff,
+                    }),
                 }
             }
 
-            state.apply_updates_for_bootstrap(cluster_updates)?;
+            let updates = iter::empty()
+                .chain(pre_cluster_updates.into_iter())
+                .chain(builtin_type_updates.into_iter())
+                .chain(other_builtin_updates.into_iter())
+                // TODO(jkosh44/mjibson) Applying builtin views on startup is one of the slowest
+                // parts of startup. One fix for this would be to modify this code to do the
+                // following:
+                //
+                //   1. Apply all updates before the builtin views.
+                //   2. Apply builtin views in parallel.
+                //   3. Apply all updates after builtin views.
+                //
+                // Applying the builtin views in parallel is non-trivial because they still need to
+                // be applied in dependency order.
+                .chain(builtin_view_updates.into_iter())
+                .chain(cluster_updates.into_iter())
+                .chain(builtin_index_updates.into_iter())
+                .collect();
 
-            // Load all builtin indexes.
-            for (builtin, id) in builtin_indexes {
-                let schema_id = state.ambient_schemas_by_name[builtin.schema()];
-                let name = QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec: ResolvedDatabaseSpecifier::Ambient,
-                        schema_spec: SchemaSpecifier::Id(schema_id),
-                    },
-                    item: builtin.name().into(),
-                };
-                match builtin {
-                    Builtin::Index(index) => {
-                        let mut item = state
-                            .parse_item(
-                                id,
-                                &index.create_sql(),
-                                None,
-                                index.is_retained_metrics_object,
-                                if index.is_retained_metrics_object { Some(state.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
-                            )
-                            .unwrap_or_else(|e| {
-                                panic!(
-                                    "internal error: failed to load bootstrap index:\n\
-                                    {}\n\
-                                    error:\n\
-                                    {:?}\n\n\
-                                    make sure that the schema name is specified in the builtin index's create sql statement.",
-                                    index.name, e
-                                )
-                            });
-                        let CatalogItem::Index(_) = &mut item else {
-                            panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
-                        };
-
-                        state.insert_item(
-                            id,
-                            index.oid,
-                            name,
-                            item,
-                            MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::default(),
-                        );
-                    }
-                    Builtin::Log(_)
-                    | Builtin::Table(_)
-                    | Builtin::View(_)
-                    | Builtin::Type(_)
-                    | Builtin::Func(_)
-                    | Builtin::Source(_) => {
-                        unreachable!("handled above")
-                    }
-                }
-            }
+            state.apply_updates_for_bootstrap(updates)?;
 
             let last_seen_version = txn
                 .get_catalog_content_version()
@@ -568,10 +397,17 @@ impl Catalog {
             state.apply_updates_for_bootstrap(comment_updates)?;
 
             // Migrate builtin items.
+            let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
+                .map(|builtin| {
+                    let id = state.resolve_builtin_object(builtin);
+                    let fingerprint = builtin.fingerprint();
+                    (id, fingerprint)
+                })
+                .collect();
             let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
                 &state,
                 &mut txn,
-                builtin_item_ids.migrated_builtins,
+                migrated_builtins,
                 id_fingerprint_map,
             )?;
             Catalog::apply_in_memory_builtin_migration(
@@ -795,77 +631,6 @@ impl Catalog {
         }
         .instrument(tracing::info_span!("catalog::open"))
         .boxed()
-    }
-
-    /// Loads built-in system types into the catalog.
-    ///
-    /// Built-in types sometimes have references to other built-in types, and sometimes these
-    /// references are circular. This makes loading built-in types more complicated than other
-    /// built-in objects, and requires us to make multiple passes over the types to correctly
-    /// resolve all references.
-    #[mz_ore::instrument]
-    fn load_builtin_types(
-        state: &mut CatalogState,
-        type_id_map: &BTreeMap<&str, GlobalId>,
-    ) -> Result<(), Error> {
-        // Replace named references with id references
-        let mut builtin_types: Vec<_> = BUILTINS::types()
-            .map(|typ| Catalog::resolve_builtin_type(typ, type_id_map))
-            .collect();
-
-        // Resolve array_id for types
-        let mut element_id_to_array_id = BTreeMap::new();
-        for typ in &builtin_types {
-            match &typ.details.typ {
-                CatalogType::Array { element_reference } => {
-                    let array_id = type_id_map[typ.name];
-                    element_id_to_array_id.insert(*element_reference, array_id);
-                }
-                _ => {}
-            }
-        }
-        for typ in &mut builtin_types {
-            let element_id = type_id_map[typ.name];
-            typ.details.array_id = element_id_to_array_id.get(&element_id).map(|id| id.clone());
-        }
-
-        // Insert into catalog
-        for typ in builtin_types {
-            let element_id = type_id_map[typ.name];
-
-            // Assert that no built-in types are record types so that we don't
-            // need to bother to build a description. Only record types need
-            // descriptions.
-            let desc = None;
-            assert!(!matches!(typ.details.typ, CatalogType::Record { .. }));
-
-            let schema_id = state.resolve_system_schema(typ.schema);
-
-            state.insert_item(
-                element_id,
-                typ.oid,
-                QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec: ResolvedDatabaseSpecifier::Ambient,
-                        schema_spec: SchemaSpecifier::Id(schema_id),
-                    },
-                    item: typ.name.to_owned(),
-                },
-                CatalogItem::Type(Type {
-                    create_sql: None,
-                    details: typ.details.clone(),
-                    desc,
-                    resolved_ids: ResolvedIds(BTreeSet::new()),
-                }),
-                MZ_SYSTEM_ROLE_ID,
-                PrivilegeMap::from_mz_acl_items(vec![
-                    rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Type),
-                    rbac::owner_privilege(mz_sql::catalog::ObjectType::Type, MZ_SYSTEM_ROLE_ID),
-                ]),
-            );
-        }
-
-        Ok(())
     }
 
     /// The objects in the catalog form one or more DAGs (directed acyclic graph) via object
@@ -1135,11 +900,11 @@ impl Catalog {
     }
 }
 
+/// Returns the list of builtin [`GlobalId`]s that need to be migrated.
 fn add_new_remove_old_builtin_items_migration(
     txn: &mut mz_catalog::durable::Transaction<'_>,
-) -> Result<BootstrapSystemIds, mz_catalog::durable::CatalogError> {
+) -> Result<Vec<GlobalId>, mz_catalog::durable::CatalogError> {
     let mut new_builtins = Vec::new();
-    let mut all_builtins = Vec::new();
     let mut migrated_builtins = Vec::new();
 
     // We compare the builtin items that are compiled into the binary with the builtin items that
@@ -1177,7 +942,6 @@ fn add_new_remove_old_builtin_items_migration(
     for (desc, builtin) in builtins {
         match system_object_mappings.remove(&desc) {
             Some(system_object_mapping) => {
-                all_builtins.push((builtin, system_object_mapping.unique_identifier.id));
                 if system_object_mapping.unique_identifier.fingerprint != builtin.fingerprint() {
                     assert_ne!(
                         builtin.catalog_item_type(),
@@ -1189,7 +953,6 @@ fn add_new_remove_old_builtin_items_migration(
             }
             None => {
                 let id = new_ids.next().expect("not enough global IDs");
-                all_builtins.push((builtin, id));
                 new_builtins.push(SystemObjectMapping {
                     description: SystemObjectDescription {
                         schema_name: builtin.schema().to_string(),
@@ -1235,10 +998,7 @@ fn add_new_remove_old_builtin_items_migration(
     );
     txn.remove_system_object_mappings(deleted_system_objects)?;
 
-    Ok(BootstrapSystemIds {
-        all_builtins,
-        migrated_builtins,
-    })
+    Ok(migrated_builtins)
 }
 
 fn add_new_builtin_clusters_migration(
