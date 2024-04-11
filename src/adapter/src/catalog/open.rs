@@ -275,7 +275,7 @@ impl Catalog {
                     add_new_builtin_introspection_source_migration(&mut txn)?;
                     add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
                     add_new_builtin_roles_migration(&mut txn)?;
-                    remove_invalid_session_var_role_defaults_migration(&mut txn)?;
+                    remove_invalid_config_param_role_defaults_migration(&mut txn)?;
                 }
                 builtin_item_ids
             };
@@ -1372,13 +1372,13 @@ fn add_new_builtin_cluster_replicas_migration(
     Ok(())
 }
 
-/// Roles can have default values for session variables, e.g. you can set a Role default for the
-/// 'cluster' session variable.
+/// Roles can have default values for configuration parameters, e.g. you can set a Role default for
+/// the 'cluster' parameter.
 ///
-/// This migration exists to remove the Role default for a session variable, if the persisted input
-/// is no longer valid. For example if we remove a session variable or change the accepted set of
-/// values.
-fn remove_invalid_session_var_role_defaults_migration(
+/// This migration exists to remove the Role default for a configuration parameter, if the persisted
+/// input is no longer valid. For example if we remove a configuration parameter or change the
+/// accepted set of values.
+fn remove_invalid_config_param_role_defaults_migration(
     txn: &mut Transaction<'_>,
 ) -> Result<(), AdapterError> {
     static BUILD_INFO: mz_build_info::BuildInfo = mz_build_info::build_info!();
