@@ -59,7 +59,7 @@ const AWS_S3_MIN_PART_COUNT: i32 = 1;
 /// The largest allowable part number (inclusive).
 ///
 /// From <https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html>
-const AWS_S3_MAX_PART_COUNT: i32 = 10_000;
+pub const AWS_S3_MAX_PART_COUNT: i32 = 10_000;
 /// The minimum size of a part in a multipart upload.
 ///
 /// This minimum doesn't apply to the last chunk, which can be any size.
@@ -300,6 +300,7 @@ impl S3MultiPartUploader {
             return Err(S3MultiPartUploadError::ExceedsMaxPartNumber);
         }
 
+        // TODO: Spawn this on a new task to make it parallel.
         let res = self
             .client
             .upload_part()

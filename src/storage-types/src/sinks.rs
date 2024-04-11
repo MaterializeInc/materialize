@@ -16,6 +16,7 @@ use mz_dyncfg::ConfigSet;
 use mz_persist_types::ShardId;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::bytes::ByteSize;
 use mz_repr::{GlobalId, RelationDesc};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -852,3 +853,6 @@ impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
         })
     }
 }
+
+pub const MIN_S3_SINK_FILE_SIZE: ByteSize = ByteSize::mb(16);
+pub const MAX_S3_SINK_FILE_SIZE: ByteSize = ByteSize::gb(10);

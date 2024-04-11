@@ -34,6 +34,7 @@ use mz_sql_parser::ast::{
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormat, S3SinkFormat, StorageSinkConnection,
+    MAX_S3_SINK_FILE_SIZE, MIN_S3_SINK_FILE_SIZE,
 };
 
 use crate::ast::display::AstDisplay;
@@ -1030,8 +1031,17 @@ fn plan_copy_to_expr(
 
     let to = plan_expr(ecx, &to_expr)?.type_as(ecx, &ScalarType::String)?;
 
-    if options.max_file_size.as_bytes() < ByteSize::mb(16).as_bytes() {
-        sql_bail!("MAX FILE SIZE cannot be less than 16MB");
+    if options.max_file_size.as_bytes() < MIN_S3_SINK_FILE_SIZE.as_bytes() {
+        sql_bail!(
+            "MAX FILE SIZE cannot be less than {}",
+            MIN_S3_SINK_FILE_SIZE
+        );
+    }
+    if options.max_file_size.as_bytes() > MAX_S3_SINK_FILE_SIZE.as_bytes() {
+        sql_bail!(
+            "MAX FILE SIZE cannot be greater than {}",
+            MAX_S3_SINK_FILE_SIZE
+        );
     }
 
     Ok(Plan::CopyTo(CopyToPlan {
