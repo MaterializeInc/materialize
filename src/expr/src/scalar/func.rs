@@ -6420,14 +6420,17 @@ fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
 
 fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     let string = datums[0].unwrap_str();
-    let from = datums[1].unwrap_str();
-    let to = datums[2].unwrap_str();
+    let from = datums[1].unwrap_str().chars().collect::<Vec<_>>();
+    let to = datums[2].unwrap_str().chars().collect::<Vec<_>>();
 
     Datum::String(
         temp_storage.push_string(
             string
                 .chars()
-                .filter_map(|c| from.find(c).map_or(Some(c), |m| to.chars().nth(m)))
+                .filter_map(|c| match from.iter().position(|f| f == &c) {
+                    Some(idx) => to.get(idx).copied(),
+                    None => Some(c),
+                })
                 .collect(),
         ),
     )

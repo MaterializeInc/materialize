@@ -1620,6 +1620,16 @@ SELECT translate('hello', 'fl', 'tx')
 ----
 hexxo
 
+query T
+SELECT translate('12345', '143', 'ax')
+----
+a2x5
+
+query T
+SELECT translate('a', '👋a', E'xy')
+----
+y
+
 # constant_time_eq for string
 
 statement ok
