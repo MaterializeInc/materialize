@@ -61,10 +61,10 @@ impl OptimizerTrace {
     /// The instance will only accumulate [`TraceEntry`] instances along
     /// the prefix of the given `path` if `path` is present, or it will
     /// accumulate all [`TraceEntry`] instances otherwise.
-    pub fn new(broken: bool, filter: Option<SmallVec<[NamedPlan; 4]>>) -> OptimizerTrace {
+    pub fn new(filter: Option<SmallVec<[NamedPlan; 4]>>) -> OptimizerTrace {
         let filter = || filter.clone();
-        if broken {
-            let subscriber = Arc::clone(&mz_ore::tracing::GLOBAL_SUBSCRIBER.get().unwrap())
+        if let Some(global_subscriber) = mz_ore::tracing::GLOBAL_SUBSCRIBER.get() {
+            let subscriber = Arc::clone(global_subscriber)
                 // Collect `explain_plan` types that are not used in the regular explain
                 // path, but are useful when instrumenting code for debugging purposes.
                 .with(PlanTrace::<String>::new(filter()))
