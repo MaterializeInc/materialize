@@ -867,16 +867,7 @@ pub async fn create_state(
 
     let materialize_catalog_config = config.materialize_catalog_config.clone();
 
-    let (
-        materialize_sql_addr,
-        materialize_use_https,
-        materialize_http_addr,
-        materialize_internal_sql_addr,
-        materialize_internal_http_addr,
-        materialize_user,
-        pgclient,
-        pgconn_task,
-    ) = {
+    let (materialize_state, pgconn_task) = {
         let materialize_url = util::postgres::config_url(&config.materialize_pgconfig)?;
         let materialize_internal_url =
             util::postgres::config_url(&config.materialize_internal_pgconfig)?;
@@ -928,24 +919,27 @@ pub async fn create_state(
             materialize_internal_url.host_str().unwrap(),
             config.materialize_internal_http_port
         );
-        (
-            materialize_sql_addr,
-            config.materialize_use_https,
-            materialize_http_addr,
-            materialize_internal_sql_addr,
-            materialize_internal_http_addr,
-            materialize_user,
-            pgclient,
-            pgconn_task,
-        )
-    };
+        let environment_id = pgclient
+            .query_one("SELECT mz_environment_id()", &[])
+            .await?
+            .get::<_, String>(0)
+            .parse()
+            .context("parsing environment ID")?;
 
-    let environment_id = pgclient
-        .query_one("SELECT mz_environment_id()", &[])
-        .await?
-        .get::<_, String>(0)
-        .parse()
-        .context("parsing environment ID")?;
+        let materialize_state = MaterializeState {
+            catalog_config: materialize_catalog_config,
+            sql_addr: materialize_sql_addr,
+            use_https: config.materialize_use_https,
+            http_addr: materialize_http_addr,
+            internal_sql_addr: materialize_internal_sql_addr,
+            internal_http_addr: materialize_internal_http_addr,
+            user: materialize_user,
+            pgclient,
+            environment_id,
+        };
+
+        (materialize_state, pgconn_task)
+    };
 
     let schema_registry_url = config.schema_registry_url.to_owned();
 
@@ -1009,18 +1003,6 @@ pub async fn create_state(
             topics,
             kafka_config,
         )
-    };
-
-    let materialize_state = MaterializeState {
-        catalog_config: materialize_catalog_config,
-        sql_addr: materialize_sql_addr,
-        use_https: materialize_use_https,
-        http_addr: materialize_http_addr,
-        internal_sql_addr: materialize_internal_sql_addr,
-        internal_http_addr: materialize_internal_http_addr,
-        user: materialize_user,
-        pgclient,
-        environment_id,
     };
 
     let mut state = State {
