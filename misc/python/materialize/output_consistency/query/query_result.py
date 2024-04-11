@@ -73,6 +73,9 @@ class QueryResult(QueryOutcome):
         super().__init__(strategy, sql, True, query_column_count)
         self.result_rows = result_rows
 
+    def row_count(self) -> int:
+        return len(self.result_rows)
+
     def __str__(self) -> str:
         return f"Result with {len(self.result_rows)} rows with strategy '{self.strategy.name}'"
 
