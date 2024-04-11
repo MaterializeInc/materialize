@@ -40,7 +40,7 @@ USERS = {
                 "secret": str(uuid.uuid4()),
             }
         ],
-        "roles": [OTHER_ROLE, ADMIN_ROLE],
+        "roles": [{"id": "1", "name": OTHER_ROLE}, {"id": "2", "name": ADMIN_ROLE}],
     },
     OTHER_USER: {
         "email": OTHER_USER,
@@ -52,7 +52,7 @@ USERS = {
                 "secret": str(uuid.uuid4()),
             }
         ],
-        "roles": [OTHER_ROLE],
+        "roles": [{"id": "1", "name": OTHER_ROLE}],
     },
 }
 FRONTEGG_URL = "http://frontegg-mock:6880"

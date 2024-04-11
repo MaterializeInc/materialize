@@ -189,11 +189,11 @@ fn generate_access_token(
     context: &Context,
     email: String,
     tenant_id: Uuid,
-    roles: Vec<String>,
+    roles: Vec<Role>,
 ) -> String {
     let mut permissions = Vec::new();
     roles.iter().for_each(|role| {
-        if let Some(role_permissions) = context.role_permissions.get(role.as_str()) {
+        if let Some(role_permissions) = context.role_permissions.get(role.name.as_str()) {
             permissions.extend_from_slice(role_permissions);
         }
     });
@@ -208,7 +208,7 @@ fn generate_access_token(
             sub: Uuid::new_v4(),
             user_id: None,
             tenant_id,
-            roles,
+            roles: roles.iter().map(|role| role.name.clone()).collect(),
             permissions,
         },
         &context.encoding_key,
@@ -245,9 +245,21 @@ async fn role_update_middleware<B>(
 ) -> impl IntoResponse {
     {
         let mut role_updates_rx = context.role_updates_rx.lock().unwrap();
-        while let Ok((email, roles)) = role_updates_rx.try_recv() {
+        while let Ok((email, role_names)) = role_updates_rx.try_recv() {
+            let roles: Vec<Role> = role_names
+                .into_iter()
+                .map(|name| Role {
+                    id: "placeholder_id".to_string(),
+                    name,
+                })
+                .collect();
+
             let mut users = context.users.lock().unwrap();
-            users.get_mut(&email).unwrap().roles = roles;
+            if let Some(user) = users.get_mut(&email) {
+                user.roles = roles;
+            } else {
+                eprintln!("User with email {} not found", email);
+            }
         }
     }
     next.run(request).await
@@ -389,37 +401,8 @@ async fn handle_get_user(
     Path(user_id): Path<Uuid>,
 ) -> impl IntoResponse {
     let users = context.users.lock().unwrap();
-    let role_mapping = get_role_mapping();
-
     match users.iter().find(|(_, user)| user.id == Some(user_id)) {
-        Some((_, user)) => {
-            // Convert the stored role names in UserConfig to UserRole structs.
-            let roles: Vec<UserRole> = user
-                .roles
-                .iter()
-                .map(|role_name| {
-                    role_mapping
-                        .get(role_name)
-                        .cloned()
-                        .unwrap_or_else(|| UserRole {
-                            id: "unknown".to_string(),
-                            name: role_name.to_string(),
-                        })
-                })
-                .collect();
-
-            // Construct and return the UserResponse.
-            let user_response = UserResponse {
-                id: user.id.unwrap_or_default(),
-                email: user.email.clone(),
-                verified: user.verified.unwrap_or(false),
-                metadata: user.metadata.clone().unwrap_or_default(),
-                provider: user.auth_provider.clone().unwrap_or_default(),
-                roles,
-            };
-
-            Json(user_response).into_response()
-        }
+        Some((_, user)) => Json(user.clone()).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -446,89 +429,73 @@ async fn handle_create_user(
     Json(new_user): Json<UserCreate>,
 ) -> impl IntoResponse {
     let mut users = context.users.lock().unwrap();
-    let role_mapping = get_role_mapping();
 
     if users.contains_key(&new_user.email) {
         return (StatusCode::CONFLICT, "User already exists").into_response();
     }
 
     let default_tenant_id = Uuid::new_v4();
-    let user_id = Uuid::new_v4();
 
-    // Translate role IDs to role names for storing in UserConfig
-    let role_names: Vec<String> = new_user
-        .role_ids
-        .as_ref()
-        .unwrap_or(&Vec::new())
-        .iter()
-        .map(|role_id| {
-            role_mapping
-                .get(role_id)
-                .map_or_else(|| role_id.clone(), |role| role.name.clone())
-        })
-        .collect();
+    // As per the Frontegg API, when creating a user, the role_ids field is optional.
+    // The create request payload includes a list of role IDs
+    // On successful creation, the response payload includes a list of role names
+    let role_names = match new_user.role_ids {
+        Some(ref role_ids) => {
+            if role_ids.is_empty() {
+                Vec::new()
+            } else {
+                role_ids
+                    .iter()
+                    .filter_map(|role_id| match role_id.as_str() {
+                        "1" => Some(Role {
+                            id: "1".to_string(),
+                            name: "Organization Admin".to_string(),
+                        }),
+                        "2" => Some(Role {
+                            id: "2".to_string(),
+                            name: "Organization Member".to_string(),
+                        }),
+                        _ => None,
+                    })
+                    .collect()
+            }
+        }
+        None => Vec::new(),
+    };
 
     let user_config = UserConfig {
-        id: Some(user_id),
+        id: Some(Uuid::new_v4()),
         email: new_user.email.clone(),
         password: Uuid::new_v4().to_string(),
         tenant_id: default_tenant_id,
         initial_api_tokens: vec![],
         roles: role_names,
         auth_provider: None,
-        verified: Some(false),
-        metadata: None,
+        verified: None,
     };
 
-    // Insert the new user into the map
+    let response = (StatusCode::CREATED, Json(&user_config)).into_response();
+
     users.insert(new_user.email.clone(), user_config);
-
-    // Construct the roles for UserResponse using the mapping for ID and name
-    let user_roles: Vec<UserRole> = new_user
-        .role_ids
-        .as_ref()
-        .unwrap_or(&Vec::new())
-        .iter()
-        .map(|role_id| {
-            role_mapping
-                .get(role_id)
-                .cloned()
-                .unwrap_or_else(|| UserRole {
-                    id: role_id.clone(),
-                    name: role_id.clone(),
-                })
-        })
-        .collect();
-
-    // Create the UserResponse with the appropriate role details
-    let user_response = UserResponse {
-        id: user_id,
-        email: new_user.email.clone(),
-        verified: false,
-        metadata: String::new(),
-        provider: String::new(),
-        roles: user_roles,
-    };
-
-    (StatusCode::CREATED, Json(user_response)).into_response()
+    response
 }
 
 // https://docs.frontegg.com/reference/permissionscontrollerv2_getallroles
 async fn handle_roles_request(State(_context): State<Arc<Context>>) -> impl IntoResponse {
     let roles = vec![
-        UserRole {
+        Role {
             id: "1".to_string(),
             name: "Organization Admin".to_string(),
         },
-        UserRole {
+        Role {
             id: "2".to_string(),
             name: "Organization Member".to_string(),
         },
     ];
 
-    let response = UserRolesResponse {
+    let response = RolesResponse {
         items: roles,
-        _metadata: UserRolesMetadata {
+        _metadata: RolesMetadata {
             total_items: 2,
             total_pages: 1,
         },
@@ -572,10 +539,9 @@ pub struct UserConfig {
     pub password: String,
     pub tenant_id: Uuid,
     pub initial_api_tokens: Vec<UserApiToken>,
-    pub roles: Vec<String>,
+    pub roles: Vec<Role>,
     pub auth_provider: Option<String>,
     pub verified: Option<bool>,
-    pub metadata: Option<String>,
 }
 
 impl UserConfig {
@@ -589,10 +555,15 @@ impl UserConfig {
                 client_id: Uuid::new_v4(),
                 secret: Uuid::new_v4(),
             }],
-            roles,
+            roles: roles
+                .into_iter()
+                .map(|name| Role {
+                    id: "placeholder_id".to_string(),
+                    name,
+                })
+                .collect(),
             auth_provider: None,
             verified: None,
-            metadata: None,
         }
     }
 
@@ -617,29 +588,19 @@ pub struct UserCreate {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct UserRole {
+pub struct Role {
     pub id: String,
     pub name: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct UserResponse {
-    pub id: Uuid,
-    pub email: String,
-    pub verified: bool,
-    pub metadata: String,
-    pub provider: String,
-    pub roles: Vec<UserRole>,
+struct RolesResponse {
+    items: Vec<Role>,
+    _metadata: RolesMetadata,
 }
 
 #[derive(Serialize, Deserialize)]
-struct UserRolesResponse {
-    items: Vec<UserRole>,
-    _metadata: UserRolesMetadata,
-}
-
-#[derive(Serialize, Deserialize)]
-struct UserRolesMetadata {
+struct RolesMetadata {
     total_items: usize,
     total_pages: usize,
 }
@@ -665,23 +626,4 @@ struct Context {
 #[serde(rename_all = "camelCase")]
 struct RefreshToken<'a> {
     refresh_token: &'a str,
-}
-
-fn get_role_mapping() -> BTreeMap<String, UserRole> {
-    let mut map = BTreeMap::new();
-    map.insert(
-        "1".to_string(),
-        UserRole {
-            id: "1".to_string(),
-            name: "Organization Admin".to_string(),
-        },
-    );
-    map.insert(
-        "2".to_string(),
-        UserRole {
-            id: "2".to_string(),
-            name: "Organization Member".to_string(),
-        },
-    );
-    map
 }
