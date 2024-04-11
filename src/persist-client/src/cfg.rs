@@ -325,6 +325,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
+        .add(&crate::internal::state_diff::IGNORE_STRUCTURE)
         .add(&crate::internal::apply::ROUNDTRIP_SPINE)
         .add(&crate::operators::PERSIST_SINK_MINIMUM_BATCH_UPDATES)
         .add(&crate::operators::STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
