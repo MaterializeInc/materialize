@@ -15,6 +15,7 @@ use mz_audit_log::{
     VersionedEvent,
 };
 use mz_catalog::durable::{ReplicaLocation, Transaction};
+use mz_catalog::memory::objects::{StateUpdate, StateUpdateKind};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
@@ -25,7 +26,7 @@ use semver::Version;
 use tracing::info;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::{Catalog, CatalogState, ConnCatalog};
+use crate::catalog::{CatalogState, ConnCatalog};
 
 async fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
 where
@@ -36,7 +37,7 @@ where
     ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
 {
     let mut updated_items = BTreeMap::new();
-    let items = tx.loaded_items();
+    let items = tx.get_items();
     for mut item in items {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
 
@@ -64,7 +65,7 @@ where
     ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
 {
     let mut updated_items = BTreeMap::new();
-    let items = tx.loaded_items();
+    let items = tx.get_items();
     for mut item in items {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
 
@@ -114,7 +115,15 @@ pub(crate) async fn migrate(
     .await?;
 
     // Load up a temporary catalog.
-    let state = Catalog::load_catalog_items(tx, state)?;
+    let mut state = state.clone();
+    let item_updates = tx
+        .get_items()
+        .map(|item| StateUpdate {
+            kind: StateUpdateKind::Item(item),
+            diff: 1,
+        })
+        .collect();
+    state.apply_updates_for_bootstrap(item_updates)?;
 
     info!("migrating from catalog version {:?}", catalog_version);
 

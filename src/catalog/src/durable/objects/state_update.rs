@@ -783,6 +783,10 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     default_privilege,
                 ))
             }
+            StateUpdateKind::Item(key, value) => {
+                let item = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Item(item))
+            }
             StateUpdateKind::IntrospectionSourceIndex(key, value) => {
                 let introspection_source_index = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::IntrospectionSourceIndex(
@@ -814,7 +818,6 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             | StateUpdateKind::Config(_, _)
             | StateUpdateKind::Epoch(_)
             | StateUpdateKind::IdAllocator(_, _)
-            | StateUpdateKind::Item(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::StorageUsage(_, _)
             | StateUpdateKind::SystemObjectMapping(_, _)

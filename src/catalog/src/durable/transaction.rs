@@ -156,13 +156,13 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    pub fn loaded_items(&self) -> Vec<Item> {
-        let mut items = Vec::new();
-        self.items.for_values(|k, v| {
-            items.push(Item::from_key_value(k.clone(), v.clone()));
-        });
-        items.sort_by_key(|Item { id, .. }| *id);
-        items
+    pub fn get_items(&self) -> impl Iterator<Item = Item> {
+        self.items
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .sorted_by_key(|Item { id, .. }| *id)
     }
 
     pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
@@ -1471,6 +1471,7 @@ impl<'a> Transaction<'a> {
                 &self.comments,
                 StateUpdateKind::Comment,
             ))
+            .chain(get_collection_updates(&self.items, StateUpdateKind::Item))
             .map(|kind| StateUpdate { kind, diff: 1 })
     }
 
