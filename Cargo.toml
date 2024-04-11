@@ -308,4 +308,5 @@ disallowed_methods = "warn"
 disallowed_macros = "warn"
 disallowed_types = "warn"
 from_over_into = "warn"
+mod_module_files = "warn"
 # END LINT CONFIG
