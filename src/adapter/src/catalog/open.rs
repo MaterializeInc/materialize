@@ -51,11 +51,7 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
-use mz_sql::names::{
-    ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
-    SchemaSpecifier,
-};
-use mz_sql::rbac;
+use mz_sql::names::{QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId};
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
