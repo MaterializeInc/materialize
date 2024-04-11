@@ -469,6 +469,107 @@ impl crate::coord::Coordinator {
             .set_read_policy(storage_policy_updates);
     }
 
+    /// Attempt to update the timestamp of the read holds on the indicated collections from the
+    /// indicated times within `read_holds` to `new_time`.
+    pub(super) fn update_timeline_read_holds(
+        &mut self,
+        read_holds: &mut TimelineReadHolds<mz_repr::Timestamp>,
+        new_time: mz_repr::Timestamp,
+    ) {
+        // After this, read_holds.holds is initialized to an empty HashMap.
+        let old_holds = std::mem::take(&mut read_holds.holds);
+
+        let mut storage_policy_changes = Vec::new();
+        let mut compute_policy_changes: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        let new_time = Antichain::from_elem(new_time);
+
+        for (old_time, id_bundle) in old_holds {
+            let new_time = old_time.join(&new_time);
+            if old_time != new_time {
+                read_holds
+                    .holds
+                    .entry(new_time.clone())
+                    .or_default()
+                    .extend(&id_bundle);
+                for id in id_bundle.storage_ids {
+                    let collection = self
+                        .controller
+                        .storage
+                        .collection(id)
+                        .expect("id does not exist");
+                    assert!(collection.implied_capability.le(&new_time.borrow()),
+                            "Storage collection {:?} has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
+                            id,
+                            collection.implied_capability,
+                            new_time,
+                            old_time,
+                    );
+                    let read_needs = self
+                        .storage_read_capabilities
+                        .get_mut(&id)
+                        .expect("id does not exist");
+                    read_needs
+                        .holds
+                        .update_iter(new_time.iter().map(|t| (*t, 1)));
+                    read_needs
+                        .holds
+                        .update_iter(old_time.iter().map(|t| (*t, -1)));
+                    storage_policy_changes.push((id, read_needs.policy()));
+                }
+
+                for (compute_instance, compute_ids) in id_bundle.compute_ids {
+                    let compute = self.controller.active_compute();
+                    for id in compute_ids {
+                        let collection = compute
+                            .collection(compute_instance, id)
+                            .expect("id does not exist");
+                        assert!(collection.read_capability().le(&new_time.borrow()),
+                                "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
+                                id,
+                                compute_instance,
+                                collection.read_capability(),
+                                new_time,
+                                old_time,
+                        );
+                        let read_needs = self
+                            .compute_read_capabilities
+                            .get_mut(&id)
+                            .expect("id does not exist");
+                        read_needs
+                            .holds
+                            .update_iter(new_time.iter().map(|t| (*t, 1)));
+                        read_needs
+                            .holds
+                            .update_iter(old_time.iter().map(|t| (*t, -1)));
+                        compute_policy_changes
+                            .entry(compute_instance)
+                            .or_default()
+                            .push((id, read_needs.policy()));
+                    }
+                }
+            } else {
+                read_holds
+                    .holds
+                    .entry(old_time)
+                    .or_default()
+                    .extend(&id_bundle);
+            }
+        }
+
+        // Update STORAGE read policies.
+        self.controller
+            .storage
+            .set_read_policy(storage_policy_changes);
+
+        // Update COMPUTE read policies
+        let mut compute = self.controller.active_compute();
+        for (compute_instance, compute_policy_changes) in compute_policy_changes {
+            compute
+                .set_read_policy(compute_instance, compute_policy_changes)
+                .unwrap_or_terminate("cannot fail to set read policy");
+        }
+    }
+
     /// If there is not capability for the given object, initialize one at the
     /// earliest possible since. Return the capability.
     //
@@ -738,116 +839,6 @@ impl crate::coord::Coordinator {
             .or_insert_with(Vec::new)
             .push(read_holds);
         Ok(())
-    }
-
-    /// Attempt to update the timestamp of the read holds on the indicated collections from the
-    /// indicated times within `read_holds` to `new_time`.
-    ///
-    /// If we are unable to update a read hold at the provided `time` for a specific id, then we
-    /// leave it unchanged.
-    ///
-    /// This method relies on a previous call to
-    /// `initialize_read_holds`, `acquire_read_holds`, or `update_read_hold` that returned
-    /// `read_holds`, and its behavior will be erratic if called on anything else.
-    pub(super) fn update_read_holds(
-        &mut self,
-        mut read_holds: TimelineReadHolds<mz_repr::Timestamp>,
-        new_time: mz_repr::Timestamp,
-    ) -> TimelineReadHolds<mz_repr::Timestamp> {
-        // After this, read_holds.holds is initialized to an empty HashMap.
-        let old_holds = std::mem::take(&mut read_holds.holds);
-
-        let mut storage_policy_changes = Vec::new();
-        let mut compute_policy_changes: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let new_time = Antichain::from_elem(new_time);
-
-        for (old_time, id_bundle) in old_holds {
-            let new_time = old_time.join(&new_time);
-            if old_time != new_time {
-                read_holds
-                    .holds
-                    .entry(new_time.clone())
-                    .or_default()
-                    .extend(&id_bundle);
-                for id in id_bundle.storage_ids {
-                    let collection = self
-                        .controller
-                        .storage
-                        .collection(id)
-                        .expect("id does not exist");
-                    assert!(collection.implied_capability.le(&new_time.borrow()),
-                            "Storage collection {:?} has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
-                            id,
-                            collection.implied_capability,
-                            new_time,
-                            old_time,
-                    );
-                    let read_needs = self
-                        .storage_read_capabilities
-                        .get_mut(&id)
-                        .expect("id does not exist");
-                    read_needs
-                        .holds
-                        .update_iter(new_time.iter().map(|t| (*t, 1)));
-                    read_needs
-                        .holds
-                        .update_iter(old_time.iter().map(|t| (*t, -1)));
-                    storage_policy_changes.push((id, read_needs.policy()));
-                }
-
-                for (compute_instance, compute_ids) in id_bundle.compute_ids {
-                    let compute = self.controller.active_compute();
-                    for id in compute_ids {
-                        let collection = compute
-                            .collection(compute_instance, id)
-                            .expect("id does not exist");
-                        assert!(collection.read_capability().le(&new_time.borrow()),
-                                "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
-                                id,
-                                compute_instance,
-                                collection.read_capability(),
-                                new_time,
-                                old_time,
-                        );
-                        let read_needs = self
-                            .compute_read_capabilities
-                            .get_mut(&id)
-                            .expect("id does not exist");
-                        read_needs
-                            .holds
-                            .update_iter(new_time.iter().map(|t| (*t, 1)));
-                        read_needs
-                            .holds
-                            .update_iter(old_time.iter().map(|t| (*t, -1)));
-                        compute_policy_changes
-                            .entry(compute_instance)
-                            .or_default()
-                            .push((id, read_needs.policy()));
-                    }
-                }
-            } else {
-                read_holds
-                    .holds
-                    .entry(old_time)
-                    .or_default()
-                    .extend(&id_bundle);
-            }
-        }
-
-        // Update STORAGE read policies.
-        self.controller
-            .storage
-            .set_read_policy(storage_policy_changes);
-
-        // Update COMPUTE read policies
-        let mut compute = self.controller.active_compute();
-        for (compute_instance, compute_policy_changes) in compute_policy_changes {
-            compute
-                .set_read_policy(compute_instance, compute_policy_changes)
-                .unwrap_or_terminate("cannot fail to set read policy");
-        }
-
-        read_holds
     }
 
     /// Release the given read holds.
