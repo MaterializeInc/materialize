@@ -869,7 +869,6 @@ class Database:
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
-    fast_startup: bool
 
     def __init__(
         self,
@@ -880,7 +879,6 @@ class Database:
         complexity: Complexity,
         scenario: Scenario,
         naughty_identifiers: bool,
-        fast_startup: bool,
     ):
         global NAUGHTY_IDENTIFIERS
         self.host = host
@@ -889,7 +887,6 @@ class Database:
         self.scenario = scenario
         self.seed = seed
         NAUGHTY_IDENTIFIERS = naughty_identifiers
-        self.fast_startup = fast_startup
 
         self.s3_path = 0
         self.dbs = [DB(seed, i) for i in range(rng.randint(1, MAX_INITIAL_DBS))]
@@ -939,55 +936,6 @@ class Database:
         self.mysql_sources = []
         self.postgres_sources = []
         self.kafka_sinks = []
-        if not self.fast_startup:
-            self.kafka_sources = [
-                KafkaSource(
-                    i,
-                    rng.choice(self.clusters),
-                    rng.choice(self.schemas),
-                    ports,
-                    rng,
-                )
-                for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
-            ]
-            # TODO: Reenable when #22770 is fixed
-            if self.scenario == Scenario.BackupRestore:
-                self.mysql_sources = []
-            else:
-                self.mysql_sources = [
-                    MySqlSource(
-                        i,
-                        rng.choice(self.clusters),
-                        rng.choice(self.schemas),
-                        ports,
-                        rng,
-                    )
-                    for i in range(rng.randint(0, MAX_INITIAL_MYSQL_SOURCES))
-                ]
-            # TODO: Reenable when #22770 is fixed
-            if self.scenario == Scenario.BackupRestore:
-                self.postgres_sources = []
-            else:
-                self.postgres_sources = [
-                    PostgresSource(
-                        i,
-                        rng.choice(self.clusters),
-                        rng.choice(self.schemas),
-                        ports,
-                        rng,
-                    )
-                    for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
-                ]
-            self.kafka_sinks = [
-                KafkaSink(
-                    i,
-                    rng.choice(self.clusters),
-                    rng.choice(self.schemas),
-                    rng.choice(self.db_objects_without_views()),
-                    rng,
-                )
-                for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SINKS))
-            ]
         self.kafka_source_id = len(self.kafka_sources)
         self.mysql_source_id = len(self.mysql_sources)
         self.postgres_source_id = len(self.postgres_sources)
@@ -1064,7 +1012,7 @@ class Database:
         for relation in self:
             relation.create(exe)
 
-        if not self.fast_startup:
+        if False:  # Questionable use
             result = composition.run(
                 "sqlsmith",
                 "--target=host=materialized port=6875 dbname=materialize user=materialize",
@@ -1089,7 +1037,7 @@ class Database:
             src.executor.mz_conn.close()
 
     def update_sqlsmith_state(self, composition: Composition) -> None:
-        if not self.fast_startup:
+        if False:  # Questionable use
             result = composition.run(
                 "sqlsmith",
                 "--target=host=materialized port=6875 dbname=materialize user=materialize",

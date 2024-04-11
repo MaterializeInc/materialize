@@ -17,7 +17,7 @@ import pg8000
 import requests
 import websocket
 
-from materialize.data_ingest.query_error import QueryError
+from materialize.data_ingest.query_error import QueryError, WSQueryError
 from materialize.parallel_workload.settings import Scenario
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 logging: TextIO | None
 lock: threading.Lock
-websocket.enableTrace(True)
+#websocket.enableTrace(True)
 
 
 def initialize_logging() -> None:
@@ -83,9 +83,11 @@ class Executor:
                 self.execute("commit")
             else:
                 self.cur._c.commit()
+        except QueryError:
+            raise
         except Exception as e:
             raise QueryError(str(e), "commit")
-        self.use_ws = self.rng.choice([True, False]) if self.ws else False
+        #self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
     def rollback(self) -> None:
         self.insert_table = None
@@ -95,9 +97,11 @@ class Executor:
                 self.execute("rollback")
             else:
                 self.cur._c.rollback()
+        except QueryError:
+            raise
         except Exception as e:
             raise QueryError(str(e), "rollback")
-        self.use_ws = self.rng.choice([True, False]) if self.ws else False
+        #self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
     def log(self, msg: str) -> None:
         global logging, lock
@@ -136,7 +140,7 @@ class Executor:
                 else:
                     self.cur.execute(query)
             except Exception as e:
-                raise QueryError(str(e), query)
+                raise WSQueryError(str(e), query)
 
             self.action_run_since_last_commit_rollback = True
 

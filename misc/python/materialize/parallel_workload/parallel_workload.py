@@ -65,7 +65,6 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
-    fast_startup: bool,
     composition: Composition | None,
     sanity_restart: bool,
 ) -> None:
@@ -74,7 +73,7 @@ def run(
     rng = random.Random(random.randrange(SEED_RANGE))
 
     print(
-        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--fast-startup' if fast_startup else ''}(--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} (--host={host})"
     )
     initialize_logging()
 
@@ -83,7 +82,7 @@ def run(
     ).timestamp()
 
     database = Database(
-        rng, seed, host, ports, complexity, scenario, naughty_identifiers, fast_startup
+        rng, seed, host, ports, complexity, scenario, naughty_identifiers
     )
 
     system_conn = pg8000.connect(
@@ -496,7 +495,6 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
-        args.fast_startup,
         composition=None,  # only works in mzcompose
         sanity_restart=False,  # only works in mzcompose
     )

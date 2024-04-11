@@ -312,9 +312,6 @@ class SQLsmithAction(Action):
             self.composition.silent = False
 
     def run(self, exe: Executor) -> bool:
-        if exe.db.fast_startup:
-            return False
-
         while not self.queries:
             self.refill_sqlsmith(exe)
         query = self.queries.pop()
@@ -1777,7 +1774,7 @@ read_action_list = ActionList(
     [
         (SelectAction, 100),
         (SelectOneAction, 1),
-        (SQLsmithAction, 30),
+        # (SQLsmithAction, 30),  # Questionable use
         (CopyToS3Action, 100),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 30),
