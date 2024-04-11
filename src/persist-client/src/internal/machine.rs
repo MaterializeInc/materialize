@@ -1492,6 +1492,7 @@ pub mod datadriven {
         ))
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn dyncfg(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -1882,6 +1883,7 @@ pub mod datadriven {
         Ok(out)
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn rewrite_ts(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -2436,7 +2438,7 @@ pub mod tests {
         let (mut write1, _) = client.expect_open::<String, (), u64, i64>(shard_id).await;
         let (mut write2, _) = client2.expect_open::<String, (), u64, i64>(shard_id).await;
 
-        let data = vec![
+        let data = [
             (("1".to_owned(), ()), 1, 1),
             (("2".to_owned(), ()), 2, 1),
             (("3".to_owned(), ()), 3, 1),

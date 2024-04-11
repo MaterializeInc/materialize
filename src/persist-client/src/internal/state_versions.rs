@@ -12,7 +12,6 @@
 #[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -29,7 +28,7 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use prost::Message;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::error::{CodecMismatch, CodecMismatchT};
@@ -39,9 +38,7 @@ use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
-use crate::internal::state::{
-    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
-};
+use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -1098,7 +1095,12 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         }
     }
     fn validate_against_state(&mut self, x: &State<T>) {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
         use mz_ore::collections::HashSet;
+        use timely::progress::Antichain;
+
+        use crate::internal::state::BatchPart;
 
         x.map_blobs(|x| match x {
             HollowBlobRef::Batch(x) => {
