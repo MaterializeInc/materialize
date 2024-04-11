@@ -57,6 +57,7 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
+use serde::{Serialize, Serializer};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -113,7 +114,7 @@ impl<T: Timestamp + Lattice> Default for Trace<T> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ThinSpineBatch<T> {
     pub(crate) level: usize,
     pub(crate) desc: Description<T>,
@@ -516,6 +517,16 @@ enum SpineLog<'a, T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SpineId(pub usize, pub usize);
 
+impl Serialize for SpineId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let SpineId(lo, hi) = self;
+        serializer.serialize_str(&format!("{lo}-{hi}"))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct IdHollowBatch<T> {
     pub id: SpineId,
@@ -800,7 +811,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FuelingMerge<T> {
     pub(crate) since: Antichain<T>,
     pub(crate) remaining_work: usize,
@@ -1617,8 +1628,9 @@ pub(crate) mod tests {
             (
                 any::<Option<T>>(),
                 proptest::collection::vec(any_hollow_batch::<T>(), num_batches),
+                any::<bool>(),
             ),
-            |(since, mut batches)| {
+            |(since, mut batches, roundtrip_structure)| {
                 let mut trace = Trace::<T>::default();
                 trace.downgrade_since(&since.map_or_else(Antichain::new, Antichain::from_elem));
 
@@ -1639,6 +1651,7 @@ pub(crate) mod tests {
                     lower = batch.desc.upper().clone();
                     let _merge_req = trace.push_batch(batch);
                 }
+                trace.roundtrip_structure = roundtrip_structure;
                 trace
             },
         )
