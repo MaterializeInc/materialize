@@ -18,6 +18,7 @@ use mz_storage_types::sources::load_generator::{
 };
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -136,7 +137,14 @@ impl SourceRender for LoadGeneratorSourceConnection {
         Vec<PressOnDropButton>,
     ) {
         let generator_kind = GeneratorKind::new(&self.load_generator, self.tick_micros);
-        generator_kind.render(scope, config, committed_uppers, start_signal)
+        let (collection, progress, health, stats, button) =
+            generator_kind.render(scope, config, committed_uppers, start_signal);
+
+        // Distribute produced values evenly across the workers, as required by the `SourceRender`
+        // contract.
+        let collection = collection.inner.distribute_values().as_collection();
+
+        (collection, progress, health, stats, button)
     }
 }
 

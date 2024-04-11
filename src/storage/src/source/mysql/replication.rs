@@ -52,6 +52,7 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
+use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -416,10 +417,17 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         })
     });
 
-    // TODO: Split row decoding into a separate operator that can be distributed across all workers
     let replication_updates = data_stream
         .as_collection()
         .map(|(output_index, row)| (output_index, row.err_into()));
+
+    // TODO: Split row decoding into a separate operator that can be distributed across all workers
+    //
+    // For now, we just distribute after, to meet the `SourceRender` contract.
+    let replication_updates = replication_updates
+        .inner
+        .distribute_values()
+        .as_collection();
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
