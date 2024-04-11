@@ -64,7 +64,9 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for i, name in enumerate(c.workflows):
+    for name in buildkite.shard_list(
+        list(c.workflows.keys()), lambda workflow: workflow
+    ):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
         # refresh-mv-restart: Reenable when #25821 is fixed
@@ -77,9 +79,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "test-index-source-stuck",
         ):
             continue
-        if buildkite.accepted_by_shard(name):
-            with c.test_case(name):
-                c.workflow(name)
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
