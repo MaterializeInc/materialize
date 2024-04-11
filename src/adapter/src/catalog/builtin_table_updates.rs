@@ -16,10 +16,11 @@ use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, Versione
 use mz_catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS,
-    MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
-    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
+    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES,
+    MZ_CLUSTER_SCHEDULES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES,
+    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS,
+    MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES,
+    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
     MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
     MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
@@ -37,15 +38,17 @@ use mz_controller::clusters::{
     ReplicaAllocation, ReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::refresh_schedule::RefreshEvery;
 use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
@@ -55,6 +58,7 @@ use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
+use mz_sql::plan::ClusterSchedule;
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -225,7 +229,7 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
+    pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> Vec<BuiltinTableUpdate> {
         let id = self.clusters_by_name[name];
         let cluster = &self.clusters_by_id[&id];
         let row = self.pack_privilege_array_row(cluster.privileges());
@@ -261,11 +265,41 @@ impl CatalogState {
         } else {
             packer.push(Datum::Null);
         }
-        BuiltinTableUpdate {
+
+        let mut updates = Vec::new();
+
+        updates.push(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
             row,
             diff,
+        });
+
+        if let ClusterVariant::Managed(managed_config) = &cluster.config.variant {
+            let row = match managed_config.schedule {
+                ClusterSchedule::Manual => Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String("manual"),
+                    Datum::Null,
+                ]),
+                ClusterSchedule::Refresh {
+                    rehydration_time_estimate,
+                } => Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String("on-refresh"),
+                    Datum::Interval(
+                        Interval::from_duration(rehydration_time_estimate)
+                            .expect("undoes planning"),
+                    ),
+                ]),
+            };
+            updates.push(BuiltinTableUpdate {
+                id: self.resolve_builtin_table(&MZ_CLUSTER_SCHEDULES),
+                row,
+                diff,
+            });
         }
+
+        updates
     }
 
     pub(super) fn pack_cluster_replica_update(
@@ -919,7 +953,9 @@ impl CatalogState {
         // do the same for compatibility's sake.
         query_string.push(';');
 
-        vec![BuiltinTableUpdate {
+        let mut updates = Vec::new();
+
+        updates.push(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_MATERIALIZED_VIEWS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
@@ -934,7 +970,65 @@ impl CatalogState {
                 Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
-        }]
+        });
+
+        if let Some(refresh_schedule) = &mview.refresh_schedule {
+            // This can't be `ON COMMIT`, because that is represented by a `None` instead of an
+            // empty `RefreshSchedule`.
+            assert!(!refresh_schedule.is_empty());
+            for RefreshEvery {
+                interval,
+                aligned_to,
+            } in refresh_schedule.everies.iter()
+            {
+                let aligned_to_dt = mz_ore::now::to_datetime(
+                    <&Timestamp as TryInto<u64>>::try_into(aligned_to).expect("undoes planning"),
+                );
+                updates.push(BuiltinTableUpdate {
+                    id: self.resolve_builtin_table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
+                    row: Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String("every"),
+                        Datum::Interval(
+                            Interval::from_duration(*interval).expect("undoes planning"),
+                        ),
+                        Datum::TimestampTz(aligned_to_dt.try_into().expect("undoes planning")),
+                        Datum::Null,
+                    ]),
+                    diff,
+                });
+            }
+            for at in refresh_schedule.ats.iter() {
+                let at_dt = mz_ore::now::to_datetime(
+                    <&Timestamp as TryInto<u64>>::try_into(at).expect("undoes planning"),
+                );
+                updates.push(BuiltinTableUpdate {
+                    id: self.resolve_builtin_table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
+                    row: Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String("at"),
+                        Datum::Null,
+                        Datum::Null,
+                        Datum::TimestampTz(at_dt.try_into().expect("undoes planning")),
+                    ]),
+                    diff,
+                });
+            }
+        } else {
+            updates.push(BuiltinTableUpdate {
+                id: self.resolve_builtin_table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
+                row: Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String("on-commit"),
+                    Datum::Null,
+                    Datum::Null,
+                    Datum::Null,
+                ]),
+                diff,
+            });
+        }
+
+        updates
     }
 
     fn pack_sink_update(

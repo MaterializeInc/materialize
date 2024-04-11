@@ -740,7 +740,7 @@ impl Catalog {
                         PrivilegeMap::from_mz_acl_items(privileges),
                         config,
                     );
-                    builtin_table_updates.push(state.pack_cluster_update(&name, 1));
+                    builtin_table_updates.extend(state.pack_cluster_update(&name, 1));
                     for id in introspection_source_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
@@ -1112,7 +1112,7 @@ impl Catalog {
                                 )));
                             }
                             tx.remove_cluster(id)?;
-                            builtin_table_updates.push(state.pack_cluster_update(name, -1));
+                            builtin_table_updates.extend(state.pack_cluster_update(name, -1));
                             for id in cluster.log_indexes.values() {
                                 builtin_table_updates.extend(state.pack_item_update(*id, -1));
                             }
@@ -1326,12 +1326,12 @@ impl Catalog {
                             ObjectId::Cluster(id) => {
                                 let cluster_name = state.get_cluster(*id).name().to_string();
                                 builtin_table_updates
-                                    .push(state.pack_cluster_update(&cluster_name, -1));
+                                    .extend(state.pack_cluster_update(&cluster_name, -1));
                                 let cluster = state.get_cluster_mut(*id);
                                 update_privilege_fn(&mut cluster.privileges);
                                 tx.update_cluster(*id, cluster.clone().into())?;
                                 builtin_table_updates
-                                    .push(state.pack_cluster_update(&cluster_name, 1));
+                                    .extend(state.pack_cluster_update(&cluster_name, 1));
                             }
                             ObjectId::Database(id) => {
                                 builtin_table_updates.push(state.pack_database_update(id, -1));
@@ -1509,9 +1509,9 @@ impl Catalog {
                         )));
                     }
                     tx.rename_cluster(id, &name, &to_name)?;
-                    builtin_table_updates.push(state.pack_cluster_update(&name, -1));
+                    builtin_table_updates.extend(state.pack_cluster_update(&name, -1));
                     state.rename_cluster(id, to_name.clone());
-                    builtin_table_updates.push(state.pack_cluster_update(&to_name, 1));
+                    builtin_table_updates.extend(state.pack_cluster_update(&to_name, 1));
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -1849,7 +1849,7 @@ impl Catalog {
                                 )));
                             }
                             builtin_table_updates
-                                .push(state.pack_cluster_update(&cluster_name, -1));
+                                .extend(state.pack_cluster_update(&cluster_name, -1));
                             let cluster = state.get_cluster_mut(*id);
                             Self::update_privilege_owners(
                                 &mut cluster.privileges,
@@ -1858,7 +1858,8 @@ impl Catalog {
                             );
                             cluster.owner_id = new_owner;
                             tx.update_cluster(*id, cluster.clone().into())?;
-                            builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
+                            builtin_table_updates
+                                .extend(state.pack_cluster_update(&cluster_name, 1));
                         }
                         ObjectId::ClusterReplica((cluster_id, replica_id)) => {
                             let cluster = state.get_cluster(*cluster_id);
@@ -1987,11 +1988,11 @@ impl Catalog {
                     )?;
                 }
                 Op::UpdateClusterConfig { id, name, config } => {
-                    builtin_table_updates.push(state.pack_cluster_update(&name, -1));
+                    builtin_table_updates.extend(state.pack_cluster_update(&name, -1));
                     let cluster = state.get_cluster_mut(id);
                     cluster.config = config;
                     tx.update_cluster(id, cluster.clone().into())?;
-                    builtin_table_updates.push(state.pack_cluster_update(&name, 1));
+                    builtin_table_updates.extend(state.pack_cluster_update(&name, 1));
                     info!("update cluster {}", name);
                 }
                 Op::UpdateClusterReplicaStatus { event } => {

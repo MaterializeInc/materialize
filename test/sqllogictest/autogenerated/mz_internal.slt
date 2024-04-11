@@ -93,6 +93,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  status  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_schedules' ORDER BY position
+----
+1  cluster_id  text
+2  type  text
+3  refresh_rehydration_time_estimate  interval
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
 ----
 1  object_id  text
@@ -217,6 +224,15 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  global_lag  interval
 4  slowest_local_input_id  text
 5  slowest_global_input_id  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refresh_strategies' ORDER BY position
+----
+1  materialized_view_id  text
+2  type  text
+3  interval  interval
+4  aligned_to  timestamp␠with␠time␠zone
+5  at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
@@ -737,6 +753,7 @@ mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
+mz_cluster_schedules
 mz_comments
 mz_compute_dependencies
 mz_compute_error_counts
@@ -782,6 +799,7 @@ mz_hydration_statuses
 mz_internal_cluster_replicas
 mz_kafka_sources
 mz_materialization_lag
+mz_materialized_view_refresh_strategies
 mz_message_batch_counts_received_raw
 mz_message_batch_counts_sent_raw
 mz_message_counts

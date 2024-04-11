@@ -963,9 +963,7 @@ impl CatalogState {
                 vec![self.pack_system_privileges_update(system_privilege, diff)]
             }
             StateUpdateKind::SystemConfiguration(_) => Vec::new(),
-            StateUpdateKind::Cluster(cluster) => {
-                vec![self.pack_cluster_update(&cluster.name, diff)]
-            }
+            StateUpdateKind::Cluster(cluster) => self.pack_cluster_update(&cluster.name, diff),
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.pack_item_update(introspection_source_index.index_id, diff)
             }

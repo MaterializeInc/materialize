@@ -2220,6 +2220,26 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: Lazy<BuiltinTable> =
+    Lazy::new(|| BuiltinTable {
+        name: "mz_materialized_view_refresh_strategies",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::TABLE_MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES_OID,
+        desc: RelationDesc::empty()
+            .with_column("materialized_view_id", ScalarType::String.nullable(false))
+            .with_column("type", ScalarType::String.nullable(false))
+            .with_column("interval", ScalarType::Interval.nullable(true))
+            .with_column(
+                "aligned_to",
+                ScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .with_column(
+                "at",
+                ScalarType::TimestampTz { precision: None }.nullable(true),
+            ),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_types",
     schema: MZ_CATALOG_SCHEMA,
@@ -2431,6 +2451,20 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
                 custom_id: None,
             }
             .nullable(true),
+        ),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+pub static MZ_CLUSTER_SCHEDULES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_schedules",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_CLUSTER_SCHEDULES_OID,
+    desc: RelationDesc::empty()
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column(
+            "refresh_rehydration_time_estimate",
+            ScalarType::Interval.nullable(true),
         ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -6895,6 +6929,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEWS),
+        Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_TYPE_PG_METADATA),
         Builtin::Table(&MZ_ARRAY_TYPES),
@@ -6909,6 +6944,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_OPERATORS),
         Builtin::Table(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTERS),
+        Builtin::Table(&MZ_CLUSTER_SCHEDULES),
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
