@@ -1430,6 +1430,7 @@ mod builtin_migration_tests {
 
     use itertools::Itertools;
     use mz_catalog::memory::objects::{Index, MaterializedView, Table};
+    use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
     use mz_ore::now::NOW_ZERO;
@@ -1439,11 +1440,10 @@ mod builtin_migration_tests {
         ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
 
-    use crate::catalog::{
-        Catalog, CatalogItem, Op, OptimizedMirRelationExpr, DEFAULT_SCHEMA, SYSTEM_CONN_ID,
-    };
+    use crate::catalog::{Catalog, CatalogItem, Op, OptimizedMirRelationExpr};
     use crate::session::DEFAULT_DATABASE_NAME;
 
     enum ItemNamespace {
