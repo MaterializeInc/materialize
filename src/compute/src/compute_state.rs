@@ -80,7 +80,7 @@ pub struct ComputeState {
     ///  * Subscribes report their frontiers through the `subscribe_response_buffer`.
     pub collections: BTreeMap<GlobalId, CollectionState>,
     /// Collections that were recently dropped and whose removal needs to be reported.
-    pub dropped_collections: Vec<GlobalId>,
+    pub dropped_collections: Vec<(GlobalId, CollectionState)>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
@@ -390,9 +390,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 collection.logging = Some(logging);
             }
 
-            collection.set_reported_frontier(ReportedFrontier::NotReported {
+            let initial_frontier = ReportedFrontier::NotReported {
                 lower: as_of.clone(),
-            });
+            };
+            collection.set_reported_frontier(initial_frontier.clone());
+            collection.set_reported_capability(initial_frontier);
 
             let existing = self.compute_state.collections.insert(object_id, collection);
             if existing.is_some() {
@@ -477,8 +479,25 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
+    /// Arrange for the given collection to be dropped.
+    ///
+    /// Collection dropping occurs in three phases:
+    ///
+    ///  1. This method removes the collection from the `ComputeState` and drops its dataflow
+    ///     tokens. It does _not_ yet drop the `CollectionState` but adds it to
+    ///     `dropped_collections`.
+    ///  2. The next step of the Timely worker lets the source operators observe the token drops
+    ///     and shut themselves down.
+    ///  3. `report_dropped_collections` removes the `CollectionState` from `dropped_collections`,
+    ///     emits any outstanding final responses required by the compute protocol, then drops the
+    ///     `CollectionState`.
+    ///
+    /// These steps ensure that we don't report a collection as dropped to the controller before it
+    /// has stopped reading from its inputs. Doing so would allow the controller to release its
+    /// read holds on the inputs, which could lead to panics from the replica trying to read
+    /// already compacted times.
     fn drop_collection(&mut self, id: GlobalId) {
-        let collection = self
+        let mut collection = self
             .compute_state
             .collections
             .remove(&id)
@@ -486,20 +505,16 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // If this collection is an index, remove its trace.
         self.compute_state.traces.del_trace(&id);
+        // If this collection is a sink, drop its sink token.
+        collection.sink_token.take();
 
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
-        // We need to emit a final response reporting the dropping of this collection,
-        // unless:
-        //  * The collection is a subscribe, in which case we will emit a
-        //    `SubscribeResponse::Dropped` independently.
-        //  * The collection has already advanced to the empty frontier, in which case
-        //    the final `FrontierUpper` response already serves the purpose of reporting
-        //    the end of the dataflow.
-        if !collection.is_subscribe() && !collection.reported_frontier().is_empty() {
-            self.compute_state.dropped_collections.push(id);
-        }
+        // Remember the collection as dropped, for emission of outstanding final compute responses.
+        self.compute_state
+            .dropped_collections
+            .push((id, collection));
     }
 
     /// Initializes timely dataflow logging and publishes as a view.
@@ -543,8 +558,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         self.compute_state.compute_logger = Some(logger);
     }
 
-    /// Send progress information to the coordinator.
-    pub fn report_compute_frontiers(&mut self) {
+    /// Send upper frontier advancements to the controller.
+    pub fn report_upper_frontiers(&mut self) {
         let mut new_uppers = Vec::new();
 
         // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
@@ -571,7 +586,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             match collection.reported_frontier() {
                 ReportedFrontier::Reported(old_frontier) => {
                     // In steady state it is not expected for `old_frontier` to be beyond
-                    // `new_frontier`. However, during reconcilation this can happen as we
+                    // `new_frontier`. However, during reconciliation this can happen as we
                     // artificially advance the frontiers of to-be-dropped collections to disable
                     // frontier reporting for them.
                     if !PartialOrder::less_than(old_frontier, &new_frontier) {
@@ -594,10 +609,42 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
-    /// Update logging with the current dataflow input frontiers.
-    pub fn log_input_frontiers(&mut self) {
-        for collection in self.compute_state.collections.values_mut() {
-            collection.log_input_frontiers();
+    /// Send read capability downgrades to the controller.
+    pub fn report_read_capabilities(&mut self) {
+        let mut new_capabilities = Vec::new();
+
+        // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
+        let mut new_frontier = Antichain::new();
+
+        for (&id, collection) in self.compute_state.collections.iter_mut() {
+            new_frontier.clear();
+            for probe in collection.input_probes.values() {
+                probe.with_frontier(|frontier| new_frontier.extend(frontier.iter().copied()));
+            }
+
+            match collection.reported_capability() {
+                ReportedFrontier::Reported(old_frontier) => {
+                    // In steady state it is not expected for `old_frontier` to be beyond
+                    // `new_frontier`. However, during reconciliation this can happen as we
+                    // artificially advance the frontiers of to-be-dropped collections to disable
+                    // frontier reporting for them.
+                    if !PartialOrder::less_than(old_frontier, &new_frontier) {
+                        continue; // nothing new to report
+                    }
+                }
+                ReportedFrontier::NotReported { lower } => {
+                    if !PartialOrder::less_equal(lower, &new_frontier) {
+                        continue; // lower bound for reporting not yet reached
+                    }
+                }
+            }
+
+            new_capabilities.push((id, new_frontier.clone()));
+            collection.set_reported_capability(ReportedFrontier::Reported(new_frontier.clone()));
+        }
+
+        for (id, frontier) in new_capabilities {
+            self.send_compute_response(ComputeResponse::ReadCapability { id, frontier });
         }
     }
 
@@ -605,20 +652,25 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     pub fn report_dropped_collections(&mut self) {
         let dropped_collections = std::mem::take(&mut self.compute_state.dropped_collections);
 
-        // TODO(#16275): It is, in fact, wrong to report the dropping of a collection before it has
-        // advanced to the empty frontier by announcing that it has advanced to the empty
-        // frontier. We should introduce a new compute response variant that has the right
-        // semantics.
-        for id in dropped_collections {
-            // Sanity check: A collection that was dropped should not exist.
-            assert!(
-                !self.compute_state.collection_exists(id),
-                "tried to report a dropped collection that still exists: {id}"
-            );
-            self.send_compute_response(ComputeResponse::FrontierUpper {
-                id,
-                upper: Antichain::new(),
-            });
+        for (id, collection) in dropped_collections {
+            // The compute protocol requires us to emit a final `ReadCapability` response, unless
+            // the read capability was already reported as dropped.
+            if !collection.reported_capability.is_empty() {
+                self.send_compute_response(ComputeResponse::ReadCapability {
+                    id,
+                    frontier: Antichain::new(),
+                })
+            }
+
+            // The compute protocol requires us to emit a final `FrontierUpper` response, unless:
+            //  * The upper frontier was already reported as the empty frontier.
+            //  * The collection is a subscribe.
+            if !collection.reported_frontier().is_empty() || collection.is_subscribe() {
+                self.send_compute_response(ComputeResponse::FrontierUpper {
+                    id,
+                    upper: Antichain::new(),
+                })
+            }
         }
     }
 
@@ -1294,7 +1346,7 @@ impl IndexPeek {
 }
 
 /// A frontier we have reported to the controller, or the least frontier we are allowed to report.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ReportedFrontier {
     /// A frontier has been previously reported.
     Reported(Antichain<Timestamp>),
@@ -1323,8 +1375,10 @@ impl ReportedFrontier {
 
 /// State maintained for a compute collection.
 pub struct CollectionState {
-    /// Tracks the frontier that has been reported to the controller.
+    /// Tracks the upper frontier that has been reported to the controller.
     reported_frontier: ReportedFrontier,
+    /// Tracks the read capability that has been reported to the controller.
+    reported_capability: ReportedFrontier,
     /// A token that should be dropped when this collection is dropped to clean up associated
     /// sink state.
     ///
@@ -1344,6 +1398,7 @@ impl CollectionState {
     fn new() -> Self {
         Self {
             reported_frontier: ReportedFrontier::new(),
+            reported_capability: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
             input_probes: Default::default(),
@@ -1355,12 +1410,12 @@ impl CollectionState {
         self.sink_token.is_some() && self.sink_write_frontier.is_none()
     }
 
-    /// Return the frontier that has been reported to the controller.
+    /// Return the upper frontier that has been reported to the controller.
     pub fn reported_frontier(&self) -> &ReportedFrontier {
         &self.reported_frontier
     }
 
-    /// Set the frontier that has been reported to the controller.
+    /// Set the upper frontier that has been reported to the controller.
     pub fn set_reported_frontier(&mut self, frontier: ReportedFrontier) {
         if let Some(logging) = &mut self.logging {
             let time = match &frontier {
@@ -1373,16 +1428,22 @@ impl CollectionState {
         self.reported_frontier = frontier;
     }
 
-    /// Update logging with the current input frontiers.
-    fn log_input_frontiers(&mut self) {
-        let Some(logging) = &mut self.logging else {
-            return;
-        };
+    /// Return the read capability that has been reported to the controller.
+    pub fn reported_capability(&self) -> &ReportedFrontier {
+        &self.reported_capability
+    }
 
-        for (id, probe) in &self.input_probes {
-            let new_time = probe.with_frontier(|frontier| frontier.as_option().copied());
-            logging.set_import_frontier(*id, new_time);
+    /// Set the read capability that has been reported to the controller.
+    pub fn set_reported_capability(&mut self, frontier: ReportedFrontier) {
+        // Use this opportunity to update our input frontier logging.
+        if let Some(logging) = &mut self.logging {
+            for (id, probe) in &self.input_probes {
+                let new_time = probe.with_frontier(|frontier| frontier.as_option().copied());
+                logging.set_import_frontier(*id, new_time);
+            }
         }
+
+        self.reported_capability = frontier;
     }
 }
 

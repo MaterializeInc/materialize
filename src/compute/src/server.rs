@@ -458,8 +458,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
-                compute_state.report_compute_frontiers();
-                compute_state.log_input_frontiers();
+                compute_state.report_upper_frontiers();
+                compute_state.report_read_capabilities();
                 compute_state.report_dropped_collections();
                 compute_state.report_operator_hydration();
             }
@@ -727,14 +727,14 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             compute_state.dropped_collections = Default::default();
 
             for (&id, collection) in compute_state.collections.iter_mut() {
-                // Adjust reported frontiers:
+                // Adjust reported frontiers (both uppers and capabilities):
                 //  * For dataflows we continue to use, reset to ensure we report something not
                 //    before the new `as_of` next.
                 //  * For dataflows we drop, set to the empty frontier, to ensure we don't report
-                //    anything for them. This is only needed until we implement #16275.
+                //    anything for them.
                 let retained = retain_ids.contains(&id);
                 let compaction = old_compaction.remove(&id);
-                let new_reported_frontier = match (retained, compaction) {
+                let new_frontier = match (retained, compaction) {
                     (true, Some(new_as_of)) => ReportedFrontier::NotReported { lower: new_as_of },
                     (true, None) => {
                         unreachable!("retained dataflows are compacted to the new as_of")
@@ -750,7 +750,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     }
                 };
 
-                collection.set_reported_frontier(new_reported_frontier);
+                collection.set_reported_frontier(new_frontier.clone());
+                collection.set_reported_capability(new_frontier);
 
                 // Sink tokens should be retained for retained dataflows, and dropped for dropped
                 // dataflows.
