@@ -70,3 +70,37 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
             wait(condition="condition=Ready", resource=compute_pod)
 
     mz.environmentd.sql("DROP CLUSTER sized1 CASCADE")
+
+    mz.testdrive.run(
+        input=dedent(
+            """
+            ! CREATE CLUSTER sizedbad (SIZE="badsize")
+            contains:unknown cluster replica size badsize
+            """
+        ),
+        no_reset=True,
+    )
+
+    mz.environmentd.sql(
+        'ALTER SYSTEM SET ALLOWED_CLUSTER_REPLICA_SIZES="1"',
+        port="internal",
+        user="mz_system",
+    )
+    try:
+        mz.environmentd.sql(
+            'CREATE CLUSTER mzsizetest (SIZE="2")',
+            port="internal",
+            user="mz_system",
+        )
+
+        mz.environmentd.sql(
+            "DROP CLUSTER mzsizetest CASCADE",
+            port="internal",
+            user="mz_system",
+        )
+    finally:
+        mz.environmentd.sql(
+            "ALTER SYSTEM RESET ALLOWED_CLUSTER_REPLICA_SIZES",
+            port="internal",
+            user="mz_system",
+        )
