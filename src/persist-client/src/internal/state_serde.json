@@ -382,5 +382,8 @@
         ]
       ]
     }
-  ]
+  ],
+  "hollow_batches": {},
+  "spine_batches": {},
+  "fueling_merges": {}
 }

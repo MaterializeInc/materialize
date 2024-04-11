@@ -1667,7 +1667,7 @@ fn serialize_part_stats<S: Serializer>(
 // compatibility guarantees, but still probably best to be thoughtful about
 // making unnecessary changes. Additionally, it's nice to make the output as
 // nice to use as possible without tying our hands for the actual code usages.
-impl<T: Serialize> Serialize for State<T> {
+impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let State {
             applier_version,
@@ -1698,7 +1698,11 @@ impl<T: Serialize> Serialize for State<T> {
         let () = s.serialize_field("writers", writers)?;
         let () = s.serialize_field("since", &trace.since().elements())?;
         let () = s.serialize_field("upper", &trace.upper().elements())?;
-        let () = s.serialize_field("batches", &trace.batches().into_iter().collect::<Vec<_>>())?;
+        let trace = trace.flatten();
+        let () = s.serialize_field("batches", &trace.legacy_batches.keys().collect::<Vec<_>>())?;
+        let () = s.serialize_field("hollow_batches", &trace.hollow_batches)?;
+        let () = s.serialize_field("spine_batches", &trace.spine_batches)?;
+        let () = s.serialize_field("fueling_merges", &trace.fueling_merges)?;
         s.end()
     }
 }
