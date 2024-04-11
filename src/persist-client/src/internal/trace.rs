@@ -472,12 +472,10 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
-        for batch in self.spine.merging.iter_mut().rev() {
-            for batch in &mut batch.batches {
-                let result = batch.maybe_replace(res);
-                if result.matched() {
-                    return result;
-                }
+        for batch in self.spine.spine_batches_mut().rev() {
+            let result = batch.maybe_replace(res);
+            if result.matched() {
+                return result;
             }
         }
         ApplyMergeResult::NotAppliedNoMatch
@@ -1021,6 +1019,10 @@ struct Spine<T> {
 impl<T> Spine<T> {
     pub fn spine_batches(&self) -> impl Iterator<Item = &SpineBatch<T>> {
         self.merging.iter().rev().flat_map(|m| &m.batches)
+    }
+
+    pub fn spine_batches_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut SpineBatch<T>> {
+        self.merging.iter_mut().rev().flat_map(|m| &mut m.batches)
     }
 }
 
