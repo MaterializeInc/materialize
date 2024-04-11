@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
 
-from materialize.buildkite import accepted_by_shard
+from materialize.buildkite import shard_list
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -799,7 +799,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--clusterd-memory-search-step", default=0.2, type=float)
     args = parser.parse_args()
 
-    for scenario in SCENARIOS:
+    for scenario in shard_list(SCENARIOS, lambda scenario: scenario.name):
         if (
             args.scenarios is not None
             and len(args.scenarios) > 0
@@ -809,8 +809,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         if scenario.disabled:
             print(f"+++ Scenario {scenario.name} is disabled, skipping.")
-            continue
-        if not accepted_by_shard(scenario.name):
             continue
 
         if args.find_minimal_memory:

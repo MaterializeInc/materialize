@@ -140,7 +140,7 @@ def get_parallelism_count() -> int:
     return int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
 
 
-def accepted_by_shard(
+def _accepted_by_shard(
     identifier: str,
     parallelism_index: int | None = None,
     parallelism_count: int | None = None,
@@ -159,6 +159,13 @@ def accepted_by_shard(
     return hash_value % parallelism_count == parallelism_index
 
 
+def _upload_shard_info_metadata(items: list[str]) -> None:
+    label = os.getenv("BUILDKITE_LABEL") or os.getenv("BUILDKITE_STEP_KEY")
+    spawn.runv(
+        ["buildkite-agent", "meta-data", "set", f"Shard for {label}", ", ".join(items)]
+    )
+
+
 def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
     parallelism_index = get_parallelism_index()
     parallelism_count = get_parallelism_count()
@@ -166,10 +173,20 @@ def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
     if parallelism_count == 1:
         return items
 
+    if is_in_buildkite():
+        _upload_shard_info_metadata(
+            [
+                to_identifier(item)
+                for item in items
+                if _accepted_by_shard(
+                    to_identifier(item), parallelism_index, parallelism_count
+                )
+            ]
+        )
     return [
         item
         for item in items
-        if accepted_by_shard(to_identifier(item), parallelism_index, parallelism_count)
+        if _accepted_by_shard(to_identifier(item), parallelism_index, parallelism_count)
     ]
 
 
