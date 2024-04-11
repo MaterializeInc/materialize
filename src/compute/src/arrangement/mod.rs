@@ -10,3 +10,4 @@
 //! Types related to the arrangement and management of collections.
 
 pub mod manager;
+pub mod merge_batcher_col;

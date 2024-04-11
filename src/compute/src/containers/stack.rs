@@ -327,6 +327,19 @@ impl<T: Columnation> Default for ChunkedStack<T> {
     }
 }
 
+impl<A: Columnation, B: Columnation, C: Columnation> ChunkedStack<(A, B, C)> {
+    /// Copies a destructured tuple `(A, B, C)` into this column stack.
+    ///
+    /// This serves situations where a tuple should be constructed from its constituents but
+    /// not all elements are available as owned data.
+    ///
+    /// The element can be read by indexing
+    pub fn copy_destructured(&mut self, r0: &A, r1: &B, r2: &C) {
+        let copy = unsafe { self.inner.copy_destructured(r0, r1, r2) };
+        self.push(copy);
+    }
+}
+
 /// An iterator of a [`ChunkedStack`].
 pub struct Iter<'a, T: Columnation> {
     stack: &'a ChunkedStack<T>,
