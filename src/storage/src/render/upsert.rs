@@ -219,6 +219,15 @@ where
     // this, to prevent unnecessary work.
     let wait_for_input_resumption =
         dyncfgs::DELAY_SOURCES_PAST_REHYDRATION.get(storage_configuration.config_set());
+
+    // Whether or not to partially drain the input buffer
+    // to prevent buffering of the _upstream_ snapshot.
+    let prevent_snapshot_buffering =
+        dyncfgs::STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING.get(storage_configuration.config_set());
+    // If the above is true, the number of timely batches to process at once.
+    let snapshot_buffering_max = dyncfgs::STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING
+        .get(storage_configuration.config_set());
+
     let upsert_config = UpsertConfig {
         wait_for_input_resumption,
         shrink_upsert_unused_buffers_by_ratio: storage_configuration
@@ -284,6 +293,8 @@ where
                     )
                 },
                 upsert_config,
+                prevent_snapshot_buffering,
+                snapshot_buffering_max,
             )
         } else {
             upsert_inner(
@@ -312,6 +323,8 @@ where
                     )
                 },
                 upsert_config,
+                prevent_snapshot_buffering,
+                snapshot_buffering_max,
             )
         }
     } else {
@@ -330,6 +343,8 @@ where
             source_config,
             || async { InMemoryHashMap::default() },
             upsert_config,
+            prevent_snapshot_buffering,
+            snapshot_buffering_max,
         )
     }
 }
@@ -531,6 +546,8 @@ fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     source_config: crate::source::RawSourceCreationConfig,
     state: F,
     upsert_config: UpsertConfig,
+    prevent_snapshot_buffering: bool,
+    snapshot_buffering_max: Option<usize>,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
@@ -767,6 +784,7 @@ where
         // Now can can resume consuming the collection
         let mut output_updates = vec![];
         let mut post_snapshot = true;
+
         while let Some(event) = {
             // Synthesize a `Progress` event that allows us to drain the `stash` of values
             // obtained during snapshotting.
@@ -783,10 +801,11 @@ where
                 .into_iter()
                 .chain(itertools::unfold(&mut input, |input| {
                     input.next().now_or_never().flatten()
-                }));
+                }))
+                .enumerate();
 
             let mut partial_drain_time = None;
-            for event in events {
+            for (i, event) in events {
                 match event {
                     AsyncEvent::Data(cap, mut data) => {
                         tracing::trace!(
@@ -809,7 +828,9 @@ where
                         //
                         // This is a load-bearing optimization, as it is required to avoid buffering
                         // the entire source snapshot in the `stash`.
-                        if output_cap.time().cmp(event_time) == Ordering::Equal {
+                        if prevent_snapshot_buffering
+                            && output_cap.time().cmp(event_time) == Ordering::Equal
+                        {
                             partial_drain_time = Some(event_time.clone());
                         }
                     }
@@ -843,6 +864,12 @@ where
                             output_cap.downgrade(ts);
                         }
                         input_upper = upper;
+                    }
+                }
+                let events_processed = i + 1;
+                if let Some(max) = snapshot_buffering_max {
+                    if events_processed >= max {
+                        break;
                     }
                 }
             }

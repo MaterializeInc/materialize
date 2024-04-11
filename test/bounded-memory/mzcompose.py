@@ -440,6 +440,14 @@ SCENARIOS = [
             ]
         )
         + KafkaScenario.END_MARKER
+        # Ensure this config works.
+        + dedent(
+            """
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET storage_upsert_max_snapshot_batch_buffering = 2;
+            """
+        )
         + KafkaScenario.SOURCE
         + dedent(
             """
