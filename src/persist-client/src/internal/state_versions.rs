@@ -41,7 +41,7 @@ use crate::internal::state::HollowBatch;
 use crate::internal::state::{
     BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
 };
-use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
+use crate::internal::state_diff::{StateDiff, StateFieldValDiff, IGNORE_STRUCTURE};
 use crate::{Metrics, PersistConfig, ShardId};
 
 /// A durable, truncatable log of versions of [State].
@@ -975,7 +975,7 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
             None => return None,
         };
         let data = diff.data.clone();
-        let diff = self
+        let mut diff = self
             .metrics
             .codecs
             .state_diff
@@ -1000,6 +1000,12 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
         }
 
         let diff_seqno_to = diff.seqno_to;
+        if IGNORE_STRUCTURE.get(&self.cfg.configs) {
+            assert!(diff.hollow_batches.is_empty());
+            self.state.collections.trace.roundtrip_structure = false;
+            diff.spine_batches.clear();
+            diff.fueling_merges.clear();
+        }
         self.state
             .apply_diffs(&self.metrics, std::iter::once((diff, data)));
         assert_eq!(self.state.seqno, diff_seqno_to);

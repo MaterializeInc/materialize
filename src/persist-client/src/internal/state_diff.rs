@@ -15,6 +15,7 @@ use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist_types::Codec64;
@@ -313,24 +314,39 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         diffs: I,
     ) {
         let mut state_seqno = self.seqno;
+        let ignore_structure = IGNORE_STRUCTURE.get(&cfg.configs);
+        if ignore_structure {
+            self.collections.trace.roundtrip_structure = false;
+        }
         let diffs = diffs.into_iter().filter_map(move |x| {
             if x.seqno != state_seqno.next() {
                 // No-op.
                 return None;
             }
             let data = x.data.clone();
-            let diff = metrics
+            let mut diff = metrics
                 .codecs
                 .state_diff
                 // Note: `x.data` is a `Bytes`, so cloning just increments a ref count
                 .decode(|| StateDiff::decode(&cfg.build_version, x.data.clone()));
             assert_eq!(diff.seqno_from, state_seqno);
             state_seqno = diff.seqno_to;
+            if ignore_structure {
+                assert!(diff.hollow_batches.is_empty());
+                diff.spine_batches.clear();
+                diff.fueling_merges.clear();
+            }
             Some((diff, data))
         });
         self.apply_diffs(metrics, diffs);
     }
 }
+
+pub(crate) const IGNORE_STRUCTURE: Config<bool> = Config::new(
+    "persist_ignore_structure",
+    false,
+    "If true, ignore any structural information in the spine when applying diffs.",
+);
 
 impl<T: Timestamp + Lattice + Codec64> State<T> {
     pub fn apply_diffs<I: IntoIterator<Item = (StateDiff<T>, Bytes)>>(
@@ -425,7 +441,8 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         let spine_unchanged =
             diff_since.is_empty() && diff_legacy_batches.is_empty() && structure_unchanged;
 
-        if trace.roundtrip_structure || !structure_unchanged {
+        let should_roundtrip_structure = trace.roundtrip_structure || !structure_unchanged;
+        if should_roundtrip_structure {
             if !spine_unchanged {
                 metrics.state.apply_spine_flattened.inc();
                 let mut flat = trace.flatten();
