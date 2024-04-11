@@ -1456,6 +1456,18 @@ impl<'a> Transaction<'a> {
                 StateUpdateKind::SystemConfiguration,
             ))
             .chain(get_collection_updates(
+                &self.clusters,
+                StateUpdateKind::Cluster,
+            ))
+            .chain(get_collection_updates(
+                &self.introspection_sources,
+                StateUpdateKind::IntrospectionSourceIndex,
+            ))
+            .chain(get_collection_updates(
+                &self.cluster_replicas,
+                StateUpdateKind::ClusterReplica,
+            ))
+            .chain(get_collection_updates(
                 &self.comments,
                 StateUpdateKind::Comment,
             ))

@@ -19,6 +19,7 @@ from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_BUILD_STEP_STATES,
     BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
 )
+from materialize.buildkite_insights.buildkite_api.generic_api import RateLimitExceeded
 from materialize.buildkite_insights.cache import builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
@@ -40,6 +41,7 @@ def print_data(
     job_outcomes: list[BuildJobOutcome],
     build_steps: list[BuildStepMatcher],
     output_type: str,
+    data_is_incomplete: bool,
 ) -> None:
     if output_type == OUTPUT_TYPE_CSV:
         print("step_key,build_number,created_at,duration_in_min,passed,retry_count")
@@ -66,6 +68,9 @@ def print_data(
 
     if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
         print_stats(job_outcomes, build_steps)
+
+    if data_is_incomplete:
+        print("Warning! Data is incomplete due to exceeded rate limit!")
 
 
 def print_stats(
@@ -117,16 +122,22 @@ def main(
     build_step_states: list[str],
     output_type: str,
 ) -> None:
-    builds_data = builds_cache.get_or_query_builds(
-        pipeline_slug, fetch_mode, max_fetches, branch, build_states
-    )
+    try:
+        builds_data = builds_cache.get_or_query_builds(
+            pipeline_slug, fetch_mode, max_fetches, branch, build_states
+        )
+        data_is_incomplete = False
+    except RateLimitExceeded as e:
+        builds_data = e.partial_result
+        data_is_incomplete = True
+
     step_outcomes = extract_build_step_outcomes(
         builds_data=builds_data,
         selected_build_steps=build_steps,
         build_step_states=build_step_states,
     )
     job_outcomes = step_outcomes_to_job_outcomes(step_outcomes)
-    print_data(job_outcomes, build_steps, output_type)
+    print_data(job_outcomes, build_steps, output_type, data_is_incomplete)
 
 
 if __name__ == "__main__":

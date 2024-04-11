@@ -1392,24 +1392,25 @@ pub mod datadriven {
             if x.seqno < from {
                 continue;
             }
-            let mut batches = vec![];
             let rollups: Vec<_> = x
                 .collections
                 .rollups
                 .keys()
                 .map(|seqno| seqno.to_string())
                 .collect();
-            x.collections.trace.map_batches(|b| {
-                if b.parts.is_empty() {
-                    return;
-                }
-                for (batch_name, original_batch) in &datadriven.batches {
-                    if original_batch.parts == b.parts {
-                        batches.push(batch_name.to_owned());
-                        break;
-                    }
-                }
-            });
+            let batches: Vec<_> = x
+                .collections
+                .trace
+                .batches()
+                .filter(|b| !b.parts.is_empty())
+                .filter_map(|b| {
+                    datadriven
+                        .batches
+                        .iter()
+                        .find(|(_, original_batch)| original_batch.parts == b.parts)
+                        .map(|(batch_name, _)| batch_name.to_owned())
+                })
+                .collect();
             write!(
                 s,
                 "seqno={} batches={} rollups={}\n",

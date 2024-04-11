@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
 
-from materialize.buildkite import accepted_by_shard
+from materialize.buildkite import shard_list
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -53,9 +53,9 @@ class Scenario:
     name: str
     pre_restart: str
     post_restart: str
+    materialized_memory: str
+    clusterd_memory: str
     disabled: bool = False
-    materialized_memory: str = "5Gb"
-    clusterd_memory: str = "3.5Gb"
 
 
 class PgCdcScenario(Scenario):
@@ -232,7 +232,8 @@ SCENARIOS = [
             {ITERATIONS * REPEAT}
             """
         ),
-        clusterd_memory="3.6Gb",
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     PgCdcScenario(
         name="pg-cdc-update",
@@ -274,6 +275,8 @@ SCENARIOS = [
             0
             """
         ),
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     PgCdcScenario(
         name="pg-cdc-large-tx",
@@ -336,7 +339,8 @@ SCENARIOS = [
             {ITERATIONS * REPEAT}
             """
         ),
-        clusterd_memory="3.6Gb",
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     MySqlCdcScenario(
         name="mysql-cdc-update",
@@ -380,6 +384,8 @@ SCENARIOS = [
             0
             """
         ),
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     MySqlCdcScenario(
         name="mysql-cdc-large-tx",
@@ -411,6 +417,7 @@ SCENARIOS = [
             {int(ITERATIONS * 20) * int(REPEAT / 24)}
             """
         ),
+        materialized_memory="4.5Gb",
         clusterd_memory="8.0Gb",
         disabled=True,
     ),
@@ -439,6 +446,8 @@ SCENARIOS = [
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     # Perform updates while the source is ingesting
     KafkaScenario(
@@ -466,6 +475,8 @@ SCENARIOS = [
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     # Perform inserts+deletes while the source is ingesting
     KafkaScenario(
@@ -496,6 +507,8 @@ SCENARIOS = [
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="table-insert-delete",
@@ -534,6 +547,8 @@ SCENARIOS = [
            0
            """
         ),
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="table-index-hydration",
@@ -628,7 +643,7 @@ SCENARIOS = [
             10000001
             """
         ),
-        materialized_memory="9.5Gb",
+        materialized_memory="8.5Gb",
         clusterd_memory="3.5Gb",
     ),
     KafkaScenario(
@@ -675,7 +690,8 @@ SCENARIOS = [
             "${{kafka-ingest.iteration}}"
             """
         ),
-        materialized_memory="10Gb",
+        materialized_memory="7.2Gb",
+        clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="table-aggregate",
@@ -727,7 +743,8 @@ SCENARIOS = [
             true
             """
         ),
-        clusterd_memory="7Gb",
+        materialized_memory="4.5Gb",
+        clusterd_memory="5.5Gb",
     ),
     Scenario(
         name="table-outer-join",
@@ -783,6 +800,8 @@ SCENARIOS = [
             true
             """
         ),
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
     ),
 ]
 
@@ -799,7 +818,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--clusterd-memory-search-step", default=0.2, type=float)
     args = parser.parse_args()
 
-    for scenario in SCENARIOS:
+    for scenario in shard_list(SCENARIOS, lambda scenario: scenario.name):
         if (
             args.scenarios is not None
             and len(args.scenarios) > 0
@@ -809,8 +828,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         if scenario.disabled:
             print(f"+++ Scenario {scenario.name} is disabled, skipping.")
-            continue
-        if not accepted_by_shard(scenario.name):
             continue
 
         if args.find_minimal_memory:
@@ -934,6 +951,9 @@ def find_minimal_memory(
 ) -> tuple[str, str]:
     assert reduce_materialized_memory_by_gb > 0 or reduce_clusterd_memory_by_gb > 0
 
+    min_allowed_materialized_memory_in_gb = 4.5
+    min_allowed_clusterd_memory_in_gb = 3.5
+
     materialized_memory = initial_materialized_memory
     clusterd_memory = initial_clusterd_memory
     materialized_memory_steps = [materialized_memory]
@@ -941,10 +961,14 @@ def find_minimal_memory(
 
     while True:
         new_materialized_memory = _reduce_memory(
-            materialized_memory, reduce_materialized_memory_by_gb
+            materialized_memory,
+            reduce_materialized_memory_by_gb,
+            min_allowed_materialized_memory_in_gb,
         )
         new_clusterd_memory = _reduce_memory(
-            clusterd_memory, reduce_clusterd_memory_by_gb
+            clusterd_memory,
+            reduce_clusterd_memory_by_gb,
+            min_allowed_clusterd_memory_in_gb,
         )
 
         if new_materialized_memory is None or new_clusterd_memory is None:
@@ -1021,7 +1045,9 @@ def _validate_new_memory_configuration(
     return materialized_memory, clusterd_memory
 
 
-def _reduce_memory(memory_spec: str, reduce_by_gb: float) -> str | None:
+def _reduce_memory(
+    memory_spec: str, reduce_by_gb: float, lower_bound_in_gb: float
+) -> str | None:
     if not memory_spec.endswith("Gb"):
         raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
 
@@ -1031,7 +1057,10 @@ def _reduce_memory(memory_spec: str, reduce_by_gb: float) -> str | None:
     current_gb = float(memory_spec.removesuffix("Gb"))
     new_gb = current_gb - reduce_by_gb
 
-    if new_gb <= 0.2:
+    if new_gb == lower_bound_in_gb:
         return None
+
+    if new_gb < lower_bound_in_gb:
+        new_gb = lower_bound_in_gb
 
     return f"{new_gb}Gb"

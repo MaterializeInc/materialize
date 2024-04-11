@@ -53,7 +53,7 @@ pub struct ClusterConfig {
 pub type ClusterStatus = mz_orchestrator::ServiceStatus;
 
 /// Configures a cluster replica.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ReplicaConfig {
     /// The location of the replica.
     pub location: ReplicaLocation,
@@ -161,7 +161,7 @@ fn test_replica_allocation_deserialization() {
 }
 
 /// Configures the location of a cluster replica.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub enum ReplicaLocation {
     /// An unmanaged replica.
     Unmanaged(UnmanagedReplicaLocation),
@@ -225,7 +225,7 @@ pub enum ClusterRole {
 }
 
 /// The location of an unmanaged replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UnmanagedReplicaLocation {
     /// The network addresses of the storagectl endpoints for each process in
     /// the replica.
@@ -244,7 +244,7 @@ pub struct UnmanagedReplicaLocation {
 }
 
 /// Information about availability zone constraints for replicas.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ManagedReplicaAvailabilityZones {
     /// Specified if the `Replica` is from `MANAGED` cluster,
     /// and specifies if there is an `AVAILABILITY ZONES`
@@ -256,7 +256,7 @@ pub enum ManagedReplicaAvailabilityZones {
 }
 
 /// The location of a managed replica.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ManagedReplicaLocation {
     /// The resource allocation for the replica.
     pub allocation: ReplicaAllocation,

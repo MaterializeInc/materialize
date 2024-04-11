@@ -24,6 +24,7 @@
 
 pub mod notice;
 
+use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::string::ToString;
 use std::sync::Mutex;
@@ -7170,6 +7171,9 @@ pub mod BUILTINS {
         BUILTINS_STATIC.iter()
     }
 }
+
+pub static BUILTIN_LOG_LOOKUP: Lazy<BTreeMap<&'static str, &'static BuiltinLog>> =
+    Lazy::new(|| BUILTINS::logs().map(|log| (log.name, log)).collect());
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`

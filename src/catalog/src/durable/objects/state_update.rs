@@ -759,6 +759,16 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
         }
 
         Ok(match kind {
+            StateUpdateKind::Cluster(key, value) => {
+                let cluster = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Cluster(cluster))
+            }
+            StateUpdateKind::ClusterReplica(key, value) => {
+                let cluster_replica = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::ClusterReplica(
+                    cluster_replica,
+                ))
+            }
             StateUpdateKind::Comment(key, value) => {
                 let comment = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Comment(comment))
@@ -771,6 +781,12 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let default_privilege = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::DefaultPrivilege(
                     default_privilege,
+                ))
+            }
+            StateUpdateKind::IntrospectionSourceIndex(key, value) => {
+                let introspection_source_index = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::IntrospectionSourceIndex(
+                    introspection_source_index,
                 ))
             }
             StateUpdateKind::Role(key, value) => {
@@ -795,12 +811,9 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             }
             // TODO(jkosh44) Add conversions for valid variants.
             StateUpdateKind::AuditLog(_, _)
-            | StateUpdateKind::Cluster(_, _)
-            | StateUpdateKind::ClusterReplica(_, _)
             | StateUpdateKind::Config(_, _)
             | StateUpdateKind::Epoch(_)
             | StateUpdateKind::IdAllocator(_, _)
-            | StateUpdateKind::IntrospectionSourceIndex(_, _)
             | StateUpdateKind::Item(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::StorageUsage(_, _)

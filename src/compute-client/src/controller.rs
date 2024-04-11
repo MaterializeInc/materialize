@@ -105,7 +105,7 @@ pub enum ComputeControllerResponse<T> {
 }
 
 /// Replica configuration
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ComputeReplicaConfig {
     /// TODO(#25239): Add documentation.
     pub logging: ComputeReplicaLogging,

@@ -37,7 +37,7 @@ use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
-use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
+use crate::internal::trace::FueledMergeRes;
 use crate::rpc::NoopPubSubSender;
 use crate::write::WriterId;
 use crate::{Diagnostics, Metrics, PersistConfig, ShardId, StateVersions, BUILD_INFO};
@@ -365,20 +365,15 @@ where
             if !maintenance.is_empty() {
                 info!("ignoring non-empty requested maintenance: {maintenance:?}")
             }
-            match apply_res {
-                ApplyMergeResult::AppliedExact | ApplyMergeResult::AppliedSubset => {
-                    info!("attempt {} req {}: {:?}", attempt, idx, apply_res);
-                }
-                ApplyMergeResult::NotAppliedInvalidSince
-                | ApplyMergeResult::NotAppliedNoMatch
-                | ApplyMergeResult::NotAppliedTooManyUpdates => {
-                    info!(
-                        "attempt {} req {}: {:?} trying again",
-                        attempt, idx, apply_res
-                    );
-                    attempt += 1;
-                    continue 'outer;
-                }
+            if apply_res.applied() {
+                info!("attempt {} req {}: {:?}", attempt, idx, apply_res);
+            } else {
+                info!(
+                    "attempt {} req {}: {:?} trying again",
+                    attempt, idx, apply_res
+                );
+                attempt += 1;
+                continue 'outer;
             }
         }
         info!("attempt {}: did {} compactions", attempt, reqs.len());

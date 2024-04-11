@@ -392,8 +392,8 @@ column. Each progress row will have a `NULL` key and a `NULL` value.
 {{< private-preview />}}
 
 To modify the output of `SUBSCRIBE` to support upserts using a
-[Debezium-style diff envelope](https://materialize.com/docs/sql/create-sink/#debezium-envelope)
-, use`ENVELOPE DEBEZIUM`. This clause allows you to specify a `KEY` that
+[Debezium-style diff envelope](/sql/create-sink/kafka/#debezium-envelope),
+use `ENVELOPE DEBEZIUM`. This clause allows you to specify a `KEY` that
 Materialize uses to interpret the rows as a series of inserts, updates and
 deletes within each distinct timestamp. Unlike `ENVELOPE UPSERT`, the output
 includes the state of the row before and after the upsert operation.
