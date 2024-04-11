@@ -68,6 +68,7 @@ use crate::internal::state::HollowBatch;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FueledMergeReq<T> {
+    pub id: SpineId,
     pub desc: Description<T>,
     pub inputs: Vec<IdHollowBatch<T>>,
 }
@@ -489,6 +490,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                     None
                 } else {
                     Some(FueledMergeReq {
+                        id: b.id,
                         desc: b.desc.clone(),
                         inputs: b.parts.clone(),
                     })
@@ -508,9 +510,8 @@ impl<T: Timestamp + Lattice> Trace<T> {
     ) -> Vec<FueledMergeReq<T>> {
         // Returns true if b0 covers b1, false otherwise.
         fn covers<T: PartialOrder>(b0: &FueledMergeReq<T>, b1: &FueledMergeReq<T>) -> bool {
-            PartialOrder::less_equal(b0.desc.lower(), b1.desc.lower())
-                && PartialOrder::less_equal(b1.desc.upper(), b0.desc.upper())
-                && b0.desc.since() == b1.desc.since()
+            // TODO: can we relax or remove this since check?
+            b0.id.covers(b1.id) && b0.desc.since() == b1.desc.since()
         }
 
         let mut ret = Vec::<FueledMergeReq<T>>::with_capacity(merge_reqs.len());
@@ -564,6 +565,12 @@ impl Serialize for SpineId {
     {
         let SpineId(lo, hi) = self;
         serializer.serialize_str(&format!("{lo}-{hi}"))
+    }
+}
+
+impl SpineId {
+    fn covers(self, other: SpineId) -> bool {
+        self.0 <= other.0 && other.1 <= self.1
     }
 }
 
@@ -905,6 +912,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
 
         if let SpineLog::Enabled { merge_reqs } = log {
             merge_reqs.push(FueledMergeReq {
+                id,
                 desc: desc.clone(),
                 inputs: merged_parts.clone(),
             });
@@ -1706,6 +1714,7 @@ pub(crate) mod tests {
     fn remove_redundant_merge_reqs() {
         fn req(lower: u64, upper: u64) -> FueledMergeReq<u64> {
             FueledMergeReq {
+                id: SpineId(usize::cast_from(lower), usize::cast_from(upper)),
                 desc: Description::new(
                     Antichain::from_elem(lower),
                     Antichain::from_elem(upper),
@@ -1774,6 +1783,7 @@ pub(crate) mod tests {
 
         // Different sinces (doesn't happen in practice)
         let req015 = FueledMergeReq {
+            id: SpineId(0, 1),
             desc: Description::new(
                 Antichain::from_elem(0),
                 Antichain::from_elem(1),
