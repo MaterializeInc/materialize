@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import json
 import random
 import threading
 import time
@@ -18,7 +17,12 @@ import websocket
 
 from materialize.data_ingest.query_error import QueryError
 from materialize.mzcompose.composition import Composition
-from materialize.parallel_workload.action import Action, ActionList, ReconnectAction
+from materialize.parallel_workload.action import (
+    Action,
+    ActionList,
+    ReconnectAction,
+    ws_connect,
+)
 from materialize.parallel_workload.database import Database
 from materialize.parallel_workload.executor import Executor
 
@@ -69,28 +73,16 @@ class Worker:
         )
         self.conn.autocommit = self.autocommit
         cur = self.conn.cursor()
-        thread_name = threading.current_thread().getName()
         ws = websocket.WebSocket()
-        ws.connect(f"ws://{host}:{http_port}/api/experimental/sql", origin=thread_name)
-        ws.send(
-            json.dumps(
-                {
-                    "options": {
-                        "application_name": thread_name,
-                        "max_query_result_size": "1000000",
-                        "cluster": "default",
-                        "database": "materialize",
-                        "search_path": "public",
-                    }
-                }
-            )
-        )
-        ws.recv()
+        ws_conn_id, ws_secret_key = ws_connect(ws, host, http_port, user)
         self.exe = Executor(self.rng, cur, ws, database)
         self.exe.set_isolation("SERIALIZABLE")
         cur.execute("SET auto_route_introspection_queries TO false")
-        cur.execute("SELECT pg_backend_pid()")
-        self.exe.pg_pid = cur.fetchall()[0][0]
+        if self.exe.use_ws:
+            self.exe.pg_pid = ws_conn_id
+        else:
+            cur.execute("SELECT pg_backend_pid()")
+            self.exe.pg_pid = cur.fetchall()[0][0]
 
         while time.time() < self.end_time:
             action = self.rng.choices(self.actions, self.weights)[0]

@@ -17,7 +17,7 @@ import pg8000
 import requests
 import websocket
 
-from materialize.data_ingest.query_error import QueryError, WSQueryError
+from materialize.data_ingest.query_error import QueryError
 from materialize.parallel_workload.settings import Scenario
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 logging: TextIO | None
 lock: threading.Lock
-#websocket.enableTrace(True)
+# websocket.enableTrace(True)
 
 
 def initialize_logging() -> None:
@@ -75,11 +75,11 @@ class Executor:
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
 
-    def commit(self) -> None:
+    def commit(self, http: Http = Http.MAYBE) -> None:
         self.insert_table = None
         try:
             self.log("commit")
-            if self.use_ws:
+            if self.use_ws and http:
                 self.execute("commit")
             else:
                 self.cur._c.commit()
@@ -87,13 +87,13 @@ class Executor:
             raise
         except Exception as e:
             raise QueryError(str(e), "commit")
-        #self.use_ws = self.rng.choice([True, False]) if self.ws else False
+        # self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
-    def rollback(self) -> None:
+    def rollback(self, http: Http = Http.MAYBE) -> None:
         self.insert_table = None
         try:
             self.log("rollback")
-            if self.use_ws:
+            if self.use_ws and http:
                 self.execute("rollback")
             else:
                 self.cur._c.rollback()
@@ -101,7 +101,7 @@ class Executor:
             raise
         except Exception as e:
             raise QueryError(str(e), "rollback")
-        #self.use_ws = self.rng.choice([True, False]) if self.ws else False
+        # self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
     def log(self, msg: str) -> None:
         global logging, lock
@@ -131,24 +131,54 @@ class Executor:
             query = f"EXPLAIN {query}"
         query += ";"
         extra_info_str = f" ({extra_info})" if extra_info else ""
-        http_str = " (HTTP)" if is_http else ""
+        use_ws = self.use_ws and http != Http.NO
+        http_str = " [HTTP]" if is_http else " [WS]" if use_ws and self.ws else ""
         self.log(f"{query}{extra_info_str}{http_str}")
         if not is_http:
-            try:
-                if self.use_ws and self.ws:
+            if use_ws and self.ws:
+                try:
                     self.ws.send(json.dumps({"queries": [{"query": query}]}))
-                else:
+                except Exception as e:
+                    raise QueryError(str(e), query)
+            else:
+                try:
                     self.cur.execute(query)
-            except Exception as e:
-                raise WSQueryError(str(e), query)
+                except Exception as e:
+                    raise QueryError(str(e), query)
 
             self.action_run_since_last_commit_rollback = True
 
-            if fetch:
-                if self.use_ws and self.ws:
-                    self.ws.recv()
-                else:
-                    self.cur.fetchall()
+            if use_ws and self.ws:
+                error = None
+                while True:
+                    try:
+                        result = json.loads(self.ws.recv())
+                    except websocket._exceptions.WebSocketConnectionClosedException as e:
+                        raise QueryError(str(e), query)
+                    if result["type"] in (
+                        "CommandStarting",
+                        "CommandComplete",
+                        "Notice",
+                        "Rows",
+                        "Row",
+                        "ParameterStatus",
+                    ):
+                        continue
+                    elif result["type"] == "Error":
+                        error = QueryError(
+                            f"""WS {result["payload"]["code"]}: {result["payload"]["message"]}
+{result["payload"].get("details", "")}""",
+                            query,
+                        )
+                    elif result["type"] == "ReadyForQuery":
+                        if error:
+                            raise error
+                        break
+                    else:
+                        assert False, result
+
+            if fetch and not use_ws:
+                self.cur.fetchall()
 
             return
 

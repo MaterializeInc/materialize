@@ -15,11 +15,3 @@ class QueryError(Exception):
     def __init__(self, msg: str, query: str):
         self.msg = msg
         self.query = query
-
-class WSQueryError(Exception):
-    msg: str
-    query: str
-
-    def __init__(self, msg: str, query: str):
-        self.msg = msg
-        self.query = query

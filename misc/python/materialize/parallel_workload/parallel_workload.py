@@ -211,7 +211,7 @@ def run(
         thread = threading.Thread(
             name="cancel",
             target=worker.run,
-            args=(host, ports["mz_system"], "mz_system", database),
+            args=(host, ports["mz_system"], ports["http"], "mz_system", database),
         )
         thread.start()
         threads.append(thread)
@@ -231,7 +231,7 @@ def run(
         thread = threading.Thread(
             name="kill",
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", database),
+            args=(host, ports["materialized"], ports["http"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -263,7 +263,7 @@ def run(
         thread = threading.Thread(
             name="toggle-persist-txn",
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", database),
+            args=(host, ports["materialized"], ports["http"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -283,7 +283,7 @@ def run(
         thread = threading.Thread(
             name="kill",
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", database),
+            args=(host, ports["materialized"], ports["http"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -307,7 +307,7 @@ def run(
         thread = threading.Thread(
             name="statistics",
             target=worker.run,
-            args=(host, ports["mz_system"], "mz_system", database),
+            args=(host, ports["mz_system"], ports["http"], "mz_system", database),
         )
         thread.start()
         threads.append(thread)

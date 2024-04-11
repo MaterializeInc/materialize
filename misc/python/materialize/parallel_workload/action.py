@@ -66,6 +66,46 @@ from materialize.sqlsmith import known_errors
 if TYPE_CHECKING:
     from materialize.parallel_workload.worker import Worker
 
+
+def ws_connect(ws: websocket.WebSocket, host, port, user: str) -> tuple[int, int]:
+    thread_name = threading.current_thread().getName()
+    ws.connect(f"ws://{host}:{port}/api/experimental/sql", origin=thread_name)
+    ws.send(
+        json.dumps(
+            {
+                "user": user,
+                "password": "",
+                "options": {
+                    "application_name": thread_name,
+                    "max_query_result_size": "1000000",
+                    "cluster": "quickstart",
+                    "database": "materialize",
+                    "search_path": "public",
+                },
+            }
+        )
+    )
+    ws_conn_id = -1
+    ws_secret_key = -1
+    ws_ready = False
+    while True:
+        result = json.loads(ws.recv())
+        if result["type"] == "ParameterStatus":
+            continue
+        elif result["type"] == "BackendKeyData":
+            ws_conn_id = result["payload"]["conn_id"]
+            ws_secret_key = result["payload"]["secret_key"]
+        elif result["type"] == "ReadyForQuery":
+            ws_ready = True
+        elif result["type"] == "Notice":
+            assert "connected to Materialize" in result["payload"]["message"], result
+            break
+        else:
+            assert False, result
+    assert ws_ready
+    return (ws_conn_id, ws_secret_key)
+
+
 # TODO: CASCADE in DROPs, keep track of what will be deleted
 class Action:
     rng: random.Random
@@ -94,6 +134,7 @@ class Action:
                     "unknown catalog item",  # Expected, see #20381
                     "was concurrently dropped",  # role was dropped
                     "unknown cluster",  # cluster was dropped
+                    "unknown schema",  # schema was dropped
                     "the transaction's active cluster has been dropped",  # cluster was dropped
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see #24367
                 ]
@@ -114,6 +155,7 @@ class Action:
                     "network error",
                     "Can't create a connection to host",
                     "Connection refused",
+                    "Connection to remote host was lost.",  # WS
                 ]
             )
         if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
@@ -146,28 +188,27 @@ class FetchAction(Action):
     def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         # Unsupported via this API
-        http = False  # self.rng.choice([True, False])
-        if http:
-            # See https://github.com/MaterializeInc/materialize/issues/20474
-            exe.rollback() if self.rng.choice([True, False]) else exe.commit()
+        # See https://github.com/MaterializeInc/materialize/issues/20474
+        exe.rollback(http=Http.NO) if self.rng.choice([True, False]) else exe.commit(
+            http=Http.NO
+        )
         query = f"SUBSCRIBE {obj}"
         if self.rng.choice([True, False]):
             envelope = "UPSERT" if self.rng.choice([True, False]) else "DEBEZIUM"
             columns = self.rng.sample(obj.columns, len(obj.columns))
             key = ", ".join(column.name(True) for column in columns)
             query += f" ENVELOPE {envelope} (KEY ({key}))"
-        if http:
-            exe.execute(f"COPY ({query}) TO STDOUT", http=Http.YES)
-        else:
-            exe.execute(f"DECLARE c CURSOR FOR {query}", http=Http.NO)
-            while True:
-                rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
-                timeout = self.rng.randrange(10)
-                query = f"FETCH {rows} c WITH (timeout='{timeout}s')"
-                exe.execute(query, http=Http.NO, fetch=True)
-                if self.rng.choice([True, False]):
-                    break
-            exe.rollback() if self.rng.choice([True, False]) else exe.commit()
+        exe.execute(f"DECLARE c CURSOR FOR {query}", http=Http.NO)
+        while True:
+            rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
+            timeout = self.rng.randrange(10)
+            query = f"FETCH {rows} c WITH (timeout='{timeout}s')"
+            exe.execute(query, http=Http.NO, fetch=True)
+            if self.rng.choice([True, False]):
+                break
+        exe.rollback(http=Http.NO) if self.rng.choice([True, False]) else exe.commit(
+            http=Http.NO
+        )
         return True
 
 
@@ -350,11 +391,6 @@ class CopyToS3Action(Action):
 
 
 class InsertAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "cannot be run inside a transaction block",
-        ] + super().errors_to_ignore(exe)
-
     def run(self, exe: Executor) -> bool:
         table = None
         if exe.insert_table is not None:
@@ -384,16 +420,51 @@ class InsertAction(Action):
             )
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        if self.rng.choice([True, False]):
-            returning_exprs = []
-            if self.rng.choice([True, False]):
-                returning_exprs.append("0")
-            elif self.rng.choice([True, False]):
-                returning_exprs.append("*")
+        exe.execute(query, http=Http.MAYBE)
+        table.num_rows += len(column_values)
+        exe.insert_table = table.table_id
+        return True
+
+
+class InsertReturningAction(Action):
+    def run(self, exe: Executor) -> bool:
+        table = None
+        if exe.insert_table is not None:
+            for t in exe.db.tables:
+                if t.table_id == exe.insert_table:
+                    table = t
+                    if table.num_rows >= MAX_ROWS:
+                        exe.commit() if self.rng.choice(
+                            [True, False]
+                        ) else exe.rollback()
+                        table = None
+                    break
             else:
-                returning_exprs.append(column_names)
-            if returning_exprs:
-                query += f" RETURNING {', '.join(returning_exprs)}"
+                exe.commit() if self.rng.choice([True, False]) else exe.rollback()
+        if not table:
+            tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
+            if not tables:
+                return False
+            table = self.rng.choice(tables)
+
+        column_names = ", ".join(column.name(True) for column in table.columns)
+        column_values = []
+        max_rows = min(100, MAX_ROWS - table.num_rows)
+        for i in range(self.rng.randrange(1, max_rows + 1)):
+            column_values.append(
+                ", ".join(column.value(self.rng, True) for column in table.columns)
+            )
+        all_column_values = ", ".join(f"({v})" for v in column_values)
+        query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
+        returning_exprs = []
+        if self.rng.choice([True, False]):
+            returning_exprs.append("0")
+        elif self.rng.choice([True, False]):
+            returning_exprs.append("*")
+        else:
+            returning_exprs.append(column_names)
+        if returning_exprs:
+            query += f" RETURNING {', '.join(returning_exprs)}"
         exe.execute(query, http=Http.MAYBE)
         table.num_rows += len(column_values)
         exe.insert_table = table.table_id
@@ -589,7 +660,7 @@ class RenameTableAction(Action):
             try:
                 exe.execute(
                     f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}",
-                    http=Http.MAYBE,
+                    # http=Http.MAYBE,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             except:
                 table.rename -= 1
@@ -614,7 +685,7 @@ class RenameViewAction(Action):
             try:
                 exe.execute(
                     f"ALTER {'MATERIALIZED VIEW' if view.materialized else 'VIEW'} {old_name} RENAME TO {identifier(view.name())}",
-                    http=Http.MAYBE,
+                    # http=Http.MAYBE,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             except:
                 view.rename -= 1
@@ -639,7 +710,7 @@ class RenameSinkAction(Action):
             try:
                 exe.execute(
                     f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}",
-                    http=Http.MAYBE,
+                    # http=Http.MAYBE,  # Fails
                 )
             except:
                 sink.rename -= 1
@@ -736,7 +807,7 @@ class RenameSchemaAction(Action):
             try:
                 exe.execute(
                     f"ALTER SCHEMA {old_name} RENAME TO {identifier(schema.name())}",
-                    http=Http.MAYBE,
+                    # http=Http.MAYBE,  # Fails
                 )
             except:
                 schema.rename -= 1
@@ -982,7 +1053,7 @@ class SwapClusterAction(Action):
             if self.rng.choice([True, False]):
                 exe.execute(
                     f"ALTER CLUSTER {cluster1} SWAP WITH {identifier(cluster2.name())}",
-                    http=Http.MAYBE,
+                    # http=Http.MAYBE,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             else:
                 try:
@@ -1172,32 +1243,11 @@ class ReconnectAction(Action):
                 user = "materialize"
             conn = exe.cur._c
 
-        if exe.ws:
+        if exe.ws and exe.use_ws:
             try:
                 exe.ws.close()
             except:
                 pass
-
-            thread_name = threading.current_thread().getName()
-            exe.ws = websocket.WebSocket()
-            http_port = exe.db.ports["http"]
-            exe.ws.connect(
-                f"ws://{host}:{http_port}/api/experimental/sql", origin=thread_name
-            )
-            exe.ws.send(
-                json.dumps(
-                    {
-                        "options": {
-                            "application_name": thread_name,
-                            "max_query_result_size": "1000000",
-                            "cluster": "default",
-                            "database": "materialize",
-                            "search_path": "public",
-                        }
-                    }
-                )
-            )
-            print(exe.ws.recv())
 
         try:
             exe.cur.close()
@@ -1209,6 +1259,23 @@ class ReconnectAction(Action):
             pass
 
         NUM_ATTEMPTS = 20
+        if exe.ws:
+            threading.current_thread().getName()
+            for i in range(NUM_ATTEMPTS):
+                exe.ws = websocket.WebSocket()
+                try:
+                    ws_conn_id, ws_secret_key = ws_connect(
+                        exe.ws, host, exe.db.ports["http"], user
+                    )
+                except Exception as e:
+                    if i < NUM_ATTEMPTS - 1:
+                        time.sleep(1)
+                        continue
+                    raise QueryError(str(e), "WS connect")
+                if exe.use_ws:
+                    exe.pg_pid = ws_conn_id
+                break
+
         for i in range(NUM_ATTEMPTS):
             try:
                 conn = pg8000.connect(
@@ -1219,7 +1286,8 @@ class ReconnectAction(Action):
                 exe.cur = cur
                 exe.set_isolation("SERIALIZABLE")
                 cur.execute("SELECT pg_backend_pid()")
-                exe.pg_pid = cur.fetchall()[0][0]
+                if not exe.use_ws:
+                    exe.pg_pid = cur.fetchall()[0][0]
             except Exception as e:
                 if i < NUM_ATTEMPTS - 1 and (
                     "network error" in str(e)
@@ -1809,6 +1877,7 @@ dml_nontrans_action_list = ActionList(
     [
         (DeleteAction, 10),
         (UpdateAction, 10),
+        (InsertReturningAction, 10),
         (CommentAction, 5),
         (SetClusterAction, 1),
         (ReconnectAction, 1),

@@ -985,6 +985,8 @@ class Database:
         for row in exe.cur.fetchall():
             exe.execute(f"DROP ROLE {identifier(row[0])} CASCADE")
 
+        print("Creating connections")
+
         exe.execute(
             "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"
         )
@@ -1007,7 +1009,7 @@ class Database:
             "CREATE CONNECTION IF NOT EXISTS aws_conn TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)"
         )
 
-        print("Created connections")
+        print("Creating relations")
 
         for relation in self:
             relation.create(exe)
