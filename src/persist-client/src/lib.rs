@@ -825,7 +825,7 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn sanity_check(dyncfgs: ConfigUpdates) {
-        let data = vec![
+        let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),
@@ -1189,12 +1189,12 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn multiple_shards(dyncfgs: ConfigUpdates) {
-        let data1 = vec![
+        let data1 = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
-        let data2 = vec![(("1".to_owned(), ()), 1, 1), (("2".to_owned(), ()), 2, 1)];
+        let data2 = [(("1".to_owned(), ()), 1, 1), (("2".to_owned(), ()), 2, 1)];
 
         let client = new_test_client(&dyncfgs).await;
 
@@ -1230,7 +1230,7 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn fetch_upper(dyncfgs: ConfigUpdates) {
-        let data = vec![
+        let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
@@ -1262,7 +1262,7 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn append_with_invalid_upper(dyncfgs: ConfigUpdates) {
-        let data = vec![
+        let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
@@ -1279,7 +1279,7 @@ mod tests {
             .expect_append(&data[..], write.upper().clone(), vec![3])
             .await;
 
-        let data = vec![
+        let data = [
             (("5".to_owned(), "fünf".to_owned()), 5, 1),
             (("6".to_owned(), "sechs".to_owned()), 6, 1),
         ];
@@ -1718,7 +1718,7 @@ mod tests {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
-        let data = vec![
+        let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),

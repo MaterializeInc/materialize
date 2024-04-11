@@ -1241,7 +1241,7 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn drop_unused_subscribe(dyncfgs: ConfigUpdates) {
-        let data = vec![
+        let data = [
             (("0".to_owned(), "zero".to_owned()), 0, 1),
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
