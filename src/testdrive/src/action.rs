@@ -174,6 +174,19 @@ pub struct Config {
     pub fivetran_destination_files_path: String,
 }
 
+pub struct MaterializeState {
+    catalog_config: Option<CatalogConfig>,
+
+    sql_addr: String,
+    use_https: bool,
+    http_addr: String,
+    internal_sql_addr: String,
+    internal_http_addr: String,
+    user: String,
+    pgclient: tokio_postgres::Client,
+    environment_id: EnvironmentId,
+}
+
 pub struct State {
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
@@ -192,16 +205,7 @@ pub struct State {
     regex_replacement: String,
 
     // === Materialize state. ===
-    materialize_catalog_config: Option<CatalogConfig>,
-
-    materialize_sql_addr: String,
-    materialize_use_https: bool,
-    materialize_http_addr: String,
-    materialize_internal_sql_addr: String,
-    materialize_internal_http_addr: String,
-    materialize_user: String,
-    pgclient: tokio_postgres::Client,
-    environment_id: EnvironmentId,
+    materialize: MaterializeState,
 
     // === Persist state. ===
     persist_consensus_url: Option<String>,
@@ -290,19 +294,19 @@ impl State {
         }
         self.cmd_vars.insert(
             "testdrive.materialize-environment-id".into(),
-            self.environment_id.to_string(),
+            self.materialize.environment_id.to_string(),
         );
         self.cmd_vars.insert(
             "testdrive.materialize-sql-addr".into(),
-            self.materialize_sql_addr.clone(),
+            self.materialize.sql_addr.clone(),
         );
         self.cmd_vars.insert(
             "testdrive.materialize-internal-sql-addr".into(),
-            self.materialize_internal_sql_addr.clone(),
+            self.materialize.internal_sql_addr.clone(),
         );
         self.cmd_vars.insert(
             "testdrive.materialize-user".into(),
-            self.materialize_user.clone(),
+            self.materialize.user.clone(),
         );
         self.cmd_vars.insert(
             "testdrive.fivetran-destination-url".into(),
@@ -350,7 +354,7 @@ impl State {
         if let Some(CatalogConfig {
             persist_consensus_url,
             persist_blob_url,
-        }) = &self.materialize_catalog_config
+        }) = &self.materialize.catalog_config
         {
             let persist_client = persist_client(
                 persist_consensus_url.clone(),
@@ -361,7 +365,7 @@ impl State {
             let catalog = Catalog::open_debug_read_only_persist_catalog_config(
                 persist_client,
                 SYSTEM_TIME.clone(),
-                self.environment_id.clone(),
+                self.materialize.environment_id.clone(),
                 system_parameter_defaults,
             )
             .await?;
@@ -391,7 +395,7 @@ impl State {
         let (inner_client, _) = postgres_client(
             &format!(
                 "postgres://mz_system:materialize@{}",
-                self.materialize_internal_sql_addr
+                self.materialize.internal_sql_addr
             ),
             self.default_timeout,
         )
@@ -493,7 +497,7 @@ impl State {
         if let Ok(rows) = inner_client.query("SELECT name FROM mz_roles", &[]).await {
             for row in rows {
                 let role_name: String = row.get(0);
-                if role_name == self.materialize_user || role_name.starts_with("mz_") {
+                if role_name == self.materialize.user || role_name.starts_with("mz_") {
                     continue;
                 }
                 let query = format!("DROP ROLE {}", role_name);
@@ -509,7 +513,7 @@ impl State {
         inner_client
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
-                self.materialize_user
+                self.materialize.user
             ))
             .await?;
 
@@ -520,13 +524,13 @@ impl State {
         inner_client
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
-                self.materialize_user
+                self.materialize.user
             ))
             .await?;
         inner_client
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
-                self.materialize_user
+                self.materialize.user
             ))
             .await?;
 
@@ -540,7 +544,7 @@ impl State {
         inner_client
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON CLUSTER {cluster} TO {}",
-                self.materialize_user
+                self.materialize.user
             ))
             .await?;
 
@@ -1007,6 +1011,18 @@ pub async fn create_state(
         )
     };
 
+    let materialize_state = MaterializeState {
+        catalog_config: materialize_catalog_config,
+        sql_addr: materialize_sql_addr,
+        use_https: materialize_use_https,
+        http_addr: materialize_http_addr,
+        internal_sql_addr: materialize_internal_sql_addr,
+        internal_http_addr: materialize_internal_http_addr,
+        user: materialize_user,
+        pgclient,
+        environment_id,
+    };
+
     let mut state = State {
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
@@ -1025,15 +1041,7 @@ pub async fn create_state(
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
 
         // === Materialize state. ===
-        materialize_catalog_config,
-        materialize_sql_addr,
-        materialize_use_https,
-        materialize_http_addr,
-        materialize_internal_sql_addr,
-        materialize_internal_http_addr,
-        materialize_user,
-        pgclient,
-        environment_id,
+        materialize: materialize_state,
 
         // === Persist state. ===
         persist_consensus_url: config.persist_consensus_url.clone(),

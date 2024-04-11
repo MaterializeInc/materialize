@@ -55,6 +55,7 @@ async fn get_topic(sink: &str, topic_field: &str, state: &State) -> Result<Strin
     );
     let sink_fields: Vec<&str> = sink.split('.').collect();
     let result = state
+        .materialize
         .pgclient
         .query_one(
             query.as_str(),

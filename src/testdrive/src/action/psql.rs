@@ -34,7 +34,7 @@ pub async fn run_execute(
             &command,
             &format!(
                 "postgres://{}@{}",
-                state.materialize_user, state.materialize_sql_addr
+                state.materialize.user, state.materialize.sql_addr
             ),
         ])
         .output()

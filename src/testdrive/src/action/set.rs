@@ -107,6 +107,7 @@ pub async fn run_set_from_sql(
     cmd.args.done()?;
 
     let row = state
+        .materialize
         .pgclient
         .query_one(&cmd.input.join("\n"), &[])
         .await

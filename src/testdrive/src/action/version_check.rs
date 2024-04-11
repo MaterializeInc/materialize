@@ -19,6 +19,7 @@ pub async fn run_version_check(
 ) -> Result<bool, anyhow::Error> {
     let query = "SELECT mz_version_num()";
     let stmt = state
+        .materialize
         .pgclient
         .prepare(query)
         .await
@@ -30,6 +31,7 @@ pub async fn run_version_check(
         );
     }
     let actual_version: i32 = state
+        .materialize
         .pgclient
         .query_one(&stmt, &[])
         .await
