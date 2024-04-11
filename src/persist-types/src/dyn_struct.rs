@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow2::array::{Array, NullArray, StructArray};
-use arrow2::bitmap::MutableBitmap;
+use arrow2::bitmap::{Bitmap, MutableBitmap};
 use arrow2::datatypes::{DataType as ArrowLogicalType, Field};
 use arrow2::io::parquet::write::Encoding;
 
@@ -158,11 +158,14 @@ impl DynStructCol {
     /// Explodes this _non-optional_ struct column into its component fields.
     ///
     /// Panics if this struct is optional.
-    pub fn as_ref<'a>(&'a self) -> ColumnsRef<'a> {
+    pub fn as_ref(&self) -> ColumnsRef {
         assert!(self.validity.is_none());
         ColumnsRef {
             validity: (),
-            cols: self.cols().map(|(n, _s, c)| (n, c)).collect(),
+            cols: self
+                .cols()
+                .map(|(n, _s, c)| (n.into(), c.clone()))
+                .collect(),
         }
     }
 
@@ -171,18 +174,18 @@ impl DynStructCol {
     ///
     /// If the column is actually non-option, succeeds and acts as if every
     /// value is a Some.
-    pub fn as_opt_ref<'a>(&'a self) -> ColumnsRef<'a, ValidityRef<'a>> {
+    pub fn as_opt_ref(&self) -> ColumnsRef<ValidityRef> {
         ColumnsRef {
-            validity: ValidityRef(self.validity.as_ref()),
-            cols: self.cols().map(|(n, _s, c)| (n, c)).collect(),
+            validity: ValidityRef(self.validity.clone()),
+            cols: self
+                .cols()
+                .map(|(n, _s, c)| (n.into(), c.clone()))
+                .collect(),
         }
     }
 
-    pub(crate) fn stats(
-        &self,
-        validity: ValidityRef<'_>,
-    ) -> Result<OptionStats<StructStats>, String> {
-        let validity = match (validity.0, self.validity.as_ref()) {
+    pub(crate) fn stats(&self, validity: ValidityRef) -> Result<OptionStats<StructStats>, String> {
+        let validity = match (validity.0.as_ref(), self.validity.as_ref()) {
             (Some(_), Some(y)) => {
                 debug_assert!(validity.is_superset(Some(y)));
                 Some(y)
@@ -194,8 +197,8 @@ impl DynStructCol {
         let mut cols = BTreeMap::new();
         for (n, s, c) in self.cols() {
             let stats = match s {
-                StatsFn::Default => c.stats_default(ValidityRef(validity)),
-                StatsFn::Custom(x) => x(c, ValidityRef(validity))?,
+                StatsFn::Default => c.stats_default(ValidityRef(validity.cloned())),
+                StatsFn::Custom(x) => x(c, ValidityRef(validity.cloned()))?,
             };
             cols.insert(n.to_owned(), stats);
         }
@@ -431,10 +434,12 @@ impl From<DynStructMut> for DynStructCol {
 /// The `arrow2` crate has an optimization where the validity column can be
 /// elided if every value is true. This is the common case for the `Ok` struct
 /// of our `SourceData`, so seems worth opting in to ourselves.
-#[derive(Debug, Clone, Copy)]
-pub struct ValidityRef<'a>(pub(crate) Option<&'a <bool as Data>::Col>);
+///
+/// Note: [`Bitmap`] is internally reference counted so cloning is cheap.
+#[derive(Debug, Clone)]
+pub struct ValidityRef(pub(crate) Option<Bitmap>);
 
-impl ValidityRef<'_> {
+impl ValidityRef {
     /// Returns a validity that indicates true for all values.
     pub fn none() -> Self {
         ValidityRef(None)
@@ -444,14 +449,14 @@ impl ValidityRef<'_> {
     /// If this is false, the contents of the struct's component fields at `idx`
     /// will be undefined.
     pub fn get(&self, idx: usize) -> bool {
-        self.0.map_or(true, |x| x.get_bit(idx))
+        self.0.as_ref().map_or(true, |x| x.get_bit(idx))
     }
 
     /// Returns whether the set of all indexes that return `true` in `self` is a
     /// superset of the set of all indexes that return `true` in `other`.
     #[allow(clippy::bool_comparison)]
     pub fn is_superset(&self, other: Option<&<bool as Data>::Col>) -> bool {
-        match (self.0, other) {
+        match (self.0.as_ref(), other) {
             (None, _) => {
                 // None means all-true, which is trivially a superset.
                 true
@@ -513,19 +518,19 @@ impl ValidityMut<'_> {
 /// [Self::col] and the [Self::finish] called to verify that all columns have
 /// been accounted for.
 #[derive(Debug)]
-pub struct ColumnsRef<'a, V = ()> {
+pub struct ColumnsRef<V = ()> {
     validity: V,
-    pub(crate) cols: BTreeMap<&'a str, &'a DynColumnRef>,
+    pub(crate) cols: BTreeMap<Arc<str>, DynColumnRef>,
 }
 
-impl<'a, V> ColumnsRef<'a, V> {
+impl<V> ColumnsRef<V> {
     /// Removes the named typed column from the set.
-    pub fn col<T: Data>(&mut self, name: &str) -> Result<&'a T::Col, String> {
+    pub fn col<T: Data>(&mut self, name: &str) -> Result<Arc<T::Col>, String> {
         self.dyn_col(name)?.downcast::<T>()
     }
 
     /// Removes the named dynamic column from the set.
-    fn dyn_col(&mut self, name: &str) -> Result<&'a DynColumnRef, String> {
+    fn dyn_col(&mut self, name: &str) -> Result<DynColumnRef, String> {
         self.cols
             .remove(name)
             .ok_or_else(|| format!("no col named {}", name))
@@ -536,7 +541,11 @@ impl<'a, V> ColumnsRef<'a, V> {
         if self.cols.is_empty() {
             Ok(self.validity)
         } else {
-            let names = self.cols.iter().map(|(x, _)| *x).collect::<Vec<_>>();
+            let names = self
+                .cols
+                .iter()
+                .map(|(x, _)| x.to_string())
+                .collect::<Vec<_>>();
             Err(format!("unused cols: {}", names.join(" ")))
         }
     }

@@ -239,7 +239,7 @@ pub trait PartEncoder<'a, T> {
 ///
 /// This allows us to amortize the cost of downcasting columns into concrete
 /// types.
-pub trait PartDecoder<'a, T> {
+pub trait PartDecoder<T> {
     /// Decodes the value at the given index.
     ///
     /// Implementations of this should reuse allocations within the passed value
@@ -252,13 +252,13 @@ pub trait Schema<T>: Debug + Send + Sync {
     /// The associated [PartEncoder] implementor.
     type Encoder<'a>: PartEncoder<'a, T>;
     /// The associated [PartDecoder] implementor.
-    type Decoder<'a>: PartDecoder<'a, T>;
+    type Decoder: PartDecoder<T> + Debug;
 
     /// Returns the name and types of the columns in this type.
     fn columns(&self) -> DynStructCfg;
 
-    /// Returns a [Self::Decoder<'a>] for the given columns.
-    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String>;
+    /// Returns a [`Self::Decoder`] for the given columns.
+    fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String>;
 
     /// Returns a [Self::Encoder<'a>] for the given columns.
     fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String>;

@@ -751,13 +751,13 @@ mod codec_impls {
     impl Schema<MaelstromKey> for MaelstromKeySchema {
         type Encoder<'a> = SimpleEncoder<'a, MaelstromKey, u64>;
 
-        type Decoder<'a> = SimpleDecoder<'a, MaelstromKey, u64>;
+        type Decoder = SimpleDecoder<MaelstromKey, u64>;
 
         fn columns(&self) -> DynStructCfg {
             SimpleSchema::<MaelstromKey, u64>::columns(&())
         }
 
-        fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
             SimpleSchema::<MaelstromKey, u64>::decoder(cols, |val, ret| ret.0 = val)
         }
 
@@ -795,13 +795,13 @@ mod codec_impls {
     impl Schema<MaelstromVal> for MaelstromValSchema {
         type Encoder<'a> = SimpleEncoder<'a, MaelstromVal, Vec<u8>>;
 
-        type Decoder<'a> = SimpleDecoder<'a, MaelstromVal, Vec<u8>>;
+        type Decoder = SimpleDecoder<MaelstromVal, Vec<u8>>;
 
         fn columns(&self) -> DynStructCfg {
             SimpleSchema::<MaelstromVal, Vec<u8>>::columns(&())
         }
 
-        fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
             SimpleSchema::<MaelstromVal, Vec<u8>>::decoder(cols, |val, ret| {
                 *ret = MaelstromVal::decode(val).expect("should be valid MaelstromVal")
             })
