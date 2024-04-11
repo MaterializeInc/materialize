@@ -384,6 +384,56 @@
     }
   ],
   "hollow_batches": {},
-  "spine_batches": {},
+  "spine_batches": {
+    "0-4": {
+      "level": 5,
+      "desc": {
+        "lower": {
+          "elements": [
+            0
+          ]
+        },
+        "upper": {
+          "elements": [
+            17715365949975899502
+          ]
+        },
+        "since": {
+          "elements": [
+            16259358130896200968
+          ]
+        }
+      },
+      "parts": [
+        "0-1",
+        "1-2",
+        "2-3",
+        "3-4"
+      ]
+    },
+    "4-5": {
+      "level": 4,
+      "desc": {
+        "lower": {
+          "elements": [
+            17715365949975899502
+          ]
+        },
+        "upper": {
+          "elements": [
+            18440881202665513003
+          ]
+        },
+        "since": {
+          "elements": [
+            626979934278723597
+          ]
+        }
+      },
+      "parts": [
+        "4-5"
+      ]
+    }
+  },
   "fueling_merges": {}
 }

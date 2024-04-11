@@ -1628,8 +1628,9 @@ pub(crate) mod tests {
             (
                 any::<Option<T>>(),
                 proptest::collection::vec(any_hollow_batch::<T>(), num_batches),
+                any::<bool>(),
             ),
-            |(since, mut batches)| {
+            |(since, mut batches, roundtrip_structure)| {
                 let mut trace = Trace::<T>::default();
                 trace.downgrade_since(&since.map_or_else(Antichain::new, Antichain::from_elem));
 
@@ -1650,6 +1651,7 @@ pub(crate) mod tests {
                     lower = batch.desc.upper().clone();
                     let _merge_req = trace.push_batch(batch);
                 }
+                trace.roundtrip_structure = roundtrip_structure;
                 trace
             },
         )
