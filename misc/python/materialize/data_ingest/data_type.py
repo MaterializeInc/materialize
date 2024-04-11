@@ -293,7 +293,7 @@ class UUID(DataType):
                 "6f5eec33-a3c9-40b2-ae06-58f53aca6e7d",
                 "00000000-0000-0000-0000-000000000000",
                 "ffffffff-ffff-ffff-ffff-ffffffffffff",
-                uuid.uuid4(),
+                uuid.UUID(int=rng.getrandbits(128), version=4),
             ]
         )
         return f"'{result}'::uuid" if in_query else str(result)

@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 
 logging: TextIO | None
 lock: threading.Lock
-# websocket.enableTrace(True)
 
 
 def initialize_logging() -> None:
@@ -36,7 +35,7 @@ def initialize_logging() -> None:
 
 class Http(Enum):
     NO = 0
-    MAYBE = 1
+    RANDOM = 1
     YES = 2
 
 
@@ -75,11 +74,11 @@ class Executor:
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
 
-    def commit(self, http: Http = Http.MAYBE) -> None:
+    def commit(self, http: Http = Http.RANDOM) -> None:
         self.insert_table = None
         try:
             self.log("commit")
-            if self.use_ws and http:
+            if self.use_ws and http != Http.NO:
                 self.execute("commit")
             else:
                 self.cur._c.commit()
@@ -87,13 +86,14 @@ class Executor:
             raise
         except Exception as e:
             raise QueryError(str(e), "commit")
+        # TODO(def-): Enable when things are stable
         # self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
-    def rollback(self, http: Http = Http.MAYBE) -> None:
+    def rollback(self, http: Http = Http.RANDOM) -> None:
         self.insert_table = None
         try:
             self.log("rollback")
-            if self.use_ws and http:
+            if self.use_ws and http != Http.NO:
                 self.execute("rollback")
             else:
                 self.cur._c.rollback()
@@ -101,6 +101,7 @@ class Executor:
             raise
         except Exception as e:
             raise QueryError(str(e), "rollback")
+        # TODO(def-): Enable when things are stable
         # self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
     def log(self, msg: str) -> None:
@@ -125,7 +126,7 @@ class Executor:
         fetch: bool = False,
     ) -> None:
         is_http = (
-            http == Http.MAYBE and self.rng.choice([True, False])
+            http == Http.RANDOM and self.rng.choice([True, False])
         ) or http == Http.YES
         if explainable and self.rng.choice([True, False]):
             query = f"EXPLAIN {query}"

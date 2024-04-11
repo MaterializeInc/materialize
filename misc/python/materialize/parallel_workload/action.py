@@ -152,10 +152,14 @@ class Action:
         ):
             result.extend(
                 [
+                    # pg8000
                     "network error",
                     "Can't create a connection to host",
                     "Connection refused",
-                    "Connection to remote host was lost.",  # WS
+                    # websockets
+                    "Connection to remote host was lost.",
+                    "socket is already closed.",
+                    "Broken pipe",
                 ]
             )
         if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
@@ -214,7 +218,7 @@ class FetchAction(Action):
 
 class SelectOneAction(Action):
     def run(self, exe: Executor) -> bool:
-        exe.execute("SELECT 1", explainable=True, http=Http.MAYBE, fetch=True)
+        exe.execute("SELECT 1", explainable=True, http=Http.RANDOM, fetch=True)
         return True
 
 
@@ -281,7 +285,7 @@ class SelectAction(Action):
 
         query += " LIMIT 1"
 
-        exe.execute(query, explainable=True, http=Http.MAYBE, fetch=True)
+        exe.execute(query, explainable=True, http=Http.RANDOM, fetch=True)
         return True
 
 
@@ -356,7 +360,7 @@ class SQLsmithAction(Action):
         while not self.queries:
             self.refill_sqlsmith(exe)
         query = self.queries.pop()
-        exe.execute(query, explainable=True, http=Http.MAYBE, fetch=True)
+        exe.execute(query, explainable=True, http=Http.RANDOM, fetch=True)
         return True
 
 
@@ -420,7 +424,7 @@ class InsertAction(Action):
             )
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        exe.execute(query, http=Http.MAYBE)
+        exe.execute(query, http=Http.RANDOM)
         table.num_rows += len(column_values)
         exe.insert_table = table.table_id
         return True
@@ -465,7 +469,7 @@ class InsertReturningAction(Action):
             returning_exprs.append(column_names)
         if returning_exprs:
             query += f" RETURNING {', '.join(returning_exprs)}"
-        exe.execute(query, http=Http.MAYBE)
+        exe.execute(query, http=Http.RANDOM)
         table.num_rows += len(column_values)
         exe.insert_table = table.table_id
         return True
@@ -520,7 +524,7 @@ class UpdateAction(Action):
             query += f"map_length({column1.name(True)}) = map_length({column1.value(self.rng, True)})"
         else:
             query += f"{column1.name(True)} = {column1.value(self.rng, True)}"
-        exe.execute(query, http=Http.MAYBE)
+        exe.execute(query, http=Http.RANDOM)
         exe.insert_table = table.table_id
         return True
 
@@ -544,7 +548,7 @@ class DeleteAction(Action):
                     query += (
                         f" AND {column.name(True)} = {column.value(self.rng, True)}"
                     )
-        exe.execute(query, http=Http.MAYBE)
+        exe.execute(query, http=Http.RANDOM)
         exe.commit()
         result = exe.cur.rowcount
         table.num_rows -= result
@@ -561,7 +565,7 @@ class CommentAction(Action):
         else:
             query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng)}'"
 
-        exe.execute(query, http=Http.MAYBE)
+        exe.execute(query, http=Http.RANDOM)
         return True
 
 
@@ -586,7 +590,7 @@ class CreateIndexAction(Action):
             index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
         query = f"CREATE INDEX {index} ON {obj} ({index_str})"
-        exe.execute(query, http=Http.MAYBE)
+        exe.execute(query, http=Http.RANDOM)
         with exe.db.lock:
             exe.db.indexes.add(index)
         return True
@@ -603,7 +607,7 @@ class DropIndexAction(Action):
                 return False
 
             query = f"DROP INDEX {index}"
-            exe.execute(query, http=Http.MAYBE)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.indexes.remove(index)
             return True
 
@@ -641,7 +645,7 @@ class DropTableAction(Action):
                 return False
 
             query = f"DROP TABLE {table}"
-            exe.execute(query, http=Http.MAYBE)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.tables.remove(table)
         return True
 
@@ -660,7 +664,7 @@ class RenameTableAction(Action):
             try:
                 exe.execute(
                     f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}",
-                    # http=Http.MAYBE,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
+                    # http=Http.RANDOM,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             except:
                 table.rename -= 1
@@ -685,7 +689,7 @@ class RenameViewAction(Action):
             try:
                 exe.execute(
                     f"ALTER {'MATERIALIZED VIEW' if view.materialized else 'VIEW'} {old_name} RENAME TO {identifier(view.name())}",
-                    # http=Http.MAYBE,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
+                    # http=Http.RANDOM,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             except:
                 view.rename -= 1
@@ -710,7 +714,7 @@ class RenameSinkAction(Action):
             try:
                 exe.execute(
                     f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}",
-                    # http=Http.MAYBE,  # Fails
+                    # http=Http.RANDOM,  # Fails
                 )
             except:
                 sink.rename -= 1
@@ -748,7 +752,7 @@ class DropDatabaseAction(Action):
                 return False
 
             query = f"DROP DATABASE {db} RESTRICT"
-            exe.execute(query, http=Http.MAYBE)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.dbs.remove(db)
         return True
 
@@ -783,7 +787,7 @@ class DropSchemaAction(Action):
                 return False
 
             query = f"DROP SCHEMA {schema}"
-            exe.execute(query, http=Http.MAYBE)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.schemas.remove(schema)
         return True
 
@@ -807,7 +811,7 @@ class RenameSchemaAction(Action):
             try:
                 exe.execute(
                     f"ALTER SCHEMA {old_name} RENAME TO {identifier(schema.name())}",
-                    # http=Http.MAYBE,  # Fails
+                    # http=Http.RANDOM,  # Fails
                 )
             except:
                 schema.rename -= 1
@@ -930,7 +934,7 @@ class DropViewAction(Action):
                 query = f"DROP MATERIALIZED VIEW {view}"
             else:
                 query = f"DROP VIEW {view}"
-            exe.execute(query, http=Http.MAYBE)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.views.remove(view)
         return True
 
@@ -967,7 +971,7 @@ class DropRoleAction(Action):
 
             query = f"DROP ROLE {role}"
             try:
-                exe.execute(query, http=Http.MAYBE)
+                exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1019,7 +1023,7 @@ class DropClusterAction(Action):
 
             query = f"DROP CLUSTER {cluster}"
             try:
-                exe.execute(query, http=Http.MAYBE)
+                exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1053,7 +1057,7 @@ class SwapClusterAction(Action):
             if self.rng.choice([True, False]):
                 exe.execute(
                     f"ALTER CLUSTER {cluster1} SWAP WITH {identifier(cluster2.name())}",
-                    # http=Http.MAYBE,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
+                    # http=Http.RANDOM,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             else:
                 try:
@@ -1088,7 +1092,7 @@ class SetClusterAction(Action):
                 return False
             cluster = self.rng.choice(exe.db.clusters)
         query = f"SET CLUSTER = {cluster}"
-        exe.execute(query, http=Http.MAYBE)
+        exe.execute(query, http=Http.RANDOM)
         return True
 
 
@@ -1149,7 +1153,8 @@ class DropClusterReplicaAction(Action):
 
             query = f"DROP CLUSTER REPLICA {cluster}.{replica}"
             try:
-                exe.execute(query, http=Http.MAYBE)
+                # TODO(def-) Reenable http when #26612 is fixed
+                exe.execute(query, http=Http.NO)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1178,7 +1183,7 @@ class GrantPrivilegesAction(Action):
 
             query = f"GRANT {privilege} ON {table} TO {role}"
             try:
-                exe.execute(query, http=Http.MAYBE)
+                exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1207,7 +1212,7 @@ class RevokePrivilegesAction(Action):
 
             query = f"REVOKE {privilege} ON {table} FROM {role}"
             try:
-                exe.execute(query, http=Http.MAYBE)
+                exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1333,7 +1338,7 @@ class CancelAction(Action):
         exe.execute(
             f"SELECT pg_cancel_backend({pid})",
             extra_info=f"Canceling {worker}",
-            http=Http.MAYBE,
+            http=Http.RANDOM,
         )
         # Sleep less often to work around #22228 / #2392
         time.sleep(self.rng.uniform(1, 10))
@@ -1481,7 +1486,7 @@ class DropWebhookSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source}"
-            exe.execute(query, http=Http.MAYBE)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.webhook_sources.remove(source)
         return True
 
@@ -1543,7 +1548,7 @@ class DropKafkaSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source}"
-            exe.execute(query, http=Http.MAYBE)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.kafka_sources.remove(source)
             source.executor.mz_conn.close()
         return True
@@ -1610,7 +1615,7 @@ class DropMySqlSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source.executor.source}"
-            exe.execute(query, http=Http.MAYBE)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.mysql_sources.remove(source)
             source.executor.mz_conn.close()
         return True
@@ -1677,7 +1682,7 @@ class DropPostgresSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source.executor.source}"
-            exe.execute(query, http=Http.MAYBE)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.postgres_sources.remove(source)
             source.executor.mz_conn.close()
         return True
@@ -1734,7 +1739,7 @@ class DropKafkaSinkAction(Action):
                 return False
 
             query = f"DROP SINK {sink}"
-            exe.execute(query, http=Http.MAYBE)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.kafka_sinks.remove(sink)
         return True
 
