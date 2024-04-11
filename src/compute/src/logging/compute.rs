@@ -16,8 +16,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use differential_dataflow::trace::{BatchReader, Cursor};
 use differential_dataflow::Collection;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
@@ -27,8 +26,8 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Filter, InspectCore, Operator};
-use timely::dataflow::{Scope, Stream, StreamCore};
+use timely::dataflow::operators::{Filter, Operator};
+use timely::dataflow::{Scope, Stream};
 use timely::logging::WorkerIdentifier;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker;
@@ -873,19 +872,31 @@ pub struct CollectionLogging {
     logger: Logger,
 
     logged_frontier: Option<Timestamp>,
+    logged_import_frontiers: BTreeMap<GlobalId, Timestamp>,
 }
 
 impl CollectionLogging {
     /// Create new logging state for the identified collection and emit initial logging events.
-    pub fn new(id: GlobalId, logger: Logger, dataflow_index: usize) -> Self {
+    pub fn new(
+        id: GlobalId,
+        logger: Logger,
+        dataflow_index: usize,
+        import_ids: impl Iterator<Item = GlobalId>,
+    ) -> Self {
         logger.log(ComputeEvent::Export { id, dataflow_index });
 
         let mut self_ = Self {
             id,
             logger,
             logged_frontier: None,
+            logged_import_frontiers: Default::default(),
         };
-        self_.set_frontier(Some(Timestamp::MIN));
+
+        // Initialize frontier logging.
+        let initial_frontier = Some(Timestamp::MIN);
+        self_.set_frontier(initial_frontier);
+        import_ids.for_each(|id| self_.set_import_frontier(id, initial_frontier));
+
         self_
     }
 
@@ -902,109 +913,46 @@ impl CollectionLogging {
             self.logger.log_many(events);
         }
     }
+
+    /// Set the frontier of the given import to the given new time and emit corresponding logging
+    /// events.
+    pub fn set_import_frontier(&mut self, import_id: GlobalId, new_time: Option<Timestamp>) {
+        let old_time = self.logged_import_frontiers.remove(&import_id);
+        if let Some(time) = new_time {
+            self.logged_import_frontiers.insert(import_id, time);
+        }
+
+        if old_time != new_time {
+            let export_id = self.id;
+            let retraction = old_time.map(|time| ComputeEvent::ImportFrontier {
+                import_id,
+                export_id,
+                time,
+                diff: -1,
+            });
+            let insertion = new_time.map(|time| ComputeEvent::ImportFrontier {
+                import_id,
+                export_id,
+                time,
+                diff: 1,
+            });
+            let events = retraction.into_iter().chain(insertion);
+            self.logger.log_many(events);
+        }
+    }
 }
 
 impl Drop for CollectionLogging {
     fn drop(&mut self) {
         // Emit retraction events to clean up events previously logged.
         self.set_frontier(None);
-        self.logger.log(ComputeEvent::ExportDropped { id: self.id });
-    }
-}
 
-/// Extension trait to attach `ComputeEvent::ImportFrontier` logging operators to streams and
-/// arrangements.
-pub(crate) trait LogImportFrontiers {
-    fn log_import_frontiers(
-        self,
-        logger: Logger,
-        import_id: GlobalId,
-        export_ids: Vec<GlobalId>,
-    ) -> Self;
-}
-
-impl<G, C> LogImportFrontiers for StreamCore<G, C>
-where
-    G: Scope<Timestamp = Timestamp>,
-    C: Container,
-{
-    fn log_import_frontiers(
-        self,
-        logger: Logger,
-        import_id: GlobalId,
-        export_ids: Vec<GlobalId>,
-    ) -> Self {
-        // Using `RetractImportFrontiers` ensures that retraction events are logged even when the
-        // dataflow is dropped before the input advances to the empty frontier.
-        let mut retractions = RetractImportFrontiers {
-            logger: logger.clone(),
-            import_id,
-            export_ids: export_ids.clone(),
-            time: None,
-        };
-
-        self.inspect_container(move |event| {
-            let Err(frontier) = event else { return };
-
-            retractions.log();
-
-            let Some(&time) = frontier.get(0) else { return };
-            for &export_id in export_ids.iter() {
-                logger.log(ComputeEvent::ImportFrontier {
-                    import_id,
-                    export_id,
-                    time,
-                    diff: 1,
-                });
-                retractions.time = Some(time);
-            }
-        })
-    }
-}
-
-impl<G, Tr> LogImportFrontiers for Arranged<G, Tr>
-where
-    G: Scope<Timestamp = Timestamp>,
-    Tr: TraceReader + Clone,
-{
-    fn log_import_frontiers(
-        mut self,
-        logger: Logger,
-        import_id: GlobalId,
-        export_ids: Vec<GlobalId>,
-    ) -> Self {
-        self.stream = self
-            .stream
-            .log_import_frontiers(logger, import_id, export_ids);
-        self
-    }
-}
-
-struct RetractImportFrontiers {
-    logger: Logger,
-    import_id: GlobalId,
-    export_ids: Vec<GlobalId>,
-    time: Option<Timestamp>,
-}
-
-impl RetractImportFrontiers {
-    fn log(&mut self) {
-        if let Some(time) = self.time.take() {
-            for &export_id in self.export_ids.iter() {
-                self.logger.log(ComputeEvent::ImportFrontier {
-                    import_id: self.import_id,
-                    export_id,
-                    time,
-                    diff: -1,
-                });
-            }
+        let import_ids: Vec<_> = self.logged_import_frontiers.keys().copied().collect();
+        for id in import_ids {
+            self.set_import_frontier(id, None);
         }
-    }
-}
 
-impl Drop for RetractImportFrontiers {
-    fn drop(&mut self) {
-        self.log();
+        self.logger.log(ComputeEvent::ExportDropped { id: self.id });
     }
 }
 

@@ -49,6 +49,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
+use timely::dataflow::operators::probe;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::scheduling::Scheduler;
@@ -193,6 +194,25 @@ impl ComputeState {
         self.collections
             .get_mut(&id)
             .expect("collection must exist")
+    }
+
+    /// Construct a new frontier probe for the given input and add it to the state of the given
+    /// collections.
+    ///
+    /// The caller is responsible for attaching the returned probe handle to the respective
+    /// dataflow input stream.
+    pub fn input_probe_for(
+        &mut self,
+        input_id: GlobalId,
+        collection_ids: impl Iterator<Item = GlobalId>,
+    ) -> probe::Handle<Timestamp> {
+        let probe = probe::Handle::default();
+        for id in collection_ids {
+            if let Some(collection) = self.collections.get_mut(&id) {
+                collection.input_probes.insert(input_id, probe.clone());
+            }
+        }
+        probe
     }
 
     /// Apply the current `worker_config` to the compute state.
@@ -361,7 +381,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             let mut collection = CollectionState::new();
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
-                let logging = CollectionLogging::new(object_id, logger, dataflow_index);
+                let logging = CollectionLogging::new(
+                    object_id,
+                    logger,
+                    dataflow_index,
+                    dataflow.import_ids(),
+                );
                 collection.logging = Some(logging);
             }
 
@@ -496,7 +521,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             // Initialize compute and logging state for the logging index.
             let mut collection = CollectionState::new();
 
-            let logging = CollectionLogging::new(id, logger.clone(), dataflow_index);
+            let logging =
+                CollectionLogging::new(id, logger.clone(), dataflow_index, std::iter::empty());
             collection.logging = Some(logging);
 
             let existing = self.compute_state.collections.insert(id, collection);
@@ -565,6 +591,13 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         for (id, upper) in new_uppers {
             self.send_compute_response(ComputeResponse::FrontierUpper { id, upper });
+        }
+    }
+
+    /// Update logging with the current dataflow input frontiers.
+    pub fn log_input_frontiers(&mut self) {
+        for collection in self.compute_state.collections.values_mut() {
+            collection.log_input_frontiers();
         }
     }
 
@@ -1301,6 +1334,8 @@ pub struct CollectionState {
     ///
     /// Only `Some` if the collection is a sink and *not* a subscribe.
     pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
+    /// Frontier probes for every input to the collection.
+    pub input_probes: BTreeMap<GlobalId, probe::Handle<Timestamp>>,
     /// Logging state maintained for this collection.
     logging: Option<CollectionLogging>,
 }
@@ -1311,6 +1346,7 @@ impl CollectionState {
             reported_frontier: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
+            input_probes: Default::default(),
             logging: None,
         }
     }
@@ -1335,6 +1371,18 @@ impl CollectionState {
         }
 
         self.reported_frontier = frontier;
+    }
+
+    /// Update logging with the current input frontiers.
+    fn log_input_frontiers(&mut self) {
+        let Some(logging) = &mut self.logging else {
+            return;
+        };
+
+        for (id, probe) in &self.input_probes {
+            let new_time = probe.with_frontier(|frontier| frontier.as_option().copied());
+            logging.set_import_frontier(*id, new_time);
+        }
     }
 }
 

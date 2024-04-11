@@ -131,7 +131,7 @@ use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::{BranchWhen, Operator};
+use timely::dataflow::operators::{probe, BranchWhen, Operator, Probe};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::Product;
@@ -144,7 +144,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
+use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::{
     ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
@@ -241,14 +241,10 @@ pub fn build_compute_dataflow<A: Allocate>(
                         ok_stream = suppress_early_progress(ok_stream, as_of);
                     }
 
-                    // If logging is enabled, log source frontier advancements. Note that we do
-                    // this here instead of in the server.rs worker loop since we want to catch the
-                    // wall-clock time of the frontier advancement for each dataflow as early as
-                    // possible.
-                    if let Some(logger) = compute_state.compute_logger.clone() {
-                        let export_ids = dataflow.export_ids().collect();
-                        ok_stream = ok_stream.log_import_frontiers(logger, *source_id, export_ids);
-                    }
+                    // Attach a probe reporting the input frontier.
+                    let input_probe =
+                        compute_state.input_probe_for(*source_id, dataflow.export_ids());
+                    ok_stream = ok_stream.probe_with(&input_probe);
 
                     let (oks, errs) = (
                         ok_stream.as_collection().leave_region().leave_region(),
@@ -282,11 +278,11 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
-                    let export_ids = dataflow.export_ids().collect();
+                    let input_probe = compute_state.input_probe_for(*idx_id, dataflow.export_ids());
                     context.import_index(
                         compute_state,
                         &mut tokens,
-                        export_ids,
+                        input_probe,
                         *idx_id,
                         &idx.desc,
                     );
@@ -341,11 +337,11 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
-                    let export_ids = dataflow.export_ids().collect();
+                    let input_probe = compute_state.input_probe_for(*idx_id, dataflow.export_ids());
                     context.import_index(
                         compute_state,
                         &mut tokens,
-                        export_ids,
+                        input_probe,
                         *idx_id,
                         &idx.desc,
                     );
@@ -392,7 +388,7 @@ where
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        export_ids: Vec<GlobalId>,
+        input_probe: probe::Handle<mz_repr::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
@@ -404,20 +400,16 @@ where
 
             let token = traces.to_drop().clone();
             // Import the specialized trace handle as a specialized arrangement import.
-            // Note that we incorporate optional logging setup as part of this process,
-            // since a specialized arrangement import require us to enter a scope, but
-            // we can only enter after logging is set up. We attach logging here instead
-            // of implementing it in the server.rs worker loop since we want to catch the
-            // wall-clock time of the frontier advancement for each dataflow as early as
-            // possible.
-            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_logged(
+            //
+            // Note that we incorporate probe setup as part of this process, since a specialized
+            // arrangement import requires us to enter a scope, but we can only enter after the
+            // probe is attached.
+            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier(
                 &self.scope,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
-                compute_state.compute_logger.clone(),
-                idx_id,
-                export_ids,
+                input_probe,
             );
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 &self.scope.parent,
