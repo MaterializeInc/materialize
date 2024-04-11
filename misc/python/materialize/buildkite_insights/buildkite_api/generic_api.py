@@ -16,6 +16,13 @@ import requests
 
 BUILDKITE_API_URL = "https://api.buildkite.com/v2"
 
+STATUS_CODE_RATE_LIMIT_EXCEEDED = 429
+
+
+class RateLimitExceeded(Exception):
+    def __init__(self, partial_result: list[Any]):
+        self.partial_result = partial_result
+
 
 def get(request_path: str, params: dict[str, Any]) -> Any:
     headers = {}
@@ -28,6 +35,10 @@ def get(request_path: str, params: dict[str, Any]) -> Any:
 
     url = f"{BUILDKITE_API_URL}/{request_path}"
     r = requests.get(headers=headers, url=url, params=params)
+
+    if r.status_code == STATUS_CODE_RATE_LIMIT_EXCEEDED:
+        raise RateLimitExceeded([])
+
     return r.json()
 
 
@@ -44,7 +55,11 @@ def get_multiple(
 
     fetch_count = 0
     while True:
-        result = get(request_path, params)
+        try:
+            result = get(request_path, params)
+        except RateLimitExceeded:
+            raise RateLimitExceeded(partial_result=results)
+
         fetch_count += 1
 
         if not result:
