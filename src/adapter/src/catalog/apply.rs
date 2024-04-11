@@ -516,10 +516,9 @@ impl CatalogState {
         diff: Diff,
     ) -> Result<Option<GlobalId>, ApplyUpdateError> {
         // If we knew beforehand that the items were being applied in dependency
-        // order, then this branch could then we could fully delagate to `self.insert_item(...)` and
-        // `self.drop_item(...)`. However, we don't know that items are applied in dependency order,
-        // so we must handle the case that the item is valid, but we haven't applied all of its
-        // dependencies yet.
+        // order, then we could fully delegate to `self.insert_item(...)` and`self.drop_item(...)`.
+        // However, we don't know that items are applied in dependency order, so we must handle the
+        // case that the item is valid, but we haven't applied all of its dependencies yet.
         match diff {
             1 => {
                 // TODO(benesch): a better way of detecting when a view has depended
