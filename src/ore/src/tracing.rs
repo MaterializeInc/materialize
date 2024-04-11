@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 #[cfg(feature = "tokio-console")]
@@ -290,6 +290,13 @@ pub static OPENTELEMETRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
 pub static SENTRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
     vec![Directive::from_str("kube_client::client::builder=off").expect("valid directive")]
 });
+
+/// The [`GLOBAL_SUBSCRIBER`] type.
+type GlobalSubscriber = Arc<dyn Subscriber + Send + Sync + 'static>;
+
+/// An [`Arc`] of the tracing [`Subscriber`] constructed and initialized in
+/// [`configure`]. The value is written when [`configure`] runs.
+pub static GLOBAL_SUBSCRIBER: OnceLock<GlobalSubscriber> = OnceLock::new();
 
 /// Enables application tracing via the [`tracing`] and [`opentelemetry`]
 /// libraries.
@@ -586,7 +593,11 @@ where
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(tokio_console_layer);
     let stack = stack.with(sentry_layer);
-    stack.init();
+
+    // Set the stack as a global subscriber.
+    assert!(GLOBAL_SUBSCRIBER.set(Arc::new(stack)).is_ok());
+    // Initialize the subscriber.
+    Arc::clone(GLOBAL_SUBSCRIBER.get().unwrap()).init();
 
     #[cfg(feature = "tokio-console")]
     if let Some(console_config) = config.tokio_console {
