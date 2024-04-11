@@ -42,9 +42,9 @@ pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::ne
 /// address of any broker in the connection, then the payload is appended to the
 /// client ID. A rule's payload is always prefixed with `-`, to separate it from
 /// the preceding data in the client ID.
-pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<String> = Config::new(
+pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<fn() -> serde_json::Value> = Config::new(
     "kafka_client_id_enrichment_rules",
-    "[]",
+    || serde_json::json!([]),
     "Rules for enriching the `client.id` property of Kafka clients with additional data.",
 );
 

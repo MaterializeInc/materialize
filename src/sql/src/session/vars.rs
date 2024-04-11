@@ -1238,6 +1238,9 @@ impl SystemVars {
                 ConfigVal::Duration(default) => {
                     VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
                 }
+                ConfigVal::Json(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
+                }
             })
             .collect();
 
@@ -1867,6 +1870,9 @@ impl SystemVars {
                 }
                 ConfigVal::Duration(_) => {
                     ConfigVal::from(*self.expect_config_value::<Duration>(name))
+                }
+                ConfigVal::Json(_) => {
+                    ConfigVal::from(self.expect_config_value::<serde_json::Value>(name).clone())
                 }
             };
             updates.add_dynamic(entry.name(), val);

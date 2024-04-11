@@ -552,7 +552,7 @@ impl KafkaConnection {
         }
 
         let rules = KAFKA_CLIENT_ID_ENRICHMENT_RULES.get(configs);
-        let rules = match serde_json::from_str::<Vec<EnrichmentRule>>(&rules) {
+        let rules = match serde_json::from_value::<Vec<EnrichmentRule>>(rules) {
             Ok(rules) => rules,
             Err(e) => {
                 warn!(%e, "failed to decode kafka_client_id_enrichment_rules");
