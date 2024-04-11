@@ -51,9 +51,13 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
-use mz_sql::names::{QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId};
-use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{SystemVars, VarError, VarInput};
+use mz_sql::names::{
+    ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
+    SchemaSpecifier,
+};
+use mz_sql::rbac;
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
+use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_ssh_util::keys::SshKeyPairSet;
 use timely::Container;
@@ -261,6 +265,7 @@ impl Catalog {
                     add_new_builtin_introspection_source_migration(&mut txn)?;
                     add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
                     add_new_builtin_roles_migration(&mut txn)?;
+                    remove_invalid_config_param_role_defaults_migration(&mut txn)?;
                 }
                 migrated_builtins
             };
@@ -527,9 +532,7 @@ impl Catalog {
                 ));
             }
             for (_id, role) in &catalog.state.roles_by_id {
-                if let Some(builtin_update) = catalog.state.pack_role_update(role.id, 1) {
-                    builtin_table_updates.push(builtin_update);
-                }
+                builtin_table_updates.extend(catalog.state.pack_role_update(role.id, 1));
                 for group_id in role.membership.map.keys() {
                     builtin_table_updates.push(
                         catalog
@@ -1129,6 +1132,60 @@ fn add_new_builtin_cluster_replicas_migration(
             )?;
         }
     }
+
+    Ok(())
+}
+
+/// Roles can have default values for configuration parameters, e.g. you can set a Role default for
+/// the 'cluster' parameter.
+///
+/// This migration exists to remove the Role default for a configuration parameter, if the persisted
+/// input is no longer valid. For example if we remove a configuration parameter or change the
+/// accepted set of values.
+fn remove_invalid_config_param_role_defaults_migration(
+    txn: &mut Transaction<'_>,
+) -> Result<(), AdapterError> {
+    static BUILD_INFO: mz_build_info::BuildInfo = mz_build_info::build_info!();
+
+    let roles_to_migrate: BTreeMap<_, _> = txn
+        .get_roles()
+        .filter_map(|mut role| {
+            // Create an empty SessionVars just so we can check if a var is valid.
+            //
+            // TODO(parkmycar): This is a bit hacky, instead we should have a static list of all
+            // session variables.
+            let session_vars = SessionVars::new_unchecked(&BUILD_INFO, SYSTEM_USER.clone());
+
+            // Iterate over all of the variable defaults for this role.
+            let mut invalid_roles_vars = BTreeMap::new();
+            for (name, value) in &role.vars.map {
+                // If one does not exist or its value is invalid, then mark it for removal.
+                let Ok(session_var) = session_vars.inspect(name) else {
+                    invalid_roles_vars.insert(name.clone(), value.clone());
+                    continue;
+                };
+                if session_var.check(value.borrow()).is_err() {
+                    invalid_roles_vars.insert(name.clone(), value.clone());
+                }
+            }
+
+            // If the role has no invalid values, nothing to do!
+            if invalid_roles_vars.is_empty() {
+                return None;
+            }
+
+            tracing::warn!(?role, ?invalid_roles_vars, "removing invalid role vars");
+
+            // Otherwise, remove the variables from the role and return it to be updated.
+            for (name, _value) in invalid_roles_vars {
+                role.vars.map.remove(&name);
+            }
+            Some(role)
+        })
+        .map(|role| (role.id, role))
+        .collect();
+
+    txn.update_roles(roles_to_migrate)?;
 
     Ok(())
 }

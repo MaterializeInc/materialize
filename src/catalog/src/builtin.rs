@@ -2339,6 +2339,17 @@ pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_ROLE_PARAMETERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_role_parameters",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_ROLE_PARAMETERS_OID,
+    desc: RelationDesc::empty()
+        .with_column("role_id", ScalarType::String.nullable(false))
+        .with_column("parameter_name", ScalarType::String.nullable(false))
+        .with_column("parameter_value", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
@@ -6892,6 +6903,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_MAP_TYPES),
         Builtin::Table(&MZ_ROLES),
         Builtin::Table(&MZ_ROLE_MEMBERS),
+        Builtin::Table(&MZ_ROLE_PARAMETERS),
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_OPERATORS),

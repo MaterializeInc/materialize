@@ -249,6 +249,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 3  grantor  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_role_parameters' ORDER BY position
+----
+1  role_id  text
+2  parameter_name  text
+3  parameter_value  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_schemas' ORDER BY position
 ----
 1  id  text
@@ -401,6 +408,7 @@ mz_operators
 mz_pseudo_types
 mz_relations
 mz_role_members
+mz_role_parameters
 mz_roles
 mz_schemas
 mz_secrets

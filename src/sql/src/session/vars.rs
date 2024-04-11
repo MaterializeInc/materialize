@@ -232,6 +232,15 @@ impl SessionVar {
         }
     }
 
+    /// Checks if the provided [`VarInput`] is valid for the current session variable, returning
+    /// the formatted output if it's valid.
+    pub fn check(&self, input: VarInput) -> Result<String, VarError> {
+        let v = self.definition.parse(input)?;
+        self.validate_constraints(v.as_ref())?;
+
+        Ok(v.format())
+    }
+
     /// Parse the input and update the stored value to match.
     pub fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
         let v = self.definition.parse(input)?;
@@ -490,8 +499,10 @@ impl SessionVars {
     ///
     /// Note: If you're trying to determine the value of the variable with `name` you should
     /// instead use the named accessor, or [`SessionVars::get`].
-    pub fn inspect(&self, name: &str) -> Option<&SessionVar> {
-        self.vars.get(UncasedStr::new(name))
+    pub fn inspect(&self, name: &str) -> Result<&SessionVar, VarError> {
+        self.vars
+            .get(UncasedStr::new(name))
+            .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
     }
 
     /// Sets the configuration parameter named `name` to the value represented

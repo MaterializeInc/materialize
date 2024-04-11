@@ -21,7 +21,7 @@ use mz_catalog::builtin::{
     MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS,
     MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
     MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
-    MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
+    MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
     MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
@@ -53,6 +53,8 @@ use mz_sql::catalog::{
 };
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
+use mz_sql::session::user::SYSTEM_USER;
+use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -144,13 +146,13 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_role_update(&self, id: RoleId, diff: Diff) -> Option<BuiltinTableUpdate> {
+    pub(super) fn pack_role_update(&self, id: RoleId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         match id {
             // PUBLIC role should not show up in mz_roles.
-            RoleId::Public => None,
+            RoleId::Public => vec![],
             id => {
                 let role = self.get_role(&id);
-                Some(BuiltinTableUpdate {
+                let role_update = BuiltinTableUpdate {
                     id: self.resolve_builtin_table(&MZ_ROLES),
                     row: Row::pack_slice(&[
                         Datum::String(&role.id.to_string()),
@@ -159,7 +161,40 @@ impl CatalogState {
                         Datum::from(role.attributes.inherit),
                     ]),
                     diff,
-                })
+                };
+                let mut updates = vec![role_update];
+
+                // HACK/TODO(parkmycar): Creating an empty SessionVars like this is pretty hacky,
+                // we should instead have a static list of all session vars.
+                let session_vars_reference = SessionVars::new_unchecked(
+                    &mz_build_info::DUMMY_BUILD_INFO,
+                    SYSTEM_USER.clone(),
+                );
+
+                for (name, val) in role.vars() {
+                    let result = session_vars_reference
+                        .inspect(name)
+                        .and_then(|var| var.check(val.borrow()));
+                    let Ok(formatted_val) = result else {
+                        // Note: all variables should have been validated by this point, so we
+                        // shouldn't ever hit this.
+                        tracing::error!(?name, ?val, ?result, "found invalid role default var");
+                        continue;
+                    };
+
+                    let role_var_update = BuiltinTableUpdate {
+                        id: self.resolve_builtin_table(&MZ_ROLE_PARAMETERS),
+                        row: Row::pack_slice(&[
+                            Datum::String(&role.id.to_string()),
+                            Datum::String(name),
+                            Datum::String(&formatted_val),
+                        ]),
+                        diff,
+                    };
+                    updates.push(role_var_update);
+                }
+
+                updates
             }
         }
     }

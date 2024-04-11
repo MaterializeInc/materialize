@@ -189,6 +189,10 @@ mz_role_members
 BASE TABLE
 materialize
 mz_catalog
+mz_role_parameters
+BASE TABLE
+materialize
+mz_catalog
 mz_roles
 BASE TABLE
 materialize
