@@ -437,16 +437,13 @@ impl Catalog {
                     vars,
                 } => {
                     state.ensure_not_reserved_role(&id)?;
-                    if let Some(builtin_update) = state.pack_role_update(id, -1) {
-                        builtin_table_updates.push(builtin_update);
-                    }
+                    builtin_table_updates.extend(state.pack_role_update(id, -1));
+
                     let existing_role = state.get_role_mut(&id);
                     existing_role.attributes = attributes;
                     existing_role.vars = vars;
                     tx.update_role(id, existing_role.clone().into())?;
-                    if let Some(builtin_update) = state.pack_role_update(id, 1) {
-                        builtin_table_updates.push(builtin_update);
-                    }
+                    builtin_table_updates.extend(state.pack_role_update(id, 1));
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -681,9 +678,7 @@ impl Catalog {
                             vars,
                         },
                     );
-                    if let Some(builtin_update) = state.pack_role_update(id, 1) {
-                        builtin_table_updates.push(builtin_update);
-                    }
+                    builtin_table_updates.extend(state.pack_role_update(id, 1));
                 }
                 Op::CreateCluster {
                     id,
@@ -1090,9 +1085,8 @@ impl Catalog {
                             }
                             state.ensure_not_reserved_role(&id)?;
                             tx.remove_role(&name)?;
-                            if let Some(builtin_update) = state.pack_role_update(id, -1) {
-                                builtin_table_updates.push(builtin_update);
-                            }
+                            builtin_table_updates.extend(state.pack_role_update(id, -1));
+
                             let role = state.roles_by_id.remove(&id).expect("catalog out of sync");
                             state.roles_by_name.remove(role.name());
                             state.add_to_audit_log(
