@@ -2380,9 +2380,10 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
-    use crate::catalog::Catalog;
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
     use mz_repr::role_id::RoleId;
+
+    use crate::catalog::Catalog;
 
     #[mz_ore::test]
     fn test_update_privilege_owners() {

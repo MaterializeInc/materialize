@@ -1970,13 +1970,13 @@ mod tests {
         Builtin, BuiltinType, BUILTINS,
         REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE,
     };
+    use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
     use mz_ore::now::{to_datetime, NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_persist_client::PersistClient;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
-    use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
     use mz_repr::{Datum, GlobalId, RelationType, RowArena, ScalarType, Timestamp};
@@ -1993,7 +1993,7 @@ mod tests {
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::VarInput;
 
-    use crate::catalog::{Catalog, CatalogItem, Op, PrivilegeMap, SYSTEM_CONN_ID};
+    use crate::catalog::{Catalog, CatalogItem, Op};
     use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
     use crate::session::Session;
 
