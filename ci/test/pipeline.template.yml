@@ -311,7 +311,7 @@ steps:
 
       - id: debezium-sql-server
         label: Debezium SQL Server tests
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 30
         inputs: [test/debezium]
         plugins:
@@ -588,7 +588,7 @@ steps:
 
   - id: metabase-demo
     label: Metabase smoke test
-    depends_on: build-aarch64
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:

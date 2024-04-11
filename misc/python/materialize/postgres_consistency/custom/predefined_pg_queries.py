@@ -104,6 +104,17 @@ def create_pg_timezone_names_query() -> QueryTemplate:
         "Europe/Volgograd",
     ]
 
+    # further time zones that differ in CI (due to the used libtz version)
+    excluded_timezones.extend(
+        [
+            "America/Scoresbysund",
+            "Antarctica/Casey",
+            "Antarctica/Vostok",
+            "Asia/Almaty",
+            "Asia/Qostanay",
+        ]
+    )
+
     # do not exist in mz
     excluded_timezones.extend(
         [

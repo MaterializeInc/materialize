@@ -269,7 +269,7 @@ where
         // writer that generated the compaction request / maintenance. this machine has a
         // spine structure that generated the request, so it has a much better chance of
         // merging and committing the result than a machine kept up-to-date through state
-        // diffs, which may have a different spine structure less amendable to merging.
+        // diffs, which may have a different spine structure less amenable to merging.
         let send = new_compaction_sender.try_send((
             Instant::now(),
             req,

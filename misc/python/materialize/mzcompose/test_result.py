@@ -30,6 +30,8 @@ class TestResult:
 
 @dataclass
 class TestFailureDetails:
+    __test__ = False
+
     message: str
     details: str | None
     test_class_name_override: str | None = None
