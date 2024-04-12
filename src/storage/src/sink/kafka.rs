@@ -141,7 +141,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         self.relation_key_indices.as_deref()
     }
 
-    fn render_continuous_sink(
+    fn render_sink(
         &self,
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<MetadataFilled, Timestamp>,

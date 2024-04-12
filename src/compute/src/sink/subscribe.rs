@@ -33,7 +33,7 @@ impl<G> SinkRender<G> for SubscribeSinkConnection
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn render_continuous_sink(
+    fn render_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
@@ -42,10 +42,7 @@ where
         _start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-    ) -> Option<Rc<dyn Any>>
-    where
-        G: Scope<Timestamp = Timestamp>,
-    {
+    ) -> Option<Rc<dyn Any>> {
         // An encapsulation of the Subscribe response protocol.
         // Used to send rows and progress messages,
         // and alert if the dataflow was dropped before completing.

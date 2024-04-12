@@ -52,7 +52,7 @@ impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn render_continuous_sink(
+    fn render_sink(
         &self,
         compute_state: &mut ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
@@ -61,10 +61,7 @@ where
         start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-    ) -> Option<Rc<dyn Any>>
-    where
-        G: Scope<Timestamp = Timestamp>,
-    {
+    ) -> Option<Rc<dyn Any>> {
         let mut desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
 
         // If a `RefreshSchedule` was specified, round up timestamps.
