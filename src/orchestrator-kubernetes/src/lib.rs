@@ -19,13 +19,13 @@ use cloud_resource_controller::KubernetesResourceReader;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource,
+    Affinity, Capabilities, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource,
     EphemeralVolumeSource, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
     ObjectFieldSelector, ObjectReference, PersistentVolumeClaim, PersistentVolumeClaimSpec,
     PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
     PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
-    Secret, Service as K8sService, ServicePort, ServiceSpec, Toleration, TopologySpreadConstraint,
-    Volume, VolumeMount, WeightedPodAffinityTerm,
+    SeccompProfile, Secret, SecurityContext, Service as K8sService, ServicePort, ServiceSpec,
+    Toleration, TopologySpreadConstraint, Volume, VolumeMount, WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -975,6 +975,21 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .context("`image` is not ORG/NAME:VERSION")?
             .to_string();
 
+        let container_security_context = Some(SecurityContext {
+            privileged: Some(false),
+            run_as_non_root: Some(true),
+            allow_privilege_escalation: Some(false),
+            seccomp_profile: Some(SeccompProfile {
+                type_: "RuntimeDefault".to_string(),
+                ..Default::default()
+            }),
+            capabilities: Some(Capabilities {
+                drop: Some(vec!["ALL".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
         let init_containers = init_container_image.map(|image| {
             vec![Container {
                 name: "init".to_string(),
@@ -987,6 +1002,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     limits: Some(limits.clone()),
                     requests: Some(limits.clone()),
                 }),
+                security_context: container_security_context.clone(),
                 env: Some(vec![
                     EnvVar {
                         name: "MZ_NAMESPACE".to_string(),
@@ -1120,6 +1136,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let security_context = if let Some(fs_group) = self.config.service_fs_group {
             Some(PodSecurityContext {
                 fs_group: Some(fs_group),
+                run_as_user: Some(fs_group),
+                run_as_group: Some(fs_group),
                 ..Default::default()
             })
         } else {
@@ -1170,6 +1188,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                             })
                             .collect(),
                     ),
+                    security_context: container_security_context.clone(),
                     resources: Some(ResourceRequirements {
                         claims: None,
                         // Set both limits and requests to the same values, to ensure a
