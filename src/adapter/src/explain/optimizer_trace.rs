@@ -153,6 +153,8 @@ impl OptimizerTrace {
                 let global_plan = self.collect_global_plan();
                 let fast_path_plan = self.collect_fast_path_plan();
 
+                // Plans can be very large and exhaust the json serialization recursion limit.
+                // Convert those into error objects.
                 let mut get_plan = |name: NamedPlan| {
                     let text_plan = match text_traces.remove(name.path()) {
                         None => "<unknown>".into(),
@@ -160,22 +162,24 @@ impl OptimizerTrace {
                     };
                     let json_plan = match json_traces.remove(name.path()) {
                         None => serde_json::Value::Null,
-                        Some(entry) => serde_json::from_str(&entry.plan).map_err(|e| {
-                            AdapterError::Unstructured(anyhow::anyhow!("internal error: {e}"))
-                        })?,
+                        Some(entry) => serde_json::from_str(&entry.plan).unwrap_or_else(|e| {
+                            serde_json::json!({
+                                "error": format!("internal error: {e}"),
+                            })
+                        }),
                     };
-                    Ok::<_, AdapterError>(serde_json::json!({
+                    serde_json::json!({
                         "text": text_plan,
                         "json": json_plan,
-                    }))
+                    })
                 };
 
                 let output = serde_json::json!({
                     "plans": {
-                        "raw": get_plan(NamedPlan::Raw)?,
+                        "raw": get_plan(NamedPlan::Raw),
                         "optimized": {
-                            "global": get_plan(NamedPlan::Global)?,
-                            "fast_path": get_plan(NamedPlan::FastPath)?,
+                            "global": get_plan(NamedPlan::Global),
+                            "fast_path": get_plan(NamedPlan::FastPath),
                         }
                     },
                     "insights": insights::plan_insights(humanizer, global_plan, fast_path_plan),
