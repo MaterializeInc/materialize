@@ -2094,7 +2094,7 @@ feature_flags!(
     {
         name: enable_letrec_fixpoint_analysis,
         desc: "Enable Lattice-based fixpoint iteration on LetRec nodes in the Analysis framework",
-        default: false,
+        default: true, // This is just a failsafe switch for the deployment of #25591.
         internal: true,
         enable_for_item_parsing: false,
     },
