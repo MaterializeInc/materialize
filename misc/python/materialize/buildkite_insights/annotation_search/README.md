@@ -19,6 +19,11 @@ usage: buildkite-annotation-search [-h]
                                    pattern
 ```
 
+### Authentication
+
+You will need an environment variable called `BUILDKITE_TOKEN`, which contains a Buildkite token. Such a token can be
+created on https://buildkite.com/user/api-access-tokens/new and will require at least `read_builds`.
+
 ## Examples
 
 Builds that have an annotation containing `Error { kind: Db, cause: Some(DbError`

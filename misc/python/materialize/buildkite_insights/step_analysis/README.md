@@ -17,6 +17,11 @@ usage: buildkite-step-durations [-h]
                                 {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,release-qualification,security,slt,test,www}
 ```
 
+### Authentication
+
+You will need an environment variable called `BUILDKITE_TOKEN`, which contains a Buildkite token. Such a token can be
+created on https://buildkite.com/user/api-access-tokens/new and will require at least `read_builds`.
+
 ## Examples
 
 Recent executions of build step "AWS (Localstack)" in Nightly on all branches
