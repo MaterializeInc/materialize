@@ -488,7 +488,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print("\n".join(justifications))
 
         if not all_regressions_justified:
-            sys.exit(1)
+            raise FailedTestExecutionError(
+                error_summary="At least one regression occurred",
+                errors=_regressions_to_failure_details(
+                    scenarios_with_regressions,
+                    latest_report_by_scenario_name,
+                    justification_by_scenario_name,
+                ),
+            )
 
 
 def _check_regressions_justified(
@@ -551,3 +558,28 @@ def _tag_references_release_version(image_tag: str | None) -> bool:
     return is_image_tag_of_version(image_tag) and MzVersion.is_valid_version_string(
         image_tag
     )
+
+
+def _regressions_to_failure_details(
+    scenarios_with_regressions: list[type[Scenario]],
+    latest_report_by_scenario_name: dict[str, Report],
+    justification_by_scenario_name: dict[str, str | None],
+) -> list[TestFailureDetails]:
+    failure_details = []
+
+    for scenario in scenarios_with_regressions:
+        scenario_name = scenario.__name__
+
+        if justification_by_scenario_name[scenario_name] is not None:
+            continue
+
+        report = latest_report_by_scenario_name[scenario_name]
+        failure_details.append(
+            TestFailureDetails(
+                test_case_name_override=scenario_name,
+                message="New regression",
+                details=str(report),
+            )
+        )
+
+    return failure_details
