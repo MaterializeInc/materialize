@@ -124,6 +124,19 @@ pub trait OverrideFrom<T> {
     fn override_from(self, layer: &T) -> Self;
 }
 
+/// Overrides for `U` coming from an optional `T`.
+impl<T, U> OverrideFrom<Option<&T>> for U
+where
+    Self: OverrideFrom<T>,
+{
+    fn override_from(self, layer: &Option<&T>) -> Self {
+        match layer {
+            Some(layer) => self.override_from(layer),
+            None => self,
+        }
+    }
+}
+
 /// A trait that handles conversion of feature flags.
 trait OptimizerFeatureType {
     fn encode(self) -> String;

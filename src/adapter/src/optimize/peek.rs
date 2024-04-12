@@ -100,6 +100,10 @@ impl Optimizer {
     pub fn index_id(&self) -> GlobalId {
         self.index_id
     }
+
+    pub fn config(&self) -> &OptimizerConfig {
+        &self.config
+    }
 }
 
 // A bogey `Debug` implementation that hides fields. This is needed to make the

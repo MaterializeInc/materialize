@@ -12,7 +12,7 @@ use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::optimize::OverrideFrom;
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, RelationDesc, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
@@ -193,11 +193,15 @@ impl Coordinator {
 
         let target_cluster = None; // Views don't have a target cluster.
 
+        let features =
+            OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
+
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
                 view.raw_expr.clone(),
                 format,
                 &config,
+                &features,
                 &self.catalog().for_session(ctx.session()),
                 target_cluster,
             )?,
@@ -205,6 +209,7 @@ impl Coordinator {
                 view.optimized_expr.as_inner().clone(),
                 format,
                 &config,
+                &features,
                 &self.catalog().for_session(ctx.session()),
                 target_cluster,
             )?,
@@ -446,9 +451,13 @@ impl Coordinator {
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
+        let features =
+            OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
+
         let rows = optimizer_trace.into_rows(
             format,
             &config,
+            &features,
             &expr_humanizer,
             None,
             None, // Views don't have a target cluster.

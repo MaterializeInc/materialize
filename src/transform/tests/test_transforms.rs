@@ -14,6 +14,7 @@ use mz_expr_parser::{handle_define, try_parse_mir, TestCatalog};
 use mz_ore::str::Indent;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{ExplainConfig, PlanRenderingContext};
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_transform::attribute::annotate_plan;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::TypeErrorHumanizer;
@@ -53,8 +54,12 @@ fn handle_explain(
         Err(e) => return format!("ExplainConfig::try_from error\n{}\n", e.to_string().trim()),
     };
 
+    // Create OptimizerFeatures and override from the config overrides layer.
+    let features = OptimizerFeatures::default().override_from(&config.features);
+
     let context = ExplainContext {
         config: &config,
+        features: &features,
         humanizer: catalog,
         used_indexes: Default::default(),
         finishing: Default::default(),

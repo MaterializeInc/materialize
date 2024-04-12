@@ -13,7 +13,7 @@ use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::optimize::OverrideFrom;
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
@@ -204,7 +204,11 @@ impl Coordinator {
             coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
         };
 
-        let target_cluster = Some(self.catalog().get_cluster(index.cluster_id).name.as_str());
+        let target_cluster = self.catalog().get_cluster(index.cluster_id);
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features())
+            .override_from(&config.features);
 
         let explain = match stage {
             ExplainStage::GlobalPlan => {
@@ -216,8 +220,9 @@ impl Coordinator {
                     plan,
                     format,
                     &config,
+                    &features,
                     &self.catalog().for_session(ctx.session()),
-                    target_cluster,
+                    Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
@@ -230,8 +235,9 @@ impl Coordinator {
                     plan,
                     format,
                     &config,
+                    &features,
                     &self.catalog().for_session(ctx.session()),
-                    target_cluster,
+                    Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
@@ -562,14 +568,19 @@ impl Coordinator {
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
-        let target_cluster = Some(self.catalog().get_cluster(index.cluster_id).name.as_str());
+        let target_cluster = self.catalog().get_cluster(index.cluster_id);
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features())
+            .override_from(&config.features);
 
         let rows = optimizer_trace.into_rows(
             format,
             &config,
+            &features,
             &expr_humanizer,
             None,
-            target_cluster,
+            Some(target_cluster.name.as_str()),
             df_meta,
             stage,
             plan::ExplaineeStatementKind::CreateIndex,
