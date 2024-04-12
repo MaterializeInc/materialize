@@ -10,7 +10,7 @@
 use std::env;
 
 fn main() {
-    env::set_var("PROTOC", protobuf_src::protoc());
+    env::set_var("PROTOC", mz_build_tools::protoc());
 
     let mut config = prost_build::Config::new();
     config.btree_map(["."]);

@@ -34,8 +34,7 @@ fn main() -> Result<()> {
 
     // Build protobufs.
     {
-        #[cfg(feature = "protobuf-src")]
-        env::set_var("PROTOC", protobuf_src::protoc());
+        env::set_var("PROTOC", mz_build_tools::protoc());
 
         prost_build::Config::new()
             .btree_map(["."])

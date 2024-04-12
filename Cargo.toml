@@ -83,6 +83,8 @@ members = [
     "src/sql-parser",
     "src/sql-pretty",
     "src/sqllogictest",
+    "src/stash",
+    "src/stash-types",
     "src/storage",
     "src/storage-client",
     "src/storage-controller",
@@ -100,6 +102,7 @@ members = [
     "test/metabase/smoketest",
     "test/test-util",
     "src/regexp",
+    "src/build-tools",
 ]
 
 # Here we should specify our high level binaries to prevent folks from needing to take extra steps

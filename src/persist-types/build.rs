@@ -8,8 +8,7 @@
 // by the Apache License, Version 2.0.
 
 fn main() {
-    #[cfg(feature = "protobuf-src")]
-    std::env::set_var("PROTOC", protobuf_src::protoc());
+    std::env::set_var("PROTOC", mz_build_tools::protoc());
 
     prost_build::Config::new()
         .type_attribute(".", "#[derive(serde::Serialize)]")

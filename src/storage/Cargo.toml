@@ -100,7 +100,7 @@ uuid = { version = "1.7.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
-protobuf-src = "1.1.0"
+mz-build-tools = { path = "../build-tools", default-features = false }
 tonic-build = "0.9.2"
 
 [dev-dependencies]
@@ -115,6 +115,9 @@ itertools = "0.10.5"
 num_cpus = "1.14.0"
 tempfile = "3.8.1"
 tokio = { version = "1.32.0", features = ["test-util"] }
+
+[features]
+default = ["mz-build-tools/default"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
