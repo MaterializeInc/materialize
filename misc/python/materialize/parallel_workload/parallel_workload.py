@@ -154,6 +154,8 @@ def run(
             weights = [60, 30, 30, 30, 0]
         elif complexity == Complexity.Read:
             weights = [60, 30, 0, 0, 0]
+        elif complexity == Complexity.DDLOnly:
+            weights = [0, 0, 0, 0, 100]
         else:
             raise ValueError(f"Unknown complexity {complexity}")
         worker_rng = random.Random(rng.randrange(SEED_RANGE))

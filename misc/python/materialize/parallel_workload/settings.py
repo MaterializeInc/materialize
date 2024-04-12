@@ -15,6 +15,7 @@ class Complexity(Enum):
     Read = "read"
     DML = "dml"
     DDL = "ddl"
+    DDLOnly = "ddl-only"
 
     @classmethod
     def _missing_(cls, value):

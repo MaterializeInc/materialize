@@ -82,7 +82,7 @@ class Action:
             "must be owner of",
             "network error",  # #21954, remove when fixed when fixed
         ]
-        if exe.db.complexity == Complexity.DDL:
+        if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
                 [
                     "query could not complete",
