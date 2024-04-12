@@ -48,10 +48,42 @@ pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<fn() -> serde_json::Value> = 
     "Rules for enriching the `client.id` property of Kafka clients with additional data.",
 );
 
+/// Whether or not to prevent buffering the entire _upstream_ snapshot in
+/// memory when processing it in memory. This is generally understood to reduce
+/// memory consumption.
+///
+/// When false, in general the memory utilization while processing the snapshot is:
+/// # of snapshot updates + (# of unique keys in snapshot * N), where N is some small
+/// integer number of buffers
+///
+/// When true, in general the memory utilization while processing the snapshot is:
+/// # of snapshot updates + (RocksDB buffers + # of keys in batch produced by upstream) * # of
+/// workers.
+///
+/// Without hydration flow control, which is not yet implemented, there are workloads that may
+/// cause the latter to use more memory, which is why we offer this configuration.
+pub const STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING: Config<bool> = Config::new(
+    "storage_upsert_prevent_snapshot_buffering",
+    true,
+    "Prevent snapshot buffering in upsert.",
+);
+
+/// if `storage_upsert_prevent_snapshot_buffering` is true, this prevents the upsert
+/// operator from buffering too many events from the upstream snapshot. In the absence
+/// of hydration flow control, this could prevent certain workloads from causing egregiously
+/// large writes to RocksDB.
+pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = Config::new(
+    "storage_upsert_max_snapshot_batch_buffering",
+    None,
+    "Limit snapshot buffering in upsert.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
+        .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
+        .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
 }

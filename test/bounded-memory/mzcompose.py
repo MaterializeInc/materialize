@@ -196,6 +196,9 @@ class KafkaScenario(Scenario):
         $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
         "${{kafka-ingest.iteration}}"
 
+        $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
+        "MMM"
+
         # Expect that only markers are left
         > SELECT * FROM v1;
         2
@@ -430,23 +433,31 @@ SCENARIOS = [
                 dedent(
                     f"""
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
-                    "${{kafka-ingest.iteration}}" {{"f1": "{i}{STRING_PAD}"}}
+                    "MMM" {{"f1": "{i}{STRING_PAD}"}}
                     """
                 )
                 for i in range(0, ITERATIONS)
             ]
         )
         + KafkaScenario.END_MARKER
+        # Ensure this config works.
+        + dedent(
+            """
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET storage_upsert_max_snapshot_batch_buffering = 2;
+            """
+        )
         + KafkaScenario.SOURCE
         + dedent(
-            f"""
+            """
             # Expect all ingested data + two MARKERs
             > SELECT * FROM v1;
-            {REPEAT + 2}
+            3
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
-        materialized_memory="4.5Gb",
+        materialized_memory="2Gb",
         clusterd_memory="3.5Gb",
     ),
     # Perform updates while the source is ingesting
