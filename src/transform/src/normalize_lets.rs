@@ -26,14 +26,18 @@
 
 use mz_expr::{visit::Visit, MirRelationExpr};
 use mz_ore::{id_gen::IdGen, stack::RecursionLimitError};
+use mz_repr::optimize::OptimizerFeatures;
 
 use crate::TransformCtx;
 
 pub use renumbering::renumber_bindings;
 
 /// Normalize `Let` and `LetRec` structure.
-pub fn normalize_lets(expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-    NormalizeLets { inline_mfp: false }.action(expr)
+pub fn normalize_lets(
+    expr: &mut MirRelationExpr,
+    features: &OptimizerFeatures,
+) -> Result<(), crate::TransformError> {
+    NormalizeLets::new(false).action(expr, features)
 }
 
 /// Install replace certain `Get` operators with their `Let` value.
@@ -67,24 +71,15 @@ impl crate::Transform for NormalizeLets {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _ctx: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let result = self.transform_without_trace(relation);
+        let result = self.action(relation, ctx.features);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
 }
 
 impl NormalizeLets {
-    /// Performs the `NormalizeLets` transformation without tracing the result.
-    pub fn transform_without_trace(
-        &self,
-        relation: &mut MirRelationExpr,
-    ) -> Result<(), crate::TransformError> {
-        self.action(relation)?;
-        Ok(())
-    }
-
     /// Normalize `Let` and `LetRec` bindings in `relation`.
     ///
     /// Mechanically, `action` first renumbers all bindings, erroring if any shadowing is encountered.
@@ -95,7 +90,11 @@ impl NormalizeLets {
     /// but updating nullability and keys.
     ///
     /// We then perform a final renumbering.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+    pub fn action(
+        &self,
+        relation: &mut MirRelationExpr,
+        _features: &OptimizerFeatures,
+    ) -> Result<(), crate::TransformError> {
         // Record whether the relation was initially recursive, to confirm that we do not introduce
         // recursion to a non-recursive expression.
         let was_recursive = relation.is_recursive();

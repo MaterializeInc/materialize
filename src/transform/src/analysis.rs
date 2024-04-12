@@ -74,6 +74,7 @@ pub mod common {
 
     use mz_expr::LocalId;
     use mz_expr::MirRelationExpr;
+    use mz_repr::optimize::OptimizerFeatures;
 
     use super::subtree::SubtreeSize;
     use super::Analysis;
@@ -244,22 +245,25 @@ pub mod common {
 
     /// A builder wrapper to accumulate announced dependencies and construct default state.
     #[allow(missing_debug_implementations)]
-    pub struct DerivedBuilder {
+    pub struct DerivedBuilder<'a> {
         result: Derived,
+        features: &'a OptimizerFeatures,
     }
 
-    impl Default for DerivedBuilder {
-        fn default() -> Self {
+    impl<'a> DerivedBuilder<'a> {
+        /// Create a new [`DerivedBuilder`] parameterized by [`OptimizerFeatures`].
+        pub fn new(features: &'a OptimizerFeatures) -> Self {
             // The default builder should include `SubtreeSize` to facilitate navigation.
             let mut builder = DerivedBuilder {
                 result: Derived::default(),
+                features,
             };
             builder.require::<SubtreeSize>();
             builder
         }
     }
 
-    impl DerivedBuilder {
+    impl<'a> DerivedBuilder<'a> {
         /// Announces a dependence on an analysis `A`.
         ///
         /// This ensures that `A` will be performed, and before any analysis that
