@@ -1026,7 +1026,7 @@ where
         cx: &TunnelingClientContext<C>,
     ) -> Result<T, ContextCreationError> {
         self.map_err(|e| {
-            if let SshTunnelStatus::Errored(e) = cx.tunnel_status().ssh_status {
+            if let SshTunnelStatus::Errored(e) = cx.tunnel_status() {
                 ContextCreationError::Ssh(anyhow!(e))
             } else {
                 ContextCreationError::from(e)

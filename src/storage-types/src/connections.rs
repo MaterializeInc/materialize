@@ -52,7 +52,7 @@ use url::Url;
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{AwsConnection, AwsConnectionValidationError};
 use crate::controller::AlterError;
-use crate::dyncfgs::{KAFKA_CLIENT_ID_ENRICHMENT_RULES, ENFORCE_EXTERNAL_ADDRESSES};
+use crate::dyncfgs::{ENFORCE_EXTERNAL_ADDRESSES, KAFKA_CLIENT_ID_ENRICHMENT_RULES};
 use crate::errors::{ContextCreationError, CsrConnectError};
 use crate::AlterCompatible;
 
@@ -662,6 +662,9 @@ impl KafkaConnection {
             config.set(*k, v);
         }
 
+        // TODO(roshan): Implement enforcement of external address validation once
+        // rdkafka client has been updated to support providing multiple resolved
+        // addresses for brokers
         let mut context = TunnelingClientContext::new(
             context,
             Handle::current(),
@@ -671,7 +674,6 @@ impl KafkaConnection {
                 .clone(),
             storage_configuration.parameters.ssh_timeout_config,
             in_task,
-            ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
         );
 
         match &self.default_tunnel {
@@ -727,12 +729,6 @@ impl KafkaConnection {
                     // - Its not necessary.
                     // - Not doing so makes it easier to test the `FailedDefaultSshTunnel` path
                     // in the `TunnelingClientContext`.
-                    //
-                    // NOTE that we do not need to use the `resolve_address` method to
-                    // validate the broker address here since it will be validated when the
-                    // connection is established in `src/kafka-util/src/client.rs`, and we do not
-                    // want to specify any BrokerRewrite that would override any default-tunnel
-                    // settings.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
                     let host = mz_cloud_resources::vpc_endpoint_host(
