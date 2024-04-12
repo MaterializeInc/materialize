@@ -237,6 +237,11 @@ fn handle_apply(
             let transform = ThresholdElision;
             apply_transform(transform, catalog, input)
         }
+        "union_branch_cancellation" => {
+            use mz_transform::union_cancel::UnionBranchCancellation;
+            let transform = UnionBranchCancellation;
+            apply_transform(transform, catalog, input)
+        }
         transform => Err(format!("unsupported pipeline transform: {transform}")),
     };
 
