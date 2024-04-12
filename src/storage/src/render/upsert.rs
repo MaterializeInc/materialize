@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cell::RefCell;
-use std::cmp::{Ordering, Reverse};
+use std::cmp::Reverse;
 use std::convert::AsRef;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
@@ -408,7 +408,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // Find the prefix that we can emit
     let idx = stash.partition_point(|(ts, _, _, _)| match &drain_style {
         DrainStyle::ToUpper(upper) => !upper.less_equal(ts),
-        DrainStyle::AtTime(time) => ts.cmp(time) <= Ordering::Equal,
+        DrainStyle::AtTime(time) => ts <= time,
     });
 
     tracing::trace!(?drain_style, updates = idx, "draining stash in upsert");
@@ -799,9 +799,7 @@ where
             // produced in this worker until we yield to timely.
             let events = [event]
                 .into_iter()
-                .chain(itertools::unfold(&mut input, |input| {
-                    input.next().now_or_never().flatten()
-                }))
+                .chain(std::iter::from_fn(|| input.next().now_or_never().flatten()))
                 .enumerate();
 
             let mut partial_drain_time = None;
@@ -828,9 +826,7 @@ where
                         //
                         // This is a load-bearing optimization, as it is required to avoid buffering
                         // the entire source snapshot in the `stash`.
-                        if prevent_snapshot_buffering
-                            && output_cap.time().cmp(event_time) == Ordering::Equal
-                        {
+                        if prevent_snapshot_buffering && output_cap.time() == event_time {
                             partial_drain_time = Some(event_time.clone());
                         }
                     }
