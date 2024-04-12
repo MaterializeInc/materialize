@@ -67,8 +67,7 @@ Explained Query:
     cte l0 =
       Distinct project=[#0, #1] // { arity: 2 }
         Union // { arity: 2 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
-            Get l1 // { arity: 2 }
+          Get l1 // { arity: 2 }
           Project (#0, #0) // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 1 }
               ReadStorage materialize.public.t // { arity: 1 }
