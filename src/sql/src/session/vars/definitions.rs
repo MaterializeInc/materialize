@@ -2091,6 +2091,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_letrec_fixpoint_analysis,
+        desc: "Enable Lattice-based fixpoint iteration on LetRec nodes in the Analysis framework",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2102,6 +2109,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
+            enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }

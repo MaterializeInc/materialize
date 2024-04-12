@@ -361,7 +361,8 @@ generate_extracted_config!(
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableEquivalencePropagation, Option<bool>, Default(None)),
-    (EnableVariadicLeftJoinLowering, Option<bool>, Default(None))
+    (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
+    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
 );
 
 impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
@@ -406,6 +407,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_equivalence_propagation: v.enable_equivalence_propagation,
                 enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,
+                enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
                 reoptimize_imported_views: v.reoptimize_imported_views,
                 ..Default::default()
             },
