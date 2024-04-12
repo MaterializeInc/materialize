@@ -42,7 +42,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use tracing::warn;
 
-use crate::catalog::CatalogState;
+use crate::catalog::{BuiltinTableUpdate, CatalogState};
 use crate::AdapterError;
 
 enum ApplyUpdateError {
@@ -876,6 +876,100 @@ impl CatalogState {
                 );
             }
             _ => unreachable!("invalid diff: {diff}"),
+        }
+    }
+
+    /// Generate a list of `BuiltinTableUpdate`s that correspond to a list of updates made to the
+    /// durable catalog.
+    #[instrument]
+    pub(crate) fn generate_builtin_table_updates(
+        &mut self,
+        updates: Vec<StateUpdate>,
+    ) -> Vec<BuiltinTableUpdate> {
+        let mut builtin_table_updates = Vec::new();
+        for StateUpdate { kind, diff } in updates {
+            builtin_table_updates.extend(self.generate_builtin_table_update(kind, diff));
+        }
+        builtin_table_updates
+    }
+
+    /// Generate a list of `BuiltinTableUpdate`s that correspond to a single update made to the
+    /// durable catalog.
+    #[instrument(level = "debug")]
+    fn generate_builtin_table_update(
+        &mut self,
+        kind: StateUpdateKind,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        assert!(
+            diff == 1 || diff == -1,
+            "invalid update in catalog updates: ({kind:?}, {diff:?})"
+        );
+        match kind {
+            StateUpdateKind::Role(role) => {
+                let mut builtin_table_updates = self.pack_role_update(role.id, diff);
+                for group_id in role.membership.map.keys() {
+                    builtin_table_updates
+                        .push(self.pack_role_members_update(*group_id, role.id, diff))
+                }
+                builtin_table_updates
+            }
+            StateUpdateKind::Database(database) => {
+                vec![self.pack_database_update(&database.id, diff)]
+            }
+            StateUpdateKind::Schema(schema) => {
+                let db_spec = schema.database_id.into();
+                vec![self.pack_schema_update(&db_spec, &schema.id, diff)]
+            }
+            StateUpdateKind::DefaultPrivilege(default_privilege) => {
+                vec![self.pack_default_privileges_update(
+                    &default_privilege.object,
+                    &default_privilege.acl_item.grantee,
+                    &default_privilege.acl_item.acl_mode,
+                    diff,
+                )]
+            }
+            StateUpdateKind::SystemPrivilege(system_privilege) => {
+                vec![self.pack_system_privileges_update(system_privilege, diff)]
+            }
+            StateUpdateKind::SystemConfiguration(_) => Vec::new(),
+            StateUpdateKind::Cluster(cluster) => {
+                vec![self.pack_cluster_update(&cluster.name, diff)]
+            }
+            StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
+                self.pack_item_update(introspection_source_index.index_id, diff)
+            }
+            StateUpdateKind::ClusterReplica(cluster_replica) => {
+                let mut builtin_table_updates = Vec::new();
+                builtin_table_updates.extend(self.pack_cluster_replica_update(
+                    cluster_replica.cluster_id,
+                    &cluster_replica.name,
+                    diff,
+                ));
+                let config = &self
+                    .get_cluster_replica(cluster_replica.cluster_id, cluster_replica.replica_id)
+                    .config;
+                for process_id in 0..config.location.num_processes() {
+                    let update = self.pack_cluster_replica_status_update(
+                        cluster_replica.cluster_id,
+                        cluster_replica.replica_id,
+                        u64::cast_from(process_id),
+                        diff,
+                    );
+                    builtin_table_updates.push(update);
+                }
+                builtin_table_updates
+            }
+            StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
+                self.pack_item_update(system_object_mapping.unique_identifier.id, diff)
+            }
+            StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
+            StateUpdateKind::Comment(comment) => vec![self.pack_comment_update(
+                comment.object_id,
+                comment.sub_component,
+                &comment.comment,
+                diff,
+            )],
         }
     }
 }

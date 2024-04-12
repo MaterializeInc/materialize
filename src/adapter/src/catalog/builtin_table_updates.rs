@@ -28,8 +28,8 @@ use mz_catalog::builtin::{
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterVariant, Connection, DataSourceDesc, Database, Func, Index,
-    MaterializedView, Sink, Table, Type, View,
+    CatalogItem, ClusterVariant, Connection, DataSourceDesc, Func, Index, MaterializedView, Sink,
+    Table, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -52,7 +52,9 @@ use mz_sql::catalog::{
     TypeCategory,
 };
 use mz_sql::func::FuncImplCatalogDetails;
-use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
+use mz_sql::names::{
+    CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
+};
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -99,9 +101,10 @@ impl CatalogState {
 
     pub(super) fn pack_database_update(
         &self,
-        database: &Database,
+        database_id: &DatabaseId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
+        let database = self.get_database(database_id);
         let row = self.pack_privilege_array_row(database.privileges());
         let privileges = row.unpack_first();
         BuiltinTableUpdate {

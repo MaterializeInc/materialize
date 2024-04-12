@@ -545,8 +545,7 @@ impl Catalog {
                     state
                         .database_by_name
                         .insert(name.clone(), database_id.clone());
-                    builtin_table_updates
-                        .push(state.pack_database_update(&state.database_by_id[&database_id], 1));
+                    builtin_table_updates.push(state.pack_database_update(&database_id, 1));
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -1006,7 +1005,7 @@ impl Catalog {
                                 )));
                             }
                             tx.remove_database(&id)?;
-                            builtin_table_updates.push(state.pack_database_update(database, -1));
+                            builtin_table_updates.push(state.pack_database_update(&id, -1));
                             state.add_to_audit_log(
                                 oracle_write_ts,
                                 session,
@@ -1335,14 +1334,12 @@ impl Catalog {
                                     .push(state.pack_cluster_update(&cluster_name, 1));
                             }
                             ObjectId::Database(id) => {
-                                let database = state.get_database(id);
-                                builtin_table_updates
-                                    .push(state.pack_database_update(database, -1));
+                                builtin_table_updates.push(state.pack_database_update(id, -1));
                                 let database = state.get_database_mut(id);
                                 update_privilege_fn(&mut database.privileges);
                                 let database = state.get_database(id);
                                 tx.update_database(*id, database.clone().into())?;
-                                builtin_table_updates.push(state.pack_database_update(database, 1));
+                                builtin_table_updates.push(state.pack_database_update(id, 1));
                             }
                             ObjectId::Schema((database_spec, schema_spec)) => {
                                 let schema_id = schema_spec.clone().into();
@@ -1899,7 +1896,7 @@ impl Catalog {
                                     ErrorKind::ReadOnlyDatabase(database.name().to_string()),
                                 )));
                             }
-                            builtin_table_updates.push(state.pack_database_update(database, -1));
+                            builtin_table_updates.push(state.pack_database_update(id, -1));
                             let database = state.get_database_mut(id);
                             Self::update_privilege_owners(
                                 &mut database.privileges,
@@ -1909,7 +1906,7 @@ impl Catalog {
                             database.owner_id = new_owner;
                             let database = state.get_database(id);
                             tx.update_database(*id, database.clone().into())?;
-                            builtin_table_updates.push(state.pack_database_update(database, 1));
+                            builtin_table_updates.push(state.pack_database_update(id, 1));
                         }
                         ObjectId::Schema((database_spec, schema_spec)) => {
                             let schema_id: SchemaId = schema_spec.clone().into();
