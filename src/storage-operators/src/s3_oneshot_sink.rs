@@ -26,7 +26,8 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::Broadcast;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -48,7 +49,7 @@ mod pgcopy;
 ///   - completion: removes the sentinel file and calls the `worker_callback`
 pub fn copy_to<G, F>(
     input_collection: Collection<G, ((Row, u64), ()), Diff>,
-    err_collection: Collection<G, ((DataflowError, u64), ()), Diff>,
+    err_stream: Stream<G, (((DataflowError, u64), ()), G::Timestamp, Diff)>,
     up_to: Antichain<G::Timestamp>,
     connection_details: S3UploadInfo,
     connection_context: ConnectionContext,
@@ -71,6 +72,8 @@ pub fn copy_to<G, F>(
         connection_id,
         sink_id,
         s3_key_manager.clone(),
+        up_to.clone(),
+        err_stream,
     );
 
     let completion_stream = match connection_details.format {
@@ -82,7 +85,6 @@ pub fn copy_to<G, F>(
             connection_details,
             sink_id,
             input_collection,
-            err_collection,
             up_to,
             start_stream,
         ),
@@ -94,7 +96,6 @@ pub fn copy_to<G, F>(
             connection_details,
             sink_id,
             input_collection,
-            err_collection,
             up_to,
             start_stream,
         ),
@@ -113,7 +114,12 @@ pub fn copy_to<G, F>(
 }
 
 /// Renders the 'initialization' operator, which does work on the leader worker only.
-/// The leader worker checks the S3 path for the sink to ensure it's empty
+///
+/// The leader worker first receives all errors from the `err_stream` and if it
+/// encounters any errors will early exit and broadcast the error on the
+/// returned `start_stream`, to avoid any unnecessary work across all workers.
+///
+/// The leader worker then checks the S3 path for the sink to ensure it's empty
 /// (aside from files written by other instances of this sink), and writes an INCOMPLETE
 /// sentinel file to indicate to the user that the upload is in-progress.
 ///
@@ -124,8 +130,8 @@ pub fn copy_to<G, F>(
 /// it simplifies the user ergonomics by only having to listen for a single event
 /// (a PutObject sentinel would trigger once for each replica).
 ///
-/// Returns a stream with a result object indicating the success or failure of the
-/// initialization operation.
+/// Returns the `start_stream` with a result object indicating the success or failure
+/// of the initialization operation or an error received in the `err_stream`.
 fn render_initialization_operator<G>(
     scope: G,
     connection_context: ConnectionContext,
@@ -133,6 +139,8 @@ fn render_initialization_operator<G>(
     connection_id: GlobalId,
     sink_id: GlobalId,
     s3_key_manager: S3KeyManager,
+    up_to: Antichain<G::Timestamp>,
+    err_stream: Stream<G, (((DataflowError, u64), ()), G::Timestamp, Diff)>,
 ) -> Stream<G, Result<(), String>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -147,8 +155,36 @@ where
 
     let (mut start_handle, start_stream) = builder.new_output();
 
+    // Push all errors to the leader worker, so it early exits before doing any initialization work
+    // This should be at-most 1 incoming error per-worker due to the filtering of this stream
+    // in `CopyToS3OneshotSinkConnection::render_continuous_sink`.
+    let mut error_handle = builder.new_input_for(
+        &err_stream,
+        Exchange::new(move |_| u64::cast_from(leader_id)),
+        &start_handle,
+    );
+
     builder.build(move |caps| async move {
         let [start_cap] = caps.try_into().unwrap();
+
+        while let Some(event) = error_handle.next().await {
+            match event {
+                AsyncEvent::Data(cap, data) => {
+                    for (((error, _), _), ts, _) in data {
+                        if !up_to.less_equal(&ts) {
+                            start_handle.give(&cap, Err(error.to_string())).await;
+                            return;
+                        }
+                    }
+                }
+                AsyncEvent::Progress(frontier) => {
+                    if PartialOrder::less_equal(&up_to, &frontier) {
+                        // No error, break from loop and proceed
+                        break;
+                    }
+                }
+            }
+        }
 
         if !is_leader {
             return;
@@ -209,6 +245,9 @@ where
         start_handle.give(&start_cap, res).await;
     });
 
+    // Broadcast the result to all workers so that they will all see any error that occurs
+    // and exit before doing any unnecessary work
+    start_stream.broadcast();
     start_stream
 }
 
@@ -310,7 +349,6 @@ fn render_upload_operator<G, T>(
     connection_details: S3UploadInfo,
     sink_id: GlobalId,
     input_collection: Collection<G, ((Row, u64), ()), Diff>,
-    err_collection: Collection<G, ((DataflowError, u64), ()), Diff>,
     up_to: Antichain<G::Timestamp>,
     start_stream: Stream<G, Result<(), String>>,
 ) -> Stream<G, Result<u64, String>>
@@ -322,45 +360,21 @@ where
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
 
     let mut input_handle = builder.new_disconnected_input(&input_collection.inner, Pipeline);
-    let mut error_handle = builder.new_disconnected_input(&err_collection.inner, Pipeline);
-
-    let (mut completion, completion_stream) = builder.new_output();
-    let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion);
+    let (mut completion_handle, completion_stream) = builder.new_output();
+    let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion_handle);
 
     builder.build(move |caps| async move {
         let [completion_cap] = caps.try_into().unwrap();
 
-        // Drain all errors from the error stream, exiting if we encounter one
-        while let Some(event) = error_handle.next().await {
-            match event {
-                AsyncEvent::Data(_ts, data) => {
-                    for (((error, _), _), ts, _) in data {
-                        if !up_to.less_equal(&ts) {
-                            completion
-                                .give(&completion_cap, Err(error.to_string()))
-                                .await;
-                            return;
-                        }
-                    }
-                }
-                AsyncEvent::Progress(frontier) => {
-                    if PartialOrder::less_equal(&up_to, &frontier) {
-                        // No error, break from loop and proceed
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Drain any events in the start stream, which will advance to the empty frontier after
-        // initialization is complete, and may contain a result from the leader worker.
-        // NOTE: This is being refactored in https://github.com/MaterializeInc/materialize/pull/26489/
+        // Drain any events in the start stream. Once this stream advances to the empty frontier we
+        // can proceed with uploading. If we see an error in this stream, forward it to the completion
+        // stream and early-exit.
         while let Some(event) = start_handle.next().await {
             match event {
                 AsyncEvent::Data(cap, data) => {
                     for res in data {
                         if res.is_err() {
-                            completion.give(&cap, res.map(|_| 0)).await;
+                            completion_handle.give(&cap, res.map(|_| 0)).await;
                             return;
                         }
                     }
@@ -378,6 +392,7 @@ where
             // Map of an uploader per batch.
             let mut s3_uploaders: BTreeMap<u64, T> = BTreeMap::new();
             let mut row_count = 0;
+            let mut last_row = None;
             while let Some(event) = input_handle.next().await {
                 match event {
                     AsyncEvent::Data(_ts, data) => {
@@ -407,6 +422,14 @@ where
                                     uploader.append_row(&row).await?;
                                 }
                             }
+                            // A very crude way to detect if there is ever a regression in the deterministic
+                            // ordering of rows in our input, since we are depending on an implementation
+                            // detail of timely communication (FIFO ordering over an exchange).
+                            let cur = (row, batch);
+                            if let Some(last) = last_row {
+                                assert!(&last < &cur, "broken fifo ordering!");
+                            }
+                            last_row = Some(cur);
                         }
                     }
                     AsyncEvent::Progress(frontier) => {
@@ -424,7 +447,7 @@ where
         }
         .await;
 
-        completion
+        completion_handle
             .give(&completion_cap, res.map_err(|e| e.to_string()))
             .await;
     });
