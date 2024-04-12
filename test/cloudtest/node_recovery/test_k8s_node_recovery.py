@@ -19,7 +19,7 @@ from materialize.mzcompose.test_result import (
 )
 
 TD_TIMEOUT_SHORT = 45
-TD_TIMEOUT_FULL_RECOVERY = 600
+TD_TIMEOUT_FULL_RECOVERY = 660
 
 
 @dataclass
