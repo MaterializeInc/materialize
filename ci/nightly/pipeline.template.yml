@@ -1336,6 +1336,18 @@ steps:
               composition: parallel-workload
               args: [--runtime=1500]
 
+      - id: parallel-workload-ddl-only
+        label: "Parallel Workload (DDL Only)"
+        depends_on: build-aarch64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --complexity=ddl-only, --threads=2]
+
       - id: parallel-workload-100-threads
         label: "Parallel Workload (100 threads)"
         depends_on: build-aarch64
