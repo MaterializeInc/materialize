@@ -163,6 +163,9 @@ class PgCdcBase:
             GRANT SELECT ON postgres_source_tableB{self.suffix} TO materialize
             GRANT SELECT ON postgres_source_tableC{self.suffix} TO materialize
 
+            # Can take longer after a restart
+            $ set-sql-timeout duration=600s
+
             > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableA{self.suffix} GROUP BY f1;
             A 800 {self.expects}
             B 800 {self.expects}
