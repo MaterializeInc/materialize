@@ -247,6 +247,11 @@ steps:
           composition: testdrive
     agents:
       queue: linux-aarch64
+    # TODO(def-) Remove when #19097 is fixed
+    retry:
+      automatic:
+        - exit_status: 1
+          limit: 1
 
   - id: cluster-tests
     label: Cluster tests %N
