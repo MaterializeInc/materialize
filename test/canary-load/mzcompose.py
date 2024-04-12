@@ -78,6 +78,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 no_reset=True,
                 no_consistency_checks=True,  # No access to HTTP for coordinator check
                 materialize_url=f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{host}:6875/materialize",
+                default_timeout="600s",
             ),
         ):
             c.up("testdrive", persistent=True)
