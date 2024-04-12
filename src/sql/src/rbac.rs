@@ -71,7 +71,7 @@ macro_rules! rbac_preamble {
     };
 }
 
-/// Filters `RbacRequirements` based on the current user and RBAC related feature flags.
+/// Filters `RbacRequirements` based on the session role metadata and RBAC related feature flags.
 fn filter_requirements(
     catalog: &impl SessionCatalog,
     session_meta: &dyn SessionMetadata,
