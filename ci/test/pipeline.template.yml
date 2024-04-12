@@ -252,6 +252,8 @@ steps:
       automatic:
         - exit_status: 1
           limit: 1
+        - exit_status: 255 # Timeout due to panic
+          limit: 1
 
   - id: cluster-tests
     label: Cluster tests %N

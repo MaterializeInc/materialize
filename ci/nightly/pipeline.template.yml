@@ -192,6 +192,8 @@ steps:
           automatic:
             - exit_status: 1
               limit: 1
+            - exit_status: 255 # Timeout due to panic
+              limit: 1
 
       - id: redpanda-testdrive-aarch64
         label: ":panda_face: :racing_car: testdrive aarch64"
@@ -222,6 +224,8 @@ steps:
           automatic:
             - exit_status: 1
               limit: 1
+            - exit_status: 255 # Timeout due to panic
+              limit: 1
 
       - id: testdrive-replicas-4
         label: ":racing_car: testdrive 4 replicas"
@@ -238,6 +242,8 @@ steps:
         retry:
           automatic:
             - exit_status: 1
+              limit: 1
+            - exit_status: 255 # Timeout due to panic
               limit: 1
 
       - id: testdrive-size-1
@@ -256,6 +262,8 @@ steps:
           automatic:
             - exit_status: 1
               limit: 1
+            - exit_status: 255 # Timeout due to panic
+              limit: 1
 
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
@@ -273,6 +281,8 @@ steps:
           automatic:
             - exit_status: 1
               limit: 1
+            - exit_status: 255 # Timeout due to panic
+              limit: 1
 
       - id: testdrive-in-cloudtest
         label: Full Testdrive in Cloudtest (K8s)
@@ -289,6 +299,8 @@ steps:
         retry:
           automatic:
             - exit_status: 1
+              limit: 1
+            - exit_status: 255 # Timeout due to panic
               limit: 1
 
       - id: persistence-testdrive
@@ -864,7 +876,7 @@ steps:
         retry:
           automatic:
             - exit_status: 1
-              limit: 1
+              limit: 2
         agents:
           queue: linux-aarch64
         inputs:
