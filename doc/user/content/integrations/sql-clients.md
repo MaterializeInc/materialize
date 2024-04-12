@@ -121,17 +121,6 @@ Alternatively, you can change the default value of the `cluster` configuration
 parameter for a specific user (i.e. role) using the [`ALTER
 ROLE...SET`](/sql/alter-role) command.
 
-### PopSQL
-
-[//]: # "TODO(morsapaes) Extend with instructions to use dbt-materialize once we
-yank this out as a standalone guide."
-
-To connect to Materialize using [PopSQL](https://popsql.com/), follow the
-documentation to [create a Materialize connection](https://docs.popsql.com/docs/connecting-to-materialize)
-and use the credentials provided in the Materialize console.
-
-<img width="1552" alt="Screenshot 2023-12-28 at 18 24 35" src="https://github.com/MaterializeInc/materialize/assets/23521087/2e219233-9f6c-4326-8b5e-acdfd49da342">
-
 ### TablePlus
 
 {{< note >}}
