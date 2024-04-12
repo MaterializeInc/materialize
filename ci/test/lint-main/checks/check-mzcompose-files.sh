@@ -23,6 +23,7 @@ check_all_files_referenced_in_ci() {
         -not -wholename "./misc/python/materialize/cli/mzcompose.py" `# Only glue code, no workflows` \
         -not -wholename "./misc/monitoring/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
+        -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
     while read -r composition; do
