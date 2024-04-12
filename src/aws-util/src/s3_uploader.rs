@@ -82,6 +82,8 @@ pub struct CompletedUpload {
     pub part_count: u32,
     /// The total number of bytes uploaded in the multi part upload.
     pub total_bytes_uploaded: u64,
+    pub bucket: String,
+    pub key: String,
 }
 
 /// Configuration object to configure the behaviour of the `S3MultiPartUploader`.
@@ -255,6 +257,8 @@ impl S3MultiPartUploader {
         Ok(CompletedUpload {
             part_count: self.part_count.try_into().expect("i32 to u32"),
             total_bytes_uploaded: self.total_bytes_uploaded,
+            bucket: self.bucket,
+            key: self.key,
         })
     }
 
@@ -403,6 +407,8 @@ mod tests {
         let CompletedUpload {
             part_count,
             total_bytes_uploaded,
+            bucket: _,
+            key: _,
         } = uploader.finish().await?;
 
         // Getting the uploaded object from s3 and validating the contents.
@@ -463,6 +469,8 @@ mod tests {
         let CompletedUpload {
             part_count,
             total_bytes_uploaded,
+            bucket: _,
+            key: _,
         } = uploader.finish().await?;
 
         // Getting the uploaded object from s3 and validating the contents.

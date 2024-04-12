@@ -13,11 +13,6 @@ package mz_mysql_util;
 
 import "repr/src/relation_and_scalar.proto";
 
-// TODO: Remove this ignore after MySQL Private Preview begins
-// This was to allow converting ProtoMySqlColumnDesc.column_type to an optional field
-// which should be wire compatible but is not generated-bindings-compatible.
-// buf breaking: ignore (not yet released)
-
 message ProtoMySqlTableDesc {
     string name = 1;
     string schema_name = 2;

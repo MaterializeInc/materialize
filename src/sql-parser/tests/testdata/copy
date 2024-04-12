@@ -122,6 +122,13 @@ COPY t TO 's3://path/' || mz_now() WITH (FORMAT = csv, MAX FILE SIZE = '100MB', 
 Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }, CopyOption { name: MaxFileSize, value: Some(Value(String("100MB"))) }, CopyOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("aws_conn")])))) }] })
 
 parse-statement
+COPY t TO 's3://path/' || mz_now() WITH (FORMAT = parquet, MAX FILE SIZE = '100MB', AWS CONNECTION = aws_conn)
+----
+COPY t TO 's3://path/' || mz_now() WITH (FORMAT = parquet, MAX FILE SIZE = '100MB', AWS CONNECTION = aws_conn)
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("parquet")]))) }, CopyOption { name: MaxFileSize, value: Some(Value(String("100MB"))) }, CopyOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("aws_conn")])))) }] })
+
+parse-statement
 COPY t TO 's3://path/' || repeat('1', 2)
 ----
 COPY t TO 's3://path/' || repeat('1', 2)

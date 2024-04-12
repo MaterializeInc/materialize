@@ -9,33 +9,31 @@
 
 //! Uploads a consolidated collection to S3
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
-use bytesize::ByteSize;
 use differential_dataflow::{Collection, Hashable};
 use http::Uri;
-use mz_aws_util::s3_uploader::{
-    CompletedUpload, S3MultiPartUploadError, S3MultiPartUploader, S3MultiPartUploaderConfig,
-};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::task::JoinHandleExt;
-use mz_pgcopy::{encode_copy_format, CopyFormatParams};
-use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sinks::S3UploadInfo;
+use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::Scope;
-use timely::dataflow::Stream;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::{debug, info};
+
+mod parquet;
+mod pgcopy;
 
 /// Copy the rows from the input collection to s3.
 /// `worker_callback` is used to send the final count of rows uploaded to s3,
@@ -75,18 +73,32 @@ pub fn copy_to<G, F>(
         s3_key_manager.clone(),
     );
 
-    let completion_stream = render_upload_operator(
-        scope.clone(),
-        connection_context.clone(),
-        aws_connection.clone(),
-        connection_id,
-        connection_details,
-        sink_id,
-        input_collection,
-        err_collection,
-        up_to,
-        start_stream,
-    );
+    let completion_stream = match connection_details.format {
+        S3SinkFormat::PgCopy(_) => render_upload_operator::<G, pgcopy::PgCopyUploader>(
+            scope.clone(),
+            connection_context.clone(),
+            aws_connection.clone(),
+            connection_id,
+            connection_details,
+            sink_id,
+            input_collection,
+            err_collection,
+            up_to,
+            start_stream,
+        ),
+        S3SinkFormat::Parquet => render_upload_operator::<G, parquet::ParquetUploader>(
+            scope.clone(),
+            connection_context.clone(),
+            aws_connection.clone(),
+            connection_id,
+            connection_details,
+            sink_id,
+            input_collection,
+            err_collection,
+            up_to,
+            start_stream,
+        ),
+    };
 
     render_completion_operator(
         scope,
@@ -290,7 +302,7 @@ fn render_completion_operator<G, F>(
 /// Returns a `completion_stream` which contains 1 event per worker of
 /// the result of the upload operation, either an error or the number of rows
 /// uploaded by the worker.
-fn render_upload_operator<G>(
+fn render_upload_operator<G, T>(
     scope: G,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
@@ -304,6 +316,7 @@ fn render_upload_operator<G>(
 ) -> Stream<G, Result<u64, String>>
 where
     G: Scope<Timestamp = Timestamp>,
+    T: CopyToS3Uploader,
 {
     let worker_id = scope.index();
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
@@ -363,7 +376,7 @@ where
                 .await?;
 
             // Map of an uploader per batch.
-            let mut s3_uploaders: BTreeMap<u64, CopyToS3Uploader> = BTreeMap::new();
+            let mut s3_uploaders: BTreeMap<u64, T> = BTreeMap::new();
             let mut row_count = 0;
             while let Some(event) = input_handle.next().await {
                 match event {
@@ -378,15 +391,18 @@ where
                                     )
                                 }
                                 row_count += u64::try_from(diff).unwrap();
-                                let uploader = s3_uploaders.entry(batch).or_insert_with(|| {
-                                    debug!(%sink_id, %worker_id, "handling batch: {}", batch);
-                                    CopyToS3Uploader::new(
-                                        sdk_config.clone(),
-                                        connection_details.clone(),
-                                        &sink_id,
-                                        batch,
-                                    )
-                                });
+                                let uploader = match s3_uploaders.entry(batch) {
+                                    Entry::Occupied(entry) => entry.into_mut(),
+                                    Entry::Vacant(entry) => {
+                                        debug!(%sink_id, %worker_id, "handling batch: {}", batch);
+                                        entry.insert(T::new(
+                                            sdk_config.clone(),
+                                            connection_details.clone(),
+                                            &sink_id,
+                                            batch,
+                                        )?)
+                                    }
+                                };
                                 for _ in 0..diff {
                                     uploader.append_row(&row).await?;
                                 }
@@ -470,277 +486,20 @@ impl S3KeyManager {
     }
 }
 
-/// Required state to upload batches to S3
-struct CopyToS3Uploader {
-    /// The output description.
-    desc: RelationDesc,
-    /// Params to format the data.
-    format: CopyFormatParams<'static>,
-    /// The index of the current file within the batch.
-    file_index: usize,
-    /// Provides the appropriate bucket and object keys to use for uploads
-    key_manager: S3KeyManager,
-    /// Identifies the batch that files uploaded by this uploader belong to
-    batch: u64,
-    /// The desired file size. A new file upload will be started
-    /// when the size exceeds this amount.
-    max_file_size: u64,
-    /// The aws sdk config.
-    /// This is an option so that we can get an owned value later to move to a
-    /// spawned tokio task.
-    sdk_config: Option<SdkConfig>,
-    /// Multi-part uploader for the current file.
-    /// Keeping the uploader in an `Option` to later take owned value.
-    current_file_uploader: Option<S3MultiPartUploader>,
-    /// Temporary buffer to store the encoded bytes.
-    /// Currently at a time this will only store one single encoded row
-    /// before getting added to the `current_file_uploader`'s buffer.
-    buf: Vec<u8>,
-}
-
-impl CopyToS3Uploader {
+/// This trait is used to abstract over the upload details for different file formats.
+/// Each format has its own buffering semantics and upload logic, since some can be
+/// written in a streaming fashion row-by-row, whereas others use a columnar-based
+/// format that requires buffering a batch of rows before writing to S3.
+trait CopyToS3Uploader: Sized {
     fn new(
         sdk_config: SdkConfig,
         connection_details: S3UploadInfo,
         sink_id: &GlobalId,
         batch: u64,
-    ) -> CopyToS3Uploader {
-        CopyToS3Uploader {
-            desc: connection_details.desc,
-            sdk_config: Some(sdk_config),
-            format: connection_details.format,
-            key_manager: S3KeyManager::new(sink_id, &connection_details.uri),
-            batch,
-            max_file_size: connection_details.max_file_size,
-            file_index: 0,
-            current_file_uploader: None,
-            buf: Vec::new(),
-        }
-    }
-
-    /// Creates the uploader for the next file and starts the multi part upload.
-    async fn start_new_file_upload(&mut self) -> Result<(), anyhow::Error> {
-        self.flush().await?;
-        assert!(self.current_file_uploader.is_none());
-
-        self.file_index += 1;
-        let object_key =
-            self.key_manager
-                .data_key(self.batch, self.file_index, self.format.file_extension());
-        let bucket = self.key_manager.bucket.clone();
-        info!("starting upload: bucket {}, key {}", &bucket, &object_key);
-        let sdk_config = self
-            .sdk_config
-            .take()
-            .expect("sdk_config should always be present");
-        let max_file_size = self.max_file_size;
-        // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
-        let handle = mz_ore::task::spawn(|| "s3_uploader::try_new", async move {
-            let uploader = S3MultiPartUploader::try_new(
-                &sdk_config,
-                bucket,
-                object_key,
-                S3MultiPartUploaderConfig {
-                    part_size_limit: ByteSize::mib(10).as_u64(),
-                    file_size_limit: max_file_size,
-                },
-            )
-            .await;
-            (uploader, sdk_config)
-        });
-        let (uploader, sdk_config) = handle.wait_and_assert_finished().await;
-        self.sdk_config = Some(sdk_config);
-        self.current_file_uploader = Some(uploader?);
-        Ok(())
-    }
-
-    /// Finishes any remaining in-progress upload.
-    async fn flush(&mut self) -> Result<(), anyhow::Error> {
-        if let Some(uploader) = self.current_file_uploader.take() {
-            let object_key = self.key_manager.data_key(
-                self.batch,
-                self.file_index,
-                self.format.file_extension(),
-            );
-            // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
-            let handle =
-                mz_ore::task::spawn(|| "s3_uploader::finish", async { uploader.finish().await });
-            let CompletedUpload {
-                part_count,
-                total_bytes_uploaded,
-            } = handle.wait_and_assert_finished().await?;
-            info!(
-                "finished upload: bucket {}, key {}, bytes_uploaded {}, parts_uploaded {}",
-                &self.key_manager.bucket, object_key, total_bytes_uploaded, part_count
-            );
-        }
-        Ok(())
-    }
-
-    async fn upload_buffer(&mut self) -> Result<(), S3MultiPartUploadError> {
-        assert!(!self.buf.is_empty());
-        assert!(self.current_file_uploader.is_some());
-
-        let mut uploader = self.current_file_uploader.take().unwrap();
-        // TODO: Make buf a Bytes so it can be cheaply cloned.
-        let buf = std::mem::take(&mut self.buf);
-        // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
-        let handle = mz_ore::task::spawn(|| "s3_uploader::buffer_chunk", async move {
-            let result = uploader.buffer_chunk(&buf).await;
-            (uploader, buf, result)
-        });
-        let (uploader, buf, result) = handle.wait_and_assert_finished().await;
-        self.current_file_uploader = Some(uploader);
-        self.buf = buf;
-
-        let _ = result?;
-        Ok(())
-    }
-
-    /// Appends the row to the in-progress upload where it is buffered till it reaches the configured
-    /// `part_size_limit` after which the `S3MultiPartUploader` will upload that part. In case it will
-    /// exceed the max file size of the ongoing upload, then a new `S3MultiPartUploader` for a new file will
-    /// be created and the row data will be appended there.
-    async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
-        self.buf.clear();
-        // encode the row and write to temp buffer.
-        encode_copy_format(&self.format, row, self.desc.typ(), &mut self.buf)
-            .map_err(|_| anyhow!("error encoding row"))?;
-
-        if self.current_file_uploader.is_none() {
-            self.start_new_file_upload().await?;
-        }
-
-        match self.upload_buffer().await {
-            Ok(_) => Ok(()),
-            Err(S3MultiPartUploadError::UploadExceedsMaxFileLimit(_)) => {
-                // Start a multi part upload of next file.
-                self.start_new_file_upload().await?;
-                // Upload data for the new part.
-                self.upload_buffer().await?;
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }?;
-
-        Ok(())
-    }
-}
-
-/// On CI, these tests are enabled by adding the scratch-aws-access plugin
-/// to the `cargo-test` step in `ci/test/pipeline.template.yml` and setting
-/// `MZ_S3_UPLOADER_TEST_S3_BUCKET` in
-/// `ci/test/cargo-test/mzcompose.py`.
-///
-/// For a Materialize developer, to opt in to these tests locally for
-/// development, follow the AWS access guide:
-///
-/// ```text
-/// https://www.notion.so/materialize/AWS-access-5fbd9513dcdc4e11a7591e8caa5f63fe
-/// ```
-///
-/// then running `source src/aws-util/src/setup_test_env_mz.sh`. You will also have
-/// to run `aws sso login` if you haven't recently.
-#[cfg(test)]
-mod tests {
-    use bytesize::ByteSize;
-    use mz_repr::{ColumnName, ColumnType, Datum, RelationType};
-    use uuid::Uuid;
-
-    use super::*;
-
-    fn s3_bucket_path_for_test() -> Option<(String, String)> {
-        let bucket = match std::env::var("MZ_S3_UPLOADER_TEST_S3_BUCKET") {
-            Ok(bucket) => bucket,
-            Err(_) => {
-                if mz_ore::env::is_var_truthy("CI") {
-                    panic!("CI is supposed to run this test but something has gone wrong!");
-                }
-                return None;
-            }
-        };
-
-        let prefix = Uuid::new_v4().to_string();
-        let path = format!("cargo_test/{}/file", prefix);
-        Some((bucket, path))
-    }
-
-    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
-    async fn test_multiple_files() -> Result<(), anyhow::Error> {
-        let sdk_config = mz_aws_util::defaults().load().await;
-        let (bucket, path) = match s3_bucket_path_for_test() {
-            Some(tuple) => tuple,
-            None => return Ok(()),
-        };
-        let sink_id = GlobalId::User(123);
-        let batch = 456;
-        let typ: RelationType = RelationType::new(vec![ColumnType {
-            scalar_type: mz_repr::ScalarType::String,
-            nullable: true,
-        }]);
-        let column_names = vec![ColumnName::from("col1")];
-        let desc = RelationDesc::new(typ, column_names.into_iter());
-        let mut uploader = CopyToS3Uploader::new(
-            sdk_config.clone(),
-            S3UploadInfo {
-                uri: format!("s3://{}/{}", bucket, path),
-                // this is only for testing, users will not be able to set value smaller than 16MB.
-                max_file_size: ByteSize::b(6).as_u64(),
-                desc,
-                format: CopyFormatParams::Csv(Default::default()),
-            },
-            &sink_id,
-            batch,
-        );
-        let mut row = Row::default();
-        // Even though this will exceed max_file_size, it should be successfully uploaded in a single file.
-        row.packer().push(Datum::from("1234567"));
-        uploader.append_row(&row).await?;
-
-        // Since the max_file_size is 6B, this row will be uploaded to a new file.
-        row.packer().push(Datum::Null);
-        uploader.append_row(&row).await?;
-
-        row.packer().push(Datum::from("5678"));
-        uploader.append_row(&row).await?;
-
-        uploader.flush().await?;
-
-        // Based on the max_file_size, the uploader should have uploaded two
-        // files, part-0001.csv and part-0002.csv
-        let s3_client = mz_aws_util::s3::new_client(&sdk_config);
-        let first_file = s3_client
-            .get_object()
-            .bucket(bucket.clone())
-            .key(format!(
-                "{}/mz-{}-batch-{:04}-0001.csv",
-                path, sink_id, batch
-            ))
-            .send()
-            .await
-            .unwrap();
-
-        let body = first_file.body.collect().await.unwrap().into_bytes();
-        let expected_body: &[u8] = b"1234567\n";
-        assert_eq!(body, *expected_body);
-
-        let second_file = s3_client
-            .get_object()
-            .bucket(bucket)
-            .key(format!(
-                "{}/mz-{}-batch-{:04}-0002.csv",
-                path, sink_id, batch
-            ))
-            .send()
-            .await
-            .unwrap();
-
-        let body = second_file.body.collect().await.unwrap().into_bytes();
-        let expected_body: &[u8] = b"\n5678\n";
-        assert_eq!(body, *expected_body);
-
-        Ok(())
-    }
+    ) -> Result<Self, anyhow::Error>;
+    /// Append a row to the internal buffer, and optionally flush the buffer to S3.
+    async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error>;
+    /// Flush the full remaining internal buffer to S3, and close all open resources.
+    /// This will be called when the input stream is finished.
+    async fn flush(&mut self) -> Result<(), anyhow::Error>;
 }

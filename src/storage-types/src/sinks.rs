@@ -786,6 +786,38 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
     }
 }
 
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub enum S3SinkFormat {
+    /// Encoded using the PG `COPY` protocol, with one of its supported formats.
+    PgCopy(CopyFormatParams<'static>),
+    /// Encoded as Parquet.
+    Parquet,
+}
+
+impl RustType<ProtoS3SinkFormat> for S3SinkFormat {
+    fn into_proto(&self) -> ProtoS3SinkFormat {
+        use proto_s3_sink_format::Kind;
+        ProtoS3SinkFormat {
+            kind: Some(match self {
+                Self::PgCopy(params) => Kind::PgCopy(params.into_proto()),
+                Self::Parquet => Kind::Parquet(()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoS3SinkFormat) -> Result<Self, TryFromProtoError> {
+        use proto_s3_sink_format::Kind;
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoS3SinkFormat::kind"))?;
+
+        Ok(match kind {
+            Kind::PgCopy(proto) => Self::PgCopy(proto.into_rust()?),
+            Kind::Parquet(_) => Self::Parquet,
+        })
+    }
+}
+
 /// Info required to copy the data to s3.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct S3UploadInfo {
@@ -796,7 +828,7 @@ pub struct S3UploadInfo {
     /// The relation desc of the data to be uploaded to S3.
     pub desc: RelationDesc,
     /// The selected sink format.
-    pub format: CopyFormatParams<'static>,
+    pub format: S3SinkFormat,
 }
 
 impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
