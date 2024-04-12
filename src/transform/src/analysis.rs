@@ -287,6 +287,7 @@ pub mod common {
                     Box::new(Bundle::<A> {
                         results: Vec::new(),
                         fuel: 100,
+                        allow_optimistic: self.features.enable_letrec_fixpoint_analysis,
                     }),
                 );
                 A::announce_dependencies(self);
@@ -371,6 +372,9 @@ pub mod common {
         /// Counts down with each `LetRec` re-iteration, to avoid unbounded effort.
         /// Should it reach zero, the analysis should discard its results and restart as if pessimistic.
         fuel: usize,
+        /// Allow optimistic analysis for `A` (otherwise we always do pesimistic
+        /// analysis, even if a [`crate::analysis::Lattice`] is available for `A`).
+        allow_optimistic: bool,
     }
 
     impl<A: Analysis> AnalysisBundle for Bundle<A> {
@@ -378,6 +382,7 @@ pub mod common {
             self.results.clear();
             // Attempt optimistic analysis, and if that fails go pessimistic.
             let update = A::lattice()
+                .filter(|_| self.allow_optimistic)
                 .and_then(|lattice| {
                     for _ in exprs.iter() {
                         self.results.push(lattice.top());
