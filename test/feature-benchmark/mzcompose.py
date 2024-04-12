@@ -441,7 +441,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 scenarios_with_regressions.append(scenario)
 
             print(f"+++ Benchmark Report for cycle {cycle + 1}:")
-            report.dump()
+            report.print()
 
         scenarios_to_run = scenarios_with_regressions
         if len(scenarios_to_run) == 0:

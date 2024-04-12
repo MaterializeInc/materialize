@@ -182,7 +182,7 @@ class Report:
     def extend(self, comparisons: Iterable[Comparator]) -> None:
         self._comparisons.extend(comparisons)
 
-    def dump(self) -> None:
+    def print(self) -> None:
         print(self)
 
     def __str__(self) -> str:
