@@ -1091,7 +1091,7 @@ mod tests {
 
         // empty
         assert_eq!(c.progress_exclusive, 0);
-        assert!(std::panic::catch_unwind(|| c.data_snapshot(d0, 0)).is_err());
+        assert!(mz_ore::panic::catch_unwind(|| c.data_snapshot(d0, 0)).is_err());
         assert_eq!(c.data_listen_next(&d0, 0), WaitForTxnsProgress);
 
         // ts 0 (never registered)
