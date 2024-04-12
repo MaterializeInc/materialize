@@ -1003,6 +1003,7 @@ where
                     as_of: description.sink.as_of,
                     status_id,
                     from_storage_metadata,
+                    partition_strategy: description.sink.partition_strategy,
                     with_snapshot: description.sink.with_snapshot,
                 },
             };
@@ -1062,6 +1063,7 @@ where
                     from_desc: export.description.sink.from_desc.clone(),
                     connection: export.description.sink.connection.clone(),
                     envelope: export.description.sink.envelope,
+                    partition_strategy: export.description.sink.partition_strategy.clone(),
                     with_snapshot: export.description.sink.with_snapshot,
                     // Here we are about to send a RunSinkCommand with the current read capaibility
                     // held by this sink. However, clusters are already running a version of the

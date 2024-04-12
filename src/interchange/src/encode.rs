@@ -14,7 +14,9 @@ use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
 pub trait Encode {
     fn get_format_name(&self) -> &str;
 
-    fn encode_key_unchecked(&self, row: Row) -> Vec<u8>;
+    /// Encodes the key row and returns a a u64 hash that is suitable for
+    /// stable partitioning and the encoded bytes.
+    fn encode_key_unchecked(&self, row: Row) -> (u64, Vec<u8>);
 
     fn encode_value_unchecked(&self, row: Row) -> Vec<u8>;
 }

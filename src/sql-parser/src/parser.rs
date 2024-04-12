@@ -3012,7 +3012,11 @@ impl<'a> Parser<'a> {
 
     /// Parse the name of a CREATE SINK optional parameter
     fn parse_create_sink_option_name(&mut self) -> Result<CreateSinkOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SNAPSHOT])? {
+        let name = match self.expect_one_of_keywords(&[PARTITION, SNAPSHOT])? {
+            PARTITION => {
+                self.expect_keyword(STRATEGY)?;
+                CreateSinkOptionName::PartitionStrategy
+            }
             SNAPSHOT => CreateSinkOptionName::Snapshot,
             _ => unreachable!(),
         };

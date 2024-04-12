@@ -4640,6 +4640,7 @@ dependencies = [
  "prost-build",
  "prost-reflect",
  "protobuf-src",
+ "seahash",
  "serde_json",
  "timely",
  "tokio",

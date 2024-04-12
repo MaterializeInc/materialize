@@ -98,7 +98,8 @@ use mz_storage_client::sink::{TopicCleanupPolicy, TopicConfig};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkEnvelope, StorageSinkDesc,
+    KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkEnvelope, SinkPartitionStrategy,
+    StorageSinkDesc,
 };
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
@@ -178,6 +179,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             &encoded,
             sink_id,
             self.clone(),
+            sink.partition_strategy.clone(),
             storage_state.storage_configuration.clone(),
             sink.as_of.clone(),
             metrics,
@@ -207,6 +209,10 @@ struct TransactionalProducer {
     progress_topic: String,
     /// The key each progress record is associated with.
     progress_key: ProgressKey,
+    /// The strategy to partition the data with.
+    partition_strategy: SinkPartitionStrategy,
+    /// The number of partitions in the target topic.
+    partition_count: u64,
     /// The underlying Kafka producer.
     producer: BaseProducer<TunnelingClientContext<MzClientContext>>,
     /// A handle to the metrics associated with this sink.
@@ -230,10 +236,11 @@ impl TransactionalProducer {
     async fn new(
         sink_id: GlobalId,
         connection: &KafkaSinkConnection,
+        partition_strategy: SinkPartitionStrategy,
         storage_configuration: &StorageConfiguration,
         metrics: Arc<KafkaSinkMetrics>,
         statistics: SinkStatistics,
-    ) -> Result<Self, ContextCreationError> {
+    ) -> Result<(Self, Antichain<mz_repr::Timestamp>), ContextCreationError> {
         let client_id = connection.client_id(
             storage_configuration.config_set(),
             &storage_configuration.connection_context,
@@ -282,7 +289,10 @@ impl TransactionalProducer {
 
         let stats_receiver = ctx.subscribe_statistics();
         let task_name = format!("kafka_sink_metrics_collector:{sink_id}");
-        task::spawn(|| &task_name, collect_statistics(stats_receiver, metrics));
+        task::spawn(
+            || &task_name,
+            collect_statistics(stats_receiver, Arc::clone(&metrics)),
+        );
 
         let producer: BaseProducer<_> = connection
             .connection
@@ -292,9 +302,12 @@ impl TransactionalProducer {
         let task_name = format!("kafka_sink_producer:{sink_id}");
         let progress_key = ProgressKey::new(sink_id);
 
-        let producer = Self {
+        let mut producer = Self {
             task_name,
             data_topic: connection.topic.clone(),
+            partition_strategy,
+            // partition count is fixed up later when we query the broker for metadata
+            partition_count: 0,
             progress_topic: connection
                 .progress_topic(&storage_configuration.connection_context)
                 .into_owned(),
@@ -312,7 +325,57 @@ impl TransactionalProducer {
             .spawn_blocking(move |p| p.init_transactions(timeout))
             .await?;
 
-        Ok(producer)
+        // We have just called init_transactions, which means that we have fenced out all previous
+        // transactional producers, making it safe to determine the resume upper.
+        let resume_upper = determine_sink_resume_upper(
+            sink_id,
+            connection,
+            storage_configuration,
+            Arc::clone(&metrics),
+        )
+        .await?;
+
+        let resume_upper = match resume_upper {
+            Some(upper) => upper,
+            None => {
+                // If no progress record is found in the progress topic then we additionally
+                // attempt to create the topic if it doesn't exist already.
+                mz_storage_client::sink::ensure_kafka_topic(
+                    connection,
+                    storage_configuration,
+                    &connection.topic,
+                    // TODO: allow users to configure these parameters.
+                    TopicConfig {
+                        partition_count: -1,
+                        replication_factor: -1,
+                        cleanup_policy: TopicCleanupPolicy::Retention {
+                            ms: Some(-1),
+                            bytes: Some(-1),
+                        },
+                    },
+                )
+                .await?;
+                Antichain::from_elem(Timestamp::minimum())
+            }
+        };
+
+        // If there are committed progress messages then we only check if the data
+        // topic exists, because if it does not then it must have been deleted after
+        // the fact, which is a bit of a problem.
+        let meta = producer.fetch_metadata().await?;
+        match meta.topics().iter().find(|t| t.name() == &connection.topic) {
+            Some(topic) => {
+                producer.partition_count = u64::cast_from(topic.partitions().len());
+                metrics.partition_count.set(producer.partition_count);
+            }
+            None => {
+                return Err(
+                    anyhow!("sink progress data exists, but sink data topic is missing").into(),
+                );
+            }
+        };
+
+        Ok((producer, resume_upper))
     }
 
     /// Runs the blocking operation `f` on the producer in the tokio threadpool and checks for SSH
@@ -347,6 +410,7 @@ impl TransactionalProducer {
     /// the system.
     async fn send(
         &mut self,
+        key_hash: u64,
         key: Option<&[u8]>,
         value: Option<&[u8]>,
         time: Timestamp,
@@ -358,12 +422,18 @@ impl TransactionalProducer {
             key: "materialize-timestamp",
             value: Some(time.to_string().as_bytes()),
         });
+        let partition = match self.partition_strategy {
+            SinkPartitionStrategy::V0 => None,
+            SinkPartitionStrategy::V1 => {
+                Some(i32::try_from(key_hash % self.partition_count).unwrap())
+            }
+        };
         let record = BaseRecord {
             topic: &self.data_topic,
             key,
             payload: value,
             headers: Some(headers),
-            partition: None,
+            partition,
             timestamp: None,
             delivery_opaque: (),
         };
@@ -503,9 +573,10 @@ async fn collect_statistics(
 /// Updates are sent in ascending timestamp order.
 fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     name: String,
-    input: &Collection<G, (Option<Vec<u8>>, Option<Vec<u8>>), Diff>,
+    input: &Collection<G, ((u64, Option<Vec<u8>>), Option<Vec<u8>>), Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
+    partition_strategy: SinkPartitionStrategy,
     storage_configuration: StorageConfiguration,
     as_of: Antichain<Timestamp>,
     metrics: KafkaSinkMetrics,
@@ -534,55 +605,15 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
 
             let metrics = Arc::new(metrics);
 
-            let mut producer = TransactionalProducer::new(
+            let (mut producer, resume_upper) = TransactionalProducer::new(
                 sink_id,
                 &connection,
+                partition_strategy,
                 &storage_configuration,
                 Arc::clone(&metrics),
                 statistics,
             )
             .await?;
-            // Instantiating the transactional producer fences out all previous ones, making it
-            // safe to determine the resume upper.
-            let resume_upper = determine_sink_resume_upper(
-                sink_id,
-                &connection,
-                &storage_configuration,
-                Arc::clone(&metrics),
-            )
-            .await?;
-
-            let resume_upper = match resume_upper {
-                Some(upper) => upper,
-                None => {
-                    mz_storage_client::sink::ensure_kafka_topic(
-                        &connection,
-                        &storage_configuration,
-                        &connection.topic,
-                        // TODO: allow users to configure these parameters.
-                        TopicConfig {
-                            partition_count: -1,
-                            replication_factor: -1,
-                            cleanup_policy: TopicCleanupPolicy::Retention {
-                                ms: Some(-1),
-                                bytes: Some(-1),
-                            },
-                        },
-                    )
-                    .await?;
-                    Antichain::from_elem(Timestamp::minimum())
-                }
-            };
-
-            // At this point the topic must exist and so we can query for its metadata.
-            let meta = producer.fetch_metadata().await?;
-            match meta.topics().iter().find(|t| t.name() == &connection.topic) {
-                Some(topic) => {
-                    let partition_count = u64::cast_from(topic.partitions().len());
-                    metrics.partition_count.set(partition_count);
-                }
-                None => return Err(anyhow!("sink data topic is missing").into()),
-            }
 
             // The input has overcompacted if
             let overcompacted =
@@ -624,7 +655,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             while let Some(event) = input.next().await {
                 match event {
                     Event::Data(_cap, batch) => {
-                        for ((key, value), time, diff) in batch {
+                        for (((hash, key), value), time, diff) in batch {
                             // We want to publish updates in time order and we know that we have
                             // already committed all times not beyond `upper`. Therefore, if this
                             // update happens *exactly* at upper then it is the minimum pending
@@ -636,14 +667,16 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                             // can be *exactly* at upper but we can't know ahead of time which one
                             // will be advanced in the next progress message.
                             match upper.cmp(&time) {
-                                Ordering::Less => deferred_updates.push(((key, value), time, diff)),
+                                Ordering::Less => {
+                                    deferred_updates.push((((hash, key), value), time, diff))
+                                }
                                 Ordering::Equal => {
                                     if !transaction_begun {
                                         producer.begin_transaction().await?;
                                         transaction_begun = true;
                                     }
                                     producer
-                                        .send(key.as_deref(), value.as_deref(), time, diff)
+                                        .send(hash, key.as_deref(), value.as_deref(), time, diff)
                                         .await?;
                                 }
                                 Ordering::Greater => continue,
@@ -685,9 +718,9 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                                 .drain_filter_swapping(|(_, time, _)| !progress.less_equal(time)),
                         );
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-                        for ((key, value), time, diff) in extra_updates.drain(..) {
+                        for (((hash, key), value), time, diff) in extra_updates.drain(..) {
                             producer
-                                .send(key.as_deref(), value.as_deref(), time, diff)
+                                .send(hash, key.as_deref(), value.as_deref(), time, diff)
                                 .await?;
                         }
 
@@ -1086,7 +1119,7 @@ fn encode_collection<G: Scope>(
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
 ) -> (
-    Collection<G, (Option<Vec<u8>>, Option<Vec<u8>>), Diff>,
+    Collection<G, ((u64, Option<Vec<u8>>), Option<Vec<u8>>), Diff>,
     Stream<G, HealthStatusMessage>,
     PressOnDropButton,
 ) {
@@ -1159,9 +1192,15 @@ fn encode_collection<G: Scope>(
             while let Some(event) = input.next().await {
                 if let Event::Data(cap, rows) = event {
                     for ((key, value), time, diff) in rows {
-                        let key = key.map(|key| encoder.encode_key_unchecked(key));
+                        let (hash, key) = match key {
+                            Some(key) => {
+                                let (hash, key) = encoder.encode_key_unchecked(key);
+                                (hash, Some(key))
+                            }
+                            None => (0, None),
+                        };
                         let value = value.map(|value| encoder.encode_value_unchecked(value));
-                        output.give(&cap, ((key, value), time, diff)).await;
+                        output.give(&cap, (((hash, key), value), time, diff)).await;
                     }
                 }
             }

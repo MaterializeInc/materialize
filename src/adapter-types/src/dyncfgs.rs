@@ -18,7 +18,17 @@ pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.",
 );
 
+/// Whether the default sink partitioning strategy for an environment should be 'v1'. When set to
+/// false the strategy defaults to 'v0'.
+pub const ENABLE_DEFAULT_V1_PARTITION_STRATEGY: Config<bool> = Config::new(
+    "enable_default_v1_partition_strategy",
+    false,
+    "Whether the default sink partitioning strategy for an environment should be 'v1'. When set to false the strategy defaults to 'v0'.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
-    configs.add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
+    configs
+        .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
+        .add(&ENABLE_DEFAULT_V1_PARTITION_STRATEGY)
 }
