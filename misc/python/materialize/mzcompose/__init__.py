@@ -68,6 +68,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_copy_to_expr": "true",
     "enable_disk_cluster_replicas": "true",
     "enable_eager_delta_joins": "true",
+    "enable_envelope_debezium_in_subscribe": "true",
     "enable_equivalence_propagation": "true",
     "enable_explain_broken": "true",
     "enable_expressions_in_limit_syntax": "true",

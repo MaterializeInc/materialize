@@ -66,3 +66,4 @@ typing-extensions==4.7.0
 yamllint==1.33.0
 confluent-kafka==2.1.1
 fastavro==1.8.2
+websocket-client==1.7.0

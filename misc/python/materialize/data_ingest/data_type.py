@@ -10,6 +10,7 @@
 import json
 import random
 import string
+import uuid
 from enum import Enum
 from typing import Any
 
@@ -279,6 +280,34 @@ class Bytea(Text):
             return "bytea"
 
 
+class UUID(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        result = rng.choice(
+            [
+                "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+                "6f5eec33-a3c9-40b2-ae06-58f53aca6e7d",
+                "00000000-0000-0000-0000-000000000000",
+                "ffffffff-ffff-ffff-ffff-ffffffffffff",
+                uuid.UUID(int=rng.getrandbits(128), version=4),
+            ]
+        )
+        return f"'{result}'::uuid" if in_query else str(result)
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        result = uuid.uuid1(clock_seq=num)
+        return f"'{result}'::uuid" if in_query else str(result)
+
+    @staticmethod
+    def name(backend: Backend = Backend.POSTGRES) -> str:
+        return "uuid"
+
+
 class Jsonb(DataType):
     @staticmethod
     def name(backend: Backend = Backend.POSTGRES) -> str:
@@ -363,7 +392,7 @@ DATA_TYPES = sorted(list(all_subclasses(DataType)), key=repr)
 # fastavro._schema_common.UnknownType: record
 # bytea requires Python bytes type instead of str
 DATA_TYPES_FOR_AVRO = sorted(
-    list(set(DATA_TYPES) - {TextTextMap, Jsonb, Bytea, Boolean}), key=repr
+    list(set(DATA_TYPES) - {TextTextMap, Jsonb, Bytea, Boolean, UUID}), key=repr
 )
 
 # MySQL doesn't support keys of unlimited size

@@ -1330,11 +1330,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --complexity=dml, --threads=8]
+              args: [--runtime=1500, --complexity=dml, --threads=16]
 
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
@@ -1342,11 +1342,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500]
+              args: [--runtime=1500, --threads=16]
 
       - id: parallel-workload-ddl-only
         label: "Parallel Workload (DDL Only)"
@@ -1366,7 +1366,6 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          # OOMs with linux-aarch64-small
           queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1379,11 +1378,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=rename, --naughty-identifiers]
+              args: [--runtime=1500, --scenario=rename, --naughty-identifiers, --threads=16]
 
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
@@ -1391,11 +1390,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=rename]
+              args: [--runtime=1500, --scenario=rename, --threads=16]
 
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
@@ -1404,11 +1403,11 @@ steps:
         timeout_in_minutes: 60
         skip: "TODO(def-): Reenable when #2392 is fixed"
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=cancel]
+              args: [--runtime=1500, --scenario=cancel, --threads=16]
 
       - id: parallel-workload-kill
         label: "Parallel Workload (kill)"
@@ -1416,12 +1415,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          # OOMs with linux-aarch64-small
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=kill]
+              args: [--runtime=1500, --scenario=kill, --threads=16]
 
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
@@ -1430,11 +1428,11 @@ steps:
         timeout_in_minutes: 60
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers]
+              args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
 
       - id: parallel-workload-persist-txn
         label: "Parallel Workload (toggle persist-txn)"
@@ -1442,11 +1440,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=toggle-persist-txn]
+              args: [--runtime=1500, --scenario=toggle-persist-txn, --threads=16]
 
   - id: incident-70
     label: "Test for incident 70"
