@@ -38,40 +38,45 @@ use crate::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, 
 use crate::session::vars::SystemVars;
 
 /// Common checks that need to be performed before we can start checking a role's privileges.
-fn rbac_preamble(
+macro_rules! rbac_preamble {
+    ($catalog:expr, $session_meta:expr) => {
+        // PostgreSQL allows users that have their role dropped to perform some actions,
+        // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
+        // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
+        // role is dropped.
+        if $catalog
+            .try_get_role(&$session_meta.role_metadata().current_role)
+            .is_none()
+        {
+            return Err(UnauthorizedError::ConcurrentRoleDrop(
+                $session_meta.role_metadata().current_role.clone(),
+            ));
+        };
+        if $catalog
+            .try_get_role(&$session_meta.role_metadata().session_role)
+            .is_none()
+        {
+            return Err(UnauthorizedError::ConcurrentRoleDrop(
+                $session_meta.role_metadata().session_role.clone(),
+            ));
+        };
+        if $catalog
+            .try_get_role(&$session_meta.role_metadata().authenticated_role)
+            .is_none()
+        {
+            return Err(UnauthorizedError::ConcurrentRoleDrop(
+                $session_meta.role_metadata().authenticated_role.clone(),
+            ));
+        };
+    };
+}
+
+/// Filters `RbacRequirements` based on the current user and RBAC related feature flags.
+fn filter_requirements(
     catalog: &impl SessionCatalog,
     session_meta: &dyn SessionMetadata,
     rbac_requirements: RbacRequirements,
 ) -> Result<RbacRequirements, UnauthorizedError> {
-    // PostgreSQL allows users that have their role dropped to perform some actions,
-    // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
-    // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
-    // role is dropped.
-    if catalog
-        .try_get_role(&session_meta.role_metadata().current_role)
-        .is_none()
-    {
-        return Err(UnauthorizedError::ConcurrentRoleDrop(
-            session_meta.role_metadata().current_role.clone(),
-        ));
-    };
-    if catalog
-        .try_get_role(&session_meta.role_metadata().session_role)
-        .is_none()
-    {
-        return Err(UnauthorizedError::ConcurrentRoleDrop(
-            session_meta.role_metadata().session_role.clone(),
-        ));
-    };
-    if catalog
-        .try_get_role(&session_meta.role_metadata().authenticated_role)
-        .is_none()
-    {
-        return Err(UnauthorizedError::ConcurrentRoleDrop(
-            session_meta.role_metadata().authenticated_role.clone(),
-        ));
-    };
-
     // Skip RBAC non-mandatory checks if RBAC is disabled. However, we never skip RBAC checks for
     // system roles. This allows us to limit access of system users even when RBAC is off.
     let is_rbac_disabled = !is_rbac_enabled_for_session(catalog.system_vars(), session_meta)
@@ -284,6 +289,8 @@ pub fn check_usage(
     resolved_ids: &ResolvedIds,
     item_types: &BTreeSet<CatalogItemType>,
 ) -> Result<(), UnauthorizedError> {
+    rbac_preamble!(catalog, session);
+
     // Obtain all roles that the current session is a member of.
     let role_membership = catalog.collect_role_membership(&session.role_metadata().current_role);
 
@@ -308,7 +315,7 @@ pub fn check_usage(
 
     let mut rbac_requirements = RbacRequirements::empty();
     rbac_requirements.privileges = required_privileges;
-    let rbac_requirements = rbac_preamble(catalog, session, rbac_requirements)?;
+    let rbac_requirements = filter_requirements(catalog, session, rbac_requirements)?;
     let required_privileges = rbac_requirements.privileges;
 
     check_object_privileges(
@@ -331,6 +338,8 @@ pub fn check_plan(
     target_cluster_id: Option<ClusterId>,
     resolved_ids: &ResolvedIds,
 ) -> Result<(), UnauthorizedError> {
+    rbac_preamble!(catalog, session);
+
     let rbac_requirements = generate_rbac_requirements(
         catalog,
         plan,
@@ -338,7 +347,7 @@ pub fn check_plan(
         target_cluster_id,
         session.role_metadata().current_role,
     );
-    let rbac_requirements = rbac_preamble(catalog, session, rbac_requirements)?;
+    let rbac_requirements = filter_requirements(catalog, session, rbac_requirements)?;
     debug!(
         "rbac requirements {rbac_requirements:?} for plan {:?}",
         PlanKind::from(plan)
