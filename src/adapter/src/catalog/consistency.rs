@@ -189,6 +189,28 @@ impl CatalogState {
             };
             inconsistencies.push(inconsistency);
         }
+        for role in self.roles_by_id.values() {
+            for (parent_id, grantor_id) in &role.membership.map {
+                let parent = self.roles_by_id.get(parent_id);
+                let grantor = self.roles_by_id.get(grantor_id);
+                let inconsistency = match (parent, grantor) {
+                    (None, None) => RoleInconsistency::Membership {
+                        parent: Some(*parent_id),
+                        grantor: Some(*grantor_id),
+                    },
+                    (Some(_), None) => RoleInconsistency::Membership {
+                        parent: None,
+                        grantor: Some(*grantor_id),
+                    },
+                    (None, Some(_)) => RoleInconsistency::Membership {
+                        parent: Some(*parent_id),
+                        grantor: None,
+                    },
+                    (Some(_), Some(_)) => continue,
+                };
+                inconsistencies.push(inconsistency);
+            }
+        }
 
         if inconsistencies.is_empty() {
             Ok(())
@@ -584,6 +606,10 @@ enum RoleInconsistency {
     SystemPrivilege {
         grantor: Option<RoleId>,
         grantee: Option<RoleId>,
+    },
+    Membership {
+        parent: Option<RoleId>,
+        grantor: Option<RoleId>,
     },
 }
 
