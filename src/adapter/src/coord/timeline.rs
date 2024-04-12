@@ -38,7 +38,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{debug, error, info, Instrument};
 
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::read_policy::InternalReadHolds;
+use crate::coord::read_policy::TimelineReadHolds;
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::AdapterError;
@@ -79,7 +79,7 @@ impl TimelineContext {
 /// guarantee that those read timestamps are valid.
 pub(crate) struct TimelineState<T> {
     pub(crate) oracle: Arc<dyn TimestampOracle<T> + Send + Sync>,
-    pub(crate) read_holds: InternalReadHolds<T>,
+    pub(crate) read_holds: TimelineReadHolds<T>,
 }
 
 impl<T: fmt::Debug> fmt::Debug for TimelineState<T> {
@@ -240,7 +240,7 @@ impl Coordinator {
                 timeline.clone(),
                 TimelineState {
                     oracle,
-                    read_holds: InternalReadHolds::new(),
+                    read_holds: TimelineReadHolds::new(),
                 },
             );
         }
@@ -649,7 +649,7 @@ impl Coordinator {
             };
             let read_ts = oracle.read_ts().await;
             if read_holds.times().any(|time| time.less_than(&read_ts)) {
-                read_holds = self.update_read_holds(read_holds, read_ts);
+                self.update_timeline_read_holds(&mut read_holds, read_ts);
             }
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });

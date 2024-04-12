@@ -26,8 +26,8 @@ use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-use mz_adapter::InternalReadHolds;
 use mz_adapter::ReadHolds;
+use mz_adapter::ReadHoldsInner;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(transparent)]
@@ -131,7 +131,7 @@ impl TimestampProvider for Frontiers {
     }
 
     fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
-        let mut read_holds = InternalReadHolds::new();
+        let mut read_holds = ReadHoldsInner::new();
 
         for (instance_id, ids) in id_bundle.compute_ids.iter() {
             for id in ids.iter() {

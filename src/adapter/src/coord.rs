@@ -150,7 +150,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
-use crate::coord::read_policy::InternalReadHolds;
+use crate::coord::read_policy::ReadHoldsInner;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
@@ -217,7 +217,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         Option<GroupCommitPermit>,
     ),
     AdvanceTimelines,
-    DropReadHolds(Vec<InternalReadHolds<Timestamp>>),
+    DropReadHolds(Vec<ReadHoldsInner<Timestamp>>),
     ClusterEvent(ClusterEvent),
     CancelPendingPeeks {
         conn_id: ConnectionId,
@@ -1291,13 +1291,13 @@ pub struct Coordinator {
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
 
-    /// Channel for returning/releasing [InternalReadHolds](InternalReadHolds).
+    /// Channel for returning/releasing [read holds](ReadHoldsInner).
     ///
     /// We're using a special purpose channel rather than using
     /// `internal_cmd_tx` so that we can control the priority of working off
     /// dropped read holds. If we sent them as [Message] on the internal cmd
     /// channel, these would always get top priority, which is not necessary.
-    dropped_read_holds_tx: mpsc::UnboundedSender<InternalReadHolds<Timestamp>>,
+    dropped_read_holds_tx: mpsc::UnboundedSender<ReadHoldsInner<Timestamp>>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -2413,7 +2413,7 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
-        mut dropped_read_holds_rx: mpsc::UnboundedReceiver<InternalReadHolds<Timestamp>>,
+        mut dropped_read_holds_rx: mpsc::UnboundedReceiver<ReadHoldsInner<Timestamp>>,
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
