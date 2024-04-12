@@ -253,6 +253,14 @@ impl CatalogState {
                 self.apply_comment_update(comment, diff);
                 Ok(None)
             }
+            StateUpdateKind::StorageCollectionMetadata(storage_collection_metadata) => {
+                self.apply_storage_collection_metadata_update(storage_collection_metadata, diff);
+                Ok(None)
+            }
+            StateUpdateKind::UnfinalizedShard(unfinalized_shard) => {
+                self.apply_unfinalized_shard_update(unfinalized_shard, diff);
+                Ok(None)
+            }
         }
     }
 
@@ -879,6 +887,51 @@ impl CatalogState {
         }
     }
 
+    #[instrument(level = "debug")]
+    fn apply_storage_collection_metadata_update(
+        &mut self,
+        storage_collection_metadata: mz_catalog::durable::StorageCollectionMetadata,
+        diff: Diff,
+    ) {
+        apply(
+            &mut self.storage_metadata.collection_metadata,
+            storage_collection_metadata.id,
+            || storage_collection_metadata.shard,
+            diff,
+        );
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_unfinalized_shard_update(
+        &mut self,
+        unfinalized_shard: mz_catalog::durable::UnfinalizedShard,
+        diff: Diff,
+    ) {
+        match diff {
+            1 => {
+                let newly_inserted = self
+                    .storage_metadata
+                    .unfinalized_shards
+                    .insert(unfinalized_shard.shard.clone());
+                assert!(
+                    newly_inserted,
+                    "values must be explicitly retracted before inserting a new value: {unfinalized_shard:?}",
+                );
+            }
+            -1 => {
+                let removed = self
+                    .storage_metadata
+                    .unfinalized_shards
+                    .remove(&unfinalized_shard.shard);
+                assert!(
+                    removed,
+                    "retraction does not match existing value: {unfinalized_shard:?}"
+                );
+            }
+            _ => unreachable!("invalid diff: {diff}"),
+        }
+    }
+
     /// Generate a list of `BuiltinTableUpdate`s that correspond to a list of updates made to the
     /// durable catalog.
     #[instrument]
@@ -970,6 +1023,8 @@ impl CatalogState {
                 &comment.comment,
                 diff,
             )],
+            StateUpdateKind::StorageCollectionMetadata(_)
+            | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
     }
 }

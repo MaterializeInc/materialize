@@ -1488,14 +1488,22 @@ impl<'a> Transaction<'a> {
                 StateUpdateKind::ClusterReplica,
             ))
             .chain(get_collection_updates(
-                &self.comments,
-                StateUpdateKind::Comment,
-            ))
-            .chain(get_collection_updates(
                 &self.system_gid_mapping,
                 StateUpdateKind::SystemObjectMapping,
             ))
             .chain(get_collection_updates(&self.items, StateUpdateKind::Item))
+            .chain(get_collection_updates(
+                &self.comments,
+                StateUpdateKind::Comment,
+            ))
+            .chain(get_collection_updates(
+                &self.storage_collection_metadata,
+                StateUpdateKind::StorageCollectionMetadata,
+            ))
+            .chain(get_collection_updates(
+                &self.unfinalized_shards,
+                StateUpdateKind::UnfinalizedShard,
+            ))
             .map(|kind| StateUpdate { kind, diff: 1 })
     }
 
