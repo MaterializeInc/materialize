@@ -257,8 +257,11 @@ impl Catalog {
                         probe_cluster: config.builtin_probe_cluster_replica_size,
                         support_cluster: config.builtin_support_cluster_replica_size,
                     };
+                    // TODO(jkosh44) These functions should clean up old clusters, replicas, and
+                    // roles like they do for builtin items and introspection sources, but they
+                    // don't.
                     add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
-                    add_new_builtin_introspection_source_migration(&mut txn)?;
+                    add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
                     add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
                     add_new_builtin_roles_migration(&mut txn)?;
                     remove_invalid_config_param_role_defaults_migration(&mut txn)?;
@@ -950,10 +953,11 @@ fn add_new_builtin_clusters_migration(
     Ok(())
 }
 
-fn add_new_builtin_introspection_source_migration(
+fn add_new_remove_old_builtin_introspection_source_migration(
     txn: &mut mz_catalog::durable::Transaction<'_>,
 ) -> Result<(), AdapterError> {
     let mut new_indexes = Vec::new();
+    let mut removed_indexes = BTreeSet::new();
     for cluster in txn.get_clusters() {
         let mut introspection_source_index_ids = txn.get_introspection_source_indexes(cluster.id);
 
@@ -971,12 +975,16 @@ fn add_new_builtin_introspection_source_migration(
             new_indexes.push((cluster.id, log.name.to_string(), index_id));
         }
 
-        // TODO(jkosh44) We probably want to delete these.
-        if !introspection_source_index_ids.is_empty() {
-            warn!("catalog contains leaked introspection source indexes: {introspection_source_index_ids:?}");
-        }
+        // Anything left in `introspection_source_index_ids` must have been deleted and should be
+        // removed from the catalog.
+        removed_indexes.extend(
+            introspection_source_index_ids
+                .into_keys()
+                .map(|name| (cluster.id, name)),
+        );
     }
     txn.insert_introspection_source_indexes(new_indexes)?;
+    txn.remove_introspection_source_indexes(removed_indexes)?;
     Ok(())
 }
 

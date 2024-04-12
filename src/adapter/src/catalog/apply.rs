@@ -433,34 +433,33 @@ impl CatalogState {
         introspection_source_index: mz_catalog::durable::IntrospectionSourceIndex,
         diff: Diff,
     ) {
-        // TODO(jkosh44) There may be some old deleted logs stored durably that no longer
-        // exists. For now we ignore them, but we should clean them up.
-        if let Some(log) = BUILTIN_LOG_LOOKUP.get(introspection_source_index.name.as_str()) {
-            match diff {
-                1 => {
-                    self.insert_introspection_source_index(
-                        introspection_source_index.cluster_id,
-                        log,
-                        introspection_source_index.index_id,
-                        introspection_source_index.oid,
-                    );
-                }
-                -1 => {
-                    self.drop_item(introspection_source_index.index_id);
-                }
-                _ => unreachable!("invalid diff: {diff}"),
+        let log = BUILTIN_LOG_LOOKUP
+            .get(introspection_source_index.name.as_str())
+            .expect("missing log");
+        match diff {
+            1 => {
+                self.insert_introspection_source_index(
+                    introspection_source_index.cluster_id,
+                    log,
+                    introspection_source_index.index_id,
+                    introspection_source_index.oid,
+                );
             }
-            let cluster = self
-                .clusters_by_id
-                .get_mut(&introspection_source_index.cluster_id)
-                .expect("catalog out of sync");
-            apply(
-                &mut cluster.log_indexes,
-                log.variant,
-                || introspection_source_index.index_id,
-                diff,
-            );
+            -1 => {
+                self.drop_item(introspection_source_index.index_id);
+            }
+            _ => unreachable!("invalid diff: {diff}"),
         }
+        let cluster = self
+            .clusters_by_id
+            .get_mut(&introspection_source_index.cluster_id)
+            .expect("catalog out of sync");
+        apply(
+            &mut cluster.log_indexes,
+            log.variant,
+            || introspection_source_index.index_id,
+            diff,
+        );
     }
 
     #[instrument(level = "debug")]
