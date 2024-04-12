@@ -63,6 +63,7 @@ use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
     OpenableDurableCatalogState, ReadOnlyDurableCatalogState, Transaction,
 };
+use crate::memory;
 
 /// New-type used to represent timestamps in persist.
 pub(crate) type Timestamp = mz_repr::Timestamp;
@@ -1137,6 +1138,8 @@ struct CatalogStateInner {
     audit_logs: LargeCollectionStartupCache<proto::AuditLogKey>,
     /// A cache of storage usage events that is only populated during startup.
     storage_usage_events: LargeCollectionStartupCache<proto::StorageUsageKey>,
+    /// TODO(jkosh44)
+    updates: Vec<memory::objects::StateUpdate>,
 }
 
 impl CatalogStateInner {
@@ -1145,6 +1148,7 @@ impl CatalogStateInner {
             mode,
             audit_logs: LargeCollectionStartupCache::new_open(),
             storage_usage_events: LargeCollectionStartupCache::new_open(),
+            updates: Vec::new(),
         }
     }
 }
@@ -1161,6 +1165,11 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 .collection_entries
                 .with_label_values(&[&collection_type.to_string()])
                 .add(update.diff);
+        }
+
+        // TODO(jkosh44) Maybe use CoW to avoid unecessary clones?
+        if let Some(update) = update.clone().try_into()? {
+            self.updates.push(update);
         }
 
         match (update.kind, update.diff) {
@@ -1278,6 +1287,13 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     #[mz_ore::instrument(level = "debug")]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         self.with_snapshot(Ok).await
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn sync(&mut self) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
+        self.sync_to_current_upper().await?;
+        let updates = std::mem::take(&mut self.update_applier.updates);
+        Ok(updates)
     }
 }
 

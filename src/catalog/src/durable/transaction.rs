@@ -1759,7 +1759,12 @@ impl<'a> Transaction<'a> {
                 &self.unfinalized_shards,
                 StateUpdateKind::UnfinalizedShard,
             ))
-            .map(|kind| StateUpdate { kind, diff: 1 })
+            .map(|kind| StateUpdate {
+                kind,
+                // TODO(jkosh44)
+                ts: Timestamp::new(0),
+                diff: 1,
+            })
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {

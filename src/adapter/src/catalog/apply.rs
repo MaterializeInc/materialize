@@ -74,7 +74,7 @@ impl CatalogState {
         let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut updates: VecDeque<_> = updates.into_iter().collect();
-        while let Some(StateUpdate { kind, diff }) = updates.pop_front() {
+        while let Some(StateUpdate { kind, ts, diff }) = updates.pop_front() {
             assert_eq!(
                 diff, 1,
                 "initial catalog updates should be consolidated: ({kind:?}, {diff:?})"
@@ -99,6 +99,7 @@ impl CatalogState {
                             .into_iter()
                             .map(|(item, diff)| StateUpdate {
                                 kind: StateUpdateKind::Item(item),
+                                ts,
                                 diff,
                             });
                     updates.extend(resolved_dependent_items);
@@ -918,7 +919,7 @@ impl CatalogState {
         updates: Vec<StateUpdate>,
     ) -> Vec<BuiltinTableUpdate> {
         let mut builtin_table_updates = Vec::new();
-        for StateUpdate { kind, diff } in updates {
+        for StateUpdate { kind, ts: _, diff } in updates {
             builtin_table_updates.extend(self.generate_builtin_table_update(kind, diff));
         }
         builtin_table_updates

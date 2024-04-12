@@ -234,11 +234,9 @@ impl Catalog {
                 storage_metadata: Default::default(),
             };
 
-            let is_read_only = storage.is_read_only();
-            let mut txn = storage.transaction().await?;
-
             // Migrate/update durable data before we start loading the in-memory catalog.
             let migrated_builtins = {
+                let mut txn = storage.transaction().await?;
                 migrate::durable_migrate(&mut txn, config.boot_ts)?;
                 // Overwrite and persist selected parameter values in `remote_system_parameters` that
                 // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
@@ -254,22 +252,21 @@ impl Catalog {
                 }
                 // Add any new builtin objects and remove old ones.
                 let migrated_builtins = add_new_remove_old_builtin_items_migration(&mut txn)?;
-                if !is_read_only {
-                    let cluster_sizes = BuiltinBootstrapClusterSizes {
-                        system_cluster: config.builtin_system_cluster_replica_size,
-                        introspection_cluster: config.builtin_introspection_cluster_replica_size,
-                        probe_cluster: config.builtin_probe_cluster_replica_size,
-                        support_cluster: config.builtin_support_cluster_replica_size,
-                    };
-                    // TODO(jkosh44) These functions should clean up old clusters, replicas, and
-                    // roles like they do for builtin items and introspection sources, but they
-                    // don't.
-                    add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
-                    add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
-                    add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
-                    add_new_builtin_roles_migration(&mut txn)?;
-                    remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-                }
+                let cluster_sizes = BuiltinBootstrapClusterSizes {
+                    system_cluster: config.builtin_system_cluster_replica_size,
+                    introspection_cluster: config.builtin_introspection_cluster_replica_size,
+                    probe_cluster: config.builtin_probe_cluster_replica_size,
+                    support_cluster: config.builtin_support_cluster_replica_size,
+                };
+                // TODO(jkosh44) These functions should clean up old clusters, replicas, and
+                // roles like they do for builtin items and introspection sources, but they
+                // don't.
+                add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
+                add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
+                add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
+                add_new_builtin_roles_migration(&mut txn)?;
+                remove_invalid_config_param_role_defaults_migration(&mut txn)?;
+                txn.commit().await?;
                 migrated_builtins
             };
 
@@ -291,6 +288,8 @@ impl Catalog {
                 state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
             }
 
+            let updates = storage.sync()?;
+
             // Durable catalog updates must be partitioned so that we can weave the loading of
             // builtin objects into the right spots.
             let mut pre_cluster_updates = Vec::new();
@@ -298,7 +297,7 @@ impl Catalog {
             let mut builtin_item_updates = Vec::new();
             let mut item_updates = Vec::new();
             let mut post_item_updates = Vec::new();
-            for update in txn.get_updates() {
+            for update in updates {
                 match update.kind {
                     StateUpdateKind::Role(_)
                     | StateUpdateKind::Database(_)
@@ -309,7 +308,7 @@ impl Catalog {
                     StateUpdateKind::Cluster(_)
                     | StateUpdateKind::IntrospectionSourceIndex(_)
                     | StateUpdateKind::ClusterReplica(_) => cluster_updates.push(update),
-                    StateUpdateKind::SystemObjectMapping(system_object_mapping) => builtin_item_updates.push((system_object_mapping, update.diff)),
+                    StateUpdateKind::SystemObjectMapping(system_object_mapping) => builtin_item_updates.push((system_object_mapping, update.ts, update.diff)),
                     StateUpdateKind::Item(_) => item_updates.push(update),
                     StateUpdateKind::Comment(_)
                     | StateUpdateKind::AuditLog(_)
@@ -318,28 +317,28 @@ impl Catalog {
                     | StateUpdateKind::UnfinalizedShard(_) => post_item_updates.push(update),
                 }
             }
-
             // Sort builtin item updates by dependency.
             let builtin_item_updates = builtin_item_updates.into_iter()
-                .map(|(system_object_mapping, diff)| {
+                .map(|(system_object_mapping, ts, diff)| {
                     let idx = BUILTIN_LOOKUP.get(&system_object_mapping.description).expect("missing builtin").0;
-                    (idx, system_object_mapping, diff)
+                    (idx, system_object_mapping, ts, diff)
                 })
-                .sorted_by_key(|(idx, _, _)| *idx)
-                .map(|(_, system_object_mapping, diff)| (system_object_mapping, diff));
-
+                .sorted_by_key(|(idx, _, _, _)| *idx)
+                .map(|(_, system_object_mapping, ts, diff)| (system_object_mapping, ts, diff));
             let mut builtin_type_updates = Vec::new();
             let mut other_builtin_updates = Vec::new();
             let mut builtin_view_updates = Vec::new();
             let mut builtin_index_updates = Vec::new();
-            for (builtin_item_update, diff) in builtin_item_updates {
+            for (builtin_item_update, ts, diff) in builtin_item_updates {
                 match &builtin_item_update.description.object_type {
                     CatalogItemType::Type => builtin_type_updates.push(StateUpdate {
                         kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                        ts,
                         diff,
                     }),
                     CatalogItemType::Index => builtin_index_updates.push(StateUpdate {
                         kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                        ts,
                         diff,
                     }),
                     CatalogItemType::View | CatalogItemType::MaterializedView => {
@@ -352,6 +351,7 @@ impl Catalog {
                     | CatalogItemType::Secret
                     | CatalogItemType::Connection => other_builtin_updates.push(StateUpdate {
                         kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                        ts,
                         diff,
                     }),
                 }
@@ -377,6 +377,7 @@ impl Catalog {
             state.apply_updates_for_bootstrap(pre_view_updates)?;
             Self::parse_views(&mut state, builtin_views).await;
             state.apply_updates_for_bootstrap(post_view_updates)?;
+            // let mut builtin_table_updates = state.generate_builtin_table_updates(updates);
 
             let last_seen_version = txn
                 .get_catalog_content_version()

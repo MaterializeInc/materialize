@@ -2259,7 +2259,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 #[derive(Debug)]
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
-    // TODO(jkosh44) Add timestamps.
+    pub ts: mz_repr::Timestamp,
     pub diff: Diff,
 }
 

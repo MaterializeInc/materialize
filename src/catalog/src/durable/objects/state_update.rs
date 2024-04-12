@@ -220,10 +220,10 @@ impl TryFrom<StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpda
     type Error = DurableCatalogError;
 
     fn try_from(
-        StateUpdate { kind, ts: _, diff }: StateUpdate<StateUpdateKind>,
+        StateUpdate { kind, ts, diff }: StateUpdate<StateUpdateKind>,
     ) -> Result<Self, Self::Error> {
         let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
-        let update = kind.map(|kind| memory::objects::StateUpdate { kind, diff });
+        let update = kind.map(|kind| memory::objects::StateUpdate { kind, ts, diff });
         Ok(update)
     }
 }

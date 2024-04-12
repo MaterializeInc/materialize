@@ -40,6 +40,7 @@ use crate::durable::persist::UnopenedPersistCatalogState;
 pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
 pub use crate::durable::upgrade::CATALOG_VERSION;
+use crate::memory;
 
 pub mod debug;
 mod error;
@@ -201,6 +202,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
 
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
+
+    /// TODO(jkosh44)
+    async fn sync(&mut self) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 }
 
 /// A read-write API for the durable catalog state.
