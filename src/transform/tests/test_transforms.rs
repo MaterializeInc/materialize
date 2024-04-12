@@ -172,6 +172,16 @@ fn handle_apply(
             let transform = FoldConstants { limit: None };
             apply_transform(transform, catalog, input)
         }
+        "fusion_join" => {
+            use mz_transform::fusion::join::Join;
+            let transform = Join;
+            apply_transform(transform, catalog, input)
+        }
+        "fusion_top_k" => {
+            use mz_transform::fusion::top_k::TopK;
+            let transform = TopK;
+            apply_transform(transform, catalog, input)
+        }
         "literal_lifting" => {
             use mz_transform::literal_lifting::LiteralLifting;
             let transform = LiteralLifting::default();
@@ -222,14 +232,9 @@ fn handle_apply(
             let transform = SemijoinIdempotence::default();
             apply_transform(transform, catalog, input)
         }
-        "fusion_top_k" => {
-            use mz_transform::fusion::top_k::TopK;
-            let transform = TopK;
-            apply_transform(transform, catalog, input)
-        }
-        "fusion_join" => {
-            use mz_transform::fusion::join::Join;
-            let transform = Join;
+        "threshold_elision" => {
+            use mz_transform::threshold_elision::ThresholdElision;
+            let transform = ThresholdElision;
             apply_transform(transform, catalog, input)
         }
         transform => Err(format!("unsupported pipeline transform: {transform}")),
