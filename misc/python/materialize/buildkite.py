@@ -12,12 +12,32 @@
 import hashlib
 import os
 from collections.abc import Callable
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any, TypeVar
 
 from materialize import git, spawn, ui
 
 T = TypeVar("T")
+
+
+class BuildkiteEnvVar(Enum):
+    BUILDKITE_PULL_REQUEST = auto()
+    BUILDKITE_BUILD_NUMBER = auto()
+    BUILDKITE_PIPELINE_DEFAULT_BRANCH = auto()
+    BUILDKITE_PULL_REQUEST_BASE_BRANCH = auto()
+    BUILDKITE_ORGANIZATION_SLUG = auto()
+    BUILDKITE_PIPELINE_SLUG = auto()
+    BUILDKITE_BRANCH = auto()
+
+    BUILDKITE_PARALLEL_JOB = auto()
+    BUILDKITE_PARALLEL_JOB_COUNT = auto()
+    BUILDKITE_STEP_KEY = auto()
+    BUILDKITE_LABEL = auto()
+
+
+def get_var(var: BuildkiteEnvVar, fallback_value: Any = None) -> Any:
+    return os.getenv(var.name, fallback_value)
 
 
 def is_in_buildkite() -> bool:
@@ -44,21 +64,21 @@ def is_in_pull_request() -> bool:
 
 def is_pull_request_marker_set() -> bool:
     # If set, this variable will contain either the ID of the pull request or the string "false".
-    return os.getenv("BUILDKITE_PULL_REQUEST", "false") != "false"
+    return get_var(BuildkiteEnvVar.BUILDKITE_PULL_REQUEST, "false") != "false"
 
 
 def is_on_default_branch() -> bool:
-    current_branch = os.getenv("BUILDKITE_BRANCH", "unknown")
-    default_branch = os.getenv("BUILDKITE_PIPELINE_DEFAULT_BRANCH", "main")
+    current_branch = get_var(BuildkiteEnvVar.BUILDKITE_BRANCH, "unknown")
+    default_branch = get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_DEFAULT_BRANCH, "main")
     return current_branch == default_branch
 
 
 def get_pull_request_base_branch(fallback: str = "main"):
-    return os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", fallback)
+    return get_var(BuildkiteEnvVar.BUILDKITE_PULL_REQUEST_BASE_BRANCH, fallback)
 
 
 def get_pipeline_default_branch(fallback: str = "main"):
-    return os.getenv("BUILDKITE_PIPELINE_DEFAULT_BRANCH", fallback)
+    return get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_DEFAULT_BRANCH, fallback)
 
 
 def get_merge_base(url: str = "https://github.com/MaterializeInc/materialize") -> str:
@@ -132,12 +152,12 @@ def upload_artifact(path: Path | str, cwd: Path | None = None):
 
 def get_parallelism_index() -> int:
     _validate_parallelism_configuration()
-    return int(os.environ.get("BUILDKITE_PARALLEL_JOB", 0))
+    return int(get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB, 0))
 
 
 def get_parallelism_count() -> int:
     _validate_parallelism_configuration()
-    return int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
+    return int(get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB_COUNT, 1))
 
 
 def _accepted_by_shard(
@@ -160,7 +180,9 @@ def _accepted_by_shard(
 
 
 def _upload_shard_info_metadata(items: list[str]) -> None:
-    label = os.getenv("BUILDKITE_LABEL") or os.getenv("BUILDKITE_STEP_KEY")
+    label = get_var(BuildkiteEnvVar.BUILDKITE_LABEL) or get_var(
+        BuildkiteEnvVar.BUILDKITE_STEP_KEY
+    )
     spawn.runv(
         ["buildkite-agent", "meta-data", "set", f"Shard for {label}", ", ".join(items)]
     )
@@ -191,15 +213,17 @@ def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
 
 
 def _validate_parallelism_configuration() -> None:
-    job_index = os.environ.get("BUILDKITE_PARALLEL_JOB")
-    job_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+    job_index = get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB)
+    job_count = get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB_COUNT)
 
     if job_index is None and job_count is None:
         # OK
         return
 
-    job_index_desc = f"$BUILDKITE_PARALLEL_JOB (= '{job_index}')"
-    job_count_desc = f"$BUILDKITE_PARALLEL_JOB_COUNT (= '{job_count}')"
+    job_index_desc = f"${BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB.name} (= '{job_index}')"
+    job_count_desc = (
+        f"${BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB_COUNT.name} (= '{job_count}')"
+    )
     assert (
         job_index is not None and job_count is not None
     ), f"{job_index_desc} and {job_count_desc} need to be either both specified or not specified"
@@ -219,9 +243,9 @@ def truncate_str(text: str, length: int = 900_000) -> str:
 
 
 def get_artifact_url(artifact: dict[str, Any]) -> str:
-    org = os.environ["BUILDKITE_ORGANIZATION_SLUG"]
-    pipeline = os.environ["BUILDKITE_PIPELINE_SLUG"]
-    build = os.environ["BUILDKITE_BUILD_NUMBER"]
+    org = get_var(BuildkiteEnvVar.BUILDKITE_ORGANIZATION_SLUG)
+    pipeline = get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_SLUG)
+    build = get_var(BuildkiteEnvVar.BUILDKITE_BUILD_NUMBER)
     return f"https://buildkite.com/organizations/{org}/pipelines/{pipeline}/builds/{build}/jobs/{artifact['job_id']}/artifacts/{artifact['id']}"
 
 
