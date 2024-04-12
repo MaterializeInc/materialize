@@ -20,6 +20,10 @@ menu:
 
 {{< diagram "alter-source-drop-clause.svg" >}}
 
+#### alter_source_set_retain_history_clause
+
+{{< diagram "alter-source-set-retain-history-clause.svg" >}}
+
 #### with_options
 
 {{< diagram "with-options.svg" >}}
@@ -29,6 +33,7 @@ Field   | Use
 _name_  | The identifier of the source you want to alter.
 **ADD SUBSOURCE** ... | PostgreSQL sources only: Add the identified tables from the upstream database (`table_name`) to the named source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options).
 **DROP SUBSOURCE** ... | PostgreSQL sources only: Drop the identified subsources from the source. Specifying **CASCADE** also drops all objects that depend on the subsource. **RESTRICT** (default) will not drop the subsource if it has any dependencies.
+_retention_time_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing time travel actions. Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values like `'1hr'`. See [retention period](/manage/rentention-period) guide. Default is one second.
 
 ### **ADD SUBSOURCE** `with_options`
 

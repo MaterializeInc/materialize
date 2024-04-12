@@ -37,10 +37,13 @@ Sink source type      | Description
 
 {{< diagram "kafka-sink-connection.svg" >}}
 
-
 #### `csr_connection`
 
 {{< diagram "csr-connection.svg" >}}
+
+### `with_options`
+
+{{< diagram "with-options-retain-history.svg" >}}
 
 Field | Use
 ------|-----
@@ -53,6 +56,7 @@ _item&lowbar;name_ | The name of the source, table or materialized view you want
 **NOT ENFORCED** | Whether to disable validation of key uniqueness when using the upsert envelope. See [Upsert key selection](#upsert-key-selection) for details.
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source.
 **ENVELOPE UPSERT** | The sink emits data with [upsert semantics](#upsert-envelope).
+_retention_time_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing time travel actions. Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values like `'1hr'`. See [retention period](/manage/rentention-period) guide. Default is one second.
 
 ### `CONNECTION` options
 

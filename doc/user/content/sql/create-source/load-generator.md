@@ -23,6 +23,10 @@ tests.
 
 {{< diagram "load-generator-option.svg" >}}
 
+#### `with_options`
+
+{{< diagram "with-options-retain-history.svg" >}}
+
 Field | Use
 ------|-----
 _src_name_  | The name for the source.
@@ -44,6 +48,7 @@ _src_name_  | The name for the source.
 **BATCH SIZE**              | Valid for [`KEY VALUE` generator](#key-value).
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
+_retention_time_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing time travel actions. Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values like `'1hr'`. See [retention period](/manage/rentention-period) guide. Default is one second.
 
 ## Description
 

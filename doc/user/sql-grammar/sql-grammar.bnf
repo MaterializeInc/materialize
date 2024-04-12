@@ -31,8 +31,12 @@ alter_rename ::=
   'ALTER' ('CONNECTION' | 'CLUSTER' | 'CLUSTER REPLICA' | 'INDEX' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_swap ::=
   'ALTER' ('CLUSTER' | 'SCHEMA') name 'SWAP' 'WITH' target_name
+alter_table ::=
+  'ALTER' 'TABLE' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_time) ')'
 alter_index ::=
-  'ALTER' 'INDEX' name 'SET' 'ENABLED'
+  'ALTER' 'INDEX' name 'SET' ('ENABLED' | ('(' ('RETAIN HISTORY' '='? 'FOR' retention_time) ')'))
+alter_materialized_view ::=
+  'ALTER' 'MATERIALIZED VIEW' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_time) ')'
 alter_role ::=
     'ALTER' 'ROLE' role_name ( alter_role_attributes | alter_role_set )
 alter_role_attributes ::= 'WITH'? 'INHERIT'
@@ -43,11 +47,14 @@ alter_source ::=
   'ALTER' 'SOURCE' 'IF EXISTS'? name (
     alter_source_add_clause
     | alter_source_drop_clause
+    | alter_source_set_retain_history_clause
   )
 alter_source_add_clause ::=
   'ADD' ('SUBSOURCE' | 'TABLE') table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* with_options
 alter_source_drop_clause ::=
   'DROP' ('SUBSOURCE' | 'TABLE') subsrc_name ( ',' subsrc_name )* ('RESTRICT' | 'CASCADE')?
+alter_source_set_retain_history_clause ::=
+  'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_time) ')'
 alter_set_cluster ::=
   'ALTER' 'MATERIALIZED VIEW' 'IF EXISTS'? name 'SET' 'IN' 'CLUSTER' cluster_name
 alter_system_set_stmt ::=
@@ -134,16 +141,17 @@ create_index ::=
         'INDEX' index_name ('IN' 'CLUSTER' cluster_name)? 'ON' obj_name ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
         | 'DEFAULT INDEX' ('IN' 'CLUSTER' cluster_name)? 'ON' obj_name ('USING' method)?
     )
+    with_options?
 create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
     view_name ( '(' col_ident ( ',' col_ident )* ')' )?
     ('IN CLUSTER' cluster_name)?
-    ('WITH' '(' ( 'ASSERT NOT NULL' col_ident ( ',' 'ASSERT NOT NULL' col_ident )* )? ')')?
+    with_options?
     'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'MATERIALIZED VIEW'
     view_name ( '(' col_ident ( ',' col_ident )* ')' )?
     ('IN CLUSTER' cluster_name)?
-    ('WITH' '(' ( 'ASSERT NOT NULL' col_ident ( ',' 'ASSERT NOT NULL' col_ident )* )? ')')?
+    with_options?
     'AS' select_stmt
 create_role ::=
     'CREATE' 'ROLE' role_name ('WITH'? 'INHERIT')?
@@ -176,7 +184,7 @@ create_source_kafka ::=
   )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'))?
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
-  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  with_options?
 create_source_load_generator ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
@@ -184,7 +192,7 @@ create_source_load_generator ::=
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
   'FOR ALL TABLES'
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
-  // ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  with_options?
 load_generator_option ::=
     'TICK INTERVAL' interval
     | 'SCALE FACTOR' scale_factor
@@ -206,7 +214,7 @@ create_source_postgres ::=
     | 'FOR SCHEMAS' '(' schema_name (',' schema_name )* ')'
   )
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
-  // ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  with_options?
 create_source_mysql ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
@@ -218,7 +226,7 @@ create_source_mysql ::=
     | 'FOR SCHEMAS' '(' schema_name (',' schema_name )* ')'
   )
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
-  // ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  with_options?
 create_source_webhook ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'IN CLUSTER' cluster_name
@@ -234,6 +242,7 @@ create_source_webhook ::=
       check_expression
     ')'
   )?
+  with_options?
 webhook_body_format ::= 'TEXT' | 'JSON' | 'BYTES'
 webhook_check_option ::=
   ('BODY' | 'HEADERS' | 'SECRET' secret_name) ('AS' alias)? ('BYTES')?
@@ -247,6 +256,7 @@ create_view ::=
 create_table ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'TABLE' table_name
   '(' ((col_name col_type col_option*) (',' col_name col_type col_option*)*)? ')'
+  with_options?
 deallocate ::=
   'DEALLOCATE' ('PREPARE')?  (name | 'ALL')?
 declare ::=
@@ -603,3 +613,8 @@ with_options_aws ::= 'WITH' '('
 
 with_options_aws_static ::=
   'access_key_id' '=' val ',' 'secret_access_key' '=' val ( ',' 'token' '=' val )?
+with_options_materialized_view ::= 
+  ('WITH' '(' ( 'ASSERT NOT NULL' col_ident ( ',' 'ASSERT NOT NULL' col_ident )* )?
+    ( 'RETAIN HISTORY' '='? 'FOR' retention_interval )?
+  ')')
+with_options_retain_history ::= ('WITH' '(' ('RETAIN HISTORY' '='? 'FOR' retention_time) ')')
