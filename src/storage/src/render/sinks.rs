@@ -68,7 +68,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     let ok_collection =
         apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
 
-    let (health, sink_tokens) = sink_render.render_continuous_sink(
+    let (health, sink_tokens) = sink_render.render_sink(
         storage_state,
         sink,
         sink_id,
@@ -227,16 +227,14 @@ where
     /// TODO
     fn get_relation_key_indices(&self) -> Option<&[usize]>;
     /// TODO
-    fn render_continuous_sink(
+    fn render_sink(
         &self,
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>)
-    where
-        G: Scope<Timestamp = Timestamp>;
+    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>);
 }
 
 fn get_sink_render_for<G>(connection: &StorageSinkConnection) -> Box<dyn SinkRender<G>>

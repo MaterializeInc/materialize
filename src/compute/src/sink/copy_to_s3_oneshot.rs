@@ -31,7 +31,7 @@ impl<G> SinkRender<G> for CopyToS3OneshotSinkConnection
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn render_continuous_sink(
+    fn render_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
@@ -40,10 +40,7 @@ where
         _start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-    ) -> Option<Rc<dyn Any>>
-    where
-        G: Scope<Timestamp = Timestamp>,
-    {
+    ) -> Option<Rc<dyn Any>> {
         // An encapsulation of the copy to response protocol.
         // Used to send rows and errors if this fails.
         let response_protocol_handle = Rc::new(RefCell::new(Some(ResponseProtocol {
