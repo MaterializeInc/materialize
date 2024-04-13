@@ -449,7 +449,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             latest_report_by_scenario_name[scenario.__name__] = report
 
             print(f"+++ Benchmark Report for cycle {cycle + 1}:")
-            report.print()
+            print(report)
 
         scenarios_to_run = scenarios_with_regressions
         if len(scenarios_to_run) == 0:
