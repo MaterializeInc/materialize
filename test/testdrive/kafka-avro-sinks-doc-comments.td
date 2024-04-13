@@ -13,7 +13,6 @@ $ set-arg-default single-replica-cluster=quickstart
 # Test Avro UPSERT sinks doc comments
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_comment = true;
 ALTER SYSTEM SET enable_sink_doc_on_option = true;
 
 > CREATE TYPE point AS (x integer, y integer);

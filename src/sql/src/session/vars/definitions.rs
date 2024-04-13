@@ -1930,13 +1930,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_comment,
-        desc: "the COMMENT ON feature for objects",
-        default: true,
-        internal: false,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_sink_doc_on_option,
         desc: "DOC ON option for sinks",
         default: false,
