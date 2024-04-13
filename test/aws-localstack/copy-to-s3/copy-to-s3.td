@@ -33,14 +33,14 @@ contains:AWS CONNECTION is required for COPY ... TO <expr>
   WITH (
     AWS CONNECTION = aws_conn
   );
-contains:only CSV format is supported for COPY ... TO <expr>
+contains:FORMAT TEXT not yet supported
 
 ! COPY t TO 's3://path/to/dir'
   WITH (
     AWS CONNECTION = aws_conn,
     FORMAT = 'binary'
   );
-contains:only CSV format is supported for COPY ... TO <expr>
+contains:FORMAT BINARY not yet supported
 
 ! COPY t TO '/path/'
   WITH (
