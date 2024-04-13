@@ -848,7 +848,7 @@ impl<'a> Transaction<'a> {
     /// Returns an error if any id in `ids` is not found.
     ///
     /// NOTE: On error, there still may be some items removed from the transaction. It is
-    /// up to the called to either abort the transaction or commit.
+    /// up to the caller to either abort the transaction or commit.
     pub fn remove_items(&mut self, ids: BTreeSet<GlobalId>) -> Result<(), CatalogError> {
         let n = self.items.delete(|k, _v| ids.contains(&k.gid)).len();
         if n == ids.len() {
@@ -865,7 +865,7 @@ impl<'a> Transaction<'a> {
     /// Returns an error if any description in `descriptions` is not found.
     ///
     /// NOTE: On error, there still may be some items removed from the transaction. It is
-    /// up to the called to either abort the transaction or commit.
+    /// up to the caller to either abort the transaction or commit.
     pub fn remove_system_object_mappings(
         &mut self,
         descriptions: BTreeSet<SystemObjectDescription>,
@@ -903,6 +903,36 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Removes all introspection source indexes in `indexes` from the transaction.
+    ///
+    /// Returns an error if any index in `indexes` is not found.
+    ///
+    /// NOTE: On error, there still may be some indexes removed from the transaction. It is
+    /// up to the caller to either abort the transaction or commit.
+    pub fn remove_introspection_source_indexes(
+        &mut self,
+        introspection_source_indexes: BTreeSet<(ClusterId, String)>,
+    ) -> Result<(), CatalogError> {
+        let n = self
+            .introspection_sources
+            .delete(|k, _v| introspection_source_indexes.contains(&(k.cluster_id, k.name.clone())))
+            .len();
+        if n == introspection_source_indexes.len() {
+            Ok(())
+        } else {
+            let txn_indexes = self
+                .introspection_sources
+                .items()
+                .keys()
+                .map(|k| (k.cluster_id, k.name.clone()))
+                .collect();
+            let mut unknown = introspection_source_indexes
+                .difference(&txn_indexes)
+                .map(|(cluster_id, name)| format!("{cluster_id} {name}"));
+            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+        }
+    }
+
     /// Updates item `id` in the transaction to `item_name` and `item`.
     ///
     /// Returns an error if `id` is not found.
@@ -935,7 +965,7 @@ impl<'a> Transaction<'a> {
     /// Returns an error if any id in `items` is not found.
     ///
     /// NOTE: On error, there still may be some items updated in the transaction. It is
-    /// up to the called to either abort the transaction or commit.
+    /// up to the caller to either abort the transaction or commit.
     pub fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), CatalogError> {
         let n = self.items.update(|k, v| {
             if let Some(item) = items.get(&k.gid) {
@@ -989,7 +1019,7 @@ impl<'a> Transaction<'a> {
     /// Returns an error if any id in `roles` is not found.
     ///
     /// NOTE: On error, there still may be some roles updated in the transaction. It is
-    /// up to the called to either abort the transaction or commit.
+    /// up to the caller to either abort the transaction or commit.
     pub fn update_roles(&mut self, roles: BTreeMap<RoleId, Role>) -> Result<(), CatalogError> {
         let n = self.roles.update(|k, _v| {
             if let Some(role) = roles.get(&k.id) {
