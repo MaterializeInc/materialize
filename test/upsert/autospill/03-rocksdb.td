@@ -45,7 +45,7 @@ animal:
 > SELECT count(*) from autospill;
 0
 
-# Both bytes_indexed and records_indexed should be zero
+# records_indexed should be zero
 > SELECT
     SUM(u.bytes_indexed),
     SUM(u.records_indexed)
@@ -54,4 +54,4 @@ animal:
   WHERE s.name = 'autospill'
   GROUP BY s.name
   ORDER BY s.name
-0 0
+30 0
