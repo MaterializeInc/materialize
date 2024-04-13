@@ -147,7 +147,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     /// given timestamp.
     ///
     /// Specifically, a data shard is registered at a timestamp `ts` if it has a
-    /// `register_ts <= ts` but no `forget_ts >= ts`.
+    /// `register_ts <= ts` but no `register_ts < forget_ts < ts`.
     pub fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
         self.assert_only_data_id(data_id);
         let Some(data_times) = self.datas.get(data_id) else {
@@ -172,17 +172,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     ///
     /// A data shard might be definite at times past the physical upper because
     /// of invariants maintained by this txn system. As a result, this method
-    /// discovers the latest write before the `as_of`.
+    /// discovers the latest potentially unapplied write before the `as_of`.
     ///
     /// Callers must first wait for `update_gt` with the same or later timestamp
     /// to return. Panics otherwise.
-    ///
-    /// Returns Err if that data shard has not been registered at the given ts.
     pub fn data_snapshot(&self, data_id: ShardId, as_of: T) -> DataSnapshot<T> {
         self.assert_only_data_id(&data_id);
         assert!(self.progress_exclusive > as_of);
         let Some(all) = self.datas.get(&data_id) else {
-            // Not registered at this time, so we know there are no unapplied
+            // Not registered currently, so we know there are no unapplied
             // writes.
             return DataSnapshot {
                 data_id,
@@ -191,7 +189,19 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 empty_to: self.progress_exclusive.clone(),
             };
         };
-        let latest_write = all.writes.iter().rev().find(|x| **x <= as_of).cloned();
+        let lastest_forget = all
+            .registered
+            .iter()
+            .rev()
+            .find_map(|reg| reg.forget_ts.as_ref());
+        // Forgetting a shard guarantees that all previous writes have been applied.
+        let applied = |x| matches!(lastest_forget, Some(forget_ts) if forget_ts >= x);
+        let latest_write = all
+            .writes
+            .iter()
+            .rev()
+            .find(|x| **x <= as_of && !applied(x))
+            .cloned();
         let empty_to = all
             .writes
             .iter()
@@ -227,8 +237,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     /// Note that this is a state machine on `self.progress_exclusive` and the
     /// listen progress. DataListenNext indicates which state transitions to
     /// take.
-    ///
-    /// Returns Err if that data shard has not been registered at the given ts.
     pub fn data_listen_next(&self, data_id: &ShardId, ts: T) -> DataListenNext<T> {
         self.assert_only_data_id(data_id);
         assert!(self.progress_exclusive >= ts);
@@ -264,11 +272,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         }
 
         // The most recent forget is set, which means it's not registered as of
-        // the latest information we have. Read to the current progress point
-        // normally.
+        // the latest information we have. Emit logical progress up to the
+        // forget and then read to the current progress point normally.
         let last_reg = data_times.last_reg();
-        if last_reg.forget_ts.is_some() {
-            if ts < self.progress_exclusive {
+        if let Some(forget_ts) = &last_reg.forget_ts {
+            assert!(*forget_ts < self.progress_exclusive);
+            if ts <= *forget_ts {
+                return EmitLogicalProgress(forget_ts.step_forward());
+            } else if ts < self.progress_exclusive {
                 return ReadDataTo(self.progress_exclusive.clone());
             } else {
                 // TODO(txn): Make sure to add a regression test for this when
@@ -1052,7 +1063,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[ignore] // WIP
     fn txns_cache_data_snapshot_and_listen_next() {
         let d0 = ShardId::new();
         let ds = |latest_write: Option<u64>, as_of: u64, empty_to: u64| -> DataSnapshot<u64> {
@@ -1129,7 +1139,10 @@ mod tests {
         // ts 8 (forget). Forget guarantees that all writes are applied, so no
         // latest_write. It also currently is inclusive, so we can emit logical
         // progress, though we might want to make the interval half-open?
-        c.push_register(d0, 2, -1, 2);
+        // Revisit when
+        // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
+        // it's unclear how to encode the register timestamp in a forget.
+        c.push_register(d0, 8, -1, 8);
         testcase(&mut c, 8, d0, ds(None, 8, 9), EmitLogicalProgress(9));
 
         // ts 9 (not registered, not written). This ReadDataTo would block until
@@ -1148,26 +1161,46 @@ mod tests {
         testcase(&mut c, 12, d0, ds(None, 12, 13), EmitLogicalProgress(13));
 
         // ts 13 (forgotten, registered at preceding ts)
-        c.push_register(d0, 12, -1, 12);
-        testcase(&mut c, 13, d0, ds(None, 13, 14), ReadDataTo(14));
+        // Revisit when
+        // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
+        // it's unclear how to encode the register timestamp in a forget.
+        c.push_register(d0, 13, -1, 13);
+        testcase(&mut c, 13, d0, ds(None, 13, 14), EmitLogicalProgress(14));
 
         // Now that we have more history, some of the old answers change! In
-        // particular, we can ReadDataTo much later times.
-        assert_eq!(c.data_listen_next(&d0, 0), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 1), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 2), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 3), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 4), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 5), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 6), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 7), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 8), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 9), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 10), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 11), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 12), EmitLogicalProgress(13));
+        // particular, we have more information on unapplied writes, empty
+        // times, and can ReadDataTo much later times.
+
+        assert_eq!(c.data_snapshot(d0, 0), ds(None, 0, 4));
+        assert_eq!(c.data_snapshot(d0, 1), ds(None, 1, 4));
+        assert_eq!(c.data_snapshot(d0, 2), ds(None, 2, 4));
+        assert_eq!(c.data_snapshot(d0, 3), ds(None, 3, 4));
+        assert_eq!(c.data_snapshot(d0, 4), ds(None, 4, 5));
+        assert_eq!(c.data_snapshot(d0, 5), ds(None, 5, 7));
+        assert_eq!(c.data_snapshot(d0, 6), ds(None, 6, 7));
+        assert_eq!(c.data_snapshot(d0, 7), ds(None, 7, 14));
+        assert_eq!(c.data_snapshot(d0, 8), ds(None, 8, 14));
+        assert_eq!(c.data_snapshot(d0, 9), ds(None, 9, 14));
+        assert_eq!(c.data_snapshot(d0, 10), ds(None, 10, 14));
+        assert_eq!(c.data_snapshot(d0, 11), ds(None, 11, 14));
+        assert_eq!(c.data_snapshot(d0, 12), ds(None, 12, 14));
+        assert_eq!(c.data_snapshot(d0, 13), ds(None, 13, 14));
+
+        assert_eq!(c.data_listen_next(&d0, 0), ReadDataTo(8));
+        assert_eq!(c.data_listen_next(&d0, 1), ReadDataTo(8));
+        assert_eq!(c.data_listen_next(&d0, 2), ReadDataTo(8));
+        assert_eq!(c.data_listen_next(&d0, 3), ReadDataTo(8));
+        assert_eq!(c.data_listen_next(&d0, 4), ReadDataTo(8));
+        assert_eq!(c.data_listen_next(&d0, 5), ReadDataTo(8));
+        assert_eq!(c.data_listen_next(&d0, 6), ReadDataTo(8));
+        assert_eq!(c.data_listen_next(&d0, 7), ReadDataTo(8));
+        assert_eq!(c.data_listen_next(&d0, 8), EmitLogicalProgress(14));
+        assert_eq!(c.data_listen_next(&d0, 9), EmitLogicalProgress(14));
+        assert_eq!(c.data_listen_next(&d0, 10), EmitLogicalProgress(14));
+        assert_eq!(c.data_listen_next(&d0, 11), EmitLogicalProgress(14));
+        assert_eq!(c.data_listen_next(&d0, 12), EmitLogicalProgress(14));
         assert_eq!(c.data_listen_next(&d0, 13), EmitLogicalProgress(14));
-        assert_eq!(c.data_listen_next(&d0, 13), WaitForTxnsProgress);
+        assert_eq!(c.data_listen_next(&d0, 14), WaitForTxnsProgress);
     }
 
     #[mz_ore::test(tokio::test)]
