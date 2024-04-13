@@ -182,23 +182,31 @@ class Report:
     def extend(self, comparisons: Iterable[Comparator]) -> None:
         self._comparisons.extend(comparisons)
 
-    def dump(self) -> None:
-        print(
+    def __str__(self) -> str:
+        output_lines = []
+
+        output_lines.append(
             f"{'NAME':<35} | {'TYPE':<9} | {'THIS':^15} | {'OTHER':^15} | {'Regression?':^13} | 'THIS' is:"
         )
-        print("-" * 100)
+        output_lines.append("-" * 100)
 
         for comparison in self._comparisons:
             regression = "!!YES!!" if comparison.is_regression() else "no"
-            print(
+            output_lines.append(
                 f"{comparison.name:<35} | {comparison.type:<9} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {regression:^13} | {comparison.human_readable()}"
             )
 
+        return "\n".join(output_lines)
+
 
 class SingleReport(Report):
-    def dump(self) -> None:
-        print(f"{'NAME':<25} | {'THIS':^11}")
-        print("-" * 50)
+    def __str__(self) -> str:
+        output_lines = []
+
+        output_lines.append(f"{'NAME':<25} | {'THIS':^11}")
+        output_lines.append("-" * 50)
 
         for comparison in self._comparisons:
-            print(f"{comparison.name:<25} | {comparison.this():>11.3f}")
+            output_lines.append(f"{comparison.name:<25} | {comparison.this():>11.3f}")
+
+        return "\n".join(output_lines)

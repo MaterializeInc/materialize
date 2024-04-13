@@ -18,6 +18,10 @@ from materialize import buildkite
 from materialize.docker import is_image_tag_of_version
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.test_result import (
+    FailedTestExecutionError,
+    TestFailureDetails,
+)
 from materialize.version_ancestor_overrides import (
     get_ancestor_overrides_for_performance_regressions,
 )
@@ -420,6 +424,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     scenarios_with_regressions = []
+    latest_report_by_scenario_name: dict[str, Report] = dict()
+
     for cycle in range(0, args.max_retries):
         print(
             f"Cycle {cycle + 1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
@@ -440,21 +446,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if any([c.is_regression() for c in comparators]):
                 scenarios_with_regressions.append(scenario)
 
+            latest_report_by_scenario_name[scenario.__name__] = report
+
             print(f"+++ Benchmark Report for cycle {cycle + 1}:")
-            report.dump()
+            print(report)
 
         scenarios_to_run = scenarios_with_regressions
         if len(scenarios_to_run) == 0:
             break
 
     if len(scenarios_with_regressions) > 0:
-        (
-            all_regressions_justified,
-            justified_regressions_infos,
-        ) = _are_regressions_justified(
+        justification_by_scenario_name = _check_regressions_justified(
             scenarios_with_regressions,
             this_tag=args.this_tag,
             baseline_tag=args.other_tag,
+        )
+
+        justifications = [
+            justification
+            for justification in justification_by_scenario_name.values()
+            if justification is not None
+        ]
+
+        all_regressions_justified = len(justification_by_scenario_name) == len(
+            justifications
         )
 
         print("+++ Regressions")
@@ -467,34 +482,42 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         if all_regressions_justified:
             print("All regressions are justified:")
-            print(justified_regressions_infos)
-        elif len(justified_regressions_infos) > 0:
+            print("\n".join(justifications))
+        elif len(justifications) > 0:
             print("Some regressions are justified:")
-            print(justified_regressions_infos)
+            print("\n".join(justifications))
 
         if not all_regressions_justified:
-            sys.exit(1)
+            raise FailedTestExecutionError(
+                error_summary="At least one regression occurred",
+                errors=_regressions_to_failure_details(
+                    scenarios_with_regressions,
+                    latest_report_by_scenario_name,
+                    justification_by_scenario_name,
+                ),
+            )
 
 
-def _are_regressions_justified(
+def _check_regressions_justified(
     scenarios_with_regressions: list[type[Scenario]],
     this_tag: str | None,
     baseline_tag: str | None,
-) -> tuple[bool, str]:
-    all_regressions_justified = True
-    comments = []
+) -> dict[str, str | None]:
+    """
+    :return: justification per scenario name if justified else None
+    """
+    justification_by_scenario_name: dict[str, str | None] = dict()
 
     for scenario_class in scenarios_with_regressions:
         regressions_justified, comment = _is_regression_justified(
             scenario_class, this_tag=this_tag, baseline_tag=baseline_tag
         )
 
-        if regressions_justified:
-            comments.append(comment)
-        else:
-            all_regressions_justified = False
+        justification_by_scenario_name[scenario_class.__name__] = (
+            comment if regressions_justified else None
+        )
 
-    return all_regressions_justified, "\n".join(comments)
+    return justification_by_scenario_name
 
 
 def _is_regression_justified(
@@ -535,3 +558,28 @@ def _tag_references_release_version(image_tag: str | None) -> bool:
     return is_image_tag_of_version(image_tag) and MzVersion.is_valid_version_string(
         image_tag
     )
+
+
+def _regressions_to_failure_details(
+    scenarios_with_regressions: list[type[Scenario]],
+    latest_report_by_scenario_name: dict[str, Report],
+    justification_by_scenario_name: dict[str, str | None],
+) -> list[TestFailureDetails]:
+    failure_details = []
+
+    for scenario in scenarios_with_regressions:
+        scenario_name = scenario.__name__
+
+        if justification_by_scenario_name[scenario_name] is not None:
+            continue
+
+        report = latest_report_by_scenario_name[scenario_name]
+        failure_details.append(
+            TestFailureDetails(
+                test_case_name_override=scenario_name,
+                message="New regression",
+                details=str(report),
+            )
+        )
+
+    return failure_details
