@@ -2093,6 +2093,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String, String) => VariadicFunc::HmacString => Bytes, oid::FUNC_PG_HMAC_STRING;
             params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes => Bytes, oid::FUNC_PG_HMAC_BYTES;
         },
+        "initcap" => Scalar {
+            params!(String) => UnaryFunc::Initcap(func::Initcap) => String, 872;
+        },
         "int4range" => Scalar {
             params!(Int32, Int32) => Operation::variadic(|_ecx, mut exprs| {
                 exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
