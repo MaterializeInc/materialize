@@ -4061,7 +4061,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                                 -- Return the fully-qualified name
                                 SELECT DISTINCT ARRAY[qual.d, qual.s, item.name]
                                 FROM
-                                    mz_objects AS item
+                                    mz_catalog.mz_objects AS item
                                 JOIN
                                 (
                                     SELECT
@@ -4069,9 +4069,9 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                                         s.name AS s,
                                         s.id AS schema_id
                                     FROM
-                                        mz_schemas AS s
+                                        mz_catalog.mz_schemas AS s
                                         LEFT JOIN
-                                            (SELECT id, name FROM mz_databases)
+                                            (SELECT id, name FROM mz_catalog.mz_databases)
                                             AS d
                                             ON s.database_id = d.id
                                 ) AS qual

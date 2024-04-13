@@ -14,12 +14,12 @@ use std::iter;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{self, BoxFuture, FutureExt};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin::{
-    Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_LOOKUP,
-    BUILTIN_PREFIXES, BUILTIN_ROLES,
+    Builtin, BuiltinView, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
+    BUILTIN_LOOKUP, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -42,22 +42,30 @@ use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
+use mz_sql::ast::visit::{visit_expr, Visit, VisitNode};
+use mz_sql::ast::{AstInfo, Expr, Raw, RawDataType, RawItemName, UnresolvedItemName};
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, NameReference,
     RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
-use mz_sql::names::{QualifiedItemName, SchemaId};
+use mz_sql::names::{
+    ItemQualifiers, PartialItemName, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
+    SchemaSpecifier,
+};
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
+use mz_sql::{normalize, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ident;
 use mz_ssh_util::keys::SshKeyPairSet;
 use timely::Container;
-use tracing::{info, warn, Instrument};
+use tracing::{info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -337,10 +345,7 @@ impl Catalog {
                         diff,
                     }),
                     CatalogItemType::View | CatalogItemType::MaterializedView => {
-                        builtin_view_updates.push(StateUpdate {
-                            kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                            diff,
-                        })
+                        builtin_view_updates.push(builtin_item_update);
                     }
                     CatalogItemType::Table
                     | CatalogItemType::Source
@@ -354,26 +359,26 @@ impl Catalog {
                 }
             }
 
-            let updates = iter::empty()
+            let pre_view_updates = iter::empty()
                 .chain(pre_cluster_updates.into_iter())
                 .chain(builtin_type_updates.into_iter())
                 .chain(other_builtin_updates.into_iter())
-                // TODO(jkosh44/mjibson) Applying builtin views on startup is one of the slowest
-                // parts of startup. One fix for this would be to modify this code to do the
-                // following:
-                //
-                //   1. Apply all updates before the builtin views.
-                //   2. Apply builtin views in parallel.
-                //   3. Apply all updates after builtin views.
-                //
-                // Applying the builtin views in parallel is non-trivial because they still need to
-                // be applied in dependency order.
-                .chain(builtin_view_updates.into_iter())
+                .collect();
+            let builtin_views: Vec<_> = builtin_view_updates
+                .into_iter()
+                .map(|system_object_mapping| {
+                    let (_, builtin) = BUILTIN_LOOKUP.get(&system_object_mapping.description).expect("missing builtin view");
+                    (*builtin, system_object_mapping.unique_identifier.id)
+                })
+                .collect();
+            let post_view_updates = iter::empty()
                 .chain(cluster_updates.into_iter())
                 .chain(builtin_index_updates.into_iter())
                 .collect();
 
-            state.apply_updates_for_bootstrap(updates)?;
+            state.apply_updates_for_bootstrap(pre_view_updates)?;
+            Self::parse_views(&mut state, builtin_views).await;
+            state.apply_updates_for_bootstrap(post_view_updates)?;
 
             let last_seen_version = txn
                 .get_catalog_content_version()
@@ -434,6 +439,147 @@ impl Catalog {
         }
             .instrument(tracing::info_span!("catalog::initialize_state"))
             .boxed()
+    }
+
+    #[instrument(name = "catalog::parse_views")]
+    async fn parse_views(
+        state: &mut CatalogState,
+        builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
+    ) {
+        // For each view, collect its set of dependent views.
+        // Then:
+        // 1. Spawn tasks for all views with no dependencies.
+        // 2. If there are no outstanding tasks, go to 6.
+        // 3. Wait for the next completed item.
+        // 4. Install the item in the catalog.
+        // 5. Go to 1.
+        // 6. Verify that nothing is leftover (i.e., some dependency was not listed or resolved correctly).
+
+        let mut handles = Vec::new();
+        let mut waiting = Vec::new();
+        // Avoid some reference lifetime issues by not passing `builtin` into the spawned task.
+        let mut stored: BTreeMap<GlobalId, &BuiltinView> = BTreeMap::new();
+        for (builtin, id) in builtin_views {
+            let Builtin::View(view) = builtin else {
+                unreachable!("handled elsewhere");
+            };
+            let create_sql = view.create_sql();
+            assert!(stored.insert(id, *view).is_none());
+            let stmt = mz_sql::parse::parse(&create_sql)
+                .expect("must parse")
+                .into_element()
+                .ast;
+            let deps = visit_system_view_dependency_names(&stmt)
+                .into_iter()
+                .filter_map(|name| {
+                    let name = normalize::unresolved_item_name(name).expect("must resolve");
+                    // Filter out dependencies that exist (objects and functions that are
+                    // resolvable). This *should* result in only uninstalled views left, but is
+                    // medium-hacky and could easily break in the future.
+                    if state
+                        .resolve_entry(None, &Vec::new(), &name, &SYSTEM_CONN_ID)
+                        .is_ok()
+                        || state
+                            .resolve_function(None, &Vec::new(), &name, &SYSTEM_CONN_ID)
+                            .is_ok()
+                    {
+                        None
+                    } else {
+                        Some(name)
+                    }
+                })
+                .collect::<Vec<_>>();
+            waiting.push((view, id, deps));
+        }
+        // This loop is structured so that the views with initial empty dependencies aren't special
+        // and spawn the same as views that were waiting on dependencies.
+        loop {
+            // Spawn any ready tasks.
+            for (view, id, deps) in &waiting {
+                if deps.is_empty() {
+                    let id = *id;
+                    let inner_state = state.clone();
+                    let name = PartialItemName {
+                        database: None,
+                        schema: Some(view.schema.into()),
+                        item: view.name.into(),
+                    };
+                    let create_sql = view.create_sql();
+                    let mut span = info_span!(parent: None, "parse builtin view", name = view.name);
+                    OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
+                    let handle = mz_ore::task::spawn(
+                        || "parse view",
+                        async move {
+                            let res = inner_state.parse_item(id, &create_sql, None, false, None);
+                            (id, name, res)
+                        }
+                        .instrument(span),
+                    );
+                    handles.push(handle);
+                }
+            }
+            waiting.retain(|(_, _, deps)| !deps.is_empty());
+
+            // Wait for a completed item.
+            if handles.is_empty() {
+                break;
+            }
+            let (res, _idx, remaining) = future::select_all(handles).await;
+            handles = remaining;
+            let (id, name, res) = res.expect("must join");
+            let item = res
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "internal error: failed to load bootstrap view:\n\
+                        {name}\n\
+                        error:\n\
+                        {e:?}\n\n\
+                        Make sure that:\n
+                        - the schema name is specified in the builtin view's create sql statement
+                        - any used function or cast implementations that are SQL are special cased in `visit_system_view_dependency_names` (see the notes there about reg* casts)
+                        "
+                    )
+                });
+
+            // Add item to catalog.
+            let view = stored.remove(&id).expect("must exist");
+            let schema_id = state.ambient_schemas_by_name[view.schema];
+            let qname = QualifiedItemName {
+                qualifiers: ItemQualifiers {
+                    database_spec: ResolvedDatabaseSpecifier::Ambient,
+                    schema_spec: SchemaSpecifier::Id(schema_id),
+                },
+                item: view.name.into(),
+            };
+            let mut acl_items = vec![rbac::owner_privilege(
+                mz_sql::catalog::ObjectType::View,
+                MZ_SYSTEM_ROLE_ID,
+            )];
+            acl_items.extend_from_slice(&view.access);
+
+            state.insert_item(
+                id,
+                view.oid,
+                qname,
+                item,
+                MZ_SYSTEM_ROLE_ID,
+                PrivilegeMap::from_mz_acl_items(acl_items),
+            );
+
+            // Mark item as complete for any waiting views.
+            for (_, _, deps) in waiting.iter_mut() {
+                deps.retain(|dep| dep != &name);
+            }
+        }
+
+        assert!(
+            waiting.is_empty(),
+            "builtin views had dependencies never marked complete: {waiting:?}"
+        );
+        assert!(
+            stored.is_empty(),
+            "builtin views were never marked ready: {stored:?}"
+        );
     }
 
     /// Opens or creates a catalog that stores data at `path`.
@@ -1161,12 +1307,67 @@ impl BuiltinBootstrapClusterSizes {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct SystemViewDependenciesVisitor {
+    names: BTreeSet<UnresolvedItemName>,
+}
+
+// Visitor that records the named dependencies for a statement.
+impl<'ast> Visit<'ast, Raw> for SystemViewDependenciesVisitor {
+    fn visit_item_name(&mut self, item_name: &'ast <Raw as AstInfo>::ItemName) {
+        let RawItemName::Name(name) = item_name else {
+            return;
+        };
+        // Dependent views must have only a schema specified.
+        if name.0.len() != 2 {
+            return;
+        }
+        self.names.insert(name.clone());
+    }
+
+    fn visit_expr(&mut self, node: &'ast Expr<Raw>) {
+        // Casts to reg* types involve reading from views, so any view with these casts must also
+        // depend on those views. In typeconv.rs see STRING_REG_CAST_TEMPLATE for raw SQL. If the
+        // view dependencies there change, this must also be updated.
+        if let Expr::Cast {
+            data_type:
+                RawDataType::Other {
+                    name: RawItemName::Name(name),
+                    ..
+                },
+            ..
+        } = node
+        {
+            if name.0.len() == 2
+                && name.0[0].as_str().to_ascii_lowercase() == "pg_catalog"
+                && name.0[1].as_str().to_ascii_lowercase().starts_with("reg")
+            {
+                self.names.insert(UnresolvedItemName(vec![
+                    ident!("mz_catalog"),
+                    ident!("mz_objects"),
+                ]));
+            }
+        }
+        visit_expr(self, node);
+    }
+}
+
+/// Returns the set of named dependencies for a statement.
+pub fn visit_system_view_dependency_names<'ast, N>(node: &'ast N) -> BTreeSet<UnresolvedItemName>
+where
+    N: VisitNode<'ast, Raw> + 'ast,
+{
+    let mut visitor = SystemViewDependenciesVisitor::default();
+    node.visit(&mut visitor);
+    visitor.names
+}
+
 #[cfg(test)]
 mod builtin_migration_tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use itertools::Itertools;
-    use mz_catalog::memory::objects::{Index, MaterializedView, Table};
+    use mz_catalog::memory::objects::{CatalogItem, Index, MaterializedView, Table};
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
@@ -1180,7 +1381,7 @@ mod builtin_migration_tests {
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
 
-    use crate::catalog::{Catalog, CatalogItem, Op, OptimizedMirRelationExpr};
+    use crate::catalog::{Catalog, Op, OptimizedMirRelationExpr};
     use crate::session::DEFAULT_DATABASE_NAME;
 
     enum ItemNamespace {
