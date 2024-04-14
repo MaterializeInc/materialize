@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 mod copy_to_s3_oneshot;
+mod correction;
 mod persist_sink;
 mod refresh;
 mod subscribe;
