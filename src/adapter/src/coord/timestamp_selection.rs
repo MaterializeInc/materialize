@@ -462,11 +462,7 @@ pub trait TimestampProvider {
         &self,
         read_holds: &ReadHolds<mz_repr::Timestamp>,
     ) -> Antichain<mz_repr::Timestamp> {
-        let mut since = Antichain::from_elem(Timestamp::minimum());
-        for hold in read_holds.times() {
-            since.join_assign(hold);
-        }
-        since
+        read_holds.least_valid_read()
     }
 
     /// Acquires [ReadHolds], for the given `id_bundle` at the earliest possible
