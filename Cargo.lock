@@ -3835,6 +3835,7 @@ version = "0.1.0"
 dependencies = [
  "cfg-if",
  "protobuf-src",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -10251,6 +10252,8 @@ dependencies = [
  "tikv-jemalloc-sys",
  "time",
  "time-macros",
+ "timely",
+ "timely_communication",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
