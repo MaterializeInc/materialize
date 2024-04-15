@@ -136,6 +136,14 @@ def workflow_basic(c: Composition) -> None:
         info = requests.get(f"http://localhost:{port}/api/tracing").json()
         assert info["current_level_filter"] == "info"
 
+        # Assert `EXPLAIN` doesn't break things in steady-state.
+        c.sql(
+            "EXPLAIN SELECT 1",
+            print_statement=False,
+        )
+        info = requests.get(f"http://localhost:{port}/api/tracing").json()
+        assert info["current_level_filter"] == "info"
+
 
 def workflow_clusterd(c: Composition) -> None:
     c.up("materialized", "clusterd")
