@@ -154,7 +154,7 @@ use crate::coord::read_policy::ReadHoldsInner;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
-use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
@@ -649,16 +649,13 @@ impl ExplainContext {
     /// If available for this context, wrap the [`OptimizerTrace`] into a
     /// [`tracing::Dispatch`] and set it as default, returning the resulting
     /// guard in a `Some(guard)` option.
-    fn dispatch_guard(&self) -> Option<tracing::subscriber::DefaultGuard> {
+    fn dispatch_guard(&self) -> Option<DispatchGuard<'_>> {
         let optimizer_trace = match self {
             ExplainContext::Plan(explain_ctx) => Some(&explain_ctx.optimizer_trace),
             ExplainContext::PlanInsightsNotice(optimizer_trace) => Some(optimizer_trace),
             _ => None,
         };
-        optimizer_trace.map(|optimizer_trace| {
-            let dispatch = tracing::Dispatch::from(optimizer_trace);
-            tracing::dispatcher::set_default(&dispatch)
-        })
+        optimizer_trace.map(|optimizer_trace| optimizer_trace.as_guard())
     }
 }
 

@@ -43,6 +43,9 @@ use crate::AdapterError;
 /// consisting of one layer for each supported plan type `T` and wrap it into a
 /// [`dispatcher::Dispatch`] instance.
 ///
+/// Use [`OptimizerTrace::as_guard`] to activate the [`dispatcher::Dispatch`]
+/// and collect a trace.
+///
 /// Use [`OptimizerTrace::into_rows`] or [`OptimizerTrace::into_plan_insights`]
 /// to cleanly destroy the [`OptimizerTrace`] instance and obtain the tracing
 /// result.
@@ -104,6 +107,20 @@ impl OptimizerTrace {
                 .with(tracing::level_filters::LevelFilter::TRACE);
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
+        }
+    }
+
+    /// Enter this [`OptimizerTrace`]'s tracing [`dispatcher::Dispatch`], returning a guard.
+    ///
+    /// Linked to this [`OptimizerTrace`] with a lifetime to ensure
+    /// [`OptimizerTrace::into_rows`] isn't called until the guard is dropped.
+    pub fn as_guard<'s>(&'s self) -> DispatchGuard<'s> {
+        let dispatch = self.0.clone();
+        let tracing_guard = tracing::dispatcher::set_default(&dispatch);
+
+        DispatchGuard {
+            _tracing_guard: tracing_guard,
+            _life: std::marker::PhantomData,
         }
     }
 
@@ -238,9 +255,9 @@ impl OptimizerTrace {
         };
 
         // We assume that any `Dispatch` cloned from this `OptimizerTrace` has long been dropped
-        // (any usage that doesn't use this is incorrect and is losing this data). We rebuild the
-        // tracing interest cache, as this `OptimizerTrace` is acting like a reload-layer, and
-        // tracing needs to be recalculate what the max level is, using this often-unknown
+        // (`as_guard` tries to ensure this.). We rebuild the tracing interest cache, as
+        // this `OptimizerTrace` is acting like a reload-layer, and tracing needs to
+        // recalculate what the max level is, using this often-unknown
         // API. Note that the reference to the `Dispatch` in self MUST be dropped before
         // re-calculating interest.
         //
@@ -459,12 +476,10 @@ impl OptimizerTrace {
     }
 }
 
-impl From<&OptimizerTrace> for tracing::Dispatch {
-    fn from(value: &OptimizerTrace) -> Self {
-        // be not afraid: value.0 is a Dispatcher, which is Arc<dyn Subscriber + ...>
-        // https://docs.rs/tracing-core/0.1.30/src/tracing_core/dispatcher.rs.html#451-453
-        value.0.clone()
-    }
+/// A wrapper around a `tracing::subscriber::DefaultGuard`.
+pub struct DispatchGuard<'a> {
+    _tracing_guard: tracing::subscriber::DefaultGuard,
+    _life: std::marker::PhantomData<&'a ()>,
 }
 
 /// A collection of optimizer trace entries with convenient accessor methods.
