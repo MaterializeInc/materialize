@@ -120,3 +120,28 @@ contains: still depended upon
 > SELECT name, type FROM mz_connections;
 name    type
 ----------------
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_enforce_external_addresses = true
+
+> CREATE CONNECTION omega TO SSH TUNNEL (
+    HOST 'chaos.example.com',
+    USER 'omega',
+    PORT 22
+  );
+
+# error is not consistent
+! VALIDATE CONNECTION omega;
+contains:failed to
+
+> CREATE CONNECTION local TO SSH TUNNEL (
+    HOST 'ssh-bastion-host',
+    USER 'omega',
+    PORT 22
+  );
+
+! VALIDATE CONNECTION local;
+contains:address is not global
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_enforce_external_addresses = false

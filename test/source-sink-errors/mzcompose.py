@@ -182,8 +182,13 @@ class KafkaDisruption:
                 $ kafka-ingest topic=source-topic format=bytes
                 ABC
 
+                # Specify a faster metadata refresh interval so errors are detected every second
+                # instead of every minute
                 > CREATE SOURCE source1
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
+                  FROM KAFKA CONNECTION kafka_conn (
+                    TOPIC 'testdrive-source-topic-${testdrive.seed}',
+                    TOPIC METADATA REFRESH INTERVAL '1s'
+                  )
                   FORMAT BYTES
                   ENVELOPE NONE
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
@@ -466,7 +471,7 @@ disruptions: list[Disruption] = [
             "redpanda", "rpk", "topic", "delete", f"testdrive-source-topic-{seed}"
         ),
         expected_error="UnknownTopicOrPartition|topic",
-        fixage=None
+        fixage=None,
         # Re-creating the topic does not restart the source
         # fixage=lambda c,seed: redpanda_topics(c, "create", seed),
     ),
@@ -499,7 +504,7 @@ disruptions: list[Disruption] = [
     PgDisruption(
         name="kill-postgres",
         breakage=lambda c, _: c.kill("postgres"),
-        expected_error="error connecting to server|connection closed|deadline has elapsed",
+        expected_error="error connecting to server|connection closed|deadline has elapsed|failed to lookup address information",
         fixage=lambda c, _: c.up("postgres"),
     ),
     PgDisruption(

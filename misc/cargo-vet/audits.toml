@@ -187,6 +187,26 @@ who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "4.2.0"
 
+[[audits.postgres]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.19.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
+[[audits.postgres-openssl]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.5.0@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
+[[audits.postgres-protocol]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.6.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
+[[audits.postgres-types]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.2.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
 [[audits.quanta]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -291,6 +311,11 @@ version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
+
+[[audits.tokio-postgres]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.7.8@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 
 [[audits.tracing-capture]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
