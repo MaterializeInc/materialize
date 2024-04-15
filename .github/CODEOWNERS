@@ -39,7 +39,7 @@
 /src/adapter                        @MaterializeInc/adapter
 /src/adapter-types                  @MaterializeInc/adapter
 /src/adapter/src/explain            @MaterializeInc/compute
-/src/adapter/src/optimizer          @MaterializeInc/compute
+/src/adapter/src/optimize           @MaterializeInc/compute
 # to track changes to feature flags
 /src/adapter/src/coord/ddl.rs       @MaterializeInc/testing
 # to track changes to feature flags
