@@ -308,8 +308,9 @@ impl Catalog {
                     StateUpdateKind::SystemObjectMapping(system_object_mapping) => builtin_item_updates.push((system_object_mapping, update.diff)),
                     StateUpdateKind::Item(_) => item_updates.push(update),
                     StateUpdateKind::Comment(_)
+                    | StateUpdateKind::AuditLog(_)
                     | StateUpdateKind::StorageCollectionMetadata(_)
-                    | StateUpdateKind::UnfinalizedShard(_)=> post_item_updates.push(update),
+                    | StateUpdateKind::UnfinalizedShard(_) => post_item_updates.push(update),
                 }
             }
 
@@ -513,10 +514,20 @@ impl Catalog {
                     _ => unreachable!("all operators must be scalar functions"),
                 }
             }
-            let audit_logs = catalog.storage().await.get_audit_logs().await?;
-            for event in audit_logs {
-                builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
-            }
+            let audit_logs = catalog
+                .storage()
+                .await
+                .get_audit_logs()
+                .await?
+                .into_iter()
+                .map(|event| StateUpdate {
+                    kind: StateUpdateKind::AuditLog(mz_catalog::durable::objects::AuditLog {
+                        event,
+                    }),
+                    diff: 1,
+                })
+                .collect();
+            builtin_table_updates.extend(catalog.state.generate_builtin_table_updates(audit_logs));
 
             // To avoid reading over storage_usage events multiple times, do both
             // the table updates and delete calculations in a single read over the
