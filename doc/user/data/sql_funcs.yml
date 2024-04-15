@@ -307,6 +307,13 @@
   - signature: 'constant_time_eq(a: text, b: text) -> bool'
     description: Returns `true` if the strings are identical, otherwise returns `false`. The implementation mitigates timing attacks by making a best-effort attempt to execute in constant time if the strings have the same length, regardless of their contents.
 
+  - signature: 'initcap(a: text) -> text'
+    description: >-
+      Returns `a` with the first character of every word in upper case and all
+      other characters in lower case. Words are separated by non-alphanumeric
+      characters.
+    version-added: v0.97
+
   - signature: 'left(s: str, n: int) -> str'
     description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
 

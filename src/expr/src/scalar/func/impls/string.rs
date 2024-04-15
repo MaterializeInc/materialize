@@ -804,6 +804,23 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    #[sqlname = "initcap"]
+    fn initcap<'a>(a: &'a str) -> String {
+        let mut out = String::new();
+        let mut capitalize_next = true;
+        for ch in a.chars() {
+            if capitalize_next {
+                out.extend(ch.to_uppercase())
+            } else {
+                out.extend(ch.to_lowercase())
+            };
+            capitalize_next = !ch.is_alphanumeric();
+        }
+        out
+    }
+);
+
+sqlfunc!(
     #[sqlname = "ascii"]
     fn ascii<'a>(a: &'a str) -> i32 {
         match a

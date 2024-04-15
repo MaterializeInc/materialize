@@ -4667,6 +4667,7 @@ derive_unary!(
     TrimWhitespace,
     TrimLeadingWhitespace,
     TrimTrailingWhitespace,
+    Initcap,
     RecordGet,
     ListLength,
     MapLength,
@@ -5458,6 +5459,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::TrimWhitespace(_) => TrimWhitespace(()),
             UnaryFunc::TrimLeadingWhitespace(_) => TrimLeadingWhitespace(()),
             UnaryFunc::TrimTrailingWhitespace(_) => TrimTrailingWhitespace(()),
+            UnaryFunc::Initcap(_) => Initcap(()),
             UnaryFunc::RecordGet(func) => RecordGet(func.0.into_proto()),
             UnaryFunc::ListLength(_) => ListLength(()),
             UnaryFunc::MapBuildFromRecordList(inner) => {
@@ -5926,6 +5928,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 TrimWhitespace(()) => Ok(impls::TrimWhitespace.into()),
                 TrimLeadingWhitespace(()) => Ok(impls::TrimLeadingWhitespace.into()),
                 TrimTrailingWhitespace(()) => Ok(impls::TrimTrailingWhitespace.into()),
+                Initcap(()) => Ok(impls::Initcap.into()),
                 RecordGet(field) => Ok(impls::RecordGet(field.into_rust()?).into()),
                 ListLength(()) => Ok(impls::ListLength.into()),
                 MapBuildFromRecordList(value_type) => Ok(impls::MapBuildFromRecordList {
