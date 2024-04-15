@@ -1923,13 +1923,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_explain_broken,
-        desc: "EXPLAIN ... BROKEN <query> syntax",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_comment,
         desc: "the COMMENT ON feature for objects",
         default: true,

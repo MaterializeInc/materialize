@@ -461,9 +461,6 @@ fn plan_explainee(
         }
         Explainee::Select(select, broken) => {
             let (plan, desc) = plan_select_inner(scx, *select, params, None)?;
-            if broken {
-                scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
-            }
             crate::plan::Explainee::Statement(ExplaineeStatement::Select { broken, plan, desc })
         }
         Explainee::CreateView(mut stmt, broken) => {
