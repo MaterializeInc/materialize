@@ -5269,12 +5269,12 @@ FROM
             END AS table_catalog,
             schemas.name AS table_schema,
             relations.name AS table_name
-        FROM mz_relations AS relations
-        JOIN mz_schemas AS schemas ON relations.schema_id = schemas.id
-        LEFT JOIN mz_databases AS databases ON schemas.database_id = databases.id
+        FROM mz_catalog.mz_relations AS relations
+        JOIN mz_catalog.mz_schemas AS schemas ON relations.schema_id = schemas.id
+        LEFT JOIN mz_catalog.mz_databases AS databases ON schemas.database_id = databases.id
         WHERE schemas.database_id IS NULL OR databases.name = current_database())
-    JOIN mz_roles AS grantor ON mz_internal.mz_aclitem_grantor(privileges) = grantor.id
-    LEFT JOIN mz_roles AS grantee ON mz_internal.mz_aclitem_grantee(privileges) = grantee.id)
+    JOIN mz_catalog.mz_roles AS grantor ON mz_internal.mz_aclitem_grantor(privileges) = grantor.id
+    LEFT JOIN mz_catalog.mz_roles AS grantee ON mz_internal.mz_aclitem_grantee(privileges) = grantee.id)
 WHERE
     -- WHERE clause is not guaranteed to short-circuit and 'PUBLIC' will cause an error when passed
     -- to pg_has_role. Therefore we need to use a CASE statement.
@@ -5891,7 +5891,7 @@ pub static MZ_SHOW_OBJECT_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinVi
     privileges.privilege_type AS privilege_type
 FROM
     (SELECT mz_internal.mz_aclexplode(privileges).*, schema_id, name, type
-    FROM mz_objects
+    FROM mz_catalog.mz_objects
     WHERE id NOT LIKE 's%') AS privileges
 LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
 LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id

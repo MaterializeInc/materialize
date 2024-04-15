@@ -18,7 +18,6 @@ use std::sync::Arc;
 
 use futures::Future;
 use itertools::Itertools;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventType, FullNameV1, ObjectType};
 use mz_build_info::DUMMY_BUILD_INFO;
@@ -29,9 +28,7 @@ use mz_catalog::builtin::{
 use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState};
 use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Role, Schema,
-};
+use mz_catalog::memory::objects::{CatalogEntry, Cluster, ClusterReplica, Database, Role, Schema};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -59,7 +56,7 @@ use mz_sql::names::{
     QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     SystemObjectId, PUBLIC_ROLE_NAME,
 };
-use mz_sql::plan::{PlanContext, PlanNotice, StatementDesc};
+use mz_sql::plan::{PlanNotice, StatementDesc};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
@@ -391,7 +388,7 @@ pub struct ConnCatalog<'a> {
     /// This feature is necessary to allow re-planning of statements, which is
     /// either incredibly useful or required when altering item definitions.
     ///
-    /// Note that uses of this should field should be used by short-lived
+    /// Note that uses of this field should be used by short-lived
     /// catalogs.
     unresolvable_ids: BTreeSet<GlobalId>,
     conn_id: ConnectionId,
@@ -904,16 +901,6 @@ impl Catalog {
             .object_dependents(object_ids, conn_id, &mut except)
     }
 
-    pub(crate) fn cluster_replica_dependents(
-        &self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-    ) -> Vec<ObjectId> {
-        let mut seen = BTreeSet::new();
-        self.state
-            .cluster_replica_dependents(cluster_id, replica_id, &mut seen)
-    }
-
     fn full_name_detail(name: &FullItemName) -> FullNameV1 {
         FullNameV1 {
             database: name.database.to_string(),
@@ -989,25 +976,6 @@ impl Catalog {
     #[mz_ore::instrument(level = "debug")]
     pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
         Ok(self.storage().await.confirm_leadership().await?)
-    }
-
-    /// Parses the given SQL string into a `CatalogItem`.
-    #[mz_ore::instrument]
-    fn parse_item(
-        &self,
-        id: GlobalId,
-        create_sql: &str,
-        pcx: Option<&PlanContext>,
-        is_retained_metrics_object: bool,
-        custom_logical_compaction_window: Option<CompactionWindow>,
-    ) -> Result<CatalogItem, AdapterError> {
-        self.state.parse_item(
-            id,
-            create_sql,
-            pcx,
-            is_retained_metrics_object,
-            custom_logical_compaction_window,
-        )
     }
 
     /// Return the ids of all log sources the given object depends on.
@@ -1887,6 +1855,7 @@ mod tests {
     use std::{env, iter};
 
     use itertools::Itertools;
+    use mz_catalog::memory::objects::CatalogItem;
     use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
     use uuid::Uuid;
@@ -1918,7 +1887,7 @@ mod tests {
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::VarInput;
 
-    use crate::catalog::{Catalog, CatalogItem, Op};
+    use crate::catalog::{Catalog, Op};
     use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
     use crate::session::Session;
 

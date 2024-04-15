@@ -820,13 +820,12 @@ impl CatalogState {
             .with_planning_id(id)
             .with_ignore_if_exists_errors(force_if_exists_skip);
         let mut session_catalog = self.for_system_session();
-        self.parse_plan(create_sql, Some(&pcx), &mut session_catalog)
+        Self::parse_plan(create_sql, Some(&pcx), &mut session_catalog)
     }
 
     /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds)`.
     #[mz_ore::instrument]
     pub(crate) fn parse_plan(
-        &self,
         create_sql: &str,
         pcx: Option<&PlanContext>,
         catalog: &mut ConnCatalog,
@@ -873,7 +872,7 @@ impl CatalogState {
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = self.parse_plan(create_sql, pcx, &mut session_catalog)?;
+        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &mut session_catalog)?;
 
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
