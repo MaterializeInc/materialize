@@ -213,6 +213,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-ipc"
+version = "51.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a42ea853130f7e78b9b9d178cb4cd01dee0f78e64d96c2949dc0a915d6d9e19d"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-data",
+ "arrow-schema",
+ "flatbuffers",
+]
+
+[[package]]
 name = "arrow-ord"
 version = "51.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2381,6 +2395,16 @@ name = "fixedbitset"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "279fb028e20b3c4c320317955b77c5e0c9701f05a1d309905d6fc702cdc5053e"
+
+[[package]]
+name = "flatbuffers"
+version = "23.5.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dac53e22462d78c16d64a1cd22371b54cc3fe94aa15e7886a2fa6e5d1ab8640"
+dependencies = [
+ "bitflags 1.3.2",
+ "rustc_version",
+]
 
 [[package]]
 name = "flatcontainer"
@@ -6296,6 +6320,7 @@ name = "mz-storage-operators"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arrow",
  "async-stream",
  "aws-types",
  "bytesize",
@@ -6318,6 +6343,7 @@ dependencies = [
  "proptest",
  "sentry",
  "serde",
+ "thiserror",
  "timely",
  "tokio",
  "tracing",
@@ -6455,6 +6481,7 @@ dependencies = [
  "mz-storage-types",
  "mz-tls-util",
  "once_cell",
+ "parquet",
  "postgres_array",
  "prost",
  "prost-build",
@@ -7109,9 +7136,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "096795d4f47f65fd3ee1ec5a98b77ab26d602f2cc785b0e4be5443add17ecc32"
 dependencies = [
  "ahash",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-data",
+ "arrow-ipc",
+ "arrow-schema",
+ "arrow-select",
+ "base64 0.22.0",
  "bytes",
  "chrono",
- "futures",
  "half 2.4.1",
  "hashbrown 0.14.0",
  "num",
@@ -7119,7 +7153,6 @@ dependencies = [
  "paste",
  "seq-macro",
  "thrift",
- "tokio",
  "twox-hash",
 ]
 

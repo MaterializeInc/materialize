@@ -9,6 +9,9 @@
 
 # Tests for COPY TO expr.
 
+# COPY TO expressions should immediately succeed or fail on their first runs
+$ set-max-tries max-tries=1
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_aws_connection = true;
 ALTER SYSTEM SET enable_copy_to_expr = true;
@@ -85,7 +88,7 @@ contains:MAX FILE SIZE cannot be less than 16MB
 > SET cluster = c1;
 
 # functions like now() should work in the s3 path
-> COPY t TO 's3://copytos3/test/1' || TO_CHAR(now(), 'YYYY-MM-DD')
+> COPY t TO 's3://copytos3/test/1/' || TO_CHAR(now(), 'YYYY-MM-DD')
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
@@ -137,9 +140,9 @@ contains:S3 bucket path is not empty
   );
 
 $ set-from-sql var=key-1
-SELECT 'test/1' || TO_CHAR(now(), 'YYYY-MM-DD')
+SELECT TO_CHAR(now(), 'YYYY-MM-DD')
 
-$ s3-verify-data bucket=copytos3 key=${key-1}
+$ s3-verify-data bucket=copytos3 key=test/1/${key-1}
 1
 2
 
@@ -161,3 +164,47 @@ $ postgres-execute background=true connection=postgres://materialize:materialize
 COPY (SELECT * FROM generate_series(1, 5000000)) TO 's3://copytos3/test/5' WITH (AWS CONNECTION = aws_conn, MAX FILE SIZE = "100MB", FORMAT = 'csv');
 
 $ s3-verify-keys bucket=copytos3 prefix-path=test/5 key-pattern=INCOMPLETE
+
+
+# Test with parquet formatting
+
+> COPY t TO 's3://copytos3/parquet_test/1/' || TO_CHAR(now(), 'YYYY-MM-DD')
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'parquet'
+  );
+
+> COPY (SELECT a FROM t) TO 's3://copytos3/parquet_test/2'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'parquet'
+  );
+
+# TODO: Uncomment when parquet supports complex types
+# > COPY (SELECT array[1,2]::int[], false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 12345678901234567890123.4567890123456789::numeric(39,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, '0 day'::interval, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/parquet_test/3'
+#   WITH (
+#     AWS CONNECTION = aws_conn,
+#     MAX FILE SIZE = "100MB",
+#     FORMAT = 'parquet'
+#   );
+
+> COPY (SELECT false::bool, 'Inf'::double, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/parquet_test/3'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'parquet'
+  );
+
+
+$ s3-verify-data bucket=copytos3 key=parquet_test/1/${key-1}
+1
+2
+
+$ s3-verify-data bucket=copytos3 key=parquet_test/2
+1
+2
+
+$ s3-verify-data bucket=copytos3 key=parquet_test/3
+false inf 1 32767 2147483647 9223372036854775807 2010-10-10 36610000000000 1286705410000000000 "aaaa" [92, 120, 65, 65, 65, 65] "това е" [209, 130, 208, 181, 208, 186, 209, 129, 209, 130]

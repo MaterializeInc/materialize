@@ -12,6 +12,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::bail;
+use parquet::file::reader::FileReader;
 use regex::Regex;
 
 use crate::action::{ControlFlow, State};
@@ -30,22 +31,41 @@ pub async fn run_verify_data(
     println!("Verifying contents of S3 bucket {bucket} key {key}...");
 
     let client = mz_aws_util::s3::new_client(&state.aws_config);
-    let files = client
-        .list_objects_v2()
-        .bucket(&bucket)
-        .prefix(&format!("{}/", key))
-        .send()
-        .await?;
-    if files.contents.is_none() {
-        bail!("no files found in bucket {bucket} key {key}");
+
+    // List the path until the INCOMPLETE sentinel file disappears so we know the
+    // data is complete.
+    let mut attempts = 0;
+    let all_files;
+    loop {
+        attempts += 1;
+        if attempts > 10 {
+            bail!("found incomplete sentinel file in path {key} after 10 attempts")
+        }
+
+        let files = client
+            .list_objects_v2()
+            .bucket(&bucket)
+            .prefix(&format!("{}/", key))
+            .send()
+            .await?;
+        match files.contents {
+            Some(files)
+                if files
+                    .iter()
+                    .any(|obj| obj.key().map_or(false, |key| key.contains("INCOMPLETE"))) =>
+            {
+                thread::sleep(Duration::from_secs(1))
+            }
+            None => bail!("no files found in bucket {bucket} key {key}"),
+            Some(files) => {
+                all_files = files;
+                break;
+            }
+        }
     }
 
     let mut rows = vec![];
-    for obj in files.contents.unwrap().iter() {
-        if obj.key().map_or(false, |key| key.contains("INCOMPLETE")) {
-            bail!("found incomplete sentinel file in path: {obj:?}")
-        }
-
+    for obj in all_files.iter() {
         let file = client
             .get_object()
             .bucket(&bucket)
@@ -53,8 +73,16 @@ pub async fn run_verify_data(
             .send()
             .await?;
         let bytes = file.body.collect().await?.into_bytes();
-        let actual_body = str::from_utf8(bytes.as_ref())?;
-        rows.extend(actual_body.lines().map(|l| l.to_string()));
+
+        let new_rows = match obj.key().unwrap() {
+            key if key.ends_with(".csv") => {
+                let actual_body = str::from_utf8(bytes.as_ref())?;
+                actual_body.lines().map(|l| l.to_string()).collect()
+            }
+            key if key.ends_with(".parquet") => rows_from_parquet(bytes),
+            key => bail!("unexpected file type: {key}"),
+        };
+        rows.extend(new_rows);
     }
     if sort_rows {
         expected_body.sort();
@@ -111,4 +139,23 @@ pub async fn run_verify_keys(
     }
 
     bail!("Did not find matching files in bucket {bucket} prefix {prefix_path}");
+}
+
+fn rows_from_parquet(bytes: bytes::Bytes) -> Vec<String> {
+    let reader = parquet::file::reader::SerializedFileReader::new(bytes).unwrap();
+    reader
+        .get_row_iter(None)
+        .unwrap()
+        .map(|row| {
+            let row = row.unwrap();
+            let mut row_str = String::new();
+            for (i, (_name, field)) in row.get_column_iter().enumerate() {
+                row_str.push_str(&field.to_string());
+                if i < row.len() - 1 {
+                    row_str.push_str(" ");
+                }
+            }
+            row_str
+        })
+        .collect::<Vec<_>>()
 }
