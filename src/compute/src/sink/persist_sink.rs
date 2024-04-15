@@ -10,21 +10,15 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::ops::{AddAssign, Bound, SubAssign};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::consolidation::{consolidate, consolidate_updates};
-use differential_dataflow::{AsCollection, Collection, Data, Hashable};
-use itertools::Itertools;
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
-use mz_ore::iter::IteratorExt;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -46,6 +40,7 @@ use tracing::trace;
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
+use crate::sink::correction::Correction;
 use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
@@ -542,264 +537,6 @@ enum BatchOrData {
     },
 }
 
-/// A stash for storing updates by time.
-struct UpdateStash<D> {
-    /// Stashed updates by time.
-    updates: BTreeMap<Timestamp, ConsolidatingVec<D>>,
-
-    /// Total length and capacity of vectors in `updates`.
-    ///
-    /// Tracked to maintain metrics.
-    total_size: LengthAndCapacity,
-    /// Global persist sink metrics.
-    metrics: SinkMetrics,
-    /// Per-worker persist sink metrics.
-    worker_metrics: SinkWorkerMetrics,
-}
-
-impl<D> UpdateStash<D> {
-    fn new(metrics: SinkMetrics, worker_metrics: SinkWorkerMetrics) -> Self {
-        Self {
-            updates: Default::default(),
-            total_size: Default::default(),
-            metrics,
-            worker_metrics,
-        }
-    }
-
-    /// Update persist sink metrics to the given new length and capacity.
-    fn update_metrics(&mut self, new_size: LengthAndCapacity) {
-        let old_size = self.total_size;
-        let len_delta = UpdateDelta::new(new_size.length, old_size.length);
-        let cap_delta = UpdateDelta::new(new_size.capacity, old_size.capacity);
-        self.metrics
-            .report_correction_update_deltas(len_delta, cap_delta);
-        self.worker_metrics
-            .report_correction_update_totals(new_size.length, new_size.capacity);
-
-        self.total_size = new_size;
-    }
-}
-
-impl<D: Data> UpdateStash<D> {
-    /// Insert a batch of updates into the stash.
-    fn insert(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
-        consolidate_updates(&mut updates);
-        updates.sort_unstable_by_key(|(_, time, _)| *time);
-
-        let mut new_size = self.total_size;
-        let mut updates = updates.into_iter().peekable();
-        while let Some(&(_, time, _)) = updates.peek() {
-            let data = updates
-                .peeking_take_while(|(_, t, _)| *t == time)
-                .map(|(d, _, r)| (d, r));
-
-            use std::collections::btree_map::Entry;
-            match self.updates.entry(time) {
-                Entry::Vacant(entry) => {
-                    let vec: ConsolidatingVec<_> = data.collect();
-                    new_size += (vec.len(), vec.capacity());
-                    entry.insert(vec);
-                }
-                Entry::Occupied(mut entry) => {
-                    let vec = entry.get_mut();
-                    new_size -= (vec.len(), vec.capacity());
-                    vec.extend(data);
-                    new_size += (vec.len(), vec.capacity());
-                }
-            }
-        }
-
-        self.update_metrics(new_size);
-    }
-
-    /// Consolidate and return updates within the given bounds.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `lower` is not less than or equal to `upper`.
-    fn updates_within(
-        &mut self,
-        lower: &Antichain<Timestamp>,
-        upper: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + '_ {
-        assert!(PartialOrder::less_equal(lower, upper));
-
-        let start = match lower.as_option() {
-            Some(ts) => Bound::Included(*ts),
-            None => Bound::Excluded(Timestamp::MAX),
-        };
-        let end = match upper.as_option() {
-            Some(ts) => Bound::Excluded(*ts),
-            None => Bound::Unbounded,
-        };
-
-        // Consolidate relevant times and compute the total number of updates.
-        let range = self.updates.range_mut((start, end));
-        let update_count = range.fold(0, |acc, (_, data)| {
-            data.consolidate();
-            acc + data.len()
-        });
-
-        let range = self.updates.range((start, end));
-        range
-            .flat_map(|(t, data)| data.iter().map(|(d, r)| (d.clone(), *t, *r)))
-            .exact_size(update_count)
-    }
-
-    /// Advance all contained updates by the given frontier.
-    ///
-    /// If the given frontier is empty, all remaining updates are discarded.
-    fn advance_by(&mut self, frontier: &Antichain<Timestamp>) {
-        let Some(target_ts) = frontier.as_option() else {
-            self.updates.clear();
-            self.update_metrics(Default::default());
-            return;
-        };
-
-        let mut new_size = self.total_size;
-        while let Some((ts, data)) = self.updates.pop_first() {
-            if frontier.less_equal(&ts) {
-                // We have advanced all updates that can advance.
-                self.updates.insert(ts, data);
-                break;
-            }
-
-            use std::collections::btree_map::Entry;
-            match self.updates.entry(*target_ts) {
-                Entry::Vacant(entry) => {
-                    entry.insert(data);
-                }
-                Entry::Occupied(mut entry) => {
-                    let vec = entry.get_mut();
-                    new_size -= (data.len(), data.capacity());
-                    new_size -= (vec.len(), vec.capacity());
-                    vec.extend(data);
-                    new_size += (vec.len(), vec.capacity());
-                }
-            }
-        }
-
-        self.update_metrics(new_size);
-    }
-}
-
-impl<D> Drop for UpdateStash<D> {
-    fn drop(&mut self) {
-        self.update_metrics(Default::default());
-    }
-}
-
-/// Helper type for convenient tracking of length and capacity together.
-#[derive(Clone, Copy, Default)]
-struct LengthAndCapacity {
-    length: usize,
-    capacity: usize,
-}
-
-impl AddAssign<(usize, usize)> for LengthAndCapacity {
-    fn add_assign(&mut self, (len, cap): (usize, usize)) {
-        self.length += len;
-        self.capacity += cap;
-    }
-}
-
-impl SubAssign<(usize, usize)> for LengthAndCapacity {
-    fn sub_assign(&mut self, (len, cap): (usize, usize)) {
-        self.length -= len;
-        self.capacity -= cap;
-    }
-}
-
-/// A vector that consolidates its contents.
-///
-/// The vector is filled with updates until it reaches capacity. At this point, the updates are
-/// consolidated to free up space. This process repeats until the consolidation recovered less than
-/// half of the vector's capacity, at which point the capacity is doubled.
-struct ConsolidatingVec<D>(Vec<(D, Diff)>);
-
-impl<D: Ord> ConsolidatingVec<D> {
-    /// Return the length of the vector.
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// Return the capacity of the vector.
-    fn capacity(&self) -> usize {
-        self.0.capacity()
-    }
-
-    // Pushes `item` into the vector.
-    //
-    // If the vector does not have sufficient capacity, we try to consolidate and/or double its
-    // capacity.
-    //
-    // The worst-case cost of this function is O(n log n) in the number of items the vector stores,
-    // but amortizes to O(1).
-    fn push(&mut self, item: (D, Diff)) {
-        let capacity = self.0.capacity();
-        if self.0.len() == capacity {
-            // The vector is full. First, consolidate to try to recover some space.
-            self.consolidate();
-
-            // If consolidation didn't free at least half the available capacity, double the
-            // capacity. This ensures we won't consolidate over and over again with small gains.
-            if self.0.len() > capacity / 2 {
-                self.0.reserve(capacity);
-            }
-        }
-
-        self.0.push(item);
-    }
-
-    /// Consolidate the contents.
-    fn consolidate(&mut self) {
-        consolidate(&mut self.0);
-
-        // We may have the opportunity to reclaim allocated memory.
-        // Given that `push` will double the capacity when the vector is more than half full, and
-        // we want to avoid entering into a resizing cycle, we choose to only shrink if the
-        // vector's length is less than one fourth of its capacity.
-        if self.0.len() < self.0.capacity() / 4 {
-            self.0.shrink_to_fit();
-        }
-    }
-
-    /// Return an iterator over the borrowed items.
-    fn iter(&self) -> impl Iterator<Item = &(D, Diff)> {
-        self.0.iter()
-    }
-}
-
-impl<D> IntoIterator for ConsolidatingVec<D> {
-    type Item = (D, Diff);
-    type IntoIter = std::vec::IntoIter<(D, Diff)>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl<D> FromIterator<(D, Diff)> for ConsolidatingVec<D> {
-    fn from_iter<I>(iter: I) -> Self
-    where
-        I: IntoIterator<Item = (D, Diff)>,
-    {
-        Self(Vec::from_iter(iter))
-    }
-}
-
-impl<D: Ord> Extend<(D, Diff)> for ConsolidatingVec<D> {
-    fn extend<I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = (D, Diff)>,
-    {
-        for item in iter {
-            self.push(item);
-        }
-    }
-}
-
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` for any batch of updates that was written.
@@ -865,7 +602,7 @@ where
         // Contains `desired - persist`, reflecting the updates we would like to commit
         // to `persist` in order to "correct" it to track `desired`. This collection is
         // only modified by updates received from either the `desired` or `persist` inputs.
-        let mut correction = UpdateStash::new(sink_metrics, sink_worker_metrics);
+        let mut correction = Correction::new(sink_metrics, sink_worker_metrics);
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
