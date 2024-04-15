@@ -9,6 +9,7 @@ members = [
     "src/aws-secrets-controller",
     "src/balancerd",
     "src/build-info",
+    "src/build-tools",
     "src/ccsr",
     "src/catalog",
     "src/catalog-debug",
@@ -102,7 +103,6 @@ members = [
     "test/metabase/smoketest",
     "test/test-util",
     "src/regexp",
-    "src/build-tools",
 ]
 
 # Here we should specify our high level binaries to prevent folks from needing to take extra steps

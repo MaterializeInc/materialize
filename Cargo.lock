@@ -3831,7 +3831,7 @@ dependencies = [
 
 [[package]]
 name = "mz-build-tools"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "cfg-if",
  "protobuf-src",
