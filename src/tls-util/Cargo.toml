@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
-openssl = { version = "0.10.48", features = ["vendored"] }
+openssl = { version = "0.10.64", features = ["vendored"] }
 openssl-sys = { version = "0.9.80", features = ["vendored"] }
 postgres-openssl = { version = "0.5.0" }
 thiserror = "1.0.37"

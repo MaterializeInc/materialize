@@ -17,7 +17,7 @@ mz-proto = { path = "../proto", optional = true }
 mz-repr = { path = "../repr", optional = true }
 mz-ssh-util = { path = "../ssh-util", optional = true }
 mz-tls-util = { path = "../tls-util", default-features = false }
-openssl = { version = "0.10.48", features = ["vendored"] }
+openssl = { version = "0.10.64", features = ["vendored"] }
 openssh = { version = "0.9.8", default-features = false, features = [
     "native-mux",
 ], optional = true }
