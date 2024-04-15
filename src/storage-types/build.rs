@@ -10,7 +10,7 @@
 use std::env;
 
 fn main() {
-    env::set_var("PROTOC", protobuf_src::protoc());
+    env::set_var("PROTOC", mz_build_tools::protoc());
 
     const ATTR: &str = "#[derive(Eq, PartialOrd, Ord, ::serde::Serialize, ::serde::Deserialize, ::proptest_derive::Arbitrary)]";
 

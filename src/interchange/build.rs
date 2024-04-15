@@ -11,7 +11,7 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    env::set_var("PROTOC", protobuf_src::protoc());
+    env::set_var("PROTOC", mz_build_tools::protoc());
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 

@@ -130,7 +130,7 @@ This step is only needed if `$T` is a complex type ([classes (c) or (d)](#type-c
 
 ```rust
 fn main() {
-    env::set_var("PROTOC", protobuf_src::protoc());
+    env::set_var("PROTOC", mz_build_tools::protoc());
     prost_build::Config::new()
         // list paths to external types used in the compiled files
         .extern_path(".mz_repr.adt.char", "::mz_repr::adt::char")

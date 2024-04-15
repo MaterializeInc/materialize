@@ -9,6 +9,7 @@ members = [
     "src/aws-secrets-controller",
     "src/balancerd",
     "src/build-info",
+    "src/build-tools",
     "src/ccsr",
     "src/catalog",
     "src/catalog-debug",
