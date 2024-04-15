@@ -696,6 +696,26 @@ impl DurableType<AuditLogKey, ()> for AuditLog {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageUsage {
+    pub metric: VersionedStorageUsage,
+}
+
+impl DurableType<StorageUsageKey, ()> for StorageUsage {
+    fn into_key_value(self) -> (StorageUsageKey, ()) {
+        (
+            StorageUsageKey {
+                metric: self.metric,
+            },
+            (),
+        )
+    }
+
+    fn from_key_value(key: StorageUsageKey, _value: ()) -> Self {
+        Self { metric: key.metric }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageCollectionMetadata {
     pub id: GlobalId,
     pub shard: String,

@@ -257,6 +257,10 @@ impl CatalogState {
                 // Audit logs are not stored in-memory.
                 Ok(None)
             }
+            StateUpdateKind::StorageUsage(_storage_usage) => {
+                // Storage usage events are not stored in-memory.
+                Ok(None)
+            }
             StateUpdateKind::StorageCollectionMetadata(storage_collection_metadata) => {
                 self.apply_storage_collection_metadata_update(storage_collection_metadata, diff);
                 Ok(None)
@@ -997,10 +1001,12 @@ impl CatalogState {
                 diff,
             )],
             StateUpdateKind::AuditLog(audit_log) => {
-                assert_eq!(diff, 1, "audit log is append only");
                 vec![self
-                    .pack_audit_log_update(&audit_log.event)
+                    .pack_audit_log_update(&audit_log.event, diff)
                     .expect("could not pack audit log update")]
+            }
+            StateUpdateKind::StorageUsage(storage_usage) => {
+                vec![self.pack_storage_usage_update(&storage_usage.metric, diff)]
             }
             StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),

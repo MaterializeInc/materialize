@@ -2290,7 +2290,7 @@ impl CatalogState {
         };
         let id = tx.allocate_audit_log_id()?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
-        builtin_table_updates.push(self.pack_audit_log_update(&event)?);
+        builtin_table_updates.push(self.pack_audit_log_update(&event, 1)?);
         audit_events.push(event.clone());
         tx.insert_audit_log_event(event);
         Ok(())
@@ -2308,7 +2308,7 @@ impl CatalogState {
             tx.get_and_increment_id(mz_catalog::durable::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
-        builtin_table_updates.push(self.pack_storage_usage_update(&details)?);
+        builtin_table_updates.push(self.pack_storage_usage_update(&details, 1));
         tx.insert_storage_usage_event(details);
         Ok(())
     }

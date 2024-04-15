@@ -1333,6 +1333,7 @@ impl CatalogState {
     pub fn pack_audit_log_update(
         &self,
         event: &VersionedEvent,
+        diff: Diff,
     ) -> Result<BuiltinTableUpdate, Error> {
         let (event_type, object_type, details, user, occurred_at): (
             &EventType,
@@ -1376,14 +1377,15 @@ impl CatalogState {
                 },
                 Datum::TimestampTz(dt.try_into().expect("must fit")),
             ]),
-            diff: 1,
+            diff,
         })
     }
 
     pub fn pack_storage_usage_update(
         &self,
         VersionedStorageUsage::V1(event): &VersionedStorageUsage,
-    ) -> Result<BuiltinTableUpdate, Error> {
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
         let id = self.resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
         let row = Row::pack_slice(&[
             Datum::UInt64(event.id),
@@ -1395,7 +1397,7 @@ impl CatalogState {
                     .expect("must fit"),
             ),
         ]);
-        Ok(BuiltinTableUpdate { id, row, diff: 1 })
+        BuiltinTableUpdate { id, row, diff }
     }
 
     pub fn pack_egress_ip_update(&self, ip: &Ipv4Addr) -> Result<BuiltinTableUpdate, Error> {
