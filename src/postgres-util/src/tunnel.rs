@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -39,7 +40,11 @@ macro_rules! bail_generic {
 #[derive(Debug, PartialEq, Clone)]
 pub enum TunnelConfig {
     /// Establish a direct TCP connection to the database host.
-    Direct { resolved_ips: Option<Vec<IpAddr>> },
+    /// If `resolved_ips` is not None, the provided IPs will be used
+    /// rather than resolving the hostname.
+    Direct {
+        resolved_ips: Option<BTreeSet<IpAddr>>,
+    },
     /// Establish a TCP connection to the database via an SSH tunnel.
     /// This means first establishing an SSH connection to a bastion host,
     /// and then opening a separate connection from that host to the database.
@@ -236,7 +241,9 @@ impl Config {
                         ),
                     }
                     .to_owned();
-                    // The number of 'host' and 'hostaddr' values must be the same.
+                    // Associate each resolved ip with the exact same, singular host, for tls
+                    // verification. We are required to do this dance because `tokio-postgres`
+                    // enforces that the number of 'host' and 'hostaddr' values must be the same.
                     for (idx, ip) in ips.iter().enumerate() {
                         if idx != 0 {
                             postgres_config.host(&host);
@@ -307,7 +314,9 @@ impl Config {
                     ),
                 }
                 .to_owned();
-                // The number of 'host' and 'hostaddr' values must be the same.
+                // Associate each resolved ip with the exact same, singular host, for tls
+                // verification. We are required to do this dance because `tokio-postgres`
+                // enforces that the number of 'host' and 'hostaddr' values must be the same.
                 for (idx, addr) in privatelink_addrs.enumerate() {
                     if idx != 0 {
                         postgres_config.host(&host);

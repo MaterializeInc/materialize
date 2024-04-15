@@ -10,7 +10,7 @@
 //! Connection types.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -701,7 +701,10 @@ impl KafkaConnection {
                 )
                 .await?;
                 context.set_default_tunnel(TunnelConfig::Ssh(SshTunnelConfig {
-                    host: resolved.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                    host: resolved
+                        .iter()
+                        .map(|a| a.to_string())
+                        .collect::<BTreeSet<_>>(),
                     port: ssh_tunnel.connection.port,
                     user: ssh_tunnel.connection.user.clone(),
                     key_pair,
@@ -758,7 +761,7 @@ impl KafkaConnection {
                                 host: ssh_host_resolved
                                     .iter()
                                     .map(|a| a.to_string())
-                                    .collect::<Vec<_>>(),
+                                    .collect::<BTreeSet<_>>(),
                                 port: ssh_tunnel.connection.port,
                                 user: ssh_tunnel.connection.user.clone(),
                                 key_pair: SshKeyPair::from_bytes(
@@ -1386,7 +1389,10 @@ impl PostgresConnection<InlinedConnection> {
                 .await?;
                 mz_postgres_util::TunnelConfig::Ssh {
                     config: SshTunnelConfig {
-                        host: resolved.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                        host: resolved
+                            .iter()
+                            .map(|a| a.to_string())
+                            .collect::<BTreeSet<_>>(),
                         port: connection.port,
                         user: connection.user.clone(),
                         key_pair,
@@ -1766,7 +1772,10 @@ impl MySqlConnection<InlinedConnection> {
                 .await?;
                 mz_mysql_util::TunnelConfig::Ssh {
                     config: SshTunnelConfig {
-                        host: resolved.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                        host: resolved
+                            .iter()
+                            .map(|a| a.to_string())
+                            .collect::<BTreeSet<_>>(),
                         port: connection.port,
                         user: connection.user.clone(),
                         key_pair,
@@ -2057,7 +2066,10 @@ impl SshTunnel<InlinedConnection> {
             .ssh_tunnel_manager
             .connect(
                 SshTunnelConfig {
-                    host: resolved.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                    host: resolved
+                        .iter()
+                        .map(|a| a.to_string())
+                        .collect::<BTreeSet<_>>(),
                     port: self.connection.port,
                     user: self.connection.user.clone(),
                     key_pair: SshKeyPair::from_bytes(
@@ -2134,7 +2146,10 @@ impl SshConnection {
         .await?;
 
         let config = SshTunnelConfig {
-            host: resolved.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+            host: resolved
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<BTreeSet<_>>(),
             port: self.port,
             user: self.user.clone(),
             key_pair,

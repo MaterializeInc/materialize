@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::net::IpAddr;
 
@@ -25,7 +26,7 @@ const DUMMY_PORT: u16 = 11111;
 pub async fn resolve_address(
     mut host: &str,
     enforce_global: bool,
-) -> Result<Vec<IpAddr>, io::Error> {
+) -> Result<BTreeSet<IpAddr>, io::Error> {
     // `net::lookup_host` requires a port to be specified, but we don't care about the port.
     let mut port = DUMMY_PORT;
     // If a port is already specified, use it and remove it from the host.
@@ -37,7 +38,7 @@ pub async fn resolve_address(
     }
 
     let mut addrs = lookup_host((host, port)).await?;
-    let mut ips = Vec::new();
+    let mut ips = BTreeSet::new();
     while let Some(addr) = addrs.next() {
         let ip = addr.ip();
         if enforce_global && !is_global(ip) {
@@ -46,7 +47,7 @@ pub async fn resolve_address(
                 "address is not global",
             ))?
         } else {
-            ips.push(ip);
+            ips.insert(ip);
         }
     }
 

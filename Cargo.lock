@@ -5811,6 +5811,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "futures",
+ "itertools",
  "mz-ore",
  "openssh",
  "openssh-mux-client",

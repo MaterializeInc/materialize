@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::Write;
@@ -17,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::bail;
+use itertools::Itertools;
 use mz_ore::error::ErrorExt;
 use mz_ore::task::{self, AbortOnDropHandle};
 use openssh::{ForwardType, Session};
@@ -66,7 +68,7 @@ impl Default for SshTimeoutConfig {
 pub struct SshTunnelConfig {
     /// The hostname/IP of the SSH bastion server.
     /// If multiple hosts are specified, they are tried in order.
-    pub host: Vec<String>,
+    pub host: BTreeSet<String>,
     /// The port to connect to.
     pub port: u16,
     /// The name of the user to connect as.
@@ -83,6 +85,18 @@ impl fmt::Debug for SshTunnelConfig {
             .field("user", &self.user)
             // Omit keys from debug output.
             .finish()
+    }
+}
+
+impl fmt::Display for SshTunnelConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}@{}:{}",
+            self.user,
+            self.host.iter().join(","),
+            self.port
+        )
     }
 }
 
@@ -107,14 +121,7 @@ impl SshTunnelConfig {
         remote_port: u16,
         timeout_config: SshTimeoutConfig,
     ) -> Result<SshTunnelHandle, anyhow::Error> {
-        let tunnel_id = format!(
-            "{}:{} via {}@{}:{}",
-            remote_host,
-            remote_port,
-            self.user,
-            self.host.join(","),
-            self.port,
-        );
+        let tunnel_id = format!("{}:{} via {}", remote_host, remote_port, self);
 
         // N.B.
         //
