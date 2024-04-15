@@ -25,6 +25,15 @@ use std::path::PathBuf;
 extern crate runfiles;
 
 /// Returns the path to `protoc`.
+///
+/// Looks for `protoc` in the following places:
+///
+/// * Bazel runfiles, if we're building with Bazel.
+/// * Bootstraps `protoc` via protobuf-src, if default features are enabled.
+/// * `PROTOC` environment variable, if it's set.
+/// * The system's `$PATH`, via [`which`].
+///
+/// If `protoc` can't be found then this function will panic.
 pub fn protoc() -> PathBuf {
     cfg_if! {
         if #[cfg(bazel)] {
@@ -33,7 +42,12 @@ pub fn protoc() -> PathBuf {
         } else if #[cfg(feature = "protobuf-src")] {
             protobuf_src::protoc()
         } else {
-            PathBuf::from(std::env!("PROTOC"))
+            // If we're not building with Bazel, nor have the `protobuf-src`
+            // feature specified, then try using the system's `protoc`.
+            match std::option_env!("PROTOC") {
+                Some(path) => PathBuf::from(path),
+                None => which::which("protoc").expect("protoc to exist on system"),
+            }
         }
     }
 }
@@ -49,7 +63,8 @@ pub fn protoc_include() -> PathBuf {
         } else if #[cfg(feature = "protobuf-src")] {
             protobuf_src::include()
         } else {
-            PathBuf::from(std::env!("PROTOC_INCLUDE"))
+            let path = std::option_env!("PROTOC_INCLUDE").unwrap_or_default();
+            PathBuf::from(path)
         }
     }
 }
