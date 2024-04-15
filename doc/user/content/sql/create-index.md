@@ -44,7 +44,7 @@ _obj&lowbar;name_ | The name of the source, view, or materialized view on which 
 _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this index. If not specified, defaults to the active cluster.
 _method_ | The name of the index method to use. The only supported method is [`arrangement`](/overview/arrangements).
 _col&lowbar;expr_**...** | The expressions to use as the key for the index.
-_retention_time_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing time travel actions. Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values like `'1hr'`. See [retention period](/manage/rentention-period) guide. Default is one second.
+_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing time travel actions. Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values like `'1hr'`. See [history retention period](/manage/history-rentention-period) guide. Default is one second.
 
 ## Details
 

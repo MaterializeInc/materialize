@@ -32,11 +32,11 @@ alter_rename ::=
 alter_swap ::=
   'ALTER' ('CLUSTER' | 'SCHEMA') name 'SWAP' 'WITH' target_name
 alter_table ::=
-  'ALTER' 'TABLE' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_time) ')'
+  'ALTER' 'TABLE' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
 alter_index ::=
-  'ALTER' 'INDEX' name 'SET' ('ENABLED' | ('(' ('RETAIN HISTORY' '='? 'FOR' retention_time) ')'))
+  'ALTER' 'INDEX' name 'SET' ('ENABLED' | ('(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'))
 alter_materialized_view ::=
-  'ALTER' 'MATERIALIZED VIEW' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_time) ')'
+  'ALTER' 'MATERIALIZED VIEW' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
 alter_role ::=
     'ALTER' 'ROLE' role_name ( alter_role_attributes | alter_role_set )
 alter_role_attributes ::= 'WITH'? 'INHERIT'
@@ -54,7 +54,7 @@ alter_source_add_clause ::=
 alter_source_drop_clause ::=
   'DROP' ('SUBSOURCE' | 'TABLE') subsrc_name ( ',' subsrc_name )* ('RESTRICT' | 'CASCADE')?
 alter_source_set_retain_history_clause ::=
-  'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_time) ')'
+  'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
 alter_set_cluster ::=
   'ALTER' 'MATERIALIZED VIEW' 'IF EXISTS'? name 'SET' 'IN' 'CLUSTER' cluster_name
 alter_system_set_stmt ::=
@@ -615,6 +615,6 @@ with_options_aws_static ::=
   'access_key_id' '=' val ',' 'secret_access_key' '=' val ( ',' 'token' '=' val )?
 with_options_materialized_view ::= 
   ('WITH' '(' ( 'ASSERT NOT NULL' col_ident ( ',' 'ASSERT NOT NULL' col_ident )* )?
-    ( 'RETAIN HISTORY' '='? 'FOR' retention_interval )?
+    ( 'RETAIN HISTORY' '='? 'FOR' retention_period )?
   ')')
-with_options_retain_history ::= ('WITH' '(' ('RETAIN HISTORY' '='? 'FOR' retention_time) ')')
+with_options_retain_history ::= ('WITH' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')')

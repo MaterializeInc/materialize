@@ -127,8 +127,8 @@ The `AS OF` clause allows specifying a timestamp at which the `SUBSCRIBE` should
 If `AS OF` is unspecified, the system automatically chooses an `AS OF`
 timestamp.
 
-By default, all user-defined sources and tables have a retention period of one second, so `AS OF` is of limited usefulness except when subscribing to queries over certain internal relations. To configure
-the retention period, see the docs on [retention periods](#/manage/retention-period.md).
+By default, all user-defined sources and tables have a historical retention period of one second, so `AS OF` is of limited usefulness except when subscribing to queries over certain internal relations. To configure
+the historical retention period, see the docs on [historical retention periods](/manage/historical-retention-period).
 
 ### `UP TO`
 
@@ -512,13 +512,12 @@ to sort the rows within each distinct timestamp.
 
 ### Durable (lossless) subscriptions to changing data
 Because `SUBSCRIBE` requests happen over the network, they will get disconnected for
-various reasons, both planned and unplanned. You can use [retention periods](/manage/retention-period)
+various reasons, both planned and unplanned. You can use [historical retention periods](/manage/historical-retention-period)
 and [`AS OF`](#as-of) to pick up where you left off when a connection drops, ensuring no data
 loss in the `SUBSCRIBE` stream and avoiding a full re-snapshot.
 
 To set up a durable subscription in your application: 
-1. In Materialize, configure the retention period for the object(s) queried in the `SUBSCRIBE`. Choose
-the duration for which you'd want to be able to resume losslessly in the case of
+1. In Materialize, configure the historical retention period for the object(s) queried in the `SUBSCRIBE`. Choose the duration for which you'd want to be able to resume losslessly in the case of
 disconnections. `'1hr'` is a good place to start.
 2. In your application, you'll need a place (either a table in Materialize or
 your own datastore) to store the latest timestamp completed for the

@@ -32,7 +32,7 @@ _view&lowbar;name_ | A name for the materialized view.
 _cluster&lowbar;name_ | The cluster to maintain this materialized view. If not specified, defaults to the active cluster.
 _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you want to maintain incrementally updated.
 **(** **ASSERT NOT NULL** _col_ident_... **)** | ***Private preview.** This option has known performance or stability issues and is under active development.* A list of columns for which to create [non-null assertions](#non-null-assertions).
-_retention_time_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing time travel actions. Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values like `'1hr'`. See [retention period](/manage/rentention-period) guide. Default is one second.
+_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing time travel actions. Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values like `'1hr'`. See [history retention period](/manage/history-rentention-period) guide. Default is one second.
 
 ## Details
 

@@ -15,7 +15,7 @@ menu:
 Field | Use
 ------|-----
 _name_ | The identifier of the index you want to alter.
-_retention_time_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing time travel actions. Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values like `'1hr'`. See [retention period](/manage/rentention-period) guide. Default is one second.
+_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing time travel actions. Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values like `'1hr'`. See [history retention period](/manage/history-rentention-period) guide. Default is one second.
 
 ## Details
 
