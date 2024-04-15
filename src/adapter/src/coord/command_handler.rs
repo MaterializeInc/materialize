@@ -897,10 +897,7 @@ impl Coordinator {
             // NOTE: The Drop impl of ReadHolds makes sure that the hold is
             // released when we don't use it.
             if acquire_read_holds {
-                self.txn_read_holds
-                    .entry(session.conn_id().clone())
-                    .or_insert_with(Vec::new)
-                    .push(read_holds);
+                self.store_transaction_read_holds(session, read_holds);
             }
 
             if oracle_timestamp != timestamp {

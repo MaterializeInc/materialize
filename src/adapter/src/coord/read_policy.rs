@@ -20,7 +20,7 @@
 //! `mz_ore` wrapper either.
 #![allow(clippy::disallowed_types)]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{btree_map, BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::Deref;
@@ -848,11 +848,27 @@ impl crate::coord::Coordinator {
         precise: bool,
     ) -> Result<(), Vec<(Antichain<Timestamp>, CollectionIdBundle)>> {
         let read_holds = self.acquire_read_holds(time, id_bundle, precise)?;
-        self.txn_read_holds
-            .entry(session.conn_id().clone())
-            .or_insert_with(Vec::new)
-            .push(read_holds);
+        self.store_transaction_read_holds(session, read_holds);
         Ok(())
+    }
+
+    /// Stash transaction read holds. They will be released when the transaction
+    /// is cleaned up.
+    pub(crate) fn store_transaction_read_holds(
+        &mut self,
+        session: &Session,
+        read_holds: ReadHolds<Timestamp>,
+    ) {
+        let entry = self.txn_read_holds.entry(session.conn_id().clone());
+
+        match entry {
+            btree_map::Entry::Vacant(v) => {
+                v.insert(read_holds);
+            }
+            btree_map::Entry::Occupied(mut o) => {
+                o.get_mut().merge(read_holds);
+            }
+        }
     }
 
     /// Release the given read holds.

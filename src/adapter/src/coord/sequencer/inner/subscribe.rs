@@ -261,13 +261,8 @@ impl Coordinator {
                 return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
             }
         }
-        // Store read holds so that dependencies cannot be dropped during off-thread optimization.
-        // Invariant: the last element in this connection's self.txn_read_holds must be the holds
-        // here, because the last that same element will be removed during the finish stage.
-        self.txn_read_holds
-            .entry(ctx.session().conn_id().clone())
-            .or_insert_with(Vec::new)
-            .push(read_holds);
+
+        self.store_transaction_read_holds(ctx.session(), read_holds);
 
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
@@ -344,19 +339,13 @@ impl Coordinator {
         let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
 
         // Release the pre-optimization read holds because the controller is now handling those.
-        let mut txn_reads = self
+        let txn_read_holds = self
             .txn_read_holds
             .remove(ctx.session().conn_id())
-            .expect("expected read holds to exist for sequenced SUBSCRIBE");
-        let last = txn_reads.pop().expect("expected read hold to exist");
+            .expect("must have previously installed read holds");
 
         // Explicitly drop read holds, just to make it obvious what's happening.
-        drop(last);
-
-        if !txn_reads.is_empty() {
-            self.txn_read_holds
-                .insert(ctx.session().conn_id().clone(), txn_reads);
-        }
+        drop(txn_read_holds);
 
         if let Some(target) = validity.replica_id {
             self.controller

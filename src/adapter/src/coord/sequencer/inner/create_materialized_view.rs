@@ -29,7 +29,6 @@ use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use timely::progress::Antichain;
-use timely::PartialOrder;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -546,50 +545,7 @@ impl Coordinator {
             // In some cases, for example when REFRESH is used, the preparatory
             // stages will already have acquired ReadHolds, we can re-use those.
 
-            // Verify that all acquired read holds are for exactly the same
-            // bundle of IDs, which are also the reads that we have determined
-            // above.
-            for read_holds in txn_reads.iter() {
-                assert!(
-                    id_bundle.difference(&read_holds.id_bundle()).is_empty(),
-                    "read holds {:?} does not have the expected IDs {:?}",
-                    read_holds,
-                    id_bundle
-                );
-            }
-
-            // Pick the read hold with the lowest time, specifically the read
-            // hold where the join of all the times at which it holds is lowest.
-            //
-            // This assumes that we don't have "weird" combinations of read
-            // holds, for example one hold that has early holds for one set of
-            // collections and late holds for another set of collections, and
-            // then another hold that has these sets reversed. If we had that
-            // case, the best overall hold to pick would be a combined hold
-            // where we pick the lowest time for each collection. It should not
-            // be too hard to do that, but also seems overkill for our purposes
-            // here.
-            let mut earliest_hold = &txn_reads[0];
-            let mut earliest_time =
-                earliest_hold
-                    .times()
-                    .fold(Antichain::new(), |mut acc, time| {
-                        acc.join_assign(&time);
-                        acc
-                    });
-
-            for read_hold in &txn_reads[1..] {
-                let hold_time = read_hold.times().fold(Antichain::new(), |mut acc, time| {
-                    acc.join_assign(&time);
-                    acc
-                });
-                if PartialOrder::less_than(&hold_time, &earliest_time) {
-                    earliest_hold = read_hold;
-                    earliest_time = hold_time;
-                }
-            }
-
-            earliest_hold
+            txn_reads
         } else {
             // No one has acquired holds, make sure we can determine an as_of
             // and render our dataflow below.
