@@ -5841,50 +5841,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-stash"
-version = "0.0.0"
-dependencies = [
- "bytes",
- "criterion",
- "derivative",
- "differential-dataflow",
- "fail",
- "futures",
- "itertools",
- "mz-ore",
- "mz-proto",
- "mz-tls-util",
- "once_cell",
- "paste",
- "postgres-openssl",
- "prometheus",
- "proptest",
- "prost",
- "rand",
- "serde",
- "timely",
- "tokio",
- "tokio-postgres",
- "tracing",
- "workspace-hack",
-]
-
-[[package]]
-name = "mz-stash-types"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "mz-ore",
- "mz-proto",
- "paste",
- "prometheus",
- "prost",
- "serde",
- "tokio-postgres",
- "workspace-hack",
-]
-
-[[package]]
 name = "mz-storage"
 version = "0.0.0"
 dependencies = [
@@ -10253,8 +10209,6 @@ dependencies = [
  "tikv-jemalloc-sys",
  "time",
  "time-macros",
- "timely",
- "timely_communication",
  "tokio",
  "tokio-postgres",
  "tokio-stream",

@@ -84,8 +84,6 @@ members = [
     "src/sql-parser",
     "src/sql-pretty",
     "src/sqllogictest",
-    "src/stash",
-    "src/stash-types",
     "src/storage",
     "src/storage-client",
     "src/storage-controller",

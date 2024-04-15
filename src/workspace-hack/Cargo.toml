@@ -109,8 +109,6 @@ syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extr
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.39", features = ["extra-traits", "full", "visit-mut"] }
 textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
-timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git", default-features = false, features = ["bincode", "getopts"] }
-timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git", default-features = false, features = ["bincode", "getopts"] }
 tokio = { version = "1.32.0", features = ["full", "stats", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.14", features = ["net", "sync"] }
@@ -232,8 +230,6 @@ syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.39", features = ["extra
 textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
-timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git", default-features = false, features = ["bincode", "getopts"] }
-timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git", default-features = false, features = ["bincode", "getopts"] }
 tokio = { version = "1.32.0", features = ["full", "stats", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.14", features = ["net", "sync"] }
