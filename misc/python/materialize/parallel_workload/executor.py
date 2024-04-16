@@ -201,8 +201,8 @@ class Executor:
                     f"HTTP {r[0]['error']['code']}: {r[0]['error']['message']}\n{r[0]['error'].get('detail', '')}",
                     query,
                 )
-        except requests.exceptions.ReadTimeout:
-            pass
+        except requests.exceptions.ReadTimeout as e:
+            raise QueryError(f"HTTP read timeout: {e}", query)
         except requests.exceptions.ConnectionError:
             # Expected when Mz is killed
             if self.db.scenario not in (

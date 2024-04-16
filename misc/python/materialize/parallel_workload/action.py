@@ -122,7 +122,8 @@ class Action:
         result = [
             "permission denied for",
             "must be owner of",
-            "network error",  # #21954, remove when fixed when fixed
+            "network error",  # TODO: Remove when #21954 is fixed
+            "HTTP read timeout",
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -1153,8 +1154,7 @@ class DropClusterReplicaAction(Action):
 
             query = f"DROP CLUSTER REPLICA {cluster}.{replica}"
             try:
-                # TODO(def-) Reenable http when #26612 is fixed
-                exe.execute(query, http=Http.NO)
+                exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
                 # expected, see #20465
                 if (
