@@ -69,8 +69,8 @@ class MzStart(Action):
 
         with c.override(
             Materialized(
-                external_minio="toxiproxy",
-                external_cockroach="toxiproxy",
+                external_minio="minio",
+                external_cockroach="cockroach",
                 sanity_restart=False,
                 additional_system_parameter_defaults=self.additional_system_parameter_defaults,
             )
