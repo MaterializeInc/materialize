@@ -40,14 +40,15 @@ use crate::AdapterError;
 /// optimization pipeline.
 ///
 /// Internally, this will create a layered [`tracing::subscriber::Subscriber`]
-/// consisting of one layer for each supported plan type `T`.
+/// consisting of one layer for each supported plan type `T` and wrap it into a
+/// [`dispatcher::Dispatch`] instance.
 ///
-/// Use `tracing::dispatcher::set_default` to trace in synchronous context.
-/// Use `tracing::instrument::WithSubscriber::with_subscriber(&optimizer_trace)` to trace the result of a `Future`.
+/// Use [`OptimizerTrace::as_guard`] to activate the [`dispatcher::Dispatch`]
+/// and collect a trace.
 ///
-/// The [`OptimizerTrace::collect_all`] method on the created instance can be
-/// then used to collect the trace, and [`OptimizerTrace::collect_all`] to obtain
-/// the collected trace as a vector of [`TraceEntry`] instances.
+/// Use [`OptimizerTrace::into_rows`] or [`OptimizerTrace::into_plan_insights`]
+/// to cleanly destroy the [`OptimizerTrace`] instance and obtain the tracing
+/// result.
 pub struct OptimizerTrace(dispatcher::Dispatch);
 
 impl std::fmt::Debug for OptimizerTrace {
@@ -78,26 +79,48 @@ impl OptimizerTrace {
                 .with(PlanTrace::<DataflowDescription<Plan>>::new(filter()))
                 // Don't filter for FastPathPlan entries (there can be at most one).
                 .with(PlanTrace::<FastPathPlan>::new(None))
-                .with(PlanTrace::<UsedIndexes>::new(None));
+                .with(PlanTrace::<UsedIndexes>::new(None))
+                // All optimizer spans are `TRACE` and up. Technically this slows down the system
+                // by skipping the tracing fast path DURING an `EXPLAIN`, but we haven't
+                // seen this be a problem (yet).
+                //
+                // Note that we typically do NOT use global filters like this, preferring
+                // per-layer ones, but we are forced to because per-layer filters
+                // require an `Arc<dyn Subscriber + LookupSpan>`, which isn't a trait
+                // exposed by tracing, for now.
+                .with(tracing::level_filters::LevelFilter::TRACE);
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         } else {
+            // This codepath should not be taken except in tests, and is left here as a
+            // convenience.
             let subscriber = tracing_subscriber::registry()
-                // Collect `explain_plan` types that are not used in the regular explain
-                // path, but are useful when instrumenting code for debugging purposes.
                 .with(PlanTrace::<String>::new(filter()))
                 .with(PlanTrace::<HirScalarExpr>::new(filter()))
                 .with(PlanTrace::<MirScalarExpr>::new(filter()))
-                // Collect `explain_plan` types that are used in the regular explain path.
                 .with(PlanTrace::<HirRelationExpr>::new(filter()))
                 .with(PlanTrace::<MirRelationExpr>::new(filter()))
                 .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter()))
                 .with(PlanTrace::<DataflowDescription<Plan>>::new(filter()))
-                // Don't filter for FastPathPlan entries (there can be at most one).
                 .with(PlanTrace::<FastPathPlan>::new(None))
-                .with(PlanTrace::<UsedIndexes>::new(None));
+                .with(PlanTrace::<UsedIndexes>::new(None))
+                .with(tracing::level_filters::LevelFilter::TRACE);
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
+        }
+    }
+
+    /// Enter this [`OptimizerTrace`]'s tracing [`dispatcher::Dispatch`], returning a guard.
+    ///
+    /// Linked to this [`OptimizerTrace`] with a lifetime to ensure
+    /// [`OptimizerTrace::into_rows`] isn't called until the guard is dropped.
+    pub fn as_guard<'s>(&'s self) -> DispatchGuard<'s> {
+        let dispatch = self.0.clone();
+        let tracing_guard = tracing::dispatcher::set_default(&dispatch);
+
+        DispatchGuard {
+            _tracing_guard: tracing_guard,
+            _life: std::marker::PhantomData,
         }
     }
 
@@ -231,9 +254,22 @@ impl OptimizerTrace {
             }
         };
 
+        // We assume that any `Dispatch` cloned from this `OptimizerTrace` has long been dropped
+        // (`as_guard` tries to ensure this.). We rebuild the tracing interest cache, as
+        // this `OptimizerTrace` is acting like a reload-layer, and tracing needs to
+        // recalculate what the max level is, using this often-unknown
+        // API. Note that the reference to the `Dispatch` in self MUST be dropped before
+        // re-calculating interest.
+        //
+        // Before this is dropped and rebuilt, there is small extra cost to all `DEBUG` spans and
+        // events, if the other layers (otel and stderr) are only interested in `INFO`.
+        drop(self);
+        tracing_core::callsite::rebuild_interest_cache();
         Ok(rows)
     }
 
+    /// Collect a [`insights::PlanInsights`] with insights about the the
+    /// optimized plans rendered as a JSON `String`.
     pub fn into_plan_insights(
         self,
         features: &OptimizerFeatures,
@@ -262,7 +298,7 @@ impl OptimizerTrace {
 
     /// Collect all traced plans for all plan types `T` that are available in
     /// the wrapped [`dispatcher::Dispatch`].
-    pub fn collect_all(
+    fn collect_all(
         &self,
         format: ExplainFormat,
         config: &ExplainConfig,
@@ -338,7 +374,7 @@ impl OptimizerTrace {
     }
 
     /// Collects the global optimized plan from the trace, if it exists.
-    pub fn collect_global_plan(&self) -> Option<DataflowDescription<OptimizedMirRelationExpr>> {
+    fn collect_global_plan(&self) -> Option<DataflowDescription<OptimizedMirRelationExpr>> {
         self.0
             .downcast_ref::<PlanTrace<DataflowDescription<OptimizedMirRelationExpr>>>()
             .and_then(|trace| trace.find(NamedPlan::Global.path()))
@@ -346,7 +382,7 @@ impl OptimizerTrace {
     }
 
     /// Collects the fast path plan from the trace, if it exists.
-    pub fn collect_fast_path_plan(&self) -> Option<FastPathPlan> {
+    fn collect_fast_path_plan(&self) -> Option<FastPathPlan> {
         self.0
             .downcast_ref::<PlanTrace<FastPathPlan>>()
             .and_then(|trace| trace.find(NamedPlan::FastPath.path()))
@@ -440,12 +476,10 @@ impl OptimizerTrace {
     }
 }
 
-impl From<&OptimizerTrace> for tracing::Dispatch {
-    fn from(value: &OptimizerTrace) -> Self {
-        // be not afraid: value.0 is a Dispatcher, which is Arc<dyn Subscriber + ...>
-        // https://docs.rs/tracing-core/0.1.30/src/tracing_core/dispatcher.rs.html#451-453
-        value.0.clone()
-    }
+/// A wrapper around a `tracing::subscriber::DefaultGuard`.
+pub struct DispatchGuard<'a> {
+    _tracing_guard: tracing::subscriber::DefaultGuard,
+    _life: std::marker::PhantomData<&'a ()>,
 }
 
 /// A collection of optimizer trace entries with convenient accessor methods.

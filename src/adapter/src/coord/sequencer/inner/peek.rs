@@ -942,7 +942,6 @@ impl Coordinator {
             df_meta,
             explain_ctx:
                 ExplainPlanContext {
-                    broken,
                     config,
                     format,
                     stage,
@@ -986,10 +985,6 @@ impl Coordinator {
             stage,
             plan::ExplaineeStatementKind::Select,
         )?;
-
-        if broken {
-            tracing_core::callsite::rebuild_interest_cache();
-        }
 
         Ok(Self::send_immediate_rows(rows))
     }

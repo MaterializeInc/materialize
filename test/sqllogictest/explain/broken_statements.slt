@@ -26,11 +26,6 @@ ALTER SYSTEM SET enable_unsafe_functions = true
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_explain_broken = true
-----
-COMPLETE 0
-
 mode cockroach
 
 # EXPLAIN ... BROKEN <select>
