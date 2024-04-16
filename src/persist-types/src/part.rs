@@ -41,12 +41,12 @@ impl Part {
     }
 
     /// Returns a [ColumnsRef] for the key columns.
-    pub fn key_ref<'a>(&'a self) -> ColumnsRef<'a> {
+    pub fn key_ref(&self) -> ColumnsRef {
         self.key.as_ref()
     }
 
     /// Returns a [ColumnsRef] for the val columns.
-    pub fn val_ref<'a>(&'a self) -> ColumnsRef<'a> {
+    pub fn val_ref(&self) -> ColumnsRef {
         self.val.as_ref()
     }
 

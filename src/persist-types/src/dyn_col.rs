@@ -21,7 +21,7 @@ use crate::dyn_struct::{DynStruct, ValidityRef};
 use crate::stats::{DynStats, StatsFrom};
 
 /// A type-erased [crate::columnar::Data::Col].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DynColumnRef(DataType, Arc<dyn Any + Send + Sync>);
 
 impl DynColumnRef {
@@ -34,9 +34,18 @@ impl DynColumnRef {
         &self.0
     }
 
+    /// Returns the inner value if it is a column of type `T`, or an Err if it isn't.
+    pub fn downcast<T: Data>(self) -> Result<Arc<T::Col>, String> {
+        let col = self
+            .1
+            .downcast::<T::Col>()
+            .map_err(|_| format!("expected {} col", std::any::type_name::<T::Col>()))?;
+        Ok(col)
+    }
+
     /// Returns a typed, shared reference to the inner value if it is a column
     /// of type `T`, or an Err if it isn't.
-    pub fn downcast<T: Data>(&self) -> Result<&T::Col, String> {
+    pub fn downcast_ref<T: Data>(&self) -> Result<&T::Col, String> {
         let col = self
             .1
             .downcast_ref::<T::Col>()
@@ -49,7 +58,7 @@ impl DynColumnRef {
         struct LenDataFn<'a>(&'a DynColumnRef);
         impl DataFn<Result<usize, String>> for LenDataFn<'_> {
             fn call<T: Data>(self, _cfg: &T::Cfg) -> Result<usize, String> {
-                self.0.downcast::<T>().map(|x| x.len())
+                self.0.downcast_ref::<T>().map(|x| x.len())
             }
         }
         self.0
@@ -59,12 +68,12 @@ impl DynColumnRef {
 
     /// Computes statistics on this column using the default implementation of
     /// `T::Stats::From`.
-    pub fn stats_default(&self, validity: ValidityRef<'_>) -> Box<dyn DynStats> {
-        struct StatsDataFn<'a>(&'a DynColumnRef, ValidityRef<'a>);
+    pub fn stats_default(&self, validity: ValidityRef) -> Box<dyn DynStats> {
+        struct StatsDataFn<'a>(&'a DynColumnRef, ValidityRef);
         impl DataFn<Result<Box<dyn DynStats>, String>> for StatsDataFn<'_> {
             fn call<T: Data>(self, _cfg: &T::Cfg) -> Result<Box<dyn DynStats>, String> {
                 let StatsDataFn(col, validity) = self;
-                let col = col.downcast::<T>()?;
+                let col = col.downcast_ref::<T>()?;
                 Ok(Box::new(T::Stats::stats_from(col, validity)))
             }
         }
@@ -96,7 +105,7 @@ impl DynColumnRef {
         struct ToArrowDataFn<'a>(&'a DynColumnRef);
         impl DataFn<Result<(Encoding, Box<dyn Array>), String>> for ToArrowDataFn<'_> {
             fn call<T: Data>(self, _cfg: &T::Cfg) -> Result<(Encoding, Box<dyn Array>), String> {
-                Ok(self.0.downcast::<T>()?.to_arrow())
+                Ok(self.0.downcast_ref::<T>()?.to_arrow())
             }
         }
         let (encoding, array) = self
@@ -164,7 +173,7 @@ impl DynColumnMut {
                     .downcast::<T>()
                     .expect("DynColumnMut DataType should have internally consistent");
                 let src = src
-                    .downcast::<T>()
+                    .downcast_ref::<T>()
                     .expect("push_from src type should match dst");
                 ColumnPush::<T>::push(dst, ColumnGet::<T>::get(src, idx));
             }

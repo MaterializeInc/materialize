@@ -14,6 +14,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::BufMut;
@@ -1089,15 +1090,15 @@ impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
 /// This mostly delegates the encoding logic to [RowDecoder], but flatmaps in
 /// an Err column.
 #[derive(Debug)]
-pub struct SourceDataDecoder<'a> {
-    ok_validity: ValidityRef<'a>,
-    ok: RowDecoder<'a>,
-    err: &'a <Option<Vec<u8>> as Data>::Col,
+pub struct SourceDataDecoder {
+    ok_validity: ValidityRef,
+    ok: RowDecoder,
+    err: Arc<<Option<Vec<u8>> as Data>::Col>,
 }
 
-impl<'a> PartDecoder<'a, SourceData> for SourceDataDecoder<'a> {
+impl PartDecoder<SourceData> for SourceDataDecoder {
     fn decode(&self, idx: usize, val: &mut SourceData) {
-        let err = ColumnGet::<Option<Vec<u8>>>::get(self.err, idx);
+        let err = ColumnGet::<Option<Vec<u8>>>::get(self.err.as_ref(), idx);
         match (self.ok_validity.get(idx), err) {
             (true, None) => {
                 let mut packer = match val.0.as_mut() {
@@ -1128,7 +1129,7 @@ impl<'a> PartDecoder<'a, SourceData> for SourceDataDecoder<'a> {
 impl Schema<SourceData> for RelationDesc {
     type Encoder<'a> = SourceDataEncoder<'a>;
 
-    type Decoder<'a> = SourceDataDecoder<'a>;
+    type Decoder = SourceDataDecoder;
 
     fn columns(&self) -> DynStructCfg {
         let ok_schema = Schema::<Row>::columns(self);
@@ -1153,10 +1154,10 @@ impl Schema<SourceData> for RelationDesc {
         DynStructCfg::from(cols)
     }
 
-    fn decoder<'a>(
+    fn decoder(
         &self,
-        mut cols: mz_persist_types::dyn_struct::ColumnsRef<'a>,
-    ) -> Result<Self::Decoder<'a>, String> {
+        mut cols: mz_persist_types::dyn_struct::ColumnsRef,
+    ) -> Result<Self::Decoder, String> {
         let ok = cols.col::<Option<DynStruct>>("ok")?;
         let err = cols.col::<Option<Vec<u8>>>("err")?;
         let () = cols.finish()?;

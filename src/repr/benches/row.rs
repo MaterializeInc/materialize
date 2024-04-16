@@ -284,18 +284,8 @@ fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {
     part.finish().unwrap()
 }
 
-fn decode_structured(schema: &RelationDesc, part: &Part, len: usize) -> Row {
-    let ((), decoder) = schema.decoder(part.key_ref()).unwrap();
-    let mut row = Row::default();
-    for idx in 0..len {
-        decoder.decode(idx, &mut row);
-        black_box(&row);
-    }
-    row
-}
-
 fn bench_roundtrip(c: &mut Criterion) {
-    let num_rows = 10_000;
+    let num_rows = 50_000;
     let mut rng = seeded_rng();
     let rows = (0..num_rows)
         .map(|_| {
@@ -346,15 +336,38 @@ fn bench_roundtrip(c: &mut Criterion) {
         b.iter(|| std::hint::black_box(encode_legacy(&rows)));
     });
     c.bench_function("roundtrip_encode_structured", |b| {
-        b.iter(|| std::hint::black_box(encode_structured(&schema, &rows)));
+        let mut part_builder = PartBuilder::new(&schema, &UnitSchema);
+        let mut part_mut = part_builder.get_mut();
+
+        let ((), mut key_encoder) = schema.encoder(part_mut.key).unwrap();
+
+        b.iter(|| {
+            for row in &rows {
+                key_encoder.encode(row);
+                part_mut.ts.push(1u64);
+                part_mut.diff.push(1i64);
+            }
+            std::hint::black_box((&mut key_encoder, &mut part_mut.ts, &mut part_mut.diff));
+        });
     });
+
     let legacy = encode_legacy(&rows);
     let structured = encode_structured(&schema, &rows);
     c.bench_function("roundtrip_decode_legacy", |b| {
         b.iter(|| std::hint::black_box(decode_legacy(&legacy)));
     });
     c.bench_function("roundtrip_decode_structured", |b| {
-        b.iter(|| std::hint::black_box(decode_structured(&schema, &structured, rows.len())));
+        let ((), decoder) = schema.decoder(structured.key_ref()).unwrap();
+        let mut row = Row::default();
+
+        b.iter(|| {
+            for idx in 0..rows.len() {
+                decoder.decode(idx, &mut row);
+                // We create a packer which clears the row.
+                let _ = row.packer();
+            }
+            std::hint::black_box(&mut row);
+        });
     });
 }
 

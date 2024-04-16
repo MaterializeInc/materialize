@@ -39,7 +39,7 @@ fn as_optional_datum<'a>(row: &'a Row) -> Option<Datum<'a>> {
 /// because the non-option version won't generate any Nulls.
 pub(crate) fn proto_datum_min_max_nulls(
     col: &<Option<Vec<u8>> as Data>::Col,
-    validity: ValidityRef<'_>,
+    validity: ValidityRef,
 ) -> (Vec<u8>, Vec<u8>, usize) {
     let (mut min, mut max) = (Row::default(), Row::default());
     let mut null_count = 0;
@@ -81,7 +81,7 @@ pub(crate) fn proto_datum_min_max_nulls(
 /// because the non-option version won't generate any Nulls.
 pub(crate) fn jsonb_stats_nulls(
     col: &<Option<Vec<u8>> as Data>::Col,
-    validity: ValidityRef<'_>,
+    validity: ValidityRef,
 ) -> Result<(JsonStats, usize), String> {
     let mut datums = JsonDatums::default();
     let mut null_count = 0;
