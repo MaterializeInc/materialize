@@ -65,7 +65,7 @@ kube-core = { version = "0.87.1", default-features = false, features = ["jsonpat
 libc = { version = "0.2.153", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-memchr = { version = "2.5.0", features = ["use_std"] }
+memchr = { version = "2.7.2", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", rev = "6afd2136181f2ec93b7ca7de524f6d02b6f10c1d", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
@@ -74,8 +74,8 @@ native-tls = { version = "0.2.11", default-features = false, features = ["alpn"]
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
 num-bigint = { version = "0.4.3" }
-num-integer = { version = "0.1.44", features = ["i128"] }
-num-traits = { version = "0.2.15", features = ["i128"] }
+num-integer = { version = "0.1.46", features = ["i128"] }
+num-traits = { version = "0.2.15", features = ["i128", "libm"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
@@ -93,7 +93,8 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.7.0" }
-regex-syntax = { version = "0.6.28" }
+regex-syntax-3b31131e45eafb45 = { package = "regex-syntax", version = "0.6.28" }
+regex-syntax-c38e5c1d305a1b54 = { package = "regex-syntax", version = "0.8.3" }
 reqwest = { version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
@@ -185,7 +186,7 @@ kube-core = { version = "0.87.1", default-features = false, features = ["jsonpat
 libc = { version = "0.2.153", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-memchr = { version = "2.5.0", features = ["use_std"] }
+memchr = { version = "2.7.2", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", rev = "6afd2136181f2ec93b7ca7de524f6d02b6f10c1d", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
@@ -194,8 +195,8 @@ native-tls = { version = "0.2.11", default-features = false, features = ["alpn"]
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
 num-bigint = { version = "0.4.3" }
-num-integer = { version = "0.1.44", features = ["i128"] }
-num-traits = { version = "0.2.15", features = ["i128"] }
+num-integer = { version = "0.1.46", features = ["i128"] }
+num-traits = { version = "0.2.15", features = ["i128", "libm"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
@@ -213,7 +214,8 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.7.0" }
-regex-syntax = { version = "0.6.28" }
+regex-syntax-3b31131e45eafb45 = { package = "regex-syntax", version = "0.6.28" }
+regex-syntax-c38e5c1d305a1b54 = { package = "regex-syntax", version = "0.8.3" }
 reqwest = { version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }

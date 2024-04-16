@@ -4006,6 +4006,7 @@ dependencies = [
  "chrono",
  "mz-ore",
  "mz-repr",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4767,7 +4768,7 @@ dependencies = [
  "prost",
  "prost-build",
  "regex",
- "regex-syntax 0.6.28",
+ "regex-syntax 0.8.3",
  "serde",
  "serde_json",
  "sha1",
@@ -10557,6 +10558,7 @@ dependencies = [
  "rdkafka-sys",
  "regex",
  "regex-syntax 0.6.28",
+ "regex-syntax 0.8.3",
  "reqwest",
  "ring",
  "schemars",

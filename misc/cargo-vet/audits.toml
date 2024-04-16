@@ -162,15 +162,15 @@ who = "Sean Loiselle <sean@materialize.io>"
 criteria = "safe-to-deploy"
 version = "0.3.26"
 
-[[audits.flatcontainer]]
-who = "Moritz Hoffmann <mh@materialize.com>"
-criteria = "safe-to-deploy"
-version = "0.1.0"
-
 [[audits.flatbuffers]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "23.5.26"
+
+[[audits.flatcontainer]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
 
 [[audits.funty]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -466,6 +466,11 @@ version = "0.5.0"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "3.8.0 -> 3.8.1"
+
+[[audits.thrift]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.17.0"
 
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
