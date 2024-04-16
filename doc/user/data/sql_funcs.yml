@@ -3,30 +3,31 @@
   functions:
   - signature: CAST (cast_expr) -> T
     description: Value as type `T`
-    url: cast
+    url: /sql/functions/cast
 
   - signature: 'coalesce(x: T...) -> T?'
-    description: First non-_NULL_ arg, or _NULL_ if all are _NULL_
+    description: First non-_NULL_ arg, or _NULL_ if all are _NULL_.
 
   - signature: 'greatest(x: T...) -> T?'
-    description: The maximum argument, or _NULL_ if all are _NULL_
+    description: The maximum argument, or _NULL_ if all are _NULL_.
 
   - signature: 'least(x: T...) -> T?'
-    description: The minimum argument, or _NULL_ if all are _NULL_
+    description: The minimum argument, or _NULL_ if all are _NULL_.
 
   - signature: 'nullif(x: T, y: T) -> T?'
-    description: _NULL_ if `x == y`, else `x`
+    description: _NULL_ if `x == y`, else `x`.
 
 - type: Aggregate
   description: Aggregate functions take one or more of the same element type as arguments.
   functions:
   - signature: 'array_agg(x: T) -> T[]'
-    description: Aggregate values (including nulls) as an array.
-    url: array_agg
+    description: Aggregate values (including nulls) as an array
+    url: /sql/functions/array_agg
 
   - signature: 'avg(x: T) -> U'
-    description: Average of `T`'s values.
-      <br><br>
+    description: |
+      Average of `T`'s values.
+
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
@@ -40,60 +41,67 @@
     description: Number of non-_NULL_ inputs.
 
   - signature: jsonb_agg(expression) -> jsonb
-    description: Aggregate values (including nulls) as a jsonb array.
-    url: jsonb_agg
+    description: Aggregate values (including nulls) as a jsonb array
+    url: /sql/functions/jsonb_agg
 
   - signature: jsonb_object_agg(keys, values) -> jsonb
-    description: Aggregate keys and values (including nulls) as a jsonb object.
-    url: jsonb_object_agg
+    description: Aggregate keys and values (including nulls) as a jsonb object
+    url: /sql/functions/jsonb_object_agg
 
   - signature: 'max(x: T) -> T'
-    description: Maximum value among `T`
+    description: Maximum value among `T`.
 
   - signature: 'min(x: T) -> T'
-    description: Minimum value among `T`
+    description: Minimum value among `T`.
 
   - signature: 'stddev(x: T) -> U'
-    description: Historical alias for `stddev_samp`. *(imprecise)*
-      <br><br>
+    description: |
+      Historical alias for `stddev_samp`. *(imprecise)*
+
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
   - signature: 'stddev_pop(x: T) -> U'
-    description: Population standard deviation of `T`'s values. *(imprecise)*
-      <br><br>
+    description: |
+      Population standard deviation of `T`'s values. *(imprecise)*
+
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
   - signature: 'stddev_samp(x: T) -> U'
-    description: Sample standard deviation of `T`'s values. *(imprecise)*
-      <br><br>
+    description: |
+      Sample standard deviation of `T`'s values. *(imprecise)*
+
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
   - signature: 'string_agg(value: text, delimiter: text) -> text'
-    description: Concatenates the non-null input values into text. Each value after the first is preceded by the corresponding delimiter.
-    url: string_agg
+    description: Concatenates the non-null input values into text. Each value after the first is preceded by the corresponding delimiter
+    url: /sql/functions/string_agg
 
   - signature: 'sum(x: T) -> U'
-    description: Sum of `T`'s values
-      <br><br>
+    description: |
+      Sum of `T`'s values
+
       Returns `bigint` if `x` is `int` or `smallint`, `numeric` if `x` is `bigint` or `uint8`,
       `uint8` if `x` is `uint4` or `uint2`, else returns same type as `x`.
 
   - signature: 'variance(x: T) -> U'
-    description: Historical alias for `var_samp`. *(imprecise)*
-      <br><br>
+    description: |
+      Historical alias for `var_samp`. *(imprecise)*
+
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
   - signature: 'var_pop(x: T) -> U'
-    description: Population variance of `T`'s values. *(imprecise)*
-      <br><br>
+    description: |
+      Population variance of `T`'s values. *(imprecise)*
+
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
   - signature: 'var_samp(x: T) -> U'
-    description: Sample variance of `T`'s values. *(imprecise)*
-      <br><br>
+    description: |
+      Sample variance of `T`'s values. *(imprecise)*
+
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
@@ -101,7 +109,8 @@
   description: List functions take [`list`](../types/list) arguments, and are [polymorphic](../types/list/#polymorphism).
   functions:
     - signature: 'list_agg(x: any) -> L'
-      description: Aggregate values (including nulls) as a list. ([docs](/sql/functions/list_agg))
+      description: Aggregate values (including nulls) as a list
+      url: /sql/functions/list_agg
 
     - signature: 'list_append(l: listany, e: listelementany) -> L'
       description: Appends `e` to `l`.
@@ -121,75 +130,76 @@
     - signature: 'map_length(m: mapany) -> int'
       description: Return the number of elements in `m`.
     - signature: 'map_build(kvs: list record(text, T)) -> map[text=>T]'
-      description: >-
+      description: |
         Builds a map from a list of records whose fields are two elements, the
         first of which is `text`. In the face of duplicate keys, `map_build` retains
         value from the record in the latest positition. This function is
         purpose-built to process [Kafka headers](/sql/create-source/kafka/#headers).
       version-added: v0.86
     - signature: 'map_agg(keys: text, values: T) -> map[text=>T]'
-      description: Aggregate keys and values (including nulls) as a map. ([docs](/sql/functions/map_agg))
+      description: Aggregate keys and values (including nulls) as a map
+      url: /sql/functions/map_agg
 
 - type: Numbers
   description: Number functions take number-like arguments, e.g. [`int`](../types/int),
     [`float`](../types/float), [`numeric`](../types/numeric), unless otherwise specified.
   functions:
   - signature: 'abs(x: N) -> N'
-    description: The absolute value of `x`
+    description: The absolute value of `x`.
 
   - signature: 'cbrt(x: double precision) -> double precision'
     description: The cube root of `x`.
 
   - signature: 'ceil(x: N) -> N'
-    description: The smallest integer >= `x`
+    description: The smallest integer >= `x`.
 
   - signature: 'ceiling(x: N) -> N'
-    description: "Alias of `ceil`"
+    description: "Alias of `ceil`."
 
   - signature: 'exp(x: N) -> N'
     description: Exponential of `x` (e raised to the given power)
 
   - signature: 'floor(x: N) -> N'
-    description: The largest integer <= `x`
+    description: The largest integer <= `x`.
 
   - signature: 'ln(x: double precision) -> double precision'
-    description: Natural logarithm of `x`
+    description: Natural logarithm of `x`.
 
   - signature: 'ln(x: numeric) -> numeric'
-    description: Natural logarithm of `x`
+    description: Natural logarithm of `x`.
 
   - signature: 'log(x: double precision) -> double precision'
-    description: Base 10 logarithm of `x`
+    description: Base 10 logarithm of `x`.
 
   - signature: 'log(x: numeric) -> numeric'
-    description: Base 10 logarithm of `x`
+    description: Base 10 logarithm of `x`.
 
   - signature: 'log10(x: double precision) -> double precision'
-    description: Base 10 logarithm of `x`, same as `log`
+    description: Base 10 logarithm of `x`, same as `log`.
 
   - signature: 'log10(x: numeric) -> numeric'
-    description: Base 10 logarithm of `x`, same as `log`
+    description: Base 10 logarithm of `x`, same as `log`.
 
   - signature: 'log(b: numeric, x: numeric) -> numeric'
-    description: Base `b` logarithm of `x`
+    description: Base `b` logarithm of `x`.
 
   - signature: 'mod(x: N, y: N) -> N'
     description: "`x % y`"
 
   - signature: 'pow(x: double precision, y: double precision) -> double precision'
-    description: "Alias of `power`"
+    description: "Alias of `power`."
 
   - signature: 'pow(x: numeric, y: numeric) -> numeric'
-    description: "Alias of `power`"
+    description: "Alias of `power`."
 
   - signature: 'power(x: double precision, y: double precision) -> double precision'
-    description: "`x` raised to the power of `y`"
+    description: "`x` raised to the power of `y`."
 
   - signature: 'power(x: numeric, y: numeric) -> numeric'
-    description: "`x` raised to the power of `y`"
+    description: "`x` raised to the power of `y`."
 
   - signature: 'round(x: N) -> N'
-    description: >-
+    description: |
       `x` rounded to the nearest whole number.
       If `N` is `real` or `double precision`, rounds ties to the nearest even number.
       If `N` is `numeric`, rounds ties away from zero.
@@ -205,7 +215,7 @@
     description: The square root of `x`.
 
   - signature: 'trunc(x: N) -> N'
-    description: "`x` truncated toward zero to a whole number"
+    description: "`x` truncated toward zero to a whole number."
 
 - type: Trigonometric
   description: Trigonometric functions take and return `double precision` values.
@@ -258,7 +268,7 @@
 - type: String
   functions:
   - signature: 'ascii(s: str) -> int'
-    description: The ASCII value of `s`'s left-most character
+    description: The ASCII value of `s`'s left-most character.
 
   - signature: 'btrim(s: str) -> str'
     description: Trim all spaces from both sides of `s`.
@@ -267,22 +277,22 @@
     description: Trim any character in `c` from both sides of `s`.
 
   - signature: 'bit_length(s: str) -> int'
-    description: Number of bits in `s`
+    description: Number of bits in `s`.
 
   - signature: 'bit_length(b: bytea) -> int'
-    description: Number of bits in `b`
+    description: Number of bits in `b`.
 
   - signature: 'char_length(s: str) -> int'
-    description: Number of code points in `s`
+    description: Number of code points in `s`.
 
   - signature: 'chr(i: int) -> str'
-    description: >-
+    description: |
       Character with the given Unicode codepoint.
       Only supports codepoints that can be encoded in UTF-8.
       The NULL (0) character is not allowed.
 
   - signature: 'concat(f: any, r: any...) -> text'
-    description: Concatenates the text representation of non-NULL arguments`.
+    description: Concatenates the text representation of non-NULL arguments.
 
   - signature: 'concat_ws(sep: str, f: any, r: any...) -> text'
     description: Concatenates the text representation of non-NULL arguments from `f` and `r` separated by `sep`.
@@ -291,12 +301,12 @@
     description: Convert data `b` from original encoding specified by `src_encoding` into `text`.
 
   - signature: 'decode(s: text, format: text) -> bytea'
-    description: Decode `s` using the specified textual representation.
-    url: encode
+    description: Decode `s` using the specified textual representation
+    url: /sql/functions/encode
 
   - signature: 'encode(b: bytea, format: text) -> text'
-    description: Encode `b` using the specified textual representation.
-    url: encode
+    description: Encode `b` using the specified textual representation
+    url: /sql/functions/encode
 
   - signature: 'get_byte(b: bytea, n: int) -> int'
     description: Return the `n`th byte from `b`, where the left-most byte in `b` is at the 0th position.
@@ -308,7 +318,7 @@
     description: Returns `true` if the strings are identical, otherwise returns `false`. The implementation mitigates timing attacks by making a best-effort attempt to execute in constant time if the strings have the same length, regardless of their contents.
 
   - signature: 'initcap(a: text) -> text'
-    description: >-
+    description: |
       Returns `a` with the first character of every word in upper case and all
       other characters in lower case. Words are separated by non-alphanumeric
       characters.
@@ -318,16 +328,16 @@
     description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
 
   - signature: 'length(s: str) -> int'
-    description: Number of code points in `s`
-    url: length
+    description: Number of code points in `s`.
+    url: /sql/functions/length
 
   - signature: 'length(b: bytea) -> int'
-    description: Number of bytes in `s`
-    url: length
+    description: Number of bytes in `s`.
+    url: /sql/functions/length
 
   - signature: 'length(s: bytea, encoding_name: str) -> int'
     description: Number of code points in `s` after encoding
-    url: length
+    url: /sql/functions/length
 
   - signature: 'lower(s: str) -> str'
     description: Convert `s` to lowercase.
@@ -347,42 +357,44 @@
     description: Trim any character in `c` from the left side of `s`.
 
   - signature: 'octet_length(s: str) -> int'
-    description: Number of bytes in `s`
+    description: Number of bytes in `s`.
 
   - signature: 'octet_length(b: bytea) -> int'
-    description: Number of bytes in `b`
+    description: Number of bytes in `b`.
 
   - signature: 'parse_ident(ident: str[, strict_mode: bool]) -> str[]'
-    description: >-
-      Splits a qualified identifier into an array of identifiers, removing any quoting of
-      individual identifiers. Extra characters after the last identifier are considered an error,
-      unless `strict_mode` is `false` or elided, then such extra characters are ignored. (This
-      behavior is useful for parsing names for objects like functions.) Note that this function does
-      not truncate over-length identifiers. (From [PG](https://www.postgresql.org/docs/current/functions-string.html))
+    description: |
+      Given a qualified identifier like `a."b".c`, splits into an array of the
+      constituent identifiers with quoting removed and escape sequences decoded.
+      Extra characters after the last identifier are ignored unless the
+      `strict_mode` parameter is `true` (defaults to `false`).
 
   - signature: 'position(sub: str IN s: str) -> int'
     description: The starting index of `sub` within `s` or `0` if `sub` is not a substring of `s`.
 
   - signature: 'regexp_match(haystack: str, needle: str [, flags: str]]) -> str[]'
-    description: >-
+    description: |
       Matches the regular expression `needle` against haystack, returning a
       string array that contains the value of each capture group specified in
       `needle`, in order. If `flags` is set to the string `i` matches
       case-insensitively.
 
   - signature: 'regexp_replace(source: str, pattern: str, replacement: str [, flags: str]]) -> str'
-    description: >-
+    description: |
       Replaces the first occurrence of `pattern` with `replacement` in `source`.
       No match will return `source` unchanged.
+
       If `flags` is set to `g`, all occurrences are replaced.
       If `flags` is set to `i`, matches case-insensitively.
+
       `$N` or `$name` in `replacement` can be used to match capture groups.
       `${N}` must be used to disambiguate capture group indexes from names if other characters follow `N`.
       A `$$` in `replacement` will write a literal `$`.
+
       See the [rust regex docs](https://docs.rs/regex/latest/regex/struct.Regex.html#method.replace) for more details about replacement.
 
   - signature: 'regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]'
-    description: >-
+    description: |
       Splits `text` by the regular expression `pattern` into an array.
       If `flags` is set to `i`, matches case-insensitively.
 
@@ -390,7 +402,7 @@
     description: Replicate the string `n` times.
 
   - signature: 'replace(s: str, f: str, r: str) -> str'
-    description: "`s` with all instances of `f` replaced with `r`"
+    description: "`s` with all instances of `f` replaced with `r`."
 
   - signature: 'right(s: str, n: int) -> str'
     description: The last `n` characters of `s`. If `n` is negative, all but the first `|n|` characters of `s`.
@@ -406,31 +418,36 @@
 
   - signature: 'substring(s: str, start_pos: int) -> str'
     description: Substring of `s` starting at `start_pos`
-    url: substring
+    url: /sql/functions/substring
 
   - signature: 'substring(s: str, start_pos: int, l: int) -> str'
     description: Substring starting at `start_pos` of length `l`
-    url: substring
+    url: /sql/functions/substring
 
   - signature: "substring('s' [FROM 'start_pos']? [FOR 'l']?) -> str"
     description: Substring starting at `start_pos` of length `l`
-    url: substring
+    url: /sql/functions/substring
 
   - signature: "translate(s: str, from: str, to: str) -> str"
-    description: >-
+    description: |
       Any character in `s` that matches a character in `from` is replaced by the corresponding character in `to`.
       If `from` is longer than `to`, occurrences of the extra characters in `from` are removed.
 
   - signature: "trim([BOTH | LEADING | TRAILING]? ['c'? FROM]? 's') -> str"
-    description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
-      &bull; Side: `BOTH`<br/>
-      &bull; `'c'`: `' '` (space)"
+    description: |
+      Trims any character in `c` from `s` on the specified side.
+
+      Defaults:
+
+      &bull; Side: `BOTH`
+
+      &bull; `'c'`: `' '` (space)
 
   - signature: 'try_parse_monotonic_iso8601_timestamp(s: str) -> timestamp'
-    description: >-
+    description: |
       Parses a specific subset of ISO8601 timestamps, returning `NULL` instead of
       error on failure: `YYYY-MM-DDThh:mm:ss.sssZ`
-    url: pushdown
+    url: /sql/functions/pushdown
 
   - signature: 'upper(s: str) -> str'
     description: Convert `s` to uppercase.
@@ -440,58 +457,58 @@
   functions:
   - signature: 'expression bool_op ALL(s: Scalars) -> bool'
     description: "`true` if applying [bool_op](#boolean) to `expression` and every
-      value of `s` evaluates to `true`"
+      value of `s` evaluates to `true`."
 
   - signature: 'expression bool_op ANY(s: Scalars) -> bool'
     description: "`true` if applying [bool_op](#boolean) to `expression` and any value
-      of `s` evaluates to `true`"
+      of `s` evaluates to `true`."
 
   - signature: 'expression IN(s: Scalars) -> bool'
     description: "`true` for each value in `expression` if it matches at least one
-      element of `s`"
+      element of `s`."
 
   - signature: 'expression NOT IN(s: Scalars) -> bool'
     description: "`true` for each value in `expression` if it does not match any elements
-      of `s`"
+      of `s`."
 
   - signature: 'expression bool_op SOME(s: Scalars) -> bool'
     description: "`true` if applying [bool_op](#boolean) to `expression` and any value
-      of `s` evaluates to `true`"
+      of `s` evaluates to `true`."
 
 - type: Subquery
   description: Subquery functions take a query, e.g. [`SELECT`](/sql/select)
   functions:
   - signature: 'expression bool_op ALL(s: Query) -> bool'
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
-      to `expression` and every value of `s` evaluates to `true`"
+      to `expression` and every value of `s` evaluates to `true`."
 
   - signature: 'expression bool_op ANY(s: Query) -> bool'
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
-      to `expression` and any value of `s` evaluates to `true`"
+      to `expression` and any value of `s` evaluates to `true`."
 
   - signature: 'csv_extract(num_csv_col: int, col_name: string) -> col1: string, ... coln: string'
-    description: Extracts separated values from a column containing a CSV file formatted as a string.
-    url: csv_extract
+    description: Extracts separated values from a column containing a CSV file formatted as a string
+    url: /sql/functions/csv_extract
 
   - signature: 'EXISTS(s: Query) -> bool'
-    description: "`true` if `s` returns at least one row"
+    description: "`true` if `s` returns at least one row."
 
   - signature: 'expression IN(s: Query) -> bool'
     description: "`s` must return exactly one column; `true` for each value in `expression`
-      if it matches at least one element of `s`"
+      if it matches at least one element of `s`."
 
   - signature: 'NOT EXISTS(s: Query) -> bool'
-    description: "`true` if `s` returns zero rows"
+    description: "`true` if `s` returns zero rows."
 
   - signature: 'expression NOT IN(s: Query) -> bool'
     description: "`s` must return exactly one column; `true` for each value in `expression`
-      if it does not match any elements of `s`"
+      if it does not match any elements of `s`."
 
   - signature: 'expression bool_op SOME(s: Query) -> bool'
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
-      to `expression` and any value of `s` evaluates to `true`"
+      to `expression` and any value of `s` evaluates to `true`."
 
-- type: Date and Time
+- type: Date and time
   description: Time functions take or produce a time-like type, e.g. [`date`](../types/date),
     [`timestamp`](../types/timestamp), [`timestamp with time zone`](../types/timestamptz).
   functions:
@@ -503,85 +520,91 @@
     unmaterializable: true
 
   - signature: 'date_bin(stride: interval, source: timestamp, origin: timestamp) -> timestamp'
-    description: Align `source` with `origin` along `stride`.
-    url: date-bin
+    description: Align `source` with `origin` along `stride`
+    url: /sql/functions/date-bin
 
   - signature: 'date_trunc(time_component: str, val: timestamp) -> timestamp'
     description: Largest `time_component` <= `val`
-    url: date-trunc
+    url: /sql/functions/date-trunc
 
   - signature: 'date_trunc(time_component: str, val: interval) -> interval'
     description: Largest `time_component` <= `val`
-    url: date-trunc
+    url: /sql/functions/date-trunc
 
   - signature: EXTRACT(extract_expr) -> numeric
     description: Specified time component from value
-    url: extract
+    url: /sql/functions/extract
 
   - signature: 'date_part(time_component: str, val: timestamp) -> float'
     description: Specified time component from value
-    url: date-part
+    url: /sql/functions/date-part
 
   - signature: mz_now() -> mz_timestamp
     description: |
-      The logical time at which a query executes. Used for temporal filters and query timestamp introspection.
-      <br><br>
-      **Note**: This function generally behaves like an unmaterializable function, but
-      can be used in limited contexts in materialized views as a [temporal filter](/sql/patterns/temporal-filters/).
-    url: now_and_mz_now
-    unmaterializable: true
+      The logical time at which a query executes. Used for temporal filters and query timestamp introspection
+    url: /sql/functions/now_and_mz_now
+    unmaterializable_unless_temporal_filter: true
 
   - signature: now() -> timestamptz
-    description: 'The `timestamp with time zone` representing when the query was executed.'
-    url: now_and_mz_now
+    description: 'The `timestamp with time zone` representing when the query was executed'
+    url: /sql/functions/now_and_mz_now
     unmaterializable: true
 
   - signature: timestamp AT TIME ZONE zone -> timestamptz
-    description: 'Converts `timestamp` to the specified time zone, expressed as an offset from UTC. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
-    url: timezone-and-at-time-zone
+    description: 'Converts `timestamp` to the specified time zone, expressed as an offset from UTC'
+    url: /sql/functions/timezone-and-at-time-zone
+    known_time_zone_limitation_cast: true
 
   - signature: timestamptz AT TIME ZONE zone -> timestamp
-    description: 'Converts `timestamp with time zone` from UTC to the specified time zone, expressed as the local time. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
-    url: timezone-and-at-time-zone
+    description: 'Converts `timestamp with time zone` from UTC to the specified time zone, expressed as the local time'
+    url: /sql/functions/timezone-and-at-time-zone
+    known_time_zone_limitation_cast: true
 
   - signature: timezone(zone, timestamp) -> timestamptz
-    description: 'Converts `timestamp` to specified time zone, expressed as an offset from UTC. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
-    url: timezone-and-at-time-zone
+    description: 'Converts `timestamp` to specified time zone, expressed as an offset from UTC'
+    url: /sql/functions/timezone-and-at-time-zone
+    known_time_zone_limitation_cast: true
 
   - signature: timezone(zone, timestamptz) -> timestamp
-    description: 'Converts `timestamp with time zone` from UTC to specified time zone, expressed as the local time. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
-    url: timezone-and-at-time-zone
+    description: 'Converts `timestamp with time zone` from UTC to specified time zone, expressed as the local time'
+    url: /sql/functions/timezone-and-at-time-zone
+    known_time_zone_limitation_cast: true
 
   - signature: |-
       timezone_offset(zone: str, when: timestamptz) ->
       (abbrev: str, base_utc_offset: interval, dst_offset: interval)
-    description: >-
+    description: |
       Describes a time zone's offset from UTC at a specified moment.
+
       `zone` must be a valid IANA Time Zone Database identifier.
+
       `when` is a `timestamp with time zone` that specifies the moment at which to determine `zone`'s offset from UTC.
+
       `abbrev` is the abbreviation for `zone` that is in use at the specified moment (e.g., `EST` or `EDT`).
+
       `base_utc_offset` is the base offset from UTC at the specified moment (e.g., `-5 hours`). Positive offsets mean east of Greenwich; negative offsets mean west of Greenwich.
+
       `dst_offset` is the additional offset at the specified moment due to Daylight Saving Time rules (e.g., `1 hours`). If non-zero, Daylight Saving Time is in effect.
 
   - signature: 'to_timestamp(val: double precision) -> timestamptz'
     description: Converts Unix epoch (seconds since 00:00:00 UTC on January 1, 1970)
-      to timestamp
+      to timestamp.
 
   - signature: 'to_char(val: timestamp, format: str)'
-    description: Converts a timestamp into a string using the specified format.
-    url: to_char
+    description: Converts a timestamp into a string using the specified format
+    url: /sql/functions/to_char
 
   - signature: 'justify_days(val: interval) -> interval'
-    description: Adjust interval so 30-day time periods are represented as months.
-    url: justify-days
+    description: Adjust interval so 30-day time periods are represented as months
+    url: /sql/functions/justify-days
 
   - signature: 'justify_hours(val: interval) -> interval'
-    description: Adjust interval so 24-hour time periods are represented as days.
-    url: justify-hours
+    description: Adjust interval so 24-hour time periods are represented as days
+    url: /sql/functions/justify-hours
 
   - signature: 'justify_interval(val: interval) -> interval'
-    description: Adjust interval using justify_days and justify_hours, with additional sign adjustments.
-    url: justify-interval
+    description: Adjust interval using justify_days and justify_hours, with additional sign adjustments
+    url: /sql/functions/justify-interval
 
 - type: UUID
   functions:
@@ -593,64 +616,64 @@
 - type: JSON
   functions:
   - signature: jsonb_agg(expression) -> jsonb
-    description: Aggregate values (including nulls) as a jsonb array.
-    url:  /docs/sql/functions/jsonb_agg
+    description: Aggregate values (including nulls) as a jsonb array
+    url: /sql/functions/jsonb_agg
 
   - signature: 'jsonb_array_elements(j: jsonb) -> Col<jsonb>'
-    description: "`j`'s elements if `j` is an array."
-    url: "/docs/sql/types/jsonb/#jsonb_array_elements"
+    description: "`j`'s elements if `j` is an array"
+    url: /sql/types/jsonb#jsonb_array_elements
 
   - signature: 'jsonb_array_elements_text(j: jsonb) -> Col<string>'
-    description: "`j`'s elements if `j` is an array."
-    url: "/docs/sql/types/jsonb/#jsonb_array_elements_text"
+    description: "`j`'s elements if `j` is an array"
+    url: /sql/types/jsonb#jsonb_array_elements_text
 
   - signature: 'jsonb_array_length(j: jsonb) -> int'
-    description: Number of elements in `j`'s outermost array.
-    url: "/docs/sql/types/jsonb/#jsonb_array_length"
+    description: Number of elements in `j`'s outermost array
+    url: /sql/types/jsonb#jsonb_array_length
 
   - signature: 'jsonb_build_array(x: ...) -> jsonb'
     description: Output each element of `x` as a `jsonb` array. Elements can be of heterogenous
-      types.
-    url: "/docs/sql/types/jsonb/#jsonb_build_array"
+      types
+    url: /sql/types/jsonb#jsonb_build_array
 
   - signature: 'jsonb_build_object(x: ...) -> jsonb'
     description: The elements of x as a `jsonb` object. The argument list alternates
-      between keys and values.
-    url: "/docs/sql/types/jsonb/#jsonb_build_object"
+      between keys and values
+    url: /sql/types/jsonb#jsonb_build_object
 
   - signature: 'jsonb_each(j: jsonb) -> Col<(key: string, value: jsonb)>'
-    description: "`j`'s outermost elements if `j` is an object."
-    url: "/docs/sql/types/jsonb/#jsonb_each"
+    description: "`j`'s outermost elements if `j` is an object"
+    url: /sql/types/jsonb#jsonb_each
 
   - signature: 'jsonb_each_text(j: jsonb) -> Col<(key: string, value: string)>'
-    description: "`j`'s outermost elements if `j` is an object."
-    url: "/docs/sql/types/jsonb/#jsonb_each_text"
+    description: "`j`'s outermost elements if `j` is an object"
+    url: /sql/types/jsonb#jsonb_each_text
 
   - signature: jsonb_object_agg(keys, values) -> jsonb
-    description: Aggregate keys and values (including nulls) as a `jsonb` object.
-    url: "/docs/sql/functions/jsonb_object_agg"
+    description: Aggregate keys and values (including nulls) as a `jsonb` object
+    url: /sql/functions/jsonb_object_agg
 
   - signature: 'jsonb_object_keys(j: jsonb) -> Col<string>'
-    description: "`j`'s outermost keys if `j` is an object."
-    url: "/docs/sql/types/jsonb/#jsonb_object_keys"
+    description: "`j`'s outermost keys if `j` is an object"
+    url: /sql/types/jsonb#jsonb_object_keys
 
   - signature: 'jsonb_pretty(j: jsonb) -> string'
-    description: Pretty printed (i.e. indented) `j`.
-    url: "/docs/sql/types/jsonb/#jsonb_pretty"
+    description: Pretty printed (i.e. indented) `j`
+    url: /sql/types/jsonb#jsonb_pretty
 
   - signature: 'jsonb_typeof(j: jsonb) -> string'
     description: Type of `j`'s outermost value. One of `object`, `array`, `string`,
-      `number`, `boolean`, and `null`.
-    url: "/docs/sql/types/jsonb/#jsonb_typeof"
+      `number`, `boolean`, and `null`
+    url: /sql/types/jsonb#jsonb_typeof
 
   - signature: 'jsonb_strip_nulls(j: jsonb) -> jsonb'
     description: "`j` with all object fields with a value of `null` removed. Other
-      `null` values remain."
-    url: "/docs/sql/types/jsonb/#jsonb_strip_nulls"
+      `null` values remain"
+    url: /sql/types/jsonb#jsonb_strip_nulls
 
   - signature: 'to_jsonb(v: T) -> jsonb'
     description: "`v` as `jsonb`"
-    url: "/docs/sql/types/jsonb/#to_jsonb"
+    url: /sql/types/jsonb#to_jsonb
 
 - type: Table
   description: Table functions evaluate to a set of rows, rather than a single expression.
@@ -666,9 +689,9 @@
   - signature: 'generate_subscripts(a: anyarray, dim: int) -> Col<int>'
     description: Generates a series comprising the valid subscripts of the `dim`'th dimension of the given array `a`.
   - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
-    description: Values of the capture groups of `regex` as matched in `haystack`
+    description: Values of the capture groups of `regex` as matched in `haystack`.
   - signature: 'regexp_split_to_table(text: str, pattern: str [, flags: str]]) -> Col<string>'
-    description: >-
+    description: |
       Splits `text` by the regular expression `pattern`.
       If `flags` is set to `i`, matches case-insensitively.
   - signature: 'unnest(a: anyarray)'
@@ -683,7 +706,7 @@
   - signature: 'array_cat(a1: arrayany, a2: arrayany) -> arrayany'
     description: 'Concatenates `a1` and `a2`.'
   - signature: 'array_fill(anyelement, int[], [, int[]]) -> anyarray'
-    description: 'Returns an array initialized with supplied value and dimensions, optionally with lower bounds other than 1. (From [PG](https://www.postgresql.org/docs/current/functions-array.html))'
+    description: 'Returns an array initialized with supplied value and dimensions, optionally with lower bounds other than 1.'
   - signature: 'array_length(a: arrayany, dim: bigint) -> int'
     description: 'Returns the length of the specified dimension of the array.'
   - signature: 'array_position(haystack: anycompatiblearray, needle: anycompatible) -> int'
@@ -691,59 +714,63 @@
   - signature: 'array_position(haystack: anycompatiblearray, needle: anycompatible, skip: int) -> int'
     description: 'Returns the subscript of `needle` in `haystack`, skipping the first `skip` elements. Returns `null` if not found.'
   - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
-    description: >-
+    description: |
       Concatenates the elements of `array` together separated by `sep`.
       Null elements are omitted unless `ifnull` is non-null, in which case
       null elements are replaced with the value of `ifnull`.
   - signature: 'array_remove(a: anyarray, e: anyelement) -> anyarray'
-    description: >-
+    description: |
       Returns the array `a` without any elements equal to the given value `e`.
-      The array must be one-dimensional. Comparisons are done using IS NOT
+      The array must be one-dimensional. Comparisons are done using `IS NOT
       DISTINCT FROM semantics, so it is possible to remove NULLs.
 
 - type: Cryptography
   functions:
     - signature: 'digest(data: text, type: text) -> bytea'
-      description: >-
+      description: |
         Computes a binary hash of the given text `data` using the specified `type` algorithm.
         Supported hash algorithms are: `md5`, `sha1`, `sha224`, `sha256`, `sha384`, and `sha512`.
     - signature: 'digest(data: bytea, type: text) -> bytea'
-      description: >-
+      description: |
         Computes a binary hash of the given bytea `data` using the specified `type` algorithm.
         The supported hash algorithms are the same as for the text variant of this function.
     - signature: 'hmac(data: text, key: text, type: text) -> bytea'
-      description: >-
+      description: |
         Computes a hashed MAC of the given text `data` using the specified `key` and
         `type` algorithm. Supported hash algorithms are the same as for `digest`.
     - signature: 'hmac(data: bytea, key: bytea, type: text) -> bytea'
-      description: >-
+      description: |
         Computes a hashed MAC of the given bytea `data` using the specified `key` and
         `type` algorithm. The supported hash algorithms are the same as for `digest`.
     - signature: 'md5(data: bytea) -> text'
-      description: >-
+      description: |
         Computes the MD5 hash of the given bytea `data`.
         For PostgreSQL compatibility, returns a hex-encoded value of type `text` rather than `bytea`.
     - signature: 'sha224(data: bytea) -> bytea'
-      description: >-
+      description: |
         Computes the SHA-224 hash of the given bytea `data`.
     - signature: 'sha256(data: bytea) -> bytea'
-      description: >-
+      description: |
         Computes the SHA-256 hash of the given bytea `data`.
     - signature: 'sha384(data: bytea) -> bytea'
-      description: >-
+      description: |
         Computes the SHA-384 hash of the given bytea `data`.
     - signature: 'sha512(data: bytea) -> bytea'
-      description: >-
+      description: |
         Computes the SHA-512 hash of the given bytea `data`.
 
 - type: Window
-  description: >-
+  description: |
     Window functions compute values across sets of rows related to the current row.
     For example, you can use a window aggregation to smooth measurement data by computing the average of the last 5
     measurements before every row as follows:
+
     ```
-    SELECT avg(measurement) OVER (ORDER BY time ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) FROM measurements;
-    ```.
+    SELECT
+      avg(measurement) OVER (ORDER BY time ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
+    FROM measurements;
+    ```
+
     Window functions always need an `OVER` clause. For the `OVER` clause, Materialize supports the same
     [syntax as PostgreSQL](https://www.postgresql.org/docs/current/tutorial-window.html), but currently
     only with the `ROWS` frame mode (except for the default frame, which is
@@ -756,38 +783,38 @@
     the `GROUP BY` clause.)
   functions:
   - signature: 'dense_rank() -> int'
-    description: >-
+    description: |
       Returns the rank of the current row within its partition without gaps, counting from 1.
       Rows that compare equal will have the same rank.
   - signature: 'first_value(value anycompatible) -> anyelement'
-    description: >-
+    description: |
       Returns `value` evaluated at the first row of the window frame. The default window frame is
       `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
   - signature: 'lag(value anycompatible [, offset integer [, default anycompatible ]]) -> int'
-    description: >-
+    description: |
       Returns `value` evaluated at the row that is `offset` rows before the current row within the partition;
       if there is no such row, instead returns `default` (which must be of a type compatible with `value`).
       If `offset` is `NULL`, `NULL` is returned instead.
       Both `offset` and `default` are evaluated with respect to the current row.
       If omitted, `offset` defaults to 1 and `default` to `NULL`.
   - signature: 'last_value(value anycompatible) -> anyelement'
-    description: >-
+    description: |
       Returns `value` evaluated at the last row of the window frame. The default window frame is
       `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
   - signature: 'lead(value anycompatible [, offset integer [, default anycompatible ]]) -> int'
-    description: >-
+    description: |
       Returns `value` evaluated at the row that is `offset` rows after the current row within the partition;
       if there is no such row, instead returns `default` (which must be of a type compatible with `value`).
       If `offset` is `NULL`, `NULL` is returned instead.
       Both `offset` and `default` are evaluated with respect to the current row.
       If omitted, `offset` defaults to 1 and `default` to `NULL`.
   - signature: 'rank() -> int'
-    description: >-
+    description: |
       Returns the rank of the current row within its partition with gaps (counting from 1):
       rows that compare equal will have the same rank, and then the rank is incremented by the number of rows that
       compared equal.
   - signature: 'row_number() -> int'
-    description: >-
+    description: |
       Returns the number of the current row within its partition, counting from 1.
       Rows that compare equal will be ordered in an unspecified way.
 
@@ -807,19 +834,19 @@
     description: Returns the server's version as an integer having the format `XXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version.
     unmaterializable: true
   - signature: 'current_database() -> text'
-    description: >-
+    description: |
       Returns the name of the current database.
     unmaterializable: true
   - signature: 'current_role() -> text'
-    description: >-
+    description: |
       Alias for `current_user`.
     unmaterializable: true
   - signature: 'current_user() -> text'
-    description: >-
+    description: |
       Returns the name of the user who executed the containing query.
     unmaterializable: true
   - signature: 'session_user() -> text'
-    description: >-
+    description: |
       Returns the name of the user who initiated the database connection.
     unmaterializable: true
   - signature: 'mz_row_size(expr: Record) -> int'
@@ -833,18 +860,18 @@
   - signature: 'format_type(oid: int, typemod: int) -> text'
     description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
   - signature: 'current_schema() -> text'
-    description: >-
+    description: |
       Returns the name of the first non-implicit schema on the search path, or
       `NULL` if the search path is empty.
     unmaterializable: true
   - signature: 'current_schemas(include_implicit: bool) -> text[]'
-    description: >-
+    description: |
       Returns the names of the schemas on the search path.
       The `include_implicit` parameter controls whether implicit schemas like
       `mz_catalog` and `pg_catalog` are included in the output.
     unmaterializable: true
   - signature: 'current_setting(setting_name: text[, missing_ok: bool]) -> text'
-    description: >-
+    description: |
       Returns the value of the named setting or error if it does not exist.
       If `missing_ok` is true, return NULL if it does not exist.
     unmaterializable: true
@@ -858,27 +885,27 @@
     description: Returns the internal connection ID.
     unmaterializable: true
   - signature: 'pg_cancel_backend(connection_id: int) -> bool'
-    description: >-
+    description: |
       Cancels an in-progress query on the specified connection ID.
       Returns whether the connection ID existed (not if it cancelled a query).
     side_effecting: true
   - signature: 'pg_column_size(expr: any) -> int'
     description: Returns the number of bytes used to store any individual data value.
   - signature: 'pg_get_constraintdef(oid: oid[, pretty: bool]) -> text'
-    description: >-
+    description: |
       Returns the constraint definition for the given `oid`. Currently always
       returns NULL since constraints aren't supported.
   - signature: 'pg_get_indexdef(index: oid[, column: integer, pretty: bool]) -> text'
-    description: >-
+    description: |
       Reconstructs the creating command for an index. (This is a decompiled
       reconstruction, not the original text of the command.) If column is
       supplied and is not zero, only the definition of that column is reconstructed.
   - signature: 'pg_get_ruledef(rule_oid: oid[, pretty bool]) -> text'
-    description: >-
+    description: |
       Reconstructs the creating command for a rule. This function
       always returns NULL because Materialize does not support rules.
   - signature: 'pg_get_userbyid(role: oid) -> text'
-    description: >-
+    description: |
       Returns the role (user) name for the given `oid`. If no role matches the
       specified OID, the string `unknown (OID=oid)` is returned.
   - signature: 'pg_get_viewdef(view_name: text[, pretty: bool]) -> text'
@@ -907,13 +934,13 @@
     description: Returns the time when the server started.
     unmaterializable: true
   - signature: 'pg_relation_size(relation: regclass[, fork: text]) -> bigint'
-    description: >-
+    description: |
       Disk space used by the specified fork ('main', 'fsm', 'vm', or 'init')
       of the specified table or index. If no fork is specified, it defaults
       to 'main'. This function always returns -1 because Materialize does
       not store tables and indexes on local disk.
   - signature: 'pg_stat_get_numscans(oid: oid) -> bigint'
-    description: >-
+    description: |
        Number of sequential scans done when argument is a table,
        or number of index scans done when argument is an index.
        This function always returns -1 because Materialize does
@@ -928,46 +955,46 @@
     whether the provided role is a _superuser_ or not.
   functions:
     - signature: 'has_cluster_privilege([role: text or oid,] cluster: text, privilege: text) -> bool'
-      description: >-
+      description: |
         Reports whether the role with the specified role name or OID has the privilege on
         the cluster with the specified cluster name. If the role is omitted then
         the `current_role` is assumed.
     - signature: 'has_connection_privilege([role: text or oid,] connection: text or oid, privilege: text) -> bool'
-      description: >-
+      description: |
         Reports whether the role with the specified role name or OID has the privilege on
         the connection with the specified connection name or OID. If the role is omitted then
         the `current_role` is assumed.
     - signature: 'has_database_privilege([role: text or oid,] database: text or oid, privilege: text) -> bool'
-      description: >-
+      description: |
         Reports whether the role with the specified role name or OID has the privilege on
         the database with the specified database name or OID. If the role is omitted then
         the `current_role` is assumed.
     - signature: 'has_schema_privilege([role: text or oid,] schema: text or oid, privilege: text) -> bool'
-      description: >-
+      description: |
         Reports whether the role with the specified role name or OID has the privilege on
         the schema with the specified schema name or OID. If the role is omitted then
         the `current_role` is assumed.
     - signature: 'has_role([user: name or oid,] role: text or oid, privilege: text) -> bool'
-      description: >-
+      description: |
         Reports whether the `user` has the privilege for `role`. `privilege` can either be `MEMBER`
         or `USAGE`, however currently this value is ignored. The `PUBLIC` pseudo-role cannot be used
         for the `user` nor the `role`. If the `user` is omitted then the `current_role` is assumed.
     - signature: 'has_secret_privilege([role: text or oid,] secret: text or oid, privilege: text) -> bool'
-      description: >-
+      description: |
         Reports whether the role with the specified role name or OID has the privilege on
         the secret with the specified secret name or OID. If the role is omitted then
         the `current_role` is assumed.
     - signature: 'has_system_privilege([role: text or oid,] privilege: text) -> bool'
-      description: >-
+      description: |
         Reports whether the role with the specified role name or OID has the system privilege.
         If the role is omitted then the `current_role` is assumed.
     - signature: 'has_table_privilege([role: text or oid,] relation: text or oid, privilege: text) -> bool'
-      description: >-
+      description: |
         Reports whether the role with the specified role name or OID has the privilege on
         the relation with the specified relation name or OID. If the role is omitted then
         the `current_role` is assumed.
     - signature: 'has_type_privilege([role: text or oid,] type: text or oid, privilege: text) -> bool'
-      description: >-
+      description: |
         Reports whether the role with the specified role name or OID has the privilege on
         the type with the specified type name or OID. If the role is omitted then
         the `current_role` is assumed.
