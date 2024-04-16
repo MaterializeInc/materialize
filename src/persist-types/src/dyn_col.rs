@@ -121,15 +121,16 @@ impl DynColumnRef {
 pub struct DynColumnMut(DataType, Box<dyn Any + Send + Sync>);
 
 impl DynColumnMut {
-    fn new<T: Data>(col: T::Mut) -> Self {
-        DynColumnMut(col.cfg().as_type(), Box::new(col))
+    /// Create a new [`DynColumnMut`] from an instance of [`Data::Mut`].
+    pub fn new<T: Data>(col: Box<T::Mut>) -> Self {
+        DynColumnMut(col.cfg().as_type(), col)
     }
 
     pub(crate) fn new_untyped(typ: &DataType) -> Self {
         struct NewUntypedDataFn;
         impl DataFn<DynColumnMut> for NewUntypedDataFn {
             fn call<T: Data>(self, cfg: &T::Cfg) -> DynColumnMut {
-                DynColumnMut::new::<T>(T::Mut::new(cfg))
+                DynColumnMut::new::<T>(Box::new(T::Mut::new(cfg)))
             }
         }
         typ.data_fn(NewUntypedDataFn)
@@ -140,9 +141,18 @@ impl DynColumnMut {
         &self.0
     }
 
+    /// Returns the inner value if it is a column of type `T`, or an Err if it isn't.
+    pub fn downcast<T: Data>(self) -> Result<Box<T::Mut>, String> {
+        let col = self
+            .1
+            .downcast::<T::Mut>()
+            .map_err(|_| format!("expected {} col", std::any::type_name::<T::Col>()))?;
+        Ok(col)
+    }
+
     /// Returns a typed, exclusive reference to the inner value if it is a
     /// column of type `T`, or an Err if it isn't.
-    pub fn downcast<T: Data>(&mut self) -> Result<&mut T::Mut, String> {
+    pub fn downcast_mut<T: Data>(&mut self) -> Result<&mut T::Mut, String> {
         let col = self
             .1
             .downcast_mut::<T::Mut>()
@@ -156,7 +166,7 @@ impl DynColumnMut {
             fn call<T: Data>(self, _cfg: &T::Cfg) {
                 let col = self
                     .0
-                    .downcast::<T>()
+                    .downcast_mut::<T>()
                     .expect("DynColumnMut DataType should have internally consistent");
                 ColumnPush::<T>::push(col, T::Ref::default());
             }
@@ -170,7 +180,7 @@ impl DynColumnMut {
             fn call<T: Data>(self, _cfg: &T::Cfg) {
                 let PushFromFn(src, dst, idx) = self;
                 let dst = dst
-                    .downcast::<T>()
+                    .downcast_mut::<T>()
                     .expect("DynColumnMut DataType should have internally consistent");
                 let src = src
                     .downcast_ref::<T>()

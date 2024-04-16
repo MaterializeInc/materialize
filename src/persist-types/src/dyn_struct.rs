@@ -74,8 +74,8 @@ impl Default for DynStructRef<'_> {
 /// A [crate::columnar::ColumnGet] impl for [DynStruct].
 #[derive(Debug)]
 pub struct DynStructCol {
-    len: usize,
-    cfg: DynStructCfg,
+    pub(crate) len: usize,
+    pub(crate) cfg: DynStructCfg,
     pub(crate) validity: Option<<bool as Data>::Col>,
     pub(crate) cols: Vec<DynColumnRef>,
 }
@@ -322,13 +322,8 @@ impl ColumnPush<Option<DynStruct>> for DynStructMut {
         // keep it for completeness and also so that any future changes to the
         // code consider it.
         let len = self.len;
-        if let Some(validity) = self.validity.as_ref() {
-            debug_assert_eq!(len, validity.len());
-        }
-        let mut validity = ValidityMut {
-            len,
-            validity: &mut self.validity,
-        };
+        let validity = self.validity.get_or_insert_with(MutableBitmap::default);
+        debug_assert_eq!(len, validity.len());
 
         if let Some(val) = val {
             validity.push(true);
@@ -341,15 +336,62 @@ impl ColumnPush<Option<DynStruct>> for DynStructMut {
 }
 
 impl DynStructMut {
+    /// Create a [`DynStructMut`] from individual parts.
+    ///
+    /// Returns an error if the data types in `cfg` do not match those in the
+    /// provided `cols`.
+    pub fn from_parts(
+        cfg: DynStructCfg,
+        len: usize,
+        validity: Option<MutableBitmap>,
+        cols: Vec<DynColumnMut>,
+    ) -> Result<Self, String> {
+        let data_types_match = cfg
+            .cols
+            .iter()
+            .map(|(_name, data_type, _stats)| data_type)
+            .zip(cols.iter().map(|col| col.typ()))
+            .all(|(dt_a, dt_b)| dt_a == dt_b);
+        if !data_types_match {
+            let cfg_cols = cfg
+                .cols
+                .iter()
+                .map(|(_, data_type, _)| data_type)
+                .cloned()
+                .collect::<Vec<_>>();
+            let other_cols = cols
+                .iter()
+                .map(|col| col.typ())
+                .cloned()
+                .collect::<Vec<_>>();
+
+            return Err(format!(
+                "found mismatched column types! cfg: {cfg_cols:?}, other: {other_cols:?}"
+            ));
+        }
+
+        Ok(DynStructMut {
+            cfg,
+            len,
+            validity,
+            cols,
+        })
+    }
+
     /// Returns the number of elements in this column
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Returns the configuration for this column.
+    pub fn cfg(&self) -> &DynStructCfg {
+        &self.cfg
+    }
+
     /// Explodes this _non-optional_ struct column into its component fields.
     ///
     /// Panics if this struct is optional.
-    pub fn as_mut<'a>(&'a mut self) -> ColumnsMut<'a> {
+    pub fn as_mut(self) -> ColumnsMut {
         let ColumnsMut {
             len,
             validity,
@@ -368,26 +410,26 @@ impl DynStructMut {
     ///
     /// If the column is actually non-option, succeeds and acts as if every
     /// value is a Some.
-    pub fn as_opt_mut<'a>(&'a mut self) -> ColumnsMut<'a, ValidityMut<'a>> {
+    pub fn as_opt_mut(self) -> ColumnsMut<ValidityMut> {
         debug_assert_eq!(self.cfg.cols.len(), self.cols.len());
         let cols = self
             .cfg
             .cols
             .iter()
-            .zip(self.cols.iter_mut())
+            .zip(self.cols.into_iter())
             .map(|((name, _typ, _stats_fn), col)| {
                 #[cfg(debug_assertions)]
                 {
                     assert_eq!(_typ, col.typ());
                 }
-                (name.as_str(), col)
+                (name.as_str().into(), col)
             })
             .collect();
         ColumnsMut {
-            len: &mut self.len,
+            len: self.len,
             validity: ValidityMut {
                 len: 0,
-                validity: &mut self.validity,
+                validity: self.validity,
             },
             cols,
         }
@@ -485,18 +527,18 @@ impl ValidityRef {
 /// elided if every value is true. This is the common case for the `Ok` struct
 /// of our `SourceData`, so seems worth opting in to ourselves.
 #[derive(Debug)]
-pub struct ValidityMut<'a> {
+pub struct ValidityMut {
     len: usize,
-    validity: &'a mut Option<<bool as Data>::Mut>,
+    validity: Option<MutableBitmap>,
 }
 
-impl ValidityMut<'_> {
+impl ValidityMut {
     /// Pushes whether a column of optional structs is Some at the given index.
     /// If this is false, the contents of the struct's component fields at `idx`
     /// can be anything.
     pub fn push(&mut self, valid: bool) {
         if valid {
-            if let Some(validity) = self.validity {
+            if let Some(validity) = &mut self.validity {
                 validity.push(valid);
             }
         } else {
@@ -508,6 +550,11 @@ impl ValidityMut<'_> {
             validity.push(valid);
         }
         self.len += 1;
+    }
+
+    /// Consumes `self` returning the inner parts.
+    pub fn into_parts(self) -> (usize, Option<MutableBitmap>) {
+        (self.len, self.validity)
     }
 }
 
@@ -558,15 +605,15 @@ impl<V> ColumnsRef<V> {
 /// [Self::col] and the [Self::finish] called to verify that all columns have
 /// been accounted for.
 #[derive(Debug)]
-pub struct ColumnsMut<'a, V = ()> {
-    len: &'a mut usize,
+pub struct ColumnsMut<V = ()> {
+    len: usize,
     validity: V,
-    pub(crate) cols: BTreeMap<&'a str, &'a mut DynColumnMut>,
+    pub(crate) cols: BTreeMap<Box<str>, DynColumnMut>,
 }
 
-impl<'a, V> ColumnsMut<'a, V> {
+impl<V> ColumnsMut<V> {
     /// Removes the named column from the set.
-    pub fn col<T: Data>(&mut self, name: &str) -> Result<&'a mut T::Mut, String> {
+    pub fn col<T: Data>(&mut self, name: &str) -> Result<Box<T::Mut>, String> {
         let col = self
             .cols
             .remove(name)
@@ -575,11 +622,15 @@ impl<'a, V> ColumnsMut<'a, V> {
     }
 
     /// Verifies that all columns in the set have been removed.
-    pub fn finish(self) -> Result<(&'a mut usize, V), String> {
+    pub fn finish(self) -> Result<(usize, V), String> {
         if self.cols.is_empty() {
             Ok((self.len, self.validity))
         } else {
-            let names = self.cols.iter().map(|(x, _)| *x).collect::<Vec<_>>();
+            let names = self
+                .cols
+                .iter()
+                .map(|(x, _)| x.as_ref())
+                .collect::<Vec<_>>();
             Err(format!("unused cols: {}", names.join(" ")))
         }
     }

@@ -50,8 +50,9 @@
 
 use std::fmt::Debug;
 
-use crate::codec_impls::UnitSchema;
+use crate::codec_impls::UNIT_SCHEMA;
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
+use crate::dyn_col::DynColumnMut;
 use crate::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use crate::part::PartBuilder;
 use crate::stats::{ColumnStats, StatsFrom};
@@ -230,9 +231,12 @@ pub enum ColumnFormat {
 ///
 /// This allows us to amortize the cost of downcasting columns into concrete
 /// types.
-pub trait PartEncoder<'a, T> {
+pub trait PartEncoder<T> {
     /// Encodes the given value into the Part being constructed.
     fn encode(&mut self, val: &T);
+
+    /// Consumes `self` returning the columns that were written to.
+    fn finish(self) -> (usize, Vec<DynColumnMut>);
 }
 
 /// A decoder for values of a fixed schema.
@@ -250,7 +254,7 @@ pub trait PartDecoder<T> {
 /// A description of the structure of a [crate::Codec] implementor.
 pub trait Schema<T>: Debug + Send + Sync {
     /// The associated [PartEncoder] implementor.
-    type Encoder<'a>: PartEncoder<'a, T>;
+    type Encoder: PartEncoder<T> + Debug;
     /// The associated [PartDecoder] implementor.
     type Decoder: PartDecoder<T> + Debug;
 
@@ -260,24 +264,36 @@ pub trait Schema<T>: Debug + Send + Sync {
     /// Returns a [`Self::Decoder`] for the given columns.
     fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String>;
 
-    /// Returns a [Self::Encoder<'a>] for the given columns.
-    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String>;
+    /// Returns a [Self::Encoder] for the given columns.
+    fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String>;
 }
 
 /// A helper for writing tests that validate that a piece of data roundtrips
 /// through the columnar format.
 pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
     schema: &T::Schema,
-    val: &T,
+    value: &T,
 ) -> Result<(), String> {
-    let mut part = PartBuilder::new(schema, &UnitSchema);
-    {
-        let mut part_mut = part.get_mut();
-        schema.encoder(part_mut.key)?.encode(val);
-        part_mut.ts.push(1u64);
-        part_mut.diff.push(1i64);
-    }
-    let part = part.finish()?;
+    let (cfg, builder) = PartBuilder::new(schema, &UNIT_SCHEMA);
+    let PartBuilder {
+        key,
+        val,
+        mut ts,
+        mut diff,
+    } = builder;
+
+    let mut key_encoder = schema.encoder(key)?;
+    let mut val_encoder = UNIT_SCHEMA.encoder(val)?;
+
+    key_encoder.encode(value);
+    val_encoder.encode(&());
+    ts.push(1u64);
+    diff.push(1i64);
+
+    let key_columns = key_encoder.finish();
+    let val_columns = val_encoder.finish();
+
+    let part = cfg.into_part(key_columns, val_columns, ts, diff)?;
 
     // Sanity check that we can compute stats.
     let _stats = part.key_stats().expect("stats should be compute-able");

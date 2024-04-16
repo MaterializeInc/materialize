@@ -98,16 +98,28 @@ pub fn decode_part<R: Read + Seek, K, KS: Schema<K>, V, VS: Schema<V>>(
 /// through the parquet serialization format.
 pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
     schema: &S,
-    val: &T,
+    value: &T,
 ) -> Result<(), String> {
-    let mut part = PartBuilder::new(schema, &UnitSchema);
-    {
-        let mut part_mut = part.get_mut();
-        schema.encoder(part_mut.key)?.encode(val);
-        part_mut.ts.push(1u64);
-        part_mut.diff.push(1i64);
-    }
-    let part = part.finish()?;
+    let (cfg, builder) = PartBuilder::new(schema, &UNIT_SCHEMA);
+    let PartBuilder {
+        key,
+        val,
+        mut ts,
+        mut diff,
+    } = builder;
+
+    let mut key_encoder = schema.encoder(key)?;
+    let mut val_encoder = UNIT_SCHEMA.encoder(val)?;
+
+    key_encoder.encode(value);
+    val_encoder.encode(&());
+    ts.push(1u64);
+    diff.push(1i64);
+
+    let key_columns = key_encoder.finish();
+    let val_columns = val_encoder.finish();
+
+    let part = cfg.into_part(key_columns, val_columns, ts, diff)?;
 
     // Sanity check that we can compute stats.
     let _stats = part.key_stats().expect("stats should be compute-able");

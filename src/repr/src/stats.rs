@@ -168,8 +168,8 @@ impl<'a> JsonDatums<'a> {
 
 #[cfg(test)]
 mod tests {
-    use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{Data, PartEncoder};
+    use mz_persist_types::codec_impls::UNIT_SCHEMA;
+    use mz_persist_types::columnar::{Data, PartEncoder, Schema};
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::{
         ColumnStats, DynStats, ProtoStructStats, StructStats, TrimStats,
@@ -183,17 +183,29 @@ mod tests {
         schema: &RelationDesc,
         datums: impl IntoIterator<Item = &'a Row>,
     ) {
-        let mut part = PartBuilder::new(schema, &UnitSchema);
-        {
-            let mut part_mut = part.get_mut();
-            let ((), mut encoder) = schema.encoder(part_mut.key).unwrap();
-            for datum in datums {
-                encoder.encode(datum);
-                part_mut.ts.push(1u64);
-                part_mut.diff.push(1i64);
-            }
+        let (cfg, builder) = PartBuilder::new(schema, &UNIT_SCHEMA);
+        let PartBuilder {
+            key,
+            val,
+            mut ts,
+            mut diff,
+        } = builder;
+
+        let ((), mut key_encoder) = schema.encoder(key).unwrap();
+        let mut val_encoder = UNIT_SCHEMA.encoder(val).unwrap();
+
+        for datum in datums {
+            key_encoder.encode(datum);
+            val_encoder.encode(&());
+            ts.push(1u64);
+            diff.push(1i64);
         }
-        let part = part.finish().unwrap();
+
+        let key_cols = key_encoder.finish();
+        let val_cols = val_encoder.finish();
+
+        let part = cfg.into_part(key_cols, val_cols, ts, diff).unwrap();
+
         let expected = part.key_stats().unwrap();
         let mut actual: ProtoStructStats = RustType::into_proto(&expected);
         // It's not particularly easy to give StructStats a PartialEq impl, but

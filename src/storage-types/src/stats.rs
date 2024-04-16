@@ -263,7 +263,7 @@ impl RelationPartStats<'_> {
 #[cfg(test)]
 mod tests {
     use mz_ore::metrics::MetricsRegistry;
-    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_persist_types::codec_impls::UNIT_SCHEMA;
     use mz_persist_types::columnar::{PartEncoder, Schema};
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::PartStats;
@@ -291,14 +291,26 @@ mod tests {
             let schema = RelationDesc::empty().with_column("col", column_type.clone());
             let row = SourceData(Ok(Row::pack(std::iter::once(datum))));
 
-            let mut part = PartBuilder::new::<SourceData, _, _, _>(&schema, &UnitSchema);
-            {
-                let mut part_mut = part.get_mut();
-                <RelationDesc as Schema<SourceData>>::encoder(&schema, part_mut.key)?.encode(&row);
-                part_mut.ts.push(1u64);
-                part_mut.diff.push(1i64);
-            }
-            let part = part.finish()?;
+            let (cfg, builder) = PartBuilder::new::<SourceData, _, _, _>(&schema, &UNIT_SCHEMA);
+            let PartBuilder {
+                key,
+                val,
+                mut ts,
+                mut diff,
+            } = builder;
+
+            let mut key_encoder = <RelationDesc as Schema<SourceData>>::encoder(&schema, key)?;
+            let mut val_encoder = UNIT_SCHEMA.encoder(val)?;
+
+            key_encoder.encode(&row);
+            val_encoder.encode(&());
+            ts.push(1u64);
+            diff.push(1i64);
+
+            let key_cols = key_encoder.finish();
+            let val_cols = val_encoder.finish();
+
+            let part = cfg.into_part(key_cols, val_cols, ts, diff)?;
             let stats = part.key_stats()?;
 
             let metrics = PartStatsMetrics::new(&MetricsRegistry::new());

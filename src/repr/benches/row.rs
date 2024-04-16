@@ -270,18 +270,29 @@ fn decode_legacy(part: &ColumnarRecords) -> Row {
 }
 
 fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {
-    let mut part = PartBuilder::new(schema, &UnitSchema);
-    let mut part_mut = part.get_mut();
-    let ((), mut encoder) = schema.encoder(part_mut.key).unwrap();
+    let (cfg, builder) = PartBuilder::new(schema, &UNIT_SCHEMA);
+    let PartBuilder {
+        key,
+        val,
+        mut ts,
+        mut diff,
+    } = builder;
+
+    let ((), mut key_encoder) = schema.encoder(key).unwrap();
+    let mut val_encoder = UNIT_SCHEMA.encoder(val).unwrap();
+
     for row in rows.iter() {
-        encoder.encode(row);
+        key_encoder.encode(row);
+        val_encoder.encode(&());
+        ts.push(1u64);
+        diff.push(1i64);
     }
-    drop(encoder);
-    for _ in rows.iter() {
-        part_mut.ts.push(1u64);
-        part_mut.diff.push(1i64);
-    }
-    part.finish().unwrap()
+
+    let key_cols = key_encoder.finish();
+    let val_cols = val_encoder.finish();
+
+    let part = cfg.into_part(key_cols, val_cols, ts, diff).unwrap();
+    part
 }
 
 fn bench_roundtrip(c: &mut Criterion) {
@@ -336,18 +347,25 @@ fn bench_roundtrip(c: &mut Criterion) {
         b.iter(|| std::hint::black_box(encode_legacy(&rows)));
     });
     c.bench_function("roundtrip_encode_structured", |b| {
-        let mut part_builder = PartBuilder::new(&schema, &UnitSchema);
-        let mut part_mut = part_builder.get_mut();
+        let (_cfg, builder) = PartBuilder::new(&schema, &UNIT_SCHEMA);
+        let PartBuilder {
+            key,
+            val,
+            mut ts,
+            mut diff,
+        } = builder;
 
-        let ((), mut key_encoder) = schema.encoder(part_mut.key).unwrap();
+        let ((), mut key_encoder) = schema.encoder(key).unwrap();
+        let mut val_encoder = UNIT_SCHEMA.encoder(val).unwrap();
 
         b.iter(|| {
-            for row in &rows {
+            for row in rows.iter() {
                 key_encoder.encode(row);
-                part_mut.ts.push(1u64);
-                part_mut.diff.push(1i64);
+                val_encoder.encode(&());
+                ts.push(1u64);
+                diff.push(1i64);
             }
-            std::hint::black_box((&mut key_encoder, &mut part_mut.ts, &mut part_mut.diff));
+            std::hint::black_box((&mut key_encoder, &mut val_encoder, &mut ts, &mut diff));
         });
     });
 

@@ -17,13 +17,14 @@ use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::Schema;
+use crate::dyn_col::{DynColumnMut, DynColumnRef};
 use crate::dyn_struct::{
     ColumnsMut, ColumnsRef, DynStructCfg, DynStructCol, DynStructMut, ValidityRef,
 };
 use crate::stats::StructStats;
 use crate::Codec64;
 
-/// A columnar representation of one blob's worth of data.
+/// A structured columnar representation of one blob's worth of data.
 #[derive(Debug)]
 pub struct Part {
     len: usize,
@@ -223,72 +224,99 @@ impl Part {
 /// An in-progress columnar constructor for one blob's worth of data.
 #[derive(Debug)]
 pub struct PartBuilder {
-    key: DynStructMut,
-    val: DynStructMut,
-    ts: Vec<i64>,
-    diff: Vec<i64>,
+    /// The key column.
+    pub key: ColumnsMut,
+    /// The val column.
+    pub val: ColumnsMut,
+    /// The ts column.
+    pub ts: Codec64Mut,
+    /// The diff column.
+    pub diff: Codec64Mut,
 }
 
 impl PartBuilder {
-    /// Returns a new PartBuilder with the given schema.
-    pub fn new<K, KS: Schema<K>, V, VS: Schema<V>>(key_schema: &KS, val_schema: &VS) -> Self {
-        let key = ColumnMut::<DynStructCfg>::new(&key_schema.columns());
-        let val = ColumnMut::<DynStructCfg>::new(&val_schema.columns());
-        let ts = Vec::new();
-        let diff = Vec::new();
-        PartBuilder { key, val, ts, diff }
-    }
+    /// Returns a new [`PartBuilder`] and [`PartBuilderCfg`] with the given schema.
+    ///
+    /// See [`PartBuilderCfg::into_part`] for how to finalize into a [`Part`].
+    pub fn new<K, KS: Schema<K>, V, VS: Schema<V>>(
+        key_schema: &KS,
+        val_schema: &VS,
+    ) -> (PartBuilderCfg, Self) {
+        let key = DynStructMut::new(&key_schema.columns());
+        let val = DynStructMut::new(&val_schema.columns());
+        let ts = Codec64Mut(Vec::new());
+        let diff = Codec64Mut(Vec::new());
 
-    /// Returns a [PartMut] for this in-progress part.
-    pub fn get_mut<'a>(&'a mut self) -> PartMut<'a> {
-        let len = self.diff.len();
-        debug_assert_eq!(self.key.len(), len);
-        debug_assert_eq!(self.val.len(), len);
-        debug_assert_eq!(self.ts.len(), len);
-        PartMut {
-            key: self.key.as_mut(),
-            val: self.val.as_mut(),
-            ts: Codec64Mut(&mut self.ts),
-            diff: Codec64Mut(&mut self.diff),
-        }
-    }
+        let key_cfg = key.cfg().clone();
+        let val_cfg = val.cfg().clone();
 
-    /// Completes construction of the [Part].
-    pub fn finish(self) -> Result<Part, String> {
-        let key = DynStructCol::from(self.key);
-        let val = DynStructCol::from(self.val);
-        let ts = Buffer::from(self.ts);
-        let diff = Buffer::from(self.diff);
-
-        let len = diff.len();
-        let part = Part {
-            len,
-            key,
-            val,
+        let cfg = PartBuilderCfg { key_cfg, val_cfg };
+        let builder = PartBuilder {
+            key: key.as_mut(),
+            val: val.as_mut(),
             ts,
             diff,
         };
-        let () = part.validate()?;
+
+        (cfg, builder)
+    }
+}
+
+/// Metadata that when paired with a [`PartBuilder`] can create a [`Part`].
+#[derive(Debug)]
+pub struct PartBuilderCfg {
+    /// Configuration data for the 'key' column of a [`Part`].
+    pub key_cfg: DynStructCfg,
+    /// Configuration data for the 'val' column of a [`Part`].
+    pub val_cfg: DynStructCfg,
+}
+
+impl PartBuilderCfg {
+    /// Create a [`Part`] from a [`PartBuilderCfg`] and the fields of a [`PartBuilder`].
+    pub fn into_part(
+        self,
+        (key_len, key_cols): (usize, Vec<DynColumnMut>),
+        (val_len, val_cols): (usize, Vec<DynColumnMut>),
+        ts: Codec64Mut,
+        diff: Codec64Mut,
+    ) -> Result<Part, String> {
+        let key = DynStructCol {
+            len: key_len,
+            cfg: self.key_cfg,
+            validity: None,
+            cols: key_cols.into_iter().map(DynColumnRef::from).collect(),
+        };
+        let val = DynStructCol {
+            len: val_len,
+            cfg: self.val_cfg,
+            validity: None,
+            cols: val_cols.into_iter().map(DynColumnRef::from).collect(),
+        };
+
+        let len = diff.len();
+        let part = Part {
+            key,
+            val,
+            ts: Buffer::from(ts.0),
+            diff: Buffer::from(diff.0),
+            len,
+        };
+        part.validate()?;
+
         Ok(part)
     }
 }
 
-/// Mutable access to the columns in a [PartBuilder].
-pub struct PartMut<'a> {
-    /// The key column.
-    pub key: ColumnsMut<'a>,
-    /// The val column.
-    pub val: ColumnsMut<'a>,
-    /// The ts column.
-    pub ts: Codec64Mut<'a>,
-    /// The diff column.
-    pub diff: Codec64Mut<'a>,
-}
+/// Mutable access to a column of a [`Codec64`] implementor.
+#[derive(Debug)]
+pub struct Codec64Mut(Vec<i64>);
 
-/// Mutable access to a column of a Codec64 implementor.
-pub struct Codec64Mut<'a>(&'a mut Vec<i64>);
+impl Codec64Mut {
+    /// Returns the length of the column.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 
-impl Codec64Mut<'_> {
     /// Pushes the given value into this column.
     pub fn push<X: Codec64>(&mut self, val: X) {
         self.0.push(i64::from_le_bytes(Codec64::encode(&val)));
