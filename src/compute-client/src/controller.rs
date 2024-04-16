@@ -831,6 +831,8 @@ pub struct CollectionState<T> {
     write_frontier: Antichain<T>,
     /// The write frontiers reported by individual replicas.
     replica_write_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
+    /// The input frontiers reported by individual replicas.
+    replica_input_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
 }
 
 impl<T> CollectionState<T> {
@@ -889,6 +891,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             compute_dependencies,
             write_frontier: upper,
             replica_write_frontiers: BTreeMap::new(),
+            replica_input_frontiers: BTreeMap::new(),
         }
     }
 

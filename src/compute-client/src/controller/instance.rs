@@ -858,6 +858,7 @@ where
             updates.insert(*compute_id, read_frontier.to_owned());
         }
         self.update_replica_write_frontiers(id, &updates);
+        self.update_replica_input_frontiers(id, &updates);
 
         let replica_epoch = self.compute.replica_epochs.entry(id).or_default();
         *replica_epoch += 1;
@@ -897,7 +898,7 @@ where
             .ok_or(ReplicaMissing(id))?;
 
         // Remove frontier tracking for this replica.
-        self.remove_replica_write_frontiers(id);
+        self.remove_replica_frontiers(id);
 
         // Subscribes targeting this replica either won't be served anymore (if the replica is
         // dropped) or might produce inconsistent output (if the target collection is an
@@ -986,13 +987,13 @@ where
         // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
 
-        // When we initialize per-replica write frontiers (and thereby the per-replica read
+        // When we initialize per-replica input frontiers (and thereby the per-replica read
         // capabilities), we cannot use the `as_of` because of reconciliation: Existing
         // slow replicas might be reading from the inputs at times before the `as_of` and we
         // would rather not crash them by allowing their inputs to compact too far. So instead
         // we initialize the per-replica write frontiers with the smallest possible value that
         // is a valid read capability for all inputs, which is the join of all input `since`s.
-        let mut replica_write_frontier = Antichain::from_elem(T::minimum());
+        let mut replica_input_frontier = Antichain::from_elem(T::minimum());
 
         // Record all transitive dependencies of the outputs.
         let mut storage_dependencies = Vec::new();
@@ -1020,7 +1021,7 @@ where
             }
 
             storage_dependencies.push(*source_id);
-            replica_write_frontier.join_assign(&since.to_owned());
+            replica_input_frontier.join_assign(&since.to_owned());
         }
 
         // Validate indexes have `since.less_equal(as_of)`.
@@ -1033,13 +1034,13 @@ where
             }
 
             compute_dependencies.push(*index_id);
-            replica_write_frontier.join_assign(&since.to_owned());
+            replica_input_frontier.join_assign(&since.to_owned());
         }
 
-        // If the `as_of` is empty, we are not going to create a dataflow, so don't install any read
-        // holds.
+        // If the `as_of` is empty, we are not going to create a dataflow, so replicas won't read
+        // from the inputs.
         if as_of.is_empty() {
-            replica_write_frontier = Antichain::new();
+            replica_input_frontier = Antichain::new();
         }
 
         // Canonicalize dependencies.
@@ -1072,7 +1073,6 @@ where
         self.update_read_capabilities(compute_read_updates);
 
         // Install collection state for each of the exports.
-        let mut updates = BTreeMap::new();
         for export_id in dataflow.export_ids() {
             let write_only = dataflow.sink_exports.contains_key(&export_id);
             self.compute.add_collection(
@@ -1082,12 +1082,21 @@ where
                 compute_dependencies.clone(),
                 write_only,
             );
-            updates.insert(export_id, replica_write_frontier.clone());
         }
+
         // Initialize tracking of replica frontiers.
+        let replica_write_frontier_updates = dataflow
+            .export_ids()
+            .map(|id| (id, as_of.clone()))
+            .collect();
+        let replica_input_frontier_updates = dataflow
+            .export_ids()
+            .map(|id| (id, replica_input_frontier.clone()))
+            .collect();
         let replica_ids: Vec<_> = self.compute.replica_ids().collect();
         for replica_id in replica_ids {
-            self.update_replica_write_frontiers(replica_id, &updates);
+            self.update_replica_write_frontiers(replica_id, &replica_write_frontier_updates);
+            self.update_replica_input_frontiers(replica_id, &replica_input_frontier_updates);
         }
 
         // Initialize tracking of subscribes.
@@ -1495,9 +1504,6 @@ where
         replica_id: ReplicaId,
         updates: &BTreeMap<GlobalId, Antichain<T>>,
     ) {
-        // Compute and apply read hold downgrades on storage dependencies that result from
-        // replica frontier advancements.
-        let mut storage_read_capability_changes = BTreeMap::default();
         for (id, new_upper) in updates {
             let collection = self.compute.expect_collection_mut(*id);
 
@@ -1513,16 +1519,49 @@ where
                      collection={id}, replica={replica_id}",
                 );
             }
+        }
+    }
+
+    /// Apply replica input frontier updates.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the `updates` references an absent collection.
+    /// Panics if any of the `updates` regresses an existing replica input frontier.
+    #[mz_ore::instrument(level = "debug")]
+    fn update_replica_input_frontiers(
+        &mut self,
+        replica_id: ReplicaId,
+        updates: &BTreeMap<GlobalId, Antichain<T>>,
+    ) {
+        // Compute and apply read hold downgrades on storage dependencies that result from
+        // input frontier advancements.
+        let mut storage_read_capability_changes = BTreeMap::default();
+        for (id, new_cap) in updates {
+            let collection = self.compute.expect_collection_mut(*id);
+
+            let old_cap = collection
+                .replica_input_frontiers
+                .insert(replica_id, new_cap.clone());
+
+            // Safety check against frontier regressions.
+            if let Some(old) = &old_cap {
+                assert!(
+                    PartialOrder::less_equal(old, new_cap),
+                    "replica input frontier regression: {old:?} -> {new_cap:?}, \
+                     collection={id}, replica={replica_id}",
+                );
+            }
 
             // Update per-replica read holds on storage dependencies.
             for storage_id in &collection.storage_dependencies {
                 let update = storage_read_capability_changes
                     .entry(*storage_id)
                     .or_insert_with(|| ChangeBatch::new());
-                if let Some(old) = &old_upper {
+                if let Some(old) = &old_cap {
                     update.extend(old.iter().map(|time| (time.clone(), -1)));
                 }
-                update.extend(new_upper.iter().map(|time| (time.clone(), 1)));
+                update.extend(new_cap.iter().map(|time| (time.clone(), 1)));
             }
         }
 
@@ -1538,22 +1577,27 @@ where
 
     /// Remove frontier tracking state for the given replica.
     #[mz_ore::instrument(level = "debug")]
-    fn remove_replica_write_frontiers(&mut self, replica_id: ReplicaId) {
+    fn remove_replica_frontiers(&mut self, replica_id: ReplicaId) {
         let mut storage_read_capability_changes = BTreeMap::default();
         for collection in self.compute.collections.values_mut() {
-            let last_upper = collection.replica_write_frontiers.remove(&replica_id);
-            let Some(frontier) = last_upper else { continue };
+            // Remove the tracked write frontier.
+            collection.replica_write_frontiers.remove(&replica_id);
 
-            if !frontier.is_empty() {
-                // Update read holds on storage dependencies.
-                for storage_id in &collection.storage_dependencies {
-                    let update = storage_read_capability_changes
-                        .entry(*storage_id)
-                        .or_insert_with(ChangeBatch::new);
-                    update.extend(frontier.iter().map(|time| (time.clone(), -1)));
+            // Remove the tracked input frontier and release any corresponding read holds on
+            // storage dependencies.
+            let last_cap = collection.replica_input_frontiers.remove(&replica_id);
+            if let Some(frontier) = last_cap {
+                if !frontier.is_empty() {
+                    for storage_id in &collection.storage_dependencies {
+                        let update = storage_read_capability_changes
+                            .entry(*storage_id)
+                            .or_insert_with(ChangeBatch::new);
+                        update.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                    }
                 }
             }
         }
+
         if !storage_read_capability_changes.is_empty() {
             self.storage_controller
                 .update_read_capabilities(&mut storage_read_capability_changes);
@@ -1805,7 +1849,7 @@ where
 
         // Apply an input frontier advancement.
         if let Some(new_frontier) = frontiers.input_frontier {
-            // TODO
+            self.update_replica_input_frontiers(replica_id, &[(id, new_frontier.clone())].into());
         }
 
         response
@@ -1898,6 +1942,12 @@ where
 
         let write_frontier_updates = [(subscribe_id, write_frontier)].into();
         self.update_replica_write_frontiers(replica_id, &write_frontier_updates);
+
+        // For subscribes we downgrade replica input frontiers based on write frontiers. This
+        // should be fine because subscribes can't jump their write frontiers ahead of the times
+        // they have read from their inputs currently.
+        // TODO(#16274): report subscribe input frontiers through `Frontiers` responses
+        self.update_replica_input_frontiers(replica_id, &write_frontier_updates);
 
         // If the subscribe is not tracked, or targets a different replica, there is nothing to do.
         let mut subscribe = self.compute.subscribes.get(&subscribe_id)?.clone();
