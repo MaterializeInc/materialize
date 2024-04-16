@@ -46,6 +46,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
+use mz_persist_txn::metrics::Metrics as TxnMetrics;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{Datum, GlobalId, TimestampManipulation};
@@ -54,6 +55,7 @@ use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::{StorageController, StorageMetadata, StorageTxn};
+use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
@@ -144,6 +146,7 @@ enum Readiness<T> {
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller<T = mz_repr::Timestamp> {
     pub storage: Box<dyn StorageController<Timestamp = T>>,
+    pub collections: Box<dyn StorageCollections<Timestamp = T>>,
     pub compute: ComputeController<T>,
     /// The clusterd image to use when starting new cluster processes.
     clusterd_image: String,
@@ -225,6 +228,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
 
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
         let Self {
+            collections: _,
             storage: _,
             compute,
             clusterd_image: _,
@@ -540,7 +544,8 @@ where
         + From<EpochMillis>
         + TimestampManipulation
         + std::fmt::Display
-        + Into<Datum<'static>>,
+        + Into<Datum<'static>>
+        + Into<mz_repr::Timestamp>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
     // Bounds needed by `ComputeController`:
@@ -562,16 +567,33 @@ where
         persist_txn_tables: PersistTxnTablesImpl,
         storage_txn: &dyn StorageTxn<T>,
     ) -> Self {
+        let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
+        let collections_ctl = storage_collections::StorageCollectionsImpl::new(
+            config.persist_location.clone(),
+            Arc::clone(&config.persist_clients),
+            config.now.clone(),
+            Arc::clone(&txns_metrics),
+            envd_epoch,
+            persist_txn_tables,
+            config.connection_context.clone(),
+            storage_txn,
+        )
+        .await;
+
+        let collections_ctl = Box::new(collections_ctl);
+
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
             config.persist_location,
             config.persist_clients,
             config.now,
+            Arc::clone(&txns_metrics),
             envd_epoch,
             config.metrics_registry.clone(),
             persist_txn_tables,
             config.connection_context,
             storage_txn,
+            collections_ctl.clone(),
         )
         .await;
 
@@ -587,6 +609,7 @@ where
 
         Self {
             storage: Box::new(storage_controller),
+            collections: collections_ctl,
             compute: compute_controller,
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,

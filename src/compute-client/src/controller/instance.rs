@@ -1689,18 +1689,6 @@ where
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(read_capability_changes);
         }
-
-        // Tell the storage controller about new write frontiers for storage collections that are
-        // advanced by compute sinks.
-        let storage_updates: Vec<_> = updates
-            .iter()
-            .filter_map(|(&id, upper)| {
-                let found = self.storage_controller.check_exists(id).is_ok();
-                found.then_some((id, upper.clone()))
-            })
-            .collect();
-        self.storage_controller
-            .update_write_frontiers(&storage_updates);
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends
