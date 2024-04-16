@@ -429,30 +429,25 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         let spine_unchanged =
             diff_since.is_empty() && diff_legacy_batches.is_empty() && structure_unchanged;
 
-        if trace.roundtrip_structure || !structure_unchanged {
-            if !spine_unchanged {
-                metrics.state.apply_spine_flattened.inc();
-                let mut flat = trace.flatten();
-                apply_diffs_single("since", diff_since, &mut flat.since)?;
-                apply_diffs_map(
-                    "legacy_batches",
-                    diff_legacy_batches
-                        .into_iter()
-                        .map(|StateFieldDiff { key, val }| StateFieldDiff {
-                            key: Arc::new(key),
-                            val,
-                        }),
-                    &mut flat.legacy_batches,
-                )?;
-                apply_diffs_map(
-                    "hollow_batches",
-                    diff_hollow_batches,
-                    &mut flat.hollow_batches,
-                )?;
-                apply_diffs_map("spine_batches", diff_spine_batches, &mut flat.spine_batches)?;
-                apply_diffs_map("merges", diff_fueling_merges, &mut flat.fueling_merges)?;
-                *trace = Trace::unflatten(flat)?;
-            }
+        if spine_unchanged {
+            return Ok(());
+        }
+
+        let mut flat = if trace.roundtrip_structure {
+            metrics.state.apply_spine_flattened.inc();
+            let mut flat = trace.flatten();
+            apply_diffs_single("since", diff_since, &mut flat.since)?;
+            apply_diffs_map(
+                "legacy_batches",
+                diff_legacy_batches
+                    .into_iter()
+                    .map(|StateFieldDiff { key, val }| StateFieldDiff {
+                        key: Arc::new(key),
+                        val,
+                    }),
+                &mut flat.legacy_batches,
+            )?;
+            Some(flat)
         } else {
             for x in diff_since {
                 match x.val {
@@ -474,6 +469,22 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                 apply_diffs_spine(metrics, diff_legacy_batches, trace)?;
                 debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
             }
+            None
+        };
+
+        if !structure_unchanged {
+            let flat = flat.get_or_insert_with(|| trace.flatten());
+            apply_diffs_map(
+                "hollow_batches",
+                diff_hollow_batches,
+                &mut flat.hollow_batches,
+            )?;
+            apply_diffs_map("spine_batches", diff_spine_batches, &mut flat.spine_batches)?;
+            apply_diffs_map("merges", diff_fueling_merges, &mut flat.fueling_merges)?;
+        }
+
+        if let Some(flat) = flat {
+            *trace = Trace::unflatten(flat)?;
         }
 
         // There's various sanity checks that this method could run (e.g. since,
