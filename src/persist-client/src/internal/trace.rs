@@ -114,11 +114,21 @@ impl<T: Timestamp + Lattice> Default for Trace<T> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ThinSpineBatch<T> {
     pub(crate) level: usize,
     pub(crate) desc: Description<T>,
     pub(crate) parts: Vec<SpineId>,
+    /// NB: this exists to validate legacy batch bounds during the migration;
+    /// it can be deleted once the roundtrip_structure flag is permanently rolled out.
+    pub(crate) descs: Vec<Description<T>>,
+}
+
+impl<T: PartialEq> PartialEq for ThinSpineBatch<T> {
+    fn eq(&self, other: &Self) -> bool {
+        // Ignore the temporary descs vector when comparing for equality.
+        (self.level, &self.desc, &self.parts).eq(&(other.level, &other.desc, &other.parts))
+    }
 }
 
 /// This is a "flattened" representation of a Trace. Goals:
@@ -178,6 +188,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                         level,
                         desc: id_batch.batch.desc.clone(),
                         parts: vec![push_hollow_batch(id_batch)],
+                        descs: vec![id_batch.batch.desc.clone()],
                     },
                 ),
                 SpineBatch::Fueled {
@@ -190,7 +201,8 @@ impl<T: Timestamp + Lattice> Trace<T> {
                     ThinSpineBatch {
                         level,
                         desc: desc.clone(),
-                        parts: parts.into_iter().map(&mut push_hollow_batch).collect(),
+                        parts: parts.iter().map(&mut push_hollow_batch).collect(),
+                        descs: parts.iter().map(|b| b.batch.desc.clone()).collect(),
                     },
                 ),
             };
