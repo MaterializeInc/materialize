@@ -239,7 +239,7 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
 ///
 /// All contained frontier fields are optional. `None` values imply that the respective frontier
 /// has not advanced and the previously reported value is still current.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FrontiersResponse<T = mz_repr::Timestamp> {
     /// The collection's new write frontier, if any.
     ///

@@ -459,7 +459,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
                 compute_state.report_compute_frontiers();
-                compute_state.log_input_frontiers();
                 compute_state.report_dropped_collections();
                 compute_state.report_operator_hydration();
             }
@@ -731,7 +730,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 //  * For dataflows we continue to use, reset to ensure we report something not
                 //    before the new `as_of` next.
                 //  * For dataflows we drop, set to the empty frontier, to ensure we don't report
-                //    anything for them. This is only needed until we implement #16275.
+                //    anything for them.
                 let retained = retain_ids.contains(&id);
                 let compaction = old_compaction.remove(&id);
                 let new_reported_frontier = match (retained, compaction) {
@@ -750,7 +749,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     }
                 };
 
-                collection.set_reported_frontier(new_reported_frontier);
+                collection.reset_reported_frontiers(new_reported_frontier);
 
                 // Sink tokens should be retained for retained dataflows, and dropped for dropped
                 // dataflows.
