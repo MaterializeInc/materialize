@@ -10,14 +10,13 @@
 //! Tracing utilities for explainable plans.
 
 use std::fmt::{Debug, Display};
-use std::sync::Arc;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::explain::ExplainContext;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
-use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
+use mz_repr::explain::tracing::{DelegateSubscriber, PlanTrace, TraceEntry};
 use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
 };
@@ -61,10 +60,10 @@ impl OptimizerTrace {
     /// The instance will only accumulate [`TraceEntry`] instances along
     /// the prefix of the given `path` if `path` is present, or it will
     /// accumulate all [`TraceEntry`] instances otherwise.
-    pub fn new(filter: Option<SmallVec<[NamedPlan; 4]>>) -> OptimizerTrace {
+    pub fn new(broken: bool, filter: Option<SmallVec<[NamedPlan; 4]>>) -> OptimizerTrace {
         let filter = || filter.clone();
-        if let Some(global_subscriber) = mz_ore::tracing::GLOBAL_SUBSCRIBER.get() {
-            let subscriber = Arc::clone(global_subscriber)
+        if broken {
+            let subscriber = DelegateSubscriber::default()
                 // Collect `explain_plan` types that are not used in the regular explain
                 // path, but are useful when instrumenting code for debugging purposes.
                 .with(PlanTrace::<String>::new(filter()))

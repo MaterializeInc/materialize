@@ -108,7 +108,11 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(stage.paths());
+        let broken_trace = self
+            .catalog()
+            .system_config()
+            .enable_broken_optimizer_trace();
+        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
         let resolved_ids = ResolvedIds(Default::default());
@@ -161,7 +165,11 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(stage.paths());
+        let broken_trace = self
+            .catalog()
+            .system_config()
+            .enable_broken_optimizer_trace();
+        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.paths());
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,

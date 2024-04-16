@@ -1930,6 +1930,13 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_broken_optimizer_trace, // TODO: remove once the OptimizerTrace memory leaks are fixed.
+        desc: "Force `OptimizerTrace::new(true, ...)` construction everywhere",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_comment,
         desc: "the COMMENT ON feature for objects",
         default: true,

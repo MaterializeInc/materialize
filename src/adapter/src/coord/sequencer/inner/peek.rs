@@ -76,11 +76,18 @@ impl Coordinator {
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
-        let explain_ctx = if ctx.session().vars().emit_plan_insights_notice() {
-            let optimizer_trace = OptimizerTrace::new(ExplainStage::PlanInsights.paths());
-            ExplainContext::PlanInsightsNotice(optimizer_trace)
-        } else {
-            ExplainContext::None
+        let explain_ctx = match ctx.session().vars().emit_plan_insights_notice() {
+            true => {
+                let broken_trace = self
+                    .catalog()
+                    .system_config()
+                    .enable_broken_optimizer_trace();
+                ExplainContext::PlanInsightsNotice(OptimizerTrace::new(
+                    broken_trace,
+                    ExplainStage::PlanInsights.paths(),
+                ))
+            }
+            false => ExplainContext::None,
         };
 
         self.execute_peek_stage(
@@ -185,7 +192,12 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(stage.paths());
+        // executing the optimizer pipeline.
+        let broken_trace = self
+            .catalog()
+            .system_config()
+            .enable_broken_optimizer_trace();
+        let optimizer_trace = OptimizerTrace::new(broken || broken_trace, stage.paths());
 
         self.execute_peek_stage(
             ctx,
