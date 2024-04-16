@@ -60,7 +60,8 @@ impl PartEncoder<()> for UnitSchemaEncoder {
 }
 
 impl PartDecoder<()> for UnitSchema {
-    fn decode(&self, _idx: usize, _val: &mut ()) {}
+    fn decode(&self, _idx: usize) {}
+    fn decode_into(&self, _idx: usize, _val: &mut ()) {}
 }
 
 impl Schema<()> for UnitSchema {
@@ -150,8 +151,14 @@ pub struct SimpleDecoder<X, T: Data> {
     decode: for<'a> fn(T::Ref<'a>, &mut X),
 }
 
-impl<X, T: Data> PartDecoder<X> for SimpleDecoder<X, T> {
-    fn decode(&self, idx: usize, val: &mut X) {
+impl<X: Default, T: Data> PartDecoder<X> for SimpleDecoder<X, T> {
+    fn decode(&self, idx: usize) -> X {
+        let mut val = X::default();
+        self.decode_into(idx, &mut val);
+        val
+    }
+
+    fn decode_into(&self, idx: usize, val: &mut X) {
         (self.decode)(ColumnGet::<T>::get(self.col.as_ref(), idx), val)
     }
 }

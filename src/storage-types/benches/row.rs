@@ -73,7 +73,7 @@ fn decode_structured(schema: &RelationDesc, part: &Part, len: usize) -> SourceDa
     let decoder = <RelationDesc as Schema<SourceData>>::decoder(schema, part.key_ref()).unwrap();
     let mut data = SourceData(Ok(Row::default()));
     for idx in 0..len {
-        decoder.decode(idx, &mut data);
+        decoder.decode_into(idx, &mut data);
         black_box(&data);
     }
     data

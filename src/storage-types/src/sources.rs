@@ -1116,7 +1116,13 @@ pub struct SourceDataDecoder {
 }
 
 impl PartDecoder<SourceData> for SourceDataDecoder {
-    fn decode(&self, idx: usize, val: &mut SourceData) {
+    fn decode(&self, idx: usize) -> SourceData {
+        let mut val = SourceData(Ok(Row::default()));
+        self.decode_into(idx, &mut val);
+        val
+    }
+
+    fn decode_into(&self, idx: usize, val: &mut SourceData) {
         let err = ColumnGet::<Option<Vec<u8>>>::get(self.err.as_ref(), idx);
         match (self.ok_validity.get(idx), err) {
             (true, None) => {

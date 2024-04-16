@@ -46,7 +46,7 @@ use crate::maelstrom::txn_list_append_single::codec_impls::{
 use crate::maelstrom::Args;
 
 /// Key of the persist shard used by [Transactor]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MaelstromKey(u64);
 
 /// Val of the persist shard used by [Transactor]

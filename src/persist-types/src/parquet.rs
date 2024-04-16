@@ -23,7 +23,7 @@ use arrow2::io::parquet::write::{
 };
 use parquet2::write::{DynIter, FileWriter, WriteOptions as ParquetWriteOptions};
 
-use crate::codec_impls::UnitSchema;
+use crate::codec_impls::{UnitSchema, UNIT_SCHEMA};
 use crate::columnar::{PartDecoder, PartEncoder, Schema};
 use crate::part::{Part, PartBuilder};
 
@@ -129,14 +129,13 @@ pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
     let part = decode_part(&mut std::io::Cursor::new(&encoded), schema, &UnitSchema)
         .map_err(|err| err.to_string())?;
 
-    let mut actual = T::default();
     assert_eq!(part.len(), 1);
     let part = part.key_ref();
-    schema.decoder(part)?.decode(0, &mut actual);
-    if &actual != val {
+    let actual = schema.decoder(part)?.decode(0);
+    if &actual != value {
         Err(format!(
             "validate_roundtrip expected {:?} but got {:?}",
-            val, actual
+            value, actual
         ))
     } else {
         Ok(())

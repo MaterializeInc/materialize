@@ -13,8 +13,8 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
-use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{PartDecoder, PartEncoder};
+use mz_persist_types::codec_impls::UNIT_SCHEMA;
+use mz_persist_types::columnar::{PartDecoder, PartEncoder, Schema};
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::Codec;
 use mz_repr::adt::date::Date;
@@ -380,7 +380,7 @@ fn bench_roundtrip(c: &mut Criterion) {
 
         b.iter(|| {
             for idx in 0..rows.len() {
-                decoder.decode(idx, &mut row);
+                decoder.decode_into(idx, &mut row);
                 // We create a packer which clears the row.
                 let _ = row.packer();
             }
