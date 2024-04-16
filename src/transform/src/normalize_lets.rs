@@ -26,14 +26,18 @@
 
 use mz_expr::{visit::Visit, MirRelationExpr};
 use mz_ore::{id_gen::IdGen, stack::RecursionLimitError};
+use mz_repr::optimize::OptimizerFeatures;
 
 use crate::TransformCtx;
 
 pub use renumbering::renumber_bindings;
 
 /// Normalize `Let` and `LetRec` structure.
-pub fn normalize_lets(expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-    NormalizeLets { inline_mfp: false }.action(expr)
+pub fn normalize_lets(
+    expr: &mut MirRelationExpr,
+    features: &OptimizerFeatures,
+) -> Result<(), crate::TransformError> {
+    NormalizeLets::new(false).action(expr, features)
 }
 
 /// Install replace certain `Get` operators with their `Let` value.
@@ -67,24 +71,15 @@ impl crate::Transform for NormalizeLets {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _ctx: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let result = self.transform_without_trace(relation);
+        let result = self.action(relation, ctx.features);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
 }
 
 impl NormalizeLets {
-    /// Performs the `NormalizeLets` transformation without tracing the result.
-    pub fn transform_without_trace(
-        &self,
-        relation: &mut MirRelationExpr,
-    ) -> Result<(), crate::TransformError> {
-        self.action(relation)?;
-        Ok(())
-    }
-
     /// Normalize `Let` and `LetRec` bindings in `relation`.
     ///
     /// Mechanically, `action` first renumbers all bindings, erroring if any shadowing is encountered.
@@ -95,7 +90,11 @@ impl NormalizeLets {
     /// but updating nullability and keys.
     ///
     /// We then perform a final renumbering.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+    pub fn action(
+        &self,
+        relation: &mut MirRelationExpr,
+        features: &OptimizerFeatures,
+    ) -> Result<(), crate::TransformError> {
         // Record whether the relation was initially recursive, to confirm that we do not introduce
         // recursion to a non-recursive expression.
         let was_recursive = relation.is_recursive();
@@ -120,7 +119,7 @@ impl NormalizeLets {
 
         // Return to letrec-major form to refresh types.
         let_motion::promote_let_rec(relation);
-        support::refresh_types(relation)?;
+        support::refresh_types(relation, features)?;
 
         // Renumber bindings for good measure.
         // Ideally we could skip when `action` is a no-op, but hard to thread that through at the moment.
@@ -197,7 +196,10 @@ mod support {
 
     use std::collections::BTreeMap;
 
+    use itertools::Itertools;
+
     use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
+    use mz_repr::optimize::OptimizerFeatures;
 
     pub(super) fn replace_bindings_from_map(
         map: BTreeMap<LocalId, (MirRelationExpr, Option<LetRecLimit>)>,
@@ -247,15 +249,53 @@ mod support {
     /// This method errors if the scalar type information has changed (number of columns, or types).
     /// It only refreshes the nullability and unique key information. As this information can regress,
     /// we do not error if the type weakens, even though that may be something we want to look into.
-    pub(super) fn refresh_types(expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+    ///
+    /// The method relies on the `analysis::{UniqueKeys, RelationType}` analyses to improve its type
+    /// information for `LetRec` stages.
+    pub(super) fn refresh_types(
+        expr: &mut MirRelationExpr,
+        features: &OptimizerFeatures,
+    ) -> Result<(), crate::TransformError> {
         let mut types = BTreeMap::new();
-        refresh_types_helper(expr, &mut types)
+
+        if features.enable_letrec_fixpoint_analysis {
+            // Assemble type information once for the whole expression.
+            use crate::analysis::{DerivedBuilder, RelationType, UniqueKeys};
+            let mut builder = DerivedBuilder::new(features);
+            builder.require::<RelationType>();
+            builder.require::<UniqueKeys>();
+            let derived = builder.visit(expr);
+            let derived_view = derived.as_view();
+
+            let mut todo = vec![(&*expr, derived_view)];
+            while let Some((expr, view)) = todo.pop() {
+                if let MirRelationExpr::LetRec { ids, .. } = expr {
+                    // The `skip(1)` skips the `body` child, and is followed by binding children.
+                    for (id, view) in ids.iter().rev().zip_eq(view.children_rev().skip(1)) {
+                        let cols = view
+                            .value::<RelationType>()
+                            .expect("RelationType required")
+                            .clone()
+                            .expect("Expression not well typed");
+                        let keys = view
+                            .value::<UniqueKeys>()
+                            .expect("UniqueKeys required")
+                            .clone();
+                        types.insert(*id, mz_repr::RelationType::new(cols).with_keys(keys));
+                    }
+                }
+                todo.extend(expr.children().rev().zip_eq(view.children_rev()));
+            }
+        }
+
+        refresh_types_helper(expr, &mut types, features)
     }
 
     /// Provided some existing type refreshment information, continue
     fn refresh_types_helper(
         expr: &mut MirRelationExpr,
         types: &mut BTreeMap<LocalId, mz_repr::RelationType>,
+        features: &OptimizerFeatures,
     ) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::LetRec {
             ids,
@@ -265,12 +305,35 @@ mod support {
         } = expr
         {
             for (id, value) in ids.iter().zip(values.iter_mut()) {
-                refresh_types_helper(value, types)?;
-                let typ = value.typ();
-                let prior = types.insert(*id, typ);
-                assert!(prior.is_none());
+                refresh_types_helper(value, types, features)?;
+                if features.enable_letrec_fixpoint_analysis {
+                    let mut typ = value.typ();
+                    if let Some(prior) = types.remove(id) {
+                        // TODO: Assert some relationship between `typ` and `prior`.
+                        for (new, old) in typ.column_types.iter_mut().zip(prior.column_types.iter())
+                        {
+                            new.nullable = new.nullable && old.nullable
+                        }
+                        for key in prior.keys.iter() {
+                            // antichain_insert(&mut typ.keys, key.clone());
+                            let into = &mut typ.keys;
+                            let item = key.clone();
+                            if into.iter().all(|key| !key.iter().all(|k| item.contains(k))) {
+                                into.retain(|key| !key.iter().all(|k| item.contains(k)));
+                                into.push(item);
+                            }
+                        }
+                    } else {
+                        panic!("`types` improperly prepared");
+                    }
+                    types.insert(*id, typ);
+                } else {
+                    let typ = value.typ();
+                    let prior = types.insert(*id, typ);
+                    assert!(prior.is_none());
+                }
             }
-            refresh_types_helper(body, types)?;
+            refresh_types_helper(body, types, features)?;
             // Not strictly necessary, but good hygiene.
             for id in ids.iter() {
                 types.remove(id);

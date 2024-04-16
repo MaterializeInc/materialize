@@ -60,7 +60,8 @@ impl<'a> Explainable<'a, MirRelationExpr> {
         // normalize the representation of nested Let bindings
         // and enforce sequential Let binding IDs
         if !context.config.raw_plans {
-            normalize_lets(self.0).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
+            normalize_lets(self.0, context.features)
+                .map_err(|e| ExplainError::UnknownError(e.to_string()))?;
         }
 
         Ok(ExplainSinglePlan {
@@ -111,7 +112,8 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
                 // normalize the representation of nested Let bindings
                 // and enforce sequential Let binding IDs
                 if !context.config.raw_plans {
-                    normalize_lets(plan).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
+                    normalize_lets(plan, context.features)
+                        .map_err(|e| ExplainError::UnknownError(e.to_string()))?;
                 }
 
                 let public_id = export_ids

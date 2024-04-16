@@ -17,6 +17,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::soft_panic_or_log;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::Datum;
 use mz_repr::Row;
@@ -231,22 +232,28 @@ impl Coordinator {
             );
         };
 
-        let target_cluster = Some(self.catalog().get_cluster(view.cluster_id).name.as_str());
+        let target_cluster = self.catalog().get_cluster(view.cluster_id);
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features())
+            .override_from(&config.features);
 
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
                 view.raw_expr.clone(),
                 format,
                 &config,
+                &features,
                 &self.catalog().for_session(ctx.session()),
-                target_cluster,
+                Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::LocalPlan => explain_plan(
                 view.optimized_expr.as_inner().clone(),
                 format,
                 &config,
+                &features,
                 &self.catalog().for_session(ctx.session()),
-                target_cluster,
+                Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
@@ -257,8 +264,9 @@ impl Coordinator {
                     plan,
                     format,
                     &config,
+                    &features,
                     &self.catalog().for_session(ctx.session()),
-                    target_cluster,
+                    Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
@@ -271,8 +279,9 @@ impl Coordinator {
                     plan,
                     format,
                     &config,
+                    &features,
                     &self.catalog().for_session(ctx.session()),
-                    target_cluster,
+                    Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
@@ -825,14 +834,19 @@ impl Coordinator {
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
-        let target_cluster = Some(self.catalog().get_cluster(cluster_id).name.as_str());
+        let target_cluster = self.catalog().get_cluster(cluster_id);
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features())
+            .override_from(&config.features);
 
         let rows = optimizer_trace.into_rows(
             format,
             &config,
+            &features,
             &expr_humanizer,
             None,
-            target_cluster,
+            Some(target_cluster.name.as_str()),
             df_meta,
             stage,
             plan::ExplaineeStatementKind::CreateMaterializedView,

@@ -1790,6 +1790,7 @@ pub enum ClusterFeatureName {
     EnableEagerDeltaJoins,
     EnableEquivalencePropagation,
     EnableVariadicLeftJoinLowering,
+    EnableLetrecFixpointAnalysis,
 }
 
 impl WithOptionName for ClusterFeatureName {
@@ -1800,11 +1801,12 @@ impl WithOptionName for ClusterFeatureName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            ClusterFeatureName::ReoptimizeImportedViews
-            | ClusterFeatureName::EnableNewOuterJoinLowering
-            | ClusterFeatureName::EnableEagerDeltaJoins
-            | ClusterFeatureName::EnableEquivalencePropagation
-            | ClusterFeatureName::EnableVariadicLeftJoinLowering => false,
+            Self::ReoptimizeImportedViews
+            | Self::EnableNewOuterJoinLowering
+            | Self::EnableEagerDeltaJoins
+            | Self::EnableEquivalencePropagation
+            | Self::EnableVariadicLeftJoinLowering
+            | Self::EnableLetrecFixpointAnalysis => false,
         }
     }
 }
@@ -3225,6 +3227,7 @@ pub enum ExplainPlanOptionName {
     EnableEagerDeltaJoins,
     EnableEquivalencePropagation,
     EnableVariadicLeftJoinLowering,
+    EnableLetrecFixpointAnalysis,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -3258,7 +3261,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
             | Self::EnableEquivalencePropagation
-            | Self::EnableVariadicLeftJoinLowering => false,
+            | Self::EnableVariadicLeftJoinLowering
+            | Self::EnableLetrecFixpointAnalysis => false,
         }
     }
 }

@@ -900,6 +900,17 @@ impl MapFilterProject {
             // We have an annoying pattern of mapping literals that already exist as columns (by filters).
             // Try to identify this pattern, of a map that introduces an expression equated to a prior column,
             // and then replace the mapped expression by a column reference.
+            //
+            // We think this is due to `LiteralLifting`, and we might investigate removing the introduciton in
+            // the first place. The tell-tale that we see when we fix is a diff that look likes
+            //
+            // - Project (#0, #2)
+            // -   Filter (#1 = 1)
+            // -     Map (1)
+            // -       Get l0
+            // + Filter (#1 = 1)
+            // +   Get l0
+            //
             for (index, expr) in self.expressions.iter_mut().enumerate() {
                 // If `expr` matches a filter equating it to a column < index + input_arity, rewrite it
                 for (_, predicate) in self.predicates.iter() {

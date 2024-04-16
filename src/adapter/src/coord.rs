@@ -97,7 +97,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
@@ -550,9 +550,7 @@ pub struct PeekStageCopyTo {
 #[derive(Debug)]
 pub struct PeekStageExplainPlan {
     validity: PlanValidity,
-    select_id: GlobalId,
-    finishing: RowSetFinishing,
-    target_cluster_id: ComputeInstanceId,
+    optimizer: optimize::peek::Optimizer,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
 }

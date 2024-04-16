@@ -21,7 +21,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, task};
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::optimize::OverrideFrom;
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, GlobalId, Row, RowArena, Timestamp};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::{CatalogCluster, SessionCatalog};
@@ -611,9 +611,7 @@ impl Coordinator {
                                 let (_, df_meta, _) = global_lir_plan.unapply();
                                 PeekStage::ExplainPlan(PeekStageExplainPlan {
                                     validity,
-                                    select_id: optimizer.select_id(),
-                                    finishing: optimizer.finishing().clone(),
-                                    target_cluster_id: optimizer.cluster_id(),
+                                    optimizer,
                                     df_meta,
                                     explain_ctx,
                                 })
@@ -692,9 +690,7 @@ impl Coordinator {
                             tracing::error!("error while handling EXPLAIN statement: {}", err);
                             PeekStage::ExplainPlan(PeekStageExplainPlan {
                                 validity,
-                                select_id: optimizer.select_id(),
-                                finishing: optimizer.finishing().clone(),
-                                target_cluster_id: optimizer.cluster_id(),
+                                optimizer,
                                 df_meta: Default::default(),
                                 explain_ctx,
                             })
@@ -805,18 +801,17 @@ impl Coordinator {
 
         self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
 
-        let target_cluster = Some(
-            self.catalog()
-                .get_cluster(optimizer.cluster_id())
-                .name
-                .as_str(),
-        );
+        let target_cluster = self.catalog().get_cluster(optimizer.cluster_id());
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features());
 
         if let Some(trace) = plan_insights_optimizer_trace {
             let insights = trace.into_plan_insights(
+                &features,
                 &self.catalog().for_session(session),
                 Some(plan.finishing),
-                target_cluster,
+                Some(target_cluster.name.as_str()),
                 df_meta,
             )?;
             session.add_notice(AdapterNotice::PlanInsights(insights));
@@ -943,9 +938,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         PeekStageExplainPlan {
-            select_id,
-            finishing,
-            target_cluster_id,
+            optimizer,
             df_meta,
             explain_ctx:
                 ExplainPlanContext {
@@ -965,7 +958,7 @@ impl Coordinator {
         let session_catalog = self.catalog().for_session(ctx.session());
         let expr_humanizer = {
             let transient_items = btreemap! {
-                select_id => TransientItem::new(
+                optimizer.select_id() => TransientItem::new(
                     Some(vec![GlobalId::Explain.to_string()]),
                     Some(desc.iter_names().map(|c| c.to_string()).collect()),
                 )
@@ -973,20 +966,22 @@ impl Coordinator {
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
-        let finishing = if finishing.is_trivial(desc.arity()) {
+        let finishing = if optimizer.finishing().is_trivial(desc.arity()) {
             None
         } else {
-            Some(finishing)
+            Some(optimizer.finishing().clone())
         };
 
-        let target_cluster = Some(self.catalog().get_cluster(target_cluster_id).name.as_str());
+        let target_cluster = self.catalog().get_cluster(optimizer.cluster_id());
+        let features = optimizer.config().features.clone();
 
         let rows = optimizer_trace.into_rows(
             format,
             &config,
+            &features,
             &expr_humanizer,
             finishing,
-            target_cluster,
+            Some(target_cluster.name.as_str()),
             df_meta,
             stage,
             plan::ExplaineeStatementKind::Select,

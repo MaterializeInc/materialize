@@ -395,41 +395,42 @@ EOF
 
 # Manually written idempotent semijoin.
 # The resulting plan should have 1 join with 2 inputs.
-# Interestingly, SemijoinIdempotence is not able to do its work here yet, because our key inference is not so smart for
-# WMR: we don't propagate the key created by the DISTINCT to the recursive Get
-# (https://github.com/MaterializeInc/materialize/issues/18553). However, RedundantJoin steps in, and does the work for
-# us. (But see later a similar situation, but with a LEFT JOIN, where RedundantJoin is not able to save the day.)
+# Here, SemijoinIdempotence relies on the keys introduced by the `select distinct on` being propagated through the
+# recursive Get. Note that in this test even if SemijoinIdempotence wouldn't work, RedundantJoin would step in. (But
+# see later a similar situation, but with a LEFT JOIN, where RedundantJoin wouldn't be able to eliminate a join.)
 query T multiline
 explain with(keys)
 with mutually recursive
   c0(a int4, b int8, u text, key int4) as (
-    select * from (
-      with keys as (
-        select distinct foo.a from foo, (select a, u from c0) as likebar where foo.a = likebar.a
+    select distinct on (1) * from (
+      select * from (
+        with keys as (
+          select distinct foo.a from foo, (select a, u from c0) as likebar where foo.a = likebar.a
+        )
+        select * from foo, keys where foo.a = keys.a
       )
-      select * from foo, keys where foo.a = keys.a
+      union
+      select * from c0
     )
-    union
-    select * from c0
   )
 select * from c0;
 ----
 Explained Query:
-  Return // { keys: "([0, 1, 2, 3])" }
-    Get l0 // { keys: "([0, 1, 2, 3])" }
+  Return // { keys: "([0], [0, 1, 2, 3])" }
+    Get l0 // { keys: "([0], [0, 1, 2, 3])" }
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
-        Union // { keys: "()" }
-          Project (#0..=#2, #0) // { keys: "()" }
-            Join on=(#0 = #3) type=differential // { keys: "()" }
-              ArrangeBy keys=[[#0]] // { keys: "()" }
-                ReadStorage materialize.public.foo // { keys: "()" }
-              ArrangeBy keys=[[#0]] // { keys: "([0])" }
-                Distinct project=[#0] // { keys: "([0])" }
-                  Project (#0) // { keys: "()" }
-                    Get l0 // { keys: "()" }
-          Get l0 // { keys: "()" }
+      TopK group_by=[#0] limit=1 // { keys: "([0], [0, 1, 2, 3])" }
+        Distinct project=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
+          Union // { keys: "()" }
+            Project (#0..=#2, #0) // { keys: "()" }
+              Join on=(#0 = #3) type=differential // { keys: "()" }
+                ArrangeBy keys=[[#0]] // { keys: "()" }
+                  ReadStorage materialize.public.foo // { keys: "()" }
+                ArrangeBy keys=[[#0]] // { keys: "([0])" }
+                  Project (#0) // { keys: "([0])" }
+                    Get l0 // { keys: "([0])" }
+            Get l0 // { keys: "([0])" }
 
 Target cluster: quickstart
 
@@ -599,31 +600,31 @@ Explained Query:
     cte l2 =
       Distinct project=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
         Union // { keys: "()" }
-          Project (#0..=#3) // { keys: "()" }
-            Join on=(#0 = #4) type=differential // { keys: "()" }
-              ArrangeBy keys=[[#0]] // { keys: "()" }
-                Get l2 // { keys: "()" }
+          Project (#0..=#3) // { keys: "([0, 1, 2, 3])" }
+            Join on=(#0 = #4) type=differential // { keys: "([0, 1, 2, 3])" }
+              ArrangeBy keys=[[#0]] // { keys: "([0, 1, 2, 3])" }
+                Get l2 // { keys: "([0, 1, 2, 3])" }
               ArrangeBy keys=[[#0]] // { keys: "([0])" }
                 Get l0 // { keys: "([0])" }
-          Get l2 // { keys: "()" }
+          Get l2 // { keys: "([0, 1, 2, 3])" }
     cte l1 =
       Distinct project=[#0, #1] // { keys: "([0, 1])" }
         Union // { keys: "()" }
           ReadStorage materialize.public.bar // { keys: "([0])" }
           Project (#0, #2) // { keys: "()" }
-            Get l2 // { keys: "()" }
+            Get l2 // { keys: "([0, 1, 2, 3])" }
     cte l0 =
       Project (#0) // { keys: "([0])" }
         Join on=(#0 = #1) type=differential // { keys: "([0])" }
           ArrangeBy keys=[[#0]] // { keys: "([0])" }
             Distinct project=[#0] // { keys: "([0])" }
               Project (#0) // { keys: "()" }
-                Get l2 // { keys: "()" }
+                Get l2 // { keys: "([0, 1, 2, 3])" }
           ArrangeBy keys=[[#0]] // { keys: "([0])" }
             TopK group_by=[#0] limit=1 // { keys: "([0])" }
               Project (#0) // { keys: "()" }
-                Filter (#0) IS NOT NULL // { keys: "()" }
-                  Get l1 // { keys: "()" }
+                Filter (#0) IS NOT NULL // { keys: "([0, 1])" }
+                  Get l1 // { keys: "([0, 1])" }
 
 Target cluster: quickstart
 
@@ -703,52 +704,49 @@ Target cluster: quickstart
 EOF
 
 # Test that LEFT JOIN inside WMR is planned with only one join.
-# Doesn't work yet, because our key inference is not so smart for WMR: we don't propagate the key created by the
-# DISTINCT to the recursive Get (https://github.com/MaterializeInc/materialize/issues/18553).
+# Here, SemijoinIdempotence relies on the keys introduced by the `select distinct on` being propagated through the
+# recursive Get.
 query T multiline
 explain with(keys)
 with mutually recursive
   c0(a int4, b int8, u text, a2 int4, v2 text) as (
-    select foo_raw.a, foo_raw.b, foo_raw.u, c0.a, c0.u from
-    foo_raw left join c0 on foo_raw.a = c0.a
-    union
-    select *, a, u from foo_raw
+    select distinct on (1) * from (
+      select foo_raw.a, foo_raw.b, foo_raw.u, c0.a, c0.u from
+      foo_raw left join c0 on foo_raw.a = c0.a
+      union
+      select *, a, u from foo_raw
+    )
   )
 select * from c0
 ----
 Explained Query:
-  Return // { keys: "([0, 1, 2, 3, 4])" }
-    Get l1 // { keys: "([0, 1, 2, 3, 4])" }
+  Return // { keys: "([0], [0, 1, 2, 3, 4])" }
+    Get l1 // { keys: "([0], [0, 1, 2, 3, 4])" }
   With Mutually Recursive
     cte l1 =
-      Distinct project=[#0..=#4] // { keys: "([0, 1, 2, 3, 4])" }
-        Union // { keys: "()" }
-          Map (null, null) // { keys: "()" }
-            Union // { keys: "()" }
-              Negate // { keys: "()" }
-                Project (#0..=#2) // { keys: "()" }
-                  Join on=(#0 = #3) type=differential // { keys: "()" }
-                    ArrangeBy keys=[[#0]] // { keys: "()" }
-                      ReadStorage materialize.public.foo_raw // { keys: "()" }
-                    ArrangeBy keys=[[#0]] // { keys: "([0])" }
-                      Distinct project=[#0] // { keys: "([0])" }
-                        Project (#0) // { keys: "()" }
-                          Get l0 // { keys: "()" }
+      TopK group_by=[#0] limit=1 // { keys: "([0], [0, 1, 2, 3, 4])" }
+        Distinct project=[#0..=#4] // { keys: "([0, 1, 2, 3, 4])" }
+          Union // { keys: "()" }
+            Map (null, null) // { keys: "()" }
+              Union // { keys: "()" }
+                Negate // { keys: "()" }
+                  Project (#0..=#2) // { keys: "()" }
+                    Get l0 // { keys: "()" }
+                ReadStorage materialize.public.foo_raw // { keys: "()" }
+            Project (#0..=#2, #0, #3) // { keys: "()" }
+              Get l0 // { keys: "()" }
+            Project (#0..=#2, #0, #2) // { keys: "()" }
               ReadStorage materialize.public.foo_raw // { keys: "()" }
-          Project (#0..=#2, #0, #3) // { keys: "()" }
-            Get l0 // { keys: "()" }
-          Project (#0..=#2, #0, #2) // { keys: "()" }
-            ReadStorage materialize.public.foo_raw // { keys: "()" }
     cte l0 =
       Project (#0..=#2, #4) // { keys: "()" }
         Join on=(#0 = #3) type=differential // { keys: "()" }
           ArrangeBy keys=[[#0]] // { keys: "()" }
             Filter (#0) IS NOT NULL // { keys: "()" }
               ReadStorage materialize.public.foo_raw // { keys: "()" }
-          ArrangeBy keys=[[#0]] // { keys: "()" }
-            Project (#0, #2) // { keys: "()" }
-              Filter (#0) IS NOT NULL // { keys: "()" }
-                Get l1 // { keys: "()" }
+          ArrangeBy keys=[[#0]] // { keys: "([0])" }
+            Project (#0, #2) // { keys: "([0])" }
+              Filter (#0) IS NOT NULL // { keys: "([0])" }
+                Get l1 // { keys: "([0])" }
 
 Target cluster: quickstart
 
@@ -756,7 +754,7 @@ EOF
 
 # Test that LEFT JOIN inside WMR is planned with only one join.
 # Similar to the previous test, but the recursive Get is at the other input. This means that the input that should have
-# a known key is the static one, for which key inference works fine.
+# a known key is the static one, for which we don't need to go propagate a key through a recursive Get.
 query T multiline
 explain
 with mutually recursive

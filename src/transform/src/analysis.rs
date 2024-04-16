@@ -24,7 +24,7 @@ pub use unique_keys::UniqueKeys;
 /// An analysis that can be applied bottom-up to a `MirRelationExpr`.
 pub trait Analysis: 'static {
     /// The type of value this analysis associates with an expression.
-    type Value;
+    type Value: std::fmt::Debug;
     /// Announce any depencies this analysis has on other analyses.
     ///
     /// The method should invoke `builder.require::<Foo>()` for each other
@@ -38,9 +38,32 @@ pub trait Analysis: 'static {
     /// The analysis results for `Self` can only be found in `results`, and are not
     /// available in `depends`.
     ///
+    /// The `index` indicates the post-order index for the expression, for use in finding
+    /// the corresponding information in `results` and `depends`.
+    ///
     /// The return result will be associated with this expression for this analysis,
     /// and the analyses will continue.
-    fn derive(expr: &MirRelationExpr, results: &[Self::Value], depends: &Derived) -> Self::Value;
+    fn derive(
+        expr: &MirRelationExpr,
+        index: usize,
+        results: &[Self::Value],
+        depends: &Derived,
+    ) -> Self::Value;
+
+    /// When available, provide a lattice interface to allow optimistic recursion.
+    ///
+    /// Providing a non-`None` output indicates that the analysis intends re-iteration.
+    fn lattice() -> Option<Box<dyn Lattice<Self::Value>>> {
+        None
+    }
+}
+
+/// Lattice methods for repeated analysis
+pub trait Lattice<T> {
+    /// An element greater than all other elements.
+    fn top(&self) -> T;
+    /// Set `a` to the greatest lower bound of `a` and `b`, and indicate if `a` changed as a result.
+    fn meet_assign(&self, a: &mut T, b: T) -> bool;
 }
 
 /// Types common across multiple analyses
@@ -51,6 +74,7 @@ pub mod common {
 
     use mz_expr::LocalId;
     use mz_expr::MirRelationExpr;
+    use mz_repr::optimize::OptimizerFeatures;
 
     use super::subtree::SubtreeSize;
     use super::Analysis;
@@ -221,22 +245,25 @@ pub mod common {
 
     /// A builder wrapper to accumulate announced dependencies and construct default state.
     #[allow(missing_debug_implementations)]
-    pub struct DerivedBuilder {
+    pub struct DerivedBuilder<'a> {
         result: Derived,
+        features: &'a OptimizerFeatures,
     }
 
-    impl Default for DerivedBuilder {
-        fn default() -> Self {
+    impl<'a> DerivedBuilder<'a> {
+        /// Create a new [`DerivedBuilder`] parameterized by [`OptimizerFeatures`].
+        pub fn new(features: &'a OptimizerFeatures) -> Self {
             // The default builder should include `SubtreeSize` to facilitate navigation.
             let mut builder = DerivedBuilder {
                 result: Derived::default(),
+                features,
             };
             builder.require::<SubtreeSize>();
             builder
         }
     }
 
-    impl DerivedBuilder {
+    impl<'a> DerivedBuilder<'a> {
         /// Announces a dependence on an analysis `A`.
         ///
         /// This ensures that `A` will be performed, and before any analysis that
@@ -259,6 +286,8 @@ pub mod common {
                     type_id,
                     Box::new(Bundle::<A> {
                         results: Vec::new(),
+                        fuel: 100,
+                        allow_optimistic: self.features.enable_letrec_fixpoint_analysis,
                     }),
                 );
                 A::announce_dependencies(self);
@@ -267,9 +296,7 @@ pub mod common {
             }
         }
         /// Complete the building: perform analyses and return the resulting `Derivation`.
-        pub fn visit(self, expr: &MirRelationExpr) -> Derived {
-            let mut result = self.result;
-
+        pub fn visit(mut self, expr: &MirRelationExpr) -> Derived {
             // A stack of expressions to process (`Ok`) and let bindings to fill (`Err`).
             let mut todo = vec![Ok(expr)];
             // Expressions in reverse post-order: each expression, followed by its children in reverse order.
@@ -303,33 +330,36 @@ pub mod common {
                     // A local id to install
                     Err(local_id) => {
                         // Capture the *remaining* work, which we'll need to flip around.
-                        let prior = result.bindings.insert(local_id, rev_post_order.len());
+                        let prior = self.result.bindings.insert(local_id, rev_post_order.len());
                         assert!(prior.is_none(), "Shadowing not allowed");
                     }
                 }
             }
             // Flip the offsets now that we know a length.
-            for value in result.bindings.values_mut() {
+            for value in self.result.bindings.values_mut() {
                 *value = rev_post_order.len() - *value - 1;
             }
             // Visit the pre-order in reverse order: post-order.
-            while let Some(expr) = rev_post_order.pop() {
-                // Apply each analysis to `expr` in order.
-                for id in result.order.iter() {
-                    if let Some(mut bundle) = result.analyses.remove(id) {
-                        bundle.analyse(expr, &result);
-                        result.analyses.insert(*id, bundle);
-                    }
+            rev_post_order.reverse();
+
+            // Apply each analysis to `expr` in order.
+            for id in self.result.order.iter() {
+                if let Some(mut bundle) = self.result.analyses.remove(id) {
+                    bundle.analyse(&rev_post_order[..], &self.result);
+                    self.result.analyses.insert(*id, bundle);
                 }
             }
 
-            result
+            self.result
         }
     }
 
     /// An abstraction for an analysis and associated state.
     trait AnalysisBundle: Any {
-        fn analyse(&mut self, expr: &MirRelationExpr, depends: &Derived);
+        /// Populates internal state for all of `exprs`.
+        ///
+        /// Result indicates whether new information was produced for `exprs.last()`.
+        fn analyse(&mut self, exprs: &[&MirRelationExpr], depends: &Derived) -> bool;
         /// Upcasts `self` to a `&dyn Any`.
         ///
         /// NOTE: This is required until <https://github.com/rust-lang/rfcs/issues/2765> is fixed
@@ -339,15 +369,108 @@ pub mod common {
     /// A wrapper for analysis state.
     struct Bundle<A: Analysis> {
         results: Vec<A::Value>,
+        /// Counts down with each `LetRec` re-iteration, to avoid unbounded effort.
+        /// Should it reach zero, the analysis should discard its results and restart as if pessimistic.
+        fuel: usize,
+        /// Allow optimistic analysis for `A` (otherwise we always do pesimistic
+        /// analysis, even if a [`crate::analysis::Lattice`] is available for `A`).
+        allow_optimistic: bool,
     }
 
     impl<A: Analysis> AnalysisBundle for Bundle<A> {
-        fn analyse(&mut self, expr: &MirRelationExpr, depends: &Derived) {
-            let value = A::derive(expr, &self.results[..], depends);
-            self.results.push(value);
+        fn analyse(&mut self, exprs: &[&MirRelationExpr], depends: &Derived) -> bool {
+            self.results.clear();
+            // Attempt optimistic analysis, and if that fails go pessimistic.
+            let update = A::lattice()
+                .filter(|_| self.allow_optimistic)
+                .and_then(|lattice| {
+                    for _ in exprs.iter() {
+                        self.results.push(lattice.top());
+                    }
+                    self.analyse_optimistic(exprs, 0, exprs.len(), depends, &*lattice)
+                        .ok()
+                })
+                .unwrap_or_else(|| {
+                    self.results.clear();
+                    self.analyse_pessimistic(exprs, depends)
+                });
+            assert_eq!(self.results.len(), exprs.len());
+            update
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self
+        }
+    }
+
+    impl<A: Analysis> Bundle<A> {
+        /// Analysis that starts optimistically but is only correct at a fixed point.
+        ///
+        /// Will fail out to `analyse_pessimistic` if the lattice is missing, or `self.fuel` is exhausted.
+        fn analyse_optimistic(
+            &mut self,
+            exprs: &[&MirRelationExpr],
+            lower: usize,
+            upper: usize,
+            depends: &Derived,
+            lattice: &dyn crate::analysis::Lattice<A::Value>,
+        ) -> Result<bool, ()> {
+            if let MirRelationExpr::LetRec { .. } = &exprs[upper - 1] {
+                let sizes = depends
+                    .results::<SubtreeSize>()
+                    .expect("SubtreeSize required");
+                let mut values = depends
+                    .children_of_rev(upper - 1, exprs[upper - 1].children().count())
+                    .skip(1)
+                    .collect::<Vec<_>>();
+                values.reverse();
+
+                // Visit each child, and track whether any new information emerges.
+                // Repeat, as long as new information continues to emerge.
+                let mut new_information = true;
+                while new_information {
+                    // Bail out if we have done too many `LetRec` passes in this analysis.
+                    self.fuel -= 1;
+                    if self.fuel == 0 {
+                        return Err(());
+                    }
+
+                    new_information = false;
+                    // Visit non-body children (values).
+                    for child in values.iter() {
+                        new_information = self.analyse_optimistic(
+                            exprs,
+                            *child + 1 - sizes[*child],
+                            *child + 1,
+                            depends,
+                            lattice,
+                        )? || new_information;
+                    }
+                }
+                // Visit `body` and then the `LetRec` and return whether it evolved.
+                let body = upper - 2;
+                self.analyse_optimistic(exprs, body + 1 - sizes[body], body + 1, depends, lattice)?;
+                let value = A::derive(exprs[upper - 1], upper - 1, &self.results[..], depends);
+                Ok(lattice.meet_assign(&mut self.results[upper - 1], value))
+            } else {
+                // If not a `LetRec`, we still want to revisit results and update them with meet.
+                let mut changed = false;
+                for index in lower..upper {
+                    let value = A::derive(exprs[index], index, &self.results[..], depends);
+                    changed = lattice.meet_assign(&mut self.results[index], value);
+                }
+                Ok(changed)
+            }
+        }
+
+        /// Analysis that starts conservatively and can be stopped at any point.
+        fn analyse_pessimistic(&mut self, exprs: &[&MirRelationExpr], depends: &Derived) -> bool {
+            // TODO: consider making iterative, from some `bottom()` up using `join_assign()`.
+            self.results.clear();
+            for (index, expr) in exprs.iter().enumerate() {
+                self.results
+                    .push(A::derive(expr, index, &self.results[..], depends));
+            }
+            true
         }
     }
 }
@@ -370,16 +493,16 @@ pub mod subtree {
 
         fn derive(
             expr: &MirRelationExpr,
+            index: usize,
             results: &[Self::Value],
             _depends: &Derived,
         ) -> Self::Value {
             match expr {
                 MirRelationExpr::Constant { .. } | MirRelationExpr::Get { .. } => 1,
                 _ => {
-                    let n = results.len();
                     let mut offset = 1;
                     for _ in expr.children() {
-                        offset += results[n - offset];
+                        offset += results[index - offset];
                     }
                     offset
                 }
@@ -403,12 +526,12 @@ mod arity {
 
         fn derive(
             expr: &MirRelationExpr,
+            index: usize,
             results: &[Self::Value],
             depends: &Derived,
         ) -> Self::Value {
-            let position = results.len();
             let mut offsets = depends
-                .children_of_rev(position, expr.children().count())
+                .children_of_rev(index, expr.children().count())
                 .map(|child| results[child])
                 .collect::<Vec<_>>();
             offsets.reverse();
@@ -433,12 +556,12 @@ mod types {
 
         fn derive(
             expr: &MirRelationExpr,
+            index: usize,
             results: &[Self::Value],
             depends: &Derived,
         ) -> Self::Value {
-            let position = results.len();
             let offsets = depends
-                .children_of_rev(position, expr.children().count())
+                .children_of_rev(index, expr.children().count())
                 .map(|child| &results[child])
                 .collect::<Vec<_>>();
 
@@ -457,7 +580,7 @@ mod types {
 mod unique_keys {
 
     use super::arity::Arity;
-    use super::{Analysis, Derived, DerivedBuilder};
+    use super::{Analysis, Derived, DerivedBuilder, Lattice};
     use mz_expr::MirRelationExpr;
 
     /// Analysis that determines the unique keys of relation expressions.
@@ -480,21 +603,87 @@ mod unique_keys {
 
         fn derive(
             expr: &MirRelationExpr,
+            index: usize,
             results: &[Self::Value],
             depends: &Derived,
         ) -> Self::Value {
-            let position = results.len();
             let mut offsets = depends
-                .children_of_rev(position, expr.children().count())
+                .children_of_rev(index, expr.children().count())
                 .collect::<Vec<_>>();
             offsets.reverse();
 
-            let arity = depends.results::<Arity>().unwrap();
+            match expr {
+                MirRelationExpr::Get {
+                    id: mz_expr::Id::Local(i),
+                    typ,
+                    ..
+                } => {
+                    // We have information from `typ` and from the analysis.
+                    // We should "join" them, unioning and reducing the keys.
+                    let mut keys = typ.keys.clone();
+                    if let Some(o) = depends.bindings().get(i) {
+                        if let Some(ks) = results.get(*o) {
+                            for k in ks.iter() {
+                                antichain_insert(&mut keys, k.clone());
+                            }
+                            keys.extend(ks.iter().cloned());
+                            keys.sort();
+                            keys.dedup();
+                        }
+                    }
+                    keys
+                }
+                _ => {
+                    let arity = depends.results::<Arity>().unwrap();
+                    expr.keys_with_input_keys(
+                        offsets.iter().map(|o| arity[*o]),
+                        offsets.iter().map(|o| &results[*o]),
+                    )
+                }
+            }
+        }
 
-            expr.keys_with_input_keys(
-                offsets.iter().map(|o| arity[*o]),
-                offsets.iter().map(|o| &results[*o]),
-            )
+        fn lattice() -> Option<Box<dyn Lattice<Self::Value>>> {
+            Some(Box::new(UKLattice))
+        }
+    }
+
+    fn antichain_insert(into: &mut Vec<Vec<usize>>, item: Vec<usize>) {
+        // Insert only if there is not a dominating element of `into`.
+        if into.iter().all(|key| !key.iter().all(|k| item.contains(k))) {
+            into.retain(|key| !key.iter().all(|k| item.contains(k)));
+            into.push(item);
+        }
+    }
+
+    /// Lattice for sets of columns that define a unique key.
+    ///
+    /// An element `Vec<Vec<usize>>` describes all sets of columns `Vec<usize>` that are a
+    /// superset of some set of columns in the lattice element.
+    struct UKLattice;
+
+    impl Lattice<Vec<Vec<usize>>> for UKLattice {
+        fn top(&self) -> Vec<Vec<usize>> {
+            vec![vec![]]
+        }
+        fn meet_assign(&self, a: &mut Vec<Vec<usize>>, b: Vec<Vec<usize>>) -> bool {
+            a.sort();
+            a.dedup();
+            let mut c = Vec::new();
+            for cols_a in a.iter_mut() {
+                cols_a.sort();
+                cols_a.dedup();
+                for cols_b in b.iter() {
+                    let mut cols_c = cols_a.iter().chain(cols_b).cloned().collect::<Vec<_>>();
+                    cols_c.sort();
+                    cols_c.dedup();
+                    antichain_insert(&mut c, cols_c);
+                }
+            }
+            c.sort();
+            c.dedup();
+            std::mem::swap(a, &mut c);
+            a != &mut c
         }
     }
 }
@@ -506,7 +695,7 @@ mod unique_keys {
 /// negative accumulations.
 mod non_negative {
 
-    use super::{Analysis, Derived};
+    use super::{Analysis, Derived, Lattice};
     use mz_expr::{Id, MirRelationExpr};
 
     /// Analysis that determines if all accumulations at all times are non-negative.
@@ -520,6 +709,7 @@ mod non_negative {
 
         fn derive(
             expr: &MirRelationExpr,
+            index: usize,
             results: &[Self::Value],
             depends: &Derived,
         ) -> Self::Value {
@@ -542,13 +732,29 @@ mod non_negative {
                 MirRelationExpr::Threshold { .. } => true,
                 MirRelationExpr::Join { .. } | MirRelationExpr::Union { .. } => {
                     // These two cases require all of their inputs to be non-negative.
-                    let position = results.len();
                     depends
-                        .children_of_rev(position, expr.children().count())
+                        .children_of_rev(index, expr.children().count())
                         .all(|off| results[off])
                 }
-                _ => *results.last().unwrap(),
+                _ => results[index - 1],
             }
+        }
+
+        fn lattice() -> Option<Box<dyn Lattice<Self::Value>>> {
+            Some(Box::new(NNLattice))
+        }
+    }
+
+    struct NNLattice;
+
+    impl Lattice<bool> for NNLattice {
+        fn top(&self) -> bool {
+            true
+        }
+        fn meet_assign(&self, into: &mut bool, item: bool) -> bool {
+            let changed = *into && !item;
+            *into = *into && item;
+            changed
         }
     }
 }

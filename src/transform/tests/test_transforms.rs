@@ -14,6 +14,7 @@ use mz_expr_parser::{handle_define, try_parse_mir, TestCatalog};
 use mz_ore::str::Indent;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{ExplainConfig, PlanRenderingContext};
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_transform::attribute::annotate_plan;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::TypeErrorHumanizer;
@@ -53,8 +54,12 @@ fn handle_explain(
         Err(e) => return format!("ExplainConfig::try_from error\n{}\n", e.to_string().trim()),
     };
 
+    // Create OptimizerFeatures and override from the config overrides layer.
+    let features = OptimizerFeatures::default().override_from(&config.features);
+
     let context = ExplainContext {
         config: &config,
+        features: &features,
         humanizer: catalog,
         used_indexes: Default::default(),
         finishing: Default::default(),
@@ -167,6 +172,16 @@ fn handle_apply(
             let transform = FoldConstants { limit: None };
             apply_transform(transform, catalog, input)
         }
+        "fusion_join" => {
+            use mz_transform::fusion::join::Join;
+            let transform = Join;
+            apply_transform(transform, catalog, input)
+        }
+        "fusion_top_k" => {
+            use mz_transform::fusion::top_k::TopK;
+            let transform = TopK;
+            apply_transform(transform, catalog, input)
+        }
         "literal_lifting" => {
             use mz_transform::literal_lifting::LiteralLifting;
             let transform = LiteralLifting::default();
@@ -217,14 +232,14 @@ fn handle_apply(
             let transform = SemijoinIdempotence::default();
             apply_transform(transform, catalog, input)
         }
-        "fusion_top_k" => {
-            use mz_transform::fusion::top_k::TopK;
-            let transform = TopK;
+        "threshold_elision" => {
+            use mz_transform::threshold_elision::ThresholdElision;
+            let transform = ThresholdElision;
             apply_transform(transform, catalog, input)
         }
-        "fusion_join" => {
-            use mz_transform::fusion::join::Join;
-            let transform = Join;
+        "union_branch_cancellation" => {
+            use mz_transform::union_cancel::UnionBranchCancellation;
+            let transform = UnionBranchCancellation;
             apply_transform(transform, catalog, input)
         }
         transform => Err(format!("unsupported pipeline transform: {transform}")),

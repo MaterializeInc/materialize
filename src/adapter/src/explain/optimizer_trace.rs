@@ -21,6 +21,7 @@ use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
 };
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{Datum, Row};
 use mz_sql::plan::{self, HirRelationExpr, HirScalarExpr};
 use mz_sql_parser::ast::{ExplainStage, NamedPlan};
@@ -106,6 +107,7 @@ impl OptimizerTrace {
         self,
         format: ExplainFormat,
         config: &ExplainConfig,
+        features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
         target_cluster: Option<&str>,
@@ -117,6 +119,7 @@ impl OptimizerTrace {
             self.collect_all(
                 format,
                 config,
+                features,
                 humanizer,
                 row_set_finishing.clone(),
                 target_cluster,
@@ -233,6 +236,7 @@ impl OptimizerTrace {
 
     pub fn into_plan_insights(
         self,
+        features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
         target_cluster: Option<&str>,
@@ -241,6 +245,7 @@ impl OptimizerTrace {
         let rows = self.into_rows(
             ExplainFormat::Json,
             &ExplainConfig::default(),
+            features,
             humanizer,
             row_set_finishing,
             target_cluster,
@@ -261,6 +266,7 @@ impl OptimizerTrace {
         &self,
         format: ExplainFormat,
         config: &ExplainConfig,
+        features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
         target_cluster: Option<&str>,
@@ -272,6 +278,7 @@ impl OptimizerTrace {
         // HIR plans.
         let mut context = ExplainContext {
             config,
+            features,
             humanizer,
             used_indexes: Default::default(),
             finishing: row_set_finishing.clone(),
@@ -293,6 +300,7 @@ impl OptimizerTrace {
         // Collect trace entries of types produced by global optimizer stages.
         let mut context = ExplainContext {
             config,
+            features,
             humanizer,
             used_indexes: Default::default(),
             finishing: row_set_finishing,

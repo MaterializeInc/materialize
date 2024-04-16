@@ -3522,7 +3522,8 @@ generate_extracted_config!(
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableEquivalencePropagation, Option<bool>, Default(None)),
-    (EnableVariadicLeftJoinLowering, Option<bool>, Default(None))
+    (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
+    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
 );
 
 pub fn plan_create_cluster(
@@ -3613,6 +3614,7 @@ pub fn plan_create_cluster(
             enable_new_outer_join_lowering,
             enable_equivalence_propagation,
             enable_variadic_left_join_lowering,
+            enable_letrec_fixpoint_analysis,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
@@ -3621,6 +3623,7 @@ pub fn plan_create_cluster(
             enable_new_outer_join_lowering,
             enable_equivalence_propagation,
             enable_variadic_left_join_lowering,
+            enable_letrec_fixpoint_analysis,
             ..Default::default()
         };
 

@@ -100,6 +100,10 @@ impl Optimizer {
     pub fn index_id(&self) -> GlobalId {
         self.index_id
     }
+
+    pub fn config(&self) -> &OptimizerConfig {
+        &self.config
+    }
 }
 
 // A bogey `Debug` implementation that hides fields. This is needed to make the
@@ -365,7 +369,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             _ => {
                 // Ensure all expressions are normalized before finalizing.
                 for build in df_desc.objects_to_build.iter_mut() {
-                    normalize_lets(&mut build.plan.0)?
+                    normalize_lets(&mut build.plan.0, &self.config.features)?
                 }
 
                 // Finalize the dataflow. This includes:

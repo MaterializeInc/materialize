@@ -20,6 +20,7 @@ use mz_repr::explain::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
     UnsupportedFormat, UsedIndexes,
 };
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 
 use crate::interpret::{Interpreter, MfpEval, Trace};
@@ -40,6 +41,7 @@ mod text;
 #[derive(Debug)]
 pub struct ExplainContext<'a> {
     pub config: &'a ExplainConfig,
+    pub features: &'a OptimizerFeatures,
     pub humanizer: &'a dyn ExprHumanizer,
     pub used_indexes: UsedIndexes,
     pub finishing: Option<RowSetFinishing>,

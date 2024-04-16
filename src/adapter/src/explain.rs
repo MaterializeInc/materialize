@@ -19,6 +19,7 @@ use std::sync::Arc;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::explain::ExplainContext;
 use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer};
+use mz_repr::optimize::OptimizerFeatures;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
@@ -48,6 +49,7 @@ pub(crate) fn explain_dataflow<T>(
     mut plan: DataflowDescription<T>,
     format: ExplainFormat,
     config: &ExplainConfig,
+    features: &OptimizerFeatures,
     humanizer: &dyn ExprHumanizer,
     target_cluster: Option<&str>,
     dataflow_metainfo: &DataflowMetainfo<Arc<OptimizerNotice>>,
@@ -67,6 +69,7 @@ where
 
     let context = ExplainContext {
         config,
+        features,
         humanizer,
         used_indexes,
         finishing: Default::default(),
@@ -89,6 +92,7 @@ pub(crate) fn explain_plan<T>(
     mut plan: T,
     format: ExplainFormat,
     config: &ExplainConfig,
+    features: &OptimizerFeatures,
     humanizer: &dyn ExprHumanizer,
     target_cluster: Option<&str>,
 ) -> Result<String, AdapterError>
@@ -97,6 +101,7 @@ where
 {
     let context = ExplainContext {
         config,
+        features,
         humanizer,
         used_indexes: Default::default(),
         finishing: Default::default(),

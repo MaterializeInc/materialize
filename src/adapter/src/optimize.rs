@@ -213,19 +213,6 @@ impl From<&SystemVars> for OptimizerConfig {
     }
 }
 
-/// [`OptimizerConfig`] overrides coming from an optional `T`.
-impl<T> OverrideFrom<Option<&T>> for OptimizerConfig
-where
-    Self: OverrideFrom<T>,
-{
-    fn override_from(self, layer: &Option<&T>) -> Self {
-        match layer {
-            Some(layer) => self.override_from(layer),
-            None => self,
-        }
-    }
-}
-
 /// Override [`OptimizerConfig::features`] from [`OptimizerFeatureOverrides`].
 impl OverrideFrom<OptimizerFeatureOverrides> for OptimizerConfig {
     fn override_from(mut self, overrides: &OptimizerFeatureOverrides) -> Self {

@@ -49,13 +49,13 @@ impl crate::Transform for RelationCSE {
     fn transform(
         &self,
         rel: &mut MirRelationExpr,
-        _ctx: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         // Run ANF.
         self.anf.transform_without_trace(rel)?;
 
         // Run NormalizeLets.
-        self.normalize_lets.transform_without_trace(rel)?;
+        self.normalize_lets.action(rel, ctx.features)?;
 
         // Record the result and return.
         mz_repr::explain::trace_plan(&*rel);

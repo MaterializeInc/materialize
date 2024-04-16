@@ -29,7 +29,7 @@ mod tests {
     use mz_ore::collections::HashMap;
     use mz_ore::str::separated;
     use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat};
-    use mz_repr::optimize::OptimizerFeatures;
+    use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{
         optimize_dataflow_demand_inner, optimize_dataflow_filters_inner, DataflowMetainfo,
@@ -146,8 +146,12 @@ mod tests {
                     ..ExplainConfig::default()
                 };
 
+                // Create OptimizerFeatures and override from the config overrides layer.
+                let features = OptimizerFeatures::default().override_from(&config.features);
+
                 let context = ExplainContext {
                     config: &config,
+                    features: &features,
                     humanizer: cat,
                     used_indexes: Default::default(),
                     finishing: Default::default(),
@@ -583,7 +587,8 @@ mod explain {
             // normalize the representation of nested Let bindings
             // and enforce sequential Let binding IDs
             if !context.config.raw_plans {
-                normalize_lets(self.0).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
+                normalize_lets(self.0, context.features)
+                    .map_err(|e| ExplainError::UnknownError(e.to_string()))?;
             }
 
             Ok(ExplainSinglePlan {

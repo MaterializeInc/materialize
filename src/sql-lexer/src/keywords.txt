@@ -30,6 +30,7 @@ Aggregate
 Aligned
 All
 Alter
+Analysis
 And
 Any
 Arity
@@ -160,6 +161,7 @@ Fields
 File
 Filter
 First
+Fixpoint
 Float
 Following
 For
@@ -227,6 +229,7 @@ Leading
 Least
 Left
 Legacy
+Letrec
 Level
 Like
 Limit
