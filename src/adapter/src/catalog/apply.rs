@@ -75,10 +75,6 @@ impl CatalogState {
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut updates: VecDeque<_> = updates.into_iter().collect();
         while let Some(StateUpdate { kind, ts, diff }) = updates.pop_front() {
-            assert_eq!(
-                diff, 1,
-                "initial catalog updates should be consolidated: ({kind:?}, {diff:?})"
-            );
             match self.apply_update(kind, diff) {
                 Ok(None) => {}
                 Ok(Some(id)) => {

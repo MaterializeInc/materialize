@@ -91,6 +91,14 @@ pub struct BuiltinMigrationMetadata {
     pub migrated_system_object_mappings: BTreeMap<GlobalId, SystemObjectMapping>,
     pub user_drop_ops: Vec<GlobalId>,
     pub user_create_ops: Vec<(GlobalId, SchemaId, u32, String)>,
+    pub new_user_create_ops: Vec<(
+        GlobalId,
+        u32,
+        QualifiedItemName,
+        RoleId,
+        PrivilegeMap,
+        CatalogItemRebuilder,
+    )>,
 }
 
 impl BuiltinMigrationMetadata {
@@ -288,7 +296,7 @@ impl Catalog {
                 state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
             }
 
-            let updates = storage.sync()?;
+            let mut updates = storage.sync().await?;
 
             // Durable catalog updates must be partitioned so that we can weave the loading of
             // builtin objects into the right spots.
@@ -297,7 +305,7 @@ impl Catalog {
             let mut builtin_item_updates = Vec::new();
             let mut item_updates = Vec::new();
             let mut post_item_updates = Vec::new();
-            for update in updates {
+            for update in updates.clone() {
                 match update.kind {
                     StateUpdateKind::Role(_)
                     | StateUpdateKind::Database(_)
@@ -379,11 +387,13 @@ impl Catalog {
             state.apply_updates_for_bootstrap(post_view_updates)?;
             // let mut builtin_table_updates = state.generate_builtin_table_updates(updates);
 
+            state.apply_updates_for_bootstrap(item_updates)?;
+
+            // Migrate item ASTs.
+            let mut txn = storage.transaction().await?;
             let last_seen_version = txn
                 .get_catalog_content_version()
                 .unwrap_or_else(|| "new".to_string());
-
-            // Migrate item ASTs.
             if !config.skip_migrations {
                 migrate::migrate(&state, &mut txn, config.now, config.boot_ts, &state.config.connection_context)
                     .await
@@ -395,17 +405,20 @@ impl Catalog {
                         })
                     })?;
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
-                // Throw the existing item updates away because they may have been re-written in
-                // the migration.
-                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: 1}).collect();
-                state.apply_updates_for_bootstrap(item_updates)?;
-            } else {
-                state.apply_updates_for_bootstrap(item_updates)?;
             }
+            txn.commit().await?;
+            let migrated_item_updates =  storage.sync().await?;
+            assert!(
+                migrated_item_updates.iter().all(|update| matches!(update.kind, StateUpdateKind::Item(_))),
+                "item AST migrations should only modify items: {migrated_item_updates:?}"
+            );
+            state.apply_updates_for_bootstrap(migrated_item_updates.clone())?;
+            updates.extend(migrated_item_updates);
 
             state.apply_updates_for_bootstrap(post_item_updates)?;
 
             // Migrate builtin items.
+            let mut txn = storage.transaction().await?;
             let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
                 .map(|builtin| {
                     let id = state.resolve_builtin_object(builtin);
@@ -428,8 +441,14 @@ impl Catalog {
                 &mut txn,
                 &mut builtin_migration_metadata,
             )?;
-
             txn.commit().await?;
+            let migrated_builtin_updates =  storage.sync().await?;
+            state.apply_updates_for_bootstrap(migrated_builtin_updates.clone())?;
+            updates.extend(migrated_builtin_updates);
+
+            let builtin_table_updates = state.generate_builtin_table_updates(updates);
+
+
             Ok((
                 state,
                 builtin_migration_metadata,
@@ -884,6 +903,15 @@ impl Catalog {
                     schema_id,
                     entry.oid(),
                     name.item.clone(),
+                ));
+                let item_rebuilder = CatalogItemRebuilder::new(entry, new_id, &ancestor_ids);
+                migration_metadata.new_user_create_ops.push((
+                    new_id,
+                    entry.oid(),
+                    name,
+                    entry.owner_id().clone(),
+                    entry.privileges().clone(),
+                    item_rebuilder,
                 ));
             }
             let item_rebuilder = CatalogItemRebuilder::new(entry, new_id, &ancestor_ids);

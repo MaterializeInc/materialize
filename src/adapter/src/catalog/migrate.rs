@@ -116,17 +116,6 @@ pub(crate) async fn migrate(
     })
     .await?;
 
-    // Load up a temporary catalog.
-    let mut state = state.clone();
-    let item_updates = tx
-        .get_items()
-        .map(|item| StateUpdate {
-            kind: StateUpdateKind::Item(item),
-            diff: 1,
-        })
-        .collect();
-    state.apply_updates_for_bootstrap(item_updates)?;
-
     info!("migrating from catalog version {:?}", catalog_version);
 
     let conn_cat = state.for_system_session();
