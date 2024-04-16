@@ -179,6 +179,14 @@ wrappers = [
     "pulldown-cmark",
 ]
 
+# We shouldn't manually vendor `protoc`, instead rely on it through `mz-build-tools`.
+[[bans.deny]]
+name = "protobuf-src"
+wrappers = [
+    "mz-build-tools",
+    "protobuf-native",
+]
+
 [advisories]
 ignore = [
     # Consider switching `yaml-rust` to the actively maintained `yaml-rust2` fork of the original project
