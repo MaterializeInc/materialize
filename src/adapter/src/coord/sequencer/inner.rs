@@ -1995,7 +1995,7 @@ impl Coordinator {
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
     pub(super) async fn determine_real_time_recent_timestamp(
-        &self,
+        &mut self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
     ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
