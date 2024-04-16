@@ -784,16 +784,10 @@ impl Coordinator {
 
         if !ready_txns.is_empty() {
             // Sniff out one ctx, this is where tracing breaks down because we
-            // do one confirm_leadership for multiple peeks.
+            // process all outstanding txns as a batch here.
             let otel_ctx = ready_txns.first().expect("known to exist").otel_ctx.clone();
             let mut span = tracing::debug_span!("message_linearize_reads");
             otel_ctx.attach_as_parent_to(&mut span);
-
-            self.catalog_mut()
-                .confirm_leadership()
-                .instrument(span)
-                .await
-                .unwrap_or_terminate("unable to confirm leadership");
 
             let now = Instant::now();
             for ready_txn in ready_txns {
