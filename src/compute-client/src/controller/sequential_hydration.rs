@@ -157,6 +157,7 @@ where
             id,
             FrontiersResponse {
                 write_frontier: Some(upper),
+                ..
             },
         ) = resp
         {

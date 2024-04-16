@@ -1803,6 +1803,11 @@ where
             }
         }
 
+        // Apply an input frontier advancement.
+        if let Some(new_frontier) = frontiers.input_frontier {
+            // TODO
+        }
+
         response
     }
 

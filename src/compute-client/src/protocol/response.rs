@@ -248,18 +248,34 @@ pub struct FrontiersResponse<T = mz_repr::Timestamp> {
     /// `write_frontier` as the empty frontier, the replica must no longer change the contents of the
     /// collection.
     pub write_frontier: Option<Antichain<T>>,
+    /// The collection's new input frontier, if any.
+    ///
+    /// Upon receiving an updated `input_frontier`, the controller may assume that the replica has
+    /// finished reading from the collection’s inputs up to that frontier. Once it has reported the
+    /// `input_frontier` as the empty frontier, the replica must no longer read from the
+    /// collection's inputs.
+    pub input_frontier: Option<Antichain<T>>,
+}
+
+impl<T> FrontiersResponse<T> {
+    /// Returns whether there are any contained updates.
+    pub fn has_updates(&self) -> bool {
+        self.write_frontier.is_some() || self.input_frontier.is_some()
+    }
 }
 
 impl RustType<ProtoFrontiersResponse> for FrontiersResponse {
     fn into_proto(&self) -> ProtoFrontiersResponse {
         ProtoFrontiersResponse {
             write_frontier: self.write_frontier.into_proto(),
+            input_frontier: self.input_frontier.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoFrontiersResponse) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             write_frontier: proto.write_frontier.into_rust()?,
+            input_frontier: proto.input_frontier.into_rust()?,
         })
     }
 }
@@ -269,9 +285,10 @@ impl Arbitrary for FrontiersResponse {
     type Parameters = ();
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        any_antichain()
-            .prop_map(|write| Self {
+        (any_antichain(), any_antichain())
+            .prop_map(|(write, input)| Self {
                 write_frontier: Some(write),
+                input_frontier: Some(input),
             })
             .boxed()
     }

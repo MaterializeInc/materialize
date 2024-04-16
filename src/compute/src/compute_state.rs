@@ -592,6 +592,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         for (id, upper) in new_uppers {
             let frontiers = FrontiersResponse {
                 write_frontier: Some(upper),
+                input_frontier: None, // TODO
             };
             self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
         }
@@ -620,6 +621,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             );
             let frontiers = FrontiersResponse {
                 write_frontier: Some(Antichain::new()),
+                input_frontier: None, // TODO
             };
             self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
         }

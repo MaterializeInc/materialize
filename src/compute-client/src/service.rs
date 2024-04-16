@@ -14,7 +14,6 @@
 //! Compute layer client and server.
 
 use std::collections::BTreeMap;
-use std::iter;
 use std::num::NonZeroUsize;
 
 use async_trait::async_trait;
@@ -131,7 +130,7 @@ pub struct PartitionedComputeState<T> {
     /// reported. These properties ensure that a) we always cease frontier tracking for collections
     /// that have been dropped and b) frontier tracking for a collection is not re-initialized
     /// after it was ceased.
-    frontiers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
+    frontiers: BTreeMap<GlobalId, TrackedFrontiers<T>>,
     /// Pending responses for a peek; returnable once all are available.
     ///
     /// Tracking of responses for a peek is initialized when the first `PeekResponse` for that peek
@@ -231,27 +230,6 @@ where
             }
         }
     }
-
-    fn start_frontier_tracking(&mut self, id: GlobalId) {
-        let mut frontier = MutableAntichain::new();
-        // TODO(benesch): fix this dangerous use of `as`.
-        #[allow(clippy::as_conversions)]
-        frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-        let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
-        let previous = self.frontiers.insert(id, (frontier, part_frontiers));
-        assert!(
-            previous.is_none(),
-            "starting frontier tracking for already present identifier {id}"
-        );
-    }
-
-    fn cease_frontier_tracking(&mut self, id: GlobalId) {
-        let previous = self.frontiers.remove(&id);
-        assert!(
-            previous.is_some(),
-            "ceasing frontier tracking for absent identifier {id}",
-        );
-    }
 }
 
 impl<T> PartitionedState<ComputeCommand<T>, ComputeResponse<T>> for PartitionedComputeState<T>
@@ -292,37 +270,30 @@ where
         match message {
             ComputeResponse::Frontiers(id, frontiers) => {
                 // Initialize frontier tracking state for this collection, if necessary.
-                if !self.frontiers.contains_key(&id) {
-                    self.start_frontier_tracking(id);
-                }
+                let tracked = self
+                    .frontiers
+                    .entry(id)
+                    .or_insert_with(|| TrackedFrontiers::new(self.parts));
 
-                let Some(new_shard_upper) = frontiers.write_frontier else {
-                    return None;
+                let write_frontier = frontiers
+                    .write_frontier
+                    .and_then(|f| tracked.update_write_frontier(shard_id, &f));
+                let input_frontier = frontiers
+                    .input_frontier
+                    .and_then(|f| tracked.update_input_frontier(shard_id, &f));
+
+                let frontiers = FrontiersResponse {
+                    write_frontier,
+                    input_frontier,
                 };
+                let result = frontiers
+                    .has_updates()
+                    .then_some(Ok(ComputeResponse::Frontiers(id, frontiers)));
 
-                let (frontier, shard_frontiers) = self.frontiers.get_mut(&id).unwrap();
-
-                let old_upper = frontier.frontier().to_owned();
-                let shard_upper = &mut shard_frontiers[shard_id];
-                frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
-                shard_upper.join_assign(&new_shard_upper);
-                frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), 1)));
-
-                let new_upper = frontier.frontier();
-
-                let result = if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
-                    let frontiers = FrontiersResponse {
-                        write_frontier: Some(new_upper.to_owned()),
-                    };
-                    Some(Ok(ComputeResponse::Frontiers(id, frontiers)))
-                } else {
-                    None
-                };
-
-                if new_upper.is_empty() {
+                if tracked.all_empty() {
                     // All shards have reported advancement to the empty frontier, so we do not
                     // expect further updates for this collection.
-                    self.cease_frontier_tracking(id);
+                    self.frontiers.remove(&id);
                 }
 
                 result
@@ -505,6 +476,90 @@ where
                 // Pass through status responses.
                 Some(Ok(response))
             }
+        }
+    }
+}
+
+/// Tracked frontiers for an index or a sink collection.
+///
+/// Each frontier is maintained both as a `MutableAntichain` across all partitions and individually
+/// for each partition.
+#[derive(Debug)]
+struct TrackedFrontiers<T> {
+    /// The tracked write frontier.
+    write_frontier: (MutableAntichain<T>, Vec<Antichain<T>>),
+    /// The tracked input frontier.
+    input_frontier: (MutableAntichain<T>, Vec<Antichain<T>>),
+}
+
+impl<T> TrackedFrontiers<T>
+where
+    T: timely::progress::Timestamp + Lattice,
+{
+    /// Initializes frontier tracking state for a new collection.
+    fn new(parts: usize) -> Self {
+        // TODO(benesch): fix this dangerous use of `as`.
+        #[allow(clippy::as_conversions)]
+        let parts_diff = parts as i64;
+
+        let mut frontier = MutableAntichain::new();
+        frontier.update_iter([(T::minimum(), parts_diff)]);
+        let part_frontiers = vec![Antichain::from_elem(T::minimum()); parts];
+        let frontier_entry = (frontier, part_frontiers);
+
+        Self {
+            write_frontier: frontier_entry.clone(),
+            input_frontier: frontier_entry,
+        }
+    }
+
+    /// Returns whether all tracked frontiers have advanced to the empty frontier.
+    fn all_empty(&self) -> bool {
+        self.write_frontier.0.frontier().is_empty() && self.input_frontier.0.frontier().is_empty()
+    }
+
+    /// Updates write frontier tracking with a new shard frontier.
+    ///
+    /// If this causes the global write frontier to advance, the advanced frontier is returned.
+    fn update_write_frontier(
+        &mut self,
+        shard_id: usize,
+        new_shard_frontier: &Antichain<T>,
+    ) -> Option<Antichain<T>> {
+        Self::update_frontier(&mut self.write_frontier, shard_id, new_shard_frontier)
+    }
+
+    /// Updates input frontier tracking with a new shard frontier.
+    ///
+    /// If this causes the global input frontier to advance, the advanced frontier is returned.
+    fn update_input_frontier(
+        &mut self,
+        shard_id: usize,
+        new_shard_frontier: &Antichain<T>,
+    ) -> Option<Antichain<T>> {
+        Self::update_frontier(&mut self.input_frontier, shard_id, new_shard_frontier)
+    }
+
+    /// Updates the provided frontier entry with a new shard frontier.
+    fn update_frontier(
+        entry: &mut (MutableAntichain<T>, Vec<Antichain<T>>),
+        shard_id: usize,
+        new_shard_frontier: &Antichain<T>,
+    ) -> Option<Antichain<T>> {
+        let (frontier, shard_frontiers) = entry;
+
+        let old_frontier = frontier.frontier().to_owned();
+        let shard_frontier = &mut shard_frontiers[shard_id];
+        frontier.update_iter(shard_frontier.iter().map(|t| (t.clone(), -1)));
+        shard_frontier.join_assign(new_shard_frontier);
+        frontier.update_iter(shard_frontier.iter().map(|t| (t.clone(), 1)));
+
+        let new_frontier = frontier.frontier();
+
+        if PartialOrder::less_than(&old_frontier.borrow(), &new_frontier) {
+            Some(new_frontier.to_owned())
+        } else {
+            None
         }
     }
 }
