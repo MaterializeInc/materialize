@@ -1043,7 +1043,7 @@ impl Coordinator {
         let read_holds = self
             .acquire_read_holds(mz_repr::Timestamp::MIN, &id_bundle, false)
             .expect("can acquire read holds");
-        let as_of = self.least_valid_read(&id_bundle);
+        let as_of = self.least_valid_read(&read_holds);
 
         let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {

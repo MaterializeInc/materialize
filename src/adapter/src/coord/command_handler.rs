@@ -888,12 +888,17 @@ impl Coordinator {
             // Acquire read holds _before_ we determine the least valid read.
             // Otherwise, we're not guaranteed that the since frontier doesn't
             // advance forward from underneath us.
-            if acquire_read_holds {
-                self.acquire_read_holds_auto_cleanup(session, timestamp, &ids, false)
-                    .expect("precise==false, so acquiring read holds always succeeds");
-            }
+            let read_holds = self
+                .acquire_read_holds(timestamp, &ids, false)
+                .expect("precise==false, so acquiring read holds always succeeds");
+            let least_valid_read = self.least_valid_read(&read_holds);
+            timestamp.advance_by(least_valid_read.borrow());
 
-            timestamp.advance_by(self.least_valid_read(&ids).borrow());
+            // NOTE: The Drop impl of ReadHolds makes sure that the hold is
+            // released when we don't use it.
+            if acquire_read_holds {
+                self.store_transaction_read_holds(session, read_holds);
+            }
 
             if oracle_timestamp != timestamp {
                 warn!(%cmvs.name, %oracle_timestamp, %timestamp, "REFRESH MV's inputs are not readable at the oracle read ts");

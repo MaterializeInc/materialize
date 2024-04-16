@@ -24,6 +24,7 @@ use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
 
 use mz_adapter::ReadHolds;
@@ -136,24 +137,17 @@ impl TimestampProvider for Frontiers {
         for (instance_id, ids) in id_bundle.compute_ids.iter() {
             for id in ids.iter() {
                 let frontiers = self.compute.get(&(*instance_id, *id)).unwrap();
-                read_holds
-                    .holds
-                    .entry(frontiers.read.to_owned())
-                    .or_default()
-                    .compute_ids
-                    .entry(*instance_id)
-                    .or_default()
-                    .insert(*id);
+                read_holds.compute_holds.insert(
+                    (*instance_id, *id),
+                    MutableAntichain::from(frontiers.read.to_owned()),
+                );
             }
         }
         for id in id_bundle.storage_ids.iter() {
             let frontiers = self.storage.get(id).unwrap();
             read_holds
-                .holds
-                .entry(frontiers.read.to_owned())
-                .or_default()
-                .storage_ids
-                .insert(*id);
+                .storage_holds
+                .insert(*id, MutableAntichain::from(frontiers.read.to_owned()));
         }
 
         let (dummy_tx, _dummy_rx) = tokio::sync::mpsc::unbounded_channel();

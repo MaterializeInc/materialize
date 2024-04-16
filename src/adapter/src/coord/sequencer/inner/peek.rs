@@ -1167,9 +1167,6 @@ impl Coordinator {
         // returns to the coordinator.
 
         if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
-            assert_eq!(txn_reads.len(), 1);
-            let txn_reads = &txn_reads[0];
-
             // Find referenced ids not in the read hold. A reference could be caused by a
             // user specifying an object in a different schema than the first query. An
             // index could be caused by a CREATE INDEX after the transaction started.
@@ -1191,10 +1188,7 @@ impl Coordinator {
                 });
             }
         } else if let Some(read_holds) = read_holds {
-            self.txn_read_holds
-                .entry(session.conn_id().clone())
-                .or_insert_with(Vec::new)
-                .push(read_holds);
+            self.store_transaction_read_holds(session, read_holds);
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems

@@ -29,7 +29,6 @@ use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use timely::progress::Antichain;
-use timely::progress::Timestamp;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -540,8 +539,25 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
-        let (read_holds, dataflow_as_of, storage_as_of, until) =
-            self.select_timestamps(id_bundle, refresh_schedule.as_ref())?;
+
+        let read_holds_owned;
+        let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
+            // In some cases, for example when REFRESH is used, the preparatory
+            // stages will already have acquired ReadHolds, we can re-use those.
+
+            txn_reads
+        } else {
+            // No one has acquired holds, make sure we can determine an as_of
+            // and render our dataflow below.
+            read_holds_owned = self
+                .acquire_read_holds(mz_repr::Timestamp::MIN, &id_bundle, false)
+                .expect("can always acquire non-precise read holds");
+            &read_holds_owned
+        };
+
+        let (dataflow_as_of, storage_as_of, until) =
+            self.select_timestamps(id_bundle, refresh_schedule.as_ref(), read_holds)?;
+
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
             storage_as_of = ?storage_as_of,
@@ -676,10 +692,6 @@ impl Coordinator {
             })
             .await;
 
-        // Only drop the read holds once the dataflow has been installed,
-        // which acquires its own read holds.
-        drop(read_holds);
-
         match transact_result {
             Ok(_) => Ok(ExecuteResponse::CreatedMaterializedView),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
@@ -701,28 +713,26 @@ impl Coordinator {
     /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
     /// materialized view.
     fn select_timestamps(
-        &mut self,
+        &self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
+        read_holds: &ReadHolds<mz_repr::Timestamp>,
     ) -> Result<
         (
-            ReadHolds<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
         ),
         AdapterError,
     > {
-        // Acquire read holds _before_ determining the least valid read.
-        // Otherwise the frontier might advance away from under us,
-        // concurrently.
-        let read_holds = self
-            .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
-            .expect("can always acquire non-precise read holds");
+        assert!(
+            id_bundle.difference(&read_holds.id_bundle()).is_empty(),
+            "we must have read holds for all involved collections"
+        );
 
         // For non-REFRESH MVs both the `dataflow_as_of` and the `storage_as_of` should be simply
         // `least_valid_read`.
-        let least_valid_read = self.least_valid_read(&id_bundle);
+        let least_valid_read = self.least_valid_read(read_holds);
         let mut dataflow_as_of = least_valid_read.clone();
         let mut storage_as_of = least_valid_read.clone();
 
@@ -770,7 +780,7 @@ impl Coordinator {
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
 
-        Ok((read_holds, dataflow_as_of, storage_as_of, until))
+        Ok((dataflow_as_of, storage_as_of, until))
     }
 
     #[instrument]

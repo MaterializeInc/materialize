@@ -313,7 +313,7 @@ pub trait TimestampProvider {
         // stay queryable at the chosen timestamp.
         let read_holds = self.acquire_read_holds(id_bundle);
 
-        let since = self.least_valid_read(id_bundle);
+        let since = self.least_valid_read(&read_holds);
         let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
@@ -456,22 +456,13 @@ pub trait TimestampProvider {
         Ok((determination, read_holds))
     }
 
-    /// The smallest common valid read frontier among the specified collections.
-    fn least_valid_read(&self, id_bundle: &CollectionIdBundle) -> Antichain<mz_repr::Timestamp> {
-        let mut since = Antichain::from_elem(Timestamp::minimum());
-        {
-            for id in id_bundle.storage_ids.iter() {
-                since.join_assign(self.storage_implied_capability(*id))
-            }
-        }
-        {
-            for (instance, compute_ids) in &id_bundle.compute_ids {
-                for id in compute_ids.iter() {
-                    since.join_assign(self.compute_read_capability(*instance, *id))
-                }
-            }
-        }
-        since
+    /// The smallest common valid read frontier among times in the given
+    /// [ReadHolds].
+    fn least_valid_read(
+        &self,
+        read_holds: &ReadHolds<mz_repr::Timestamp>,
+    ) -> Antichain<mz_repr::Timestamp> {
+        read_holds.least_valid_read()
     }
 
     /// Acquires [ReadHolds], for the given `id_bundle` at the earliest possible

@@ -1332,9 +1332,7 @@ pub struct Coordinator {
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    ///
-    /// We use a Vec because `ReadHolds` doesn't have a way of tracking multiplicity.
-    txn_read_holds: BTreeMap<ConnectionId, Vec<read_policy::ReadHolds<Timestamp>>>,
+    txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds<Timestamp>>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
@@ -2273,7 +2271,7 @@ impl Coordinator {
             .acquire_read_holds(mz_repr::Timestamp::minimum(), &direct_dependencies, false)
             .expect("can acquire un-precise read holds");
 
-        let min_as_of = self.least_valid_read(&direct_dependencies);
+        let min_as_of = self.least_valid_read(&read_holds);
 
         // We must not select an `as_of` that is beyond any times that have not yet been written to
         // downstream storage collections (i.e., materialized views). If we would, we might skip
