@@ -24,8 +24,8 @@ use mz_compute_client::protocol::command::{
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
-    ComputeResponse, CopyToResponse, OperatorHydrationStatus, PeekResponse, StatusResponse,
-    SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
+    StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::ENABLE_CONTROLLER_DATAFLOW_SCHEDULING;
@@ -495,7 +495,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         //  * The collection is a subscribe, in which case we will emit a
         //    `SubscribeResponse::Dropped` independently.
         //  * The collection has already advanced to the empty frontier, in which case
-        //    the final `FrontierUpper` response already serves the purpose of reporting
+        //    the final `Frontiers` response already serves the purpose of reporting
         //    the end of the dataflow.
         if !collection.is_subscribe() && !collection.reported_frontier().is_empty() {
             self.compute_state.dropped_collections.push(id);
@@ -571,7 +571,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             match collection.reported_frontier() {
                 ReportedFrontier::Reported(old_frontier) => {
                     // In steady state it is not expected for `old_frontier` to be beyond
-                    // `new_frontier`. However, during reconcilation this can happen as we
+                    // `new_frontier`. However, during reconciliation this can happen as we
                     // artificially advance the frontiers of to-be-dropped collections to disable
                     // frontier reporting for them.
                     if !PartialOrder::less_than(old_frontier, &new_frontier) {
@@ -590,7 +590,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
 
         for (id, upper) in new_uppers {
-            self.send_compute_response(ComputeResponse::FrontierUpper { id, upper });
+            let frontiers = FrontiersResponse {
+                write_frontier: Some(upper),
+            };
+            self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
         }
     }
 
@@ -615,10 +618,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 !self.compute_state.collection_exists(id),
                 "tried to report a dropped collection that still exists: {id}"
             );
-            self.send_compute_response(ComputeResponse::FrontierUpper {
-                id,
-                upper: Antichain::new(),
-            });
+            let frontiers = FrontiersResponse {
+                write_frontier: Some(Antichain::new()),
+            };
+            self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
         }
     }
 

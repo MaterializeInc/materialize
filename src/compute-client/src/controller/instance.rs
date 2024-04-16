@@ -53,8 +53,8 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, OperatorHydrationStatus, PeekResponse, StatusResponse,
-    SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
+    StatusResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -1735,8 +1735,8 @@ where
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
         match response {
-            ComputeResponse::FrontierUpper { id, upper } => {
-                self.handle_frontier_upper(id, upper, replica_id)
+            ComputeResponse::Frontiers(id, frontiers) => {
+                self.handle_frontiers_response(id, frontiers, replica_id)
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
@@ -1756,54 +1756,54 @@ where
 
     /// Handle new frontiers, returning any compute response that needs to
     /// be sent to the client.
-    fn handle_frontier_upper(
+    fn handle_frontiers_response(
         &mut self,
         id: GlobalId,
-        new_frontier: Antichain<T>,
+        frontiers: FrontiersResponse<T>,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
-        // According to the compute protocol, replicas are not allowed to send `FrontierUpper`s
-        // that regress frontiers they have reported previously. We still perform a check here,
-        // rather than risking the controller becoming confused trying to handle regressions.
+        let mut response = None;
+
+        // According to the compute protocol, replicas are not allowed to send `Frontiers`
+        // responses that regress frontiers they have reported previously. We still perform a check
+        // here, rather than risking the controller becoming confused trying to handle regressions.
         let Ok(coll) = self.compute.collection(id) else {
-            tracing::warn!(
-                ?replica_id,
-                "Frontier update for unknown collection {id}: {:?}",
-                new_frontier.elements(),
+            tracing::error!(
+               %id, %replica_id, ?frontiers,
+               "frontiers update for unknown collection",
             );
-            tracing::error!("Replica reported an untracked collection frontier");
             return None;
         };
 
-        if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
-            if !PartialOrder::less_equal(old_frontier, &new_frontier) {
-                tracing::warn!(
-                    ?replica_id,
-                    "Frontier of collection {id} regressed: {:?} -> {:?}",
-                    old_frontier.elements(),
-                    new_frontier.elements(),
-                );
-                tracing::error!("Replica reported a regressed collection frontier");
-                return None;
+        // Apply a write frontier advancement.
+        if let Some(new_frontier) = frontiers.write_frontier {
+            if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
+                if !PartialOrder::less_equal(old_frontier, &new_frontier) {
+                    tracing::error!(
+                       %id, %replica_id, ?old_frontier, ?new_frontier,
+                       "collection write frontier regression",
+                    );
+                    return None;
+                }
+            }
+
+            let old_global_frontier = coll.write_frontier.clone();
+
+            self.compute
+                .update_hydration_status(id, replica_id, &new_frontier);
+            self.update_write_frontiers(replica_id, &[(id, new_frontier.clone())].into());
+
+            if let Ok(coll) = self.compute.collection(id) {
+                if coll.write_frontier != old_global_frontier {
+                    response = Some(ComputeControllerResponse::FrontierUpper {
+                        id,
+                        upper: coll.write_frontier.clone(),
+                    });
+                }
             }
         }
 
-        let old_global_frontier = coll.write_frontier.clone();
-
-        self.compute
-            .update_hydration_status(id, replica_id, &new_frontier);
-        self.update_write_frontiers(replica_id, &[(id, new_frontier.clone())].into());
-
-        if let Ok(coll) = self.compute.collection(id) {
-            (coll.write_frontier != old_global_frontier).then_some(
-                ComputeControllerResponse::FrontierUpper {
-                    id,
-                    upper: coll.write_frontier.clone(),
-                },
-            )
-        } else {
-            None
-        }
+        response
     }
 
     fn handle_peek_response(

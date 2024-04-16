@@ -2506,7 +2506,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count > 0, f"got {count}"
 
     # mz_compute_responses_total
-    count = metrics.get_responses_total("frontier_upper")
+    count = metrics.get_responses_total("frontiers")
     assert count > 0, f"got {count}"
     count = metrics.get_responses_total("peek_response")
     assert count == 2, f"got {count}"
@@ -2514,7 +2514,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count == 0, f"got {count}"
 
     # mz_compute_response_message_bytes_total
-    count = metrics.get_response_bytes_total("frontier_upper")
+    count = metrics.get_response_bytes_total("frontiers")
     assert count > 0, f"got {count}"
     count = metrics.get_response_bytes_total("peek_response")
     assert count > 0, f"got {count}"

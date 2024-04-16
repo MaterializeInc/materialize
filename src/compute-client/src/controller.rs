@@ -100,11 +100,14 @@ pub enum ComputeControllerResponse<T> {
     /// produced. (The sink may produce no responses if its dataflow is dropped
     /// before completion.)
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
-    /// See [`ComputeResponse::FrontierUpper`]
+    /// A response reporting advancement of a collection's upper frontier.
+    ///
+    /// Once a collection's upper (aka "write frontier") has advanced to beyond a given time, the
+    /// contents of the collection as of that time have been sealed and cannot change anymore.
     FrontierUpper {
-        /// TODO(#25239): Add documentation.
+        /// The ID of a compute collection.
         id: GlobalId,
-        /// TODO(#25239): Add documentation.
+        /// The new upper frontier of the identified compute collection.
         upper: Antichain<T>,
     },
 }

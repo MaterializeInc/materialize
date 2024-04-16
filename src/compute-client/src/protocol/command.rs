@@ -128,8 +128,8 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// should prefer panicking over producing incorrect results.
     ///
     /// After receiving a `CreateDataflow` command, if the created dataflow exports indexes or
-    /// storage sinks, the replica must produce [`FrontierUpper`] responses that report the
-    /// advancement of the `upper` frontiers of these compute collections.
+    /// storage sinks, the replica must produce [`Frontiers`] responses that report the
+    /// advancement of the frontiers of these compute collections.
     ///
     /// After receiving a `CreateDataflow` command, if the created dataflow exports subscribes, the
     /// replica must produce [`SubscribeResponse`]s that report the progress and results of the
@@ -144,7 +144,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`source_imports`]: DataflowDescription::source_imports
     /// [`index_imports`]: DataflowDescription::index_imports
     /// [`as_of`]: DataflowDescription::as_of
-    /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
+    /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     CreateDataflow(DataflowDescription<FlatPlan<T>, CollectionMetadata, T>),
 
@@ -184,11 +184,11 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// compute collections.
     ///
     /// A replica that receives an `AllowCompaction` command with the empty frontier must
-    /// eventually respond with a [`FrontierUpper`] response reporting the empty frontier for the
-    /// same collection. ([#16275])
+    /// eventually respond with [`Frontiers`] responses reporting empty frontiers for the
+    /// same collection. ([#16271])
     ///
-    /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
-    /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
+    /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
+    /// [#16271]: https://github.com/MaterializeInc/materialize/issues/16271
     AllowCompaction {
         /// TODO(#25239): Add documentation.
         id: GlobalId,

@@ -34,8 +34,8 @@ use crate::controller::ComputeControllerTimestamp;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, PeekResponse, ProtoComputeResponse, SubscribeBatch,
-    SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, ProtoComputeResponse,
+    SubscribeBatch, SubscribeResponse,
 };
 use crate::service::proto_compute_server::ProtoCompute;
 
@@ -94,7 +94,7 @@ where
 /// This helper type unifies the responses of multiple partitioned workers in order to present as a
 /// single worker:
 ///
-///   * It emits `FrontierUpper` responses reporting the minimum/meet of frontiers reported by the
+///   * It emits `Frontiers` responses reporting the minimum/meet of frontiers reported by the
 ///     individual workers.
 ///   * It emits `PeekResponse`s and `SubscribeResponse`s reporting the union of the responses
 ///     received from the workers.
@@ -119,20 +119,19 @@ pub struct PartitionedComputeState<T> {
     ///
     /// This is updated upon receiving [`ComputeCommand::UpdateConfiguration`]s.
     max_result_size: u64,
-    /// Upper frontiers for indexes and sinks, both collected as a `MutableAntichain` across all
-    /// partitions and individually listed for each partition.
+    /// Tracked frontiers for indexes and sinks.
     ///
-    /// Frontier tracking for a collection is initialized when the first `FrontierUpper` response
+    /// Frontier tracking for a collection is initialized when the first `Frontiers` response
     /// for that collection is received. Frontier tracking is ceased when all shards have reported
-    /// advancement to the empty frontier.
+    /// advancement to the empty frontier for all frontier kinds.
     ///
-    /// The compute protocol requires that shards always emit a `FrontierUpper` response reporting
-    /// the empty frontier when a collection is dropped. It further requires that no further
-    /// `FrontierUpper` responses are emitted for a collection after the empty frontier was
+    /// The compute protocol requires that shards always emit `Frontiers` responses reporting empty
+    /// frontiers for all frontier kinds when a collection is dropped. It further requires that no
+    /// further `Frontier` responses are emitted for a collection after the empty frontiers were
     /// reported. These properties ensure that a) we always cease frontier tracking for collections
     /// that have been dropped and b) frontier tracking for a collection is not re-initialized
     /// after it was ceased.
-    uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
+    frontiers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
     /// Pending responses for a peek; returnable once all are available.
     ///
     /// Tracking of responses for a peek is initialized when the first `PeekResponse` for that peek
@@ -190,7 +189,7 @@ where
         PartitionedComputeState {
             parts,
             max_result_size: u64::MAX,
-            uppers: BTreeMap::new(),
+            frontiers: BTreeMap::new(),
             peek_responses: BTreeMap::new(),
             pending_subscribes: BTreeMap::new(),
             copy_to_responses: BTreeMap::new(),
@@ -206,12 +205,12 @@ where
         let PartitionedComputeState {
             parts: _,
             max_result_size: _,
-            uppers,
+            frontiers,
             peek_responses,
             pending_subscribes,
             copy_to_responses,
         } = self;
-        uppers.clear();
+        frontiers.clear();
         peek_responses.clear();
         pending_subscribes.clear();
         copy_to_responses.clear();
@@ -239,7 +238,7 @@ where
         #[allow(clippy::as_conversions)]
         frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
         let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
-        let previous = self.uppers.insert(id, (frontier, part_frontiers));
+        let previous = self.frontiers.insert(id, (frontier, part_frontiers));
         assert!(
             previous.is_none(),
             "starting frontier tracking for already present identifier {id}"
@@ -247,7 +246,7 @@ where
     }
 
     fn cease_frontier_tracking(&mut self, id: GlobalId) {
-        let previous = self.uppers.remove(&id);
+        let previous = self.frontiers.remove(&id);
         assert!(
             previous.is_some(),
             "ceasing frontier tracking for absent identifier {id}",
@@ -291,16 +290,17 @@ where
         message: ComputeResponse<T>,
     ) -> Option<Result<ComputeResponse<T>, anyhow::Error>> {
         match message {
-            ComputeResponse::FrontierUpper {
-                id,
-                upper: new_shard_upper,
-            } => {
+            ComputeResponse::Frontiers(id, frontiers) => {
                 // Initialize frontier tracking state for this collection, if necessary.
-                if !self.uppers.contains_key(&id) {
+                if !self.frontiers.contains_key(&id) {
                     self.start_frontier_tracking(id);
                 }
 
-                let (frontier, shard_frontiers) = self.uppers.get_mut(&id).unwrap();
+                let Some(new_shard_upper) = frontiers.write_frontier else {
+                    return None;
+                };
+
+                let (frontier, shard_frontiers) = self.frontiers.get_mut(&id).unwrap();
 
                 let old_upper = frontier.frontier().to_owned();
                 let shard_upper = &mut shard_frontiers[shard_id];
@@ -311,10 +311,10 @@ where
                 let new_upper = frontier.frontier();
 
                 let result = if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
-                    Some(Ok(ComputeResponse::FrontierUpper {
-                        id,
-                        upper: new_upper.to_owned(),
-                    }))
+                    let frontiers = FrontiersResponse {
+                        write_frontier: Some(new_upper.to_owned()),
+                    };
+                    Some(Ok(ComputeResponse::Frontiers(id, frontiers)))
                 } else {
                     None
                 };
