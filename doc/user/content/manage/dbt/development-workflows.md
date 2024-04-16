@@ -152,7 +152,7 @@ deploy changes to the definition of objects in Materialize in production
 environments and **can't tolerate downtime**.
 
 For development environments with no downtime considerations, you might prefer
-to use the [slim deployment pattern](#slim-deployment) instead for quicker
+to use the [slim deployment pattern](#slim-deployments) instead for quicker
 iteration and reduced CI costs.
 
 #### Configuration and initialization
@@ -209,7 +209,7 @@ These environments are later swapped transparently.
 deployment environments."
 
 We **strongly** recommend validating the results of the deployed changes on the
-deployment environment to ensure it's safe to [cutover](#cutover).
+deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
 
 <br>
 
