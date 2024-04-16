@@ -361,7 +361,11 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
 
     // Intentionally not even pub(crate) because all callers should use
     // [Self::apply_diffs].
-    fn apply_diff(&mut self, metrics: &Metrics, diff: StateDiff<T>) -> Result<(), String> {
+    pub(super) fn apply_diff(
+        &mut self,
+        metrics: &Metrics,
+        diff: StateDiff<T>,
+    ) -> Result<(), String> {
         // Deconstruct diff so we get a compile failure if new fields are added.
         let StateDiff {
             applier_version: diff_applier_version,
@@ -1241,14 +1245,138 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
 
 #[cfg(test)]
 mod tests {
+    use semver::Version;
     use std::ops::ControlFlow::Continue;
 
+    use crate::internal::paths::{PartId, PartialBatchKey, RollupId, WriterKey};
     use mz_ore::metrics::MetricsRegistry;
 
     use crate::internal::state::TypedState;
     use crate::ShardId;
 
     use super::*;
+
+    /// Model a situation where a "leader" is constantly making changes to its state, and a "follower"
+    /// is applying those changes as diffs.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn test_state_sync() {
+        use proptest::prelude::*;
+
+        #[derive(Debug, Clone)]
+        enum Action {
+            /// Append a (non)empty batch to the shard that covers the given length of time.
+            Append { empty: bool, time_delta: u64 },
+            /// Apply the Nth compaction request we've received to the shard state.
+            Compact { req: usize },
+        }
+
+        let action_gen: BoxedStrategy<Action> = {
+            prop::strategy::Union::new([
+                (any::<bool>(), 1u64..10u64)
+                    .prop_map(|(empty, time_delta)| Action::Append { empty, time_delta })
+                    .boxed(),
+                (0usize..10usize)
+                    .prop_map(|req| Action::Compact { req })
+                    .boxed(),
+            ])
+            .boxed()
+        };
+
+        fn run(actions: Vec<(Action, bool)>, metrics: &Metrics) {
+            let version = Version::new(0, 100, 0);
+            let writer_key = WriterKey::Version(version.to_string());
+            let id = ShardId::new();
+            let hostname = "computer";
+            let typed: TypedState<String, (), u64, i64> =
+                TypedState::new(version, id, hostname.to_string(), 0);
+            let mut leader = typed.state;
+
+            let seqno = SeqNo::minimum();
+            let mut lower = 0u64;
+            let mut merge_reqs = vec![];
+
+            leader.collections.rollups.insert(
+                seqno,
+                HollowRollup {
+                    key: PartialRollupKey::new(seqno, &RollupId::new()),
+                    encoded_size_bytes: None,
+                },
+            );
+            leader.collections.trace.roundtrip_structure = false;
+            let mut follower = leader.clone();
+
+            for (action, roundtrip_structure) in actions {
+                // Apply the given action and the new roundtrip_structure setting and take a diff.
+                let mut old_leader = leader.clone();
+                match action {
+                    Action::Append { empty, time_delta } => {
+                        let upper = lower + time_delta;
+                        let key = if empty {
+                            None
+                        } else {
+                            let id = PartId::new();
+                            Some(PartialBatchKey::new(&writer_key, &id))
+                        };
+
+                        let keys = key.as_ref().map(|k| k.0.as_str());
+                        let reqs = leader.collections.trace.push_batch(
+                            crate::internal::state::tests::hollow(
+                                lower,
+                                upper,
+                                keys.as_slice(),
+                                if empty { 0 } else { 1 },
+                            ),
+                        );
+                        merge_reqs.extend(reqs);
+                        lower = upper;
+                    }
+                    Action::Compact { req } => {
+                        if !merge_reqs.is_empty() {
+                            let req = merge_reqs.remove(req.min(merge_reqs.len() - 1));
+                            let output = HollowBatch {
+                                desc: req.desc,
+                                len: req.inputs.iter().map(|p| p.batch.len).sum(),
+                                parts: req
+                                    .inputs
+                                    .into_iter()
+                                    .flat_map(|p| p.batch.parts.clone())
+                                    .collect(),
+                                runs: vec![],
+                            };
+                            leader
+                                .collections
+                                .trace
+                                .apply_merge_res(&FueledMergeRes { output });
+                        }
+                    }
+                }
+                leader.collections.trace.roundtrip_structure = roundtrip_structure;
+                leader.seqno.0 += 1;
+                let diff = StateDiff::from_diff(&old_leader, &leader);
+
+                // Validate that the diff applies to both the previous state (also checked in
+                // debug asserts) and our follower that's only synchronized via diffs.
+                old_leader
+                    .apply_diff(&metrics, diff.clone())
+                    .expect("diff applies to the old version of the leader state");
+                follower
+                    .apply_diff(&metrics, diff.clone())
+                    .expect("diff applies to the synced version of the follower state");
+
+                // TODO: once spine structure is roundtripped through diffs, assert that the follower
+                // has the same batches etc. as the leader does.
+            }
+        }
+
+        let config = PersistConfig::new_for_tests();
+        let metrics_registry = MetricsRegistry::new();
+        let metrics: Metrics = Metrics::new(&config, &metrics_registry);
+
+        proptest!(|(actions in prop::collection::vec((action_gen, any::<bool>()), 1..20))| {
+            run(actions, &metrics)
+        })
+    }
 
     // Regression test for the apply_diffs_spine special case that sniffs out an
     // insert, applies it, and then lets the remaining diffs (if any) fall

@@ -1955,7 +1955,12 @@ pub(crate) mod tests {
         )
     }
 
-    fn hollow<T: Timestamp>(lower: T, upper: T, keys: &[&str], len: usize) -> HollowBatch<T> {
+    pub(crate) fn hollow<T: Timestamp>(
+        lower: T,
+        upper: T,
+        keys: &[&str],
+        len: usize,
+    ) -> HollowBatch<T> {
         HollowBatch {
             desc: Description::new(
                 Antichain::from_elem(lower),
