@@ -527,9 +527,8 @@ impl crate::coord::Coordinator {
                 let metadata = self
                     .controller
                     .storage
-                    .collection(coll_id)
+                    .collection_metadata(coll_id)
                     .expect("storage collection for fast-path peek")
-                    .collection_metadata
                     .clone();
                 (
                     peek_command,

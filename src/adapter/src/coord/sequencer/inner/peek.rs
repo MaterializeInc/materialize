@@ -852,16 +852,16 @@ impl Coordinator {
                     _ => {}
                 }
             }
-            self.controller.install_watch_set(
+            self.controller.install_storage_watch_set(
                 transitive_storage_deps,
                 ts,
                 Box::new((uuid, StatementLifecycleEvent::StorageDependenciesFinished)),
             );
-            self.controller.install_watch_set(
+            self.controller.install_compute_watch_set(
                 transitive_compute_deps,
                 ts,
                 Box::new((uuid, StatementLifecycleEvent::ComputeDependenciesFinished)),
-            );
+            )
         }
         let max_query_result_size = std::cmp::min(
             ctx.session().vars().max_query_result_size(),

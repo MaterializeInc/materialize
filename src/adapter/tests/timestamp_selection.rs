@@ -110,25 +110,19 @@ impl TimestampProvider for Frontiers {
         self.compute.get(&(instance, id)).unwrap().write.borrow()
     }
 
-    fn storage_read_capabilities<'a>(
-        &'a self,
-        id: GlobalId,
-    ) -> timely::progress::frontier::AntichainRef<'a, Timestamp> {
-        self.storage.get(&id).unwrap().read.borrow()
-    }
-
-    fn storage_implied_capability<'a>(
-        &'a self,
-        id: GlobalId,
-    ) -> &'a timely::progress::Antichain<Timestamp> {
-        &self.storage.get(&id).unwrap().read
-    }
-
-    fn storage_write_frontier<'a>(
-        &'a self,
-        id: GlobalId,
-    ) -> &'a timely::progress::Antichain<Timestamp> {
-        &self.storage.get(&id).unwrap().write
+    fn storage_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Vec<(
+        GlobalId,
+        timely::progress::Antichain<Timestamp>,
+        timely::progress::Antichain<Timestamp>,
+    )> {
+        self.storage
+            .iter()
+            .filter(|(id, _frontiers)| ids.contains(id))
+            .map(|(id, frontiers)| (*id, frontiers.read.clone(), frontiers.write.clone()))
+            .collect()
     }
 
     fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {

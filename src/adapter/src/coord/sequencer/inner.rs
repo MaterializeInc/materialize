@@ -43,6 +43,7 @@ use mz_sql::names::{
     ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
+use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::{
@@ -775,7 +776,7 @@ impl Coordinator {
         if let Err(e) = self
             .controller
             .storage
-            .collection(sink.from)
+            .check_exists(sink.from)
             .map_err(|e| match e {
                 StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
                     "{} is a {}, which cannot be exported as a sink",
@@ -2042,15 +2043,17 @@ impl Coordinator {
     ) -> TimestampExplanation<mz_repr::Timestamp> {
         let mut sources = Vec::new();
         {
-            for id in id_bundle.storage_ids.iter() {
-                let state = self
-                    .controller
-                    .storage
-                    .collection(*id)
-                    .expect("id does not exist");
+            let storage_ids = id_bundle.storage_ids.iter().cloned().collect_vec();
+            let frontiers = self
+                .controller
+                .storage
+                .collections_frontiers(storage_ids)
+                .expect("missing collection");
+
+            for (id, since, upper) in frontiers {
                 let name = self
                     .catalog()
-                    .try_get_entry(id)
+                    .try_get_entry(&id)
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog()
@@ -2060,8 +2063,8 @@ impl Coordinator {
                     .unwrap_or_else(|| id.to_string());
                 sources.push(TimestampSource {
                     name: format!("{name} ({id}, storage)"),
-                    read_frontier: state.implied_capability.elements().to_vec(),
-                    write_frontier: state.write_frontier.elements().to_vec(),
+                    read_frontier: since.elements().to_vec(),
+                    write_frontier: upper.elements().to_vec(),
                 });
             }
         }
@@ -4192,7 +4195,7 @@ struct CachedStatisticsOracle {
 }
 
 impl CachedStatisticsOracle {
-    pub async fn new<T: Clone + std::fmt::Debug + timely::PartialOrder + Send + Sync>(
+    pub async fn new<T: TimelyTimestamp>(
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<T>,
         storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,

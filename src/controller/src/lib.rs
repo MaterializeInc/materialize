@@ -117,7 +117,9 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-    /// Notification that a watch set has finished. See [`Controller::install_watch_set`] for details.
+    /// Notification that a watch set has finished. See
+    /// [`Controller::install_compute_watch_set`] and
+    /// [`Controller::install_storage_watch_set`] for details.
     WatchSetFinished(Vec<Box<dyn Any>>),
 }
 
@@ -347,7 +349,7 @@ where
     ///
     /// When all the objects in `objects` have advanced to `t`, the object
     /// `token` is returned to the client on the next call to [`Self::process`].
-    pub fn install_watch_set(
+    pub fn install_compute_watch_set(
         &mut self,
         mut objects: BTreeSet<GlobalId>,
         t: T,
@@ -358,14 +360,47 @@ where
                 .compute
                 .find_collection(*id)
                 .map(|s| s.write_frontier())
-                .unwrap_or_else(|_| {
-                    self.storage
-                        .collection(*id)
-                        .expect("some controller must have the collection")
-                        .write_frontier
-                        .borrow()
-                });
+                .expect("missing compute dependency");
             frontier.less_equal(&t)
+        });
+        if objects.is_empty() {
+            self.immediate_watch_sets.push(token);
+        } else {
+            let state = Rc::new((t, token));
+            for id in objects {
+                self.objects_to_unfulfilled_watch_sets
+                    .entry(id)
+                    .or_default()
+                    .push(Rc::clone(&state));
+            }
+        }
+    }
+
+    /// Install a _watch set_ in the controller.
+    ///
+    /// A _watch set_ is a request to be informed by the controller when
+    /// all of the frontiers of a particular set of objects have advanced at
+    /// least to a particular timestamp.
+    ///
+    /// When all the objects in `objects` have advanced to `t`, the object
+    /// `token` is returned to the client on the next call to [`Self::process`].
+    pub fn install_storage_watch_set(
+        &mut self,
+        mut objects: BTreeSet<GlobalId>,
+        t: T,
+        token: Box<dyn Any>,
+    ) {
+        let uppers = self
+            .storage
+            .collections_frontiers(objects.iter().cloned().collect())
+            .expect("missing storage dependencies")
+            .into_iter()
+            .map(|(id, _since, upper)| (id, upper))
+            .collect::<BTreeMap<_, _>>();
+
+        objects.retain(|id| {
+            let upper = uppers.get(id).expect("missing collection");
+            upper.less_equal(&t)
         });
         if objects.is_empty() {
             self.immediate_watch_sets.push(token);

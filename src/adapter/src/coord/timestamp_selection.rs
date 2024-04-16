@@ -14,6 +14,7 @@ use std::fmt;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
@@ -175,34 +176,14 @@ impl TimestampProvider for Coordinator {
             .write_frontier()
     }
 
-    /// Accumulation of read capabilities for the collection.
-    fn storage_read_capabilities<'a>(&'a self, id: GlobalId) -> AntichainRef<'a, Timestamp> {
+    fn storage_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Vec<(GlobalId, Antichain<Timestamp>, Antichain<Timestamp>)> {
         self.controller
             .storage
-            .collection(id)
-            .expect("id does not exist")
-            .read_capabilities
-            .frontier()
-    }
-
-    /// The implicit capability associated with collection creation.
-    fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp> {
-        &self
-            .controller
-            .storage
-            .collection(id)
-            .expect("id does not exist")
-            .implied_capability
-    }
-
-    /// Reported write frontier.
-    fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp> {
-        &self
-            .controller
-            .storage
-            .collection(id)
-            .expect("id does not exist")
-            .write_frontier
+            .collections_frontiers(ids)
+            .expect("missing collections")
     }
 
     fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
@@ -236,9 +217,12 @@ pub trait TimestampProvider {
         id: GlobalId,
     ) -> AntichainRef<'a, Timestamp>;
 
-    fn storage_read_capabilities<'a>(&'a self, id: GlobalId) -> AntichainRef<'a, Timestamp>;
-    fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
-    fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
+    /// Returns the implied capability (since) and write frontier (upper) for
+    /// the specified storage collections.
+    fn storage_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Vec<(GlobalId, Antichain<Timestamp>, Antichain<Timestamp>)>;
 
     fn catalog_state(&self) -> &CatalogState;
 
@@ -477,20 +461,22 @@ pub trait TimestampProvider {
     /// Times that are not greater or equal to this frontier are complete for all collections
     /// identified as arguments.
     fn least_valid_write(&self, id_bundle: &CollectionIdBundle) -> Antichain<mz_repr::Timestamp> {
-        let mut since = Antichain::new();
+        let mut upper = Antichain::new();
         {
-            for id in id_bundle.storage_ids.iter() {
-                since.extend(self.storage_write_frontier(*id).iter().cloned());
+            for (_id, _since, collection_upper) in
+                self.storage_frontiers(id_bundle.storage_ids.iter().cloned().collect_vec())
+            {
+                upper.extend(collection_upper);
             }
         }
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
                 for id in compute_ids.iter() {
-                    since.extend(self.compute_write_frontier(*instance, *id).iter().cloned());
+                    upper.extend(self.compute_write_frontier(*instance, *id).iter().cloned());
                 }
             }
         }
-        since
+        upper
     }
 
     /// Returns `least_valid_write` - 1, i.e., each time in `least_valid_write` stepped back in a
@@ -525,14 +511,20 @@ pub trait TimestampProvider {
             } else {
                 Vec::new()
             };
-        let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
-            let since = self.storage_read_capabilities(*id).to_owned();
-            if since.less_equal(&candidate) {
-                None
-            } else {
-                Some(since)
-            }
-        });
+
+        // TODO: Before, we were using the frontier of read capabilities, not the
+        // implied capability here. The real fix will be to instead report
+        // an error based on the ReadHolds that we could acquire.
+        let invalid_sources = self
+            .storage_frontiers(id_bundle.storage_ids.iter().cloned().collect())
+            .into_iter()
+            .filter_map(|(_id, since, _upper)| {
+                if since.less_equal(&candidate) {
+                    None
+                } else {
+                    Some(since)
+                }
+            });
         let invalid = invalid_indexes
             .into_iter()
             .chain(invalid_sources)

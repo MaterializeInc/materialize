@@ -366,12 +366,20 @@ impl crate::coord::Coordinator {
             let time = Antichain::from_elem(time);
 
             for id in id_bundle.storage_ids.iter() {
-                let collection = coord
+                // TODO(aljoscha): This is a bit iffy, because we're using the
+                // since without having a read hold in place. In this case it's
+                // fine because we are the one controlling the read policy and
+                // the storage controller currently cannot advance its frontiers
+                // concurrently.
+                //
+                // This will be fixed properly in a future commit that makes the
+                // storage controller concurrent.
+                let (read_frontier, _upper) = coord
                     .controller
                     .storage
-                    .collection(*id)
+                    .collection_frontiers(*id)
                     .expect("collection does not exist");
-                let read_frontier = collection.implied_capability.clone();
+
                 let time = time.join(&read_frontier);
                 read_holds
                     .holds
@@ -497,15 +505,24 @@ impl crate::coord::Coordinator {
                     .or_default()
                     .extend(&id_bundle);
                 for id in id_bundle.storage_ids {
-                    let collection = self
+                    // TODO(aljoscha): This is a bit iffy, because we're using
+                    // the since without having a read hold in place. In this
+                    // case it's fine because we are the one controlling the
+                    // read policy and the storage controller currently cannot
+                    // advance its frontiers concurrently.
+                    //
+                    // This will be fixed properly in a future commit that makes
+                    // the storage controller concurrent.
+                    let (read_frontier, _upper) = self
                         .controller
                         .storage
-                        .collection(id)
-                        .expect("id does not exist");
-                    assert!(collection.implied_capability.le(&new_time.borrow()),
+                        .collection_frontiers(id)
+                        .expect("missing storage collection");
+
+                    assert!(read_frontier.le(&new_time.borrow()),
                             "Storage collection {:?} has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                             id,
-                            collection.implied_capability,
+                            read_frontier,
                             new_time,
                             old_time,
                     );
@@ -643,13 +660,18 @@ impl crate::coord::Coordinator {
                     None => {
                         // We didn't get an initial policy, so set the current
                         // since as a static policy.
-                        let collection = self
+                        //
+                        // N.B. This is a bit iffy, because we're using the
+                        // since without having a read hold in place. In this
+                        // case it's fine because we didn't yet install a
+                        // ReadPolicy at the controller, and the since will stay
+                        // put until we put in place such a policy.
+                        let (since, _upper) = self
                             .controller
                             .storage
-                            .collection(*id)
-                            .expect("collection does not exist");
-                        let read_frontier = collection.implied_capability.clone();
-                        ReadPolicy::ValidFrom(read_frontier)
+                            .collection_frontiers(*id)
+                            .expect("missing storage collection");
+                        ReadPolicy::ValidFrom(since)
                     }
                 };
 
@@ -746,12 +768,19 @@ impl crate::coord::Coordinator {
         let time_antichain = Antichain::from_elem(time);
 
         for id in id_bundle.storage_ids.iter() {
-            let collection = self
+            // TODO(aljoscha): This is a bit iffy, because we're using the since
+            // without having a read hold in place. In this case it's fine
+            // because we are the one controlling the read policy and the
+            // storage controller currently cannot advance its frontiers
+            // concurrently.
+            //
+            // This will be fixed properly in a future commit that makes the
+            // storage controller concurrent.
+            let (read_frontier, _upper) = self
                 .controller
                 .storage
-                .collection(*id)
-                .expect("collection does not exist");
-            let read_frontier = collection.implied_capability.clone();
+                .collection_frontiers(*id)
+                .expect("missing storage collection");
             let time_antichain = time_antichain.join(&read_frontier);
             let hold_chain = MutableAntichain::from(time_antichain);
             read_holds.storage_holds.insert(*id, hold_chain);

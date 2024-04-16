@@ -53,8 +53,8 @@ use mz_storage_client::client::{
     StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
-    CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
-    ExportState, IntrospectionType, MonotonicAppender, Response, SnapshotCursor, StorageController,
+    CollectionDescription, DataSource, DataSourceOther, ExportDescription, ExportState,
+    IntrospectionType, MonotonicAppender, Response, SnapshotCursor, StorageController,
     StorageMetadata, StorageTxn,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
@@ -74,6 +74,7 @@ use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
 use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::watch::{channel, Sender};
 use tokio::sync::{mpsc, oneshot};
@@ -289,28 +290,66 @@ where
         &self.config
     }
 
-    fn collection(
+    fn collection_metadata(
         &self,
         id: GlobalId,
-    ) -> Result<&CollectionState<Self::Timestamp>, StorageError<Self::Timestamp>> {
-        self.collections
-            .get(&id)
-            .ok_or(StorageError::IdentifierMissing(id))
+    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
+        let res = self.collection(id)?.collection_metadata.clone();
+
+        Ok(res)
     }
 
-    fn collection_mut(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError<Self::Timestamp>> {
-        self.collections
-            .get_mut(&id)
-            .ok_or(StorageError::IdentifierMissing(id))
-    }
-
-    fn collections(
+    fn collection_frontiers(
         &self,
-    ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_> {
-        Box::new(self.collections.iter())
+        id: GlobalId,
+    ) -> Result<
+        (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
+        StorageError<Self::Timestamp>,
+    > {
+        let collection = self.collection(id)?;
+
+        let res = (
+            collection.implied_capability.clone(),
+            collection.write_frontier.clone(),
+        );
+
+        Ok(res)
+    }
+
+    fn collections_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Result<Vec<(GlobalId, Antichain<T>, Antichain<T>)>, StorageError<Self::Timestamp>> {
+        let res = ids
+            .into_iter()
+            .map(|id| {
+                self.collections
+                    .get(&id)
+                    .map(|c| {
+                        (
+                            id.clone(),
+                            c.implied_capability.clone(),
+                            c.write_frontier.clone(),
+                        )
+                    })
+                    .ok_or(StorageError::IdentifierMissing(id))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(res)
+    }
+
+    fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)> {
+        self.collections
+            .iter()
+            .filter(|(_id, c)| !c.is_dropped())
+            .map(|(id, c)| (*id, c.collection_metadata.clone()))
+            .collect()
+    }
+
+    fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
+        let _collection = self.collection(id)?;
+        Ok(())
     }
 
     fn create_instance(&mut self, id: StorageInstanceId) {
@@ -867,7 +906,7 @@ where
                 .enrich_ingestion(id, ingestion.clone())
                 .expect("verified valid in check_alter_collection_inner");
 
-            let collection = self.collection_mut(id).expect("validated exists");
+            let collection = self.collections.get_mut(&id).expect("validated exists");
             let new_source_exports = match &mut collection.description.data_source {
                 DataSource::Ingestion(active_ingestion) => {
                     // Determine which IDs we're adding.
@@ -1429,7 +1468,8 @@ where
 
         for (id, policy) in policies.into_iter() {
             let collection = self
-                .collection_mut(id)
+                .collections
+                .get_mut(&id)
                 .expect("Reference to absent collection");
 
             let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
@@ -1461,7 +1501,7 @@ where
         let mut read_capability_changes = BTreeMap::default();
 
         for (id, new_upper) in updates.iter() {
-            if let Ok(collection) = self.collection_mut(*id) {
+            if let Some(collection) = self.collections.get_mut(id) {
                 if PartialOrder::less_than(&collection.write_frontier, new_upper) {
                     collection.write_frontier = new_upper.clone();
                 }
@@ -1527,7 +1567,7 @@ where
         // Repeatedly extract the maximum id, and updates for it.
         while let Some(key) = updates.keys().rev().next().cloned() {
             let mut update = updates.remove(&key).unwrap();
-            if let Ok(collection) = self.collection_mut(key) {
+            if let Some(collection) = self.collections.get_mut(&key) {
                 let current_read_capabilities = collection.read_capabilities.frontier().to_owned();
                 for (time, diff) in update.iter() {
                     assert!(
@@ -1942,9 +1982,7 @@ where
         let mut frontiers = external_frontiers;
 
         // Enrich `frontiers` with storage frontiers.
-        for (object_id, collection) in self.active_collections() {
-            let since = collection.read_capabilities.frontier().to_owned();
-            let upper = collection.write_frontier.clone();
+        for (object_id, since, upper) in self.active_collection_frontiers() {
             frontiers.insert(object_id, (since, upper));
         }
         for (object_id, export) in self.active_exports() {
@@ -1999,14 +2037,14 @@ where
         let mut frontiers = external_frontiers;
 
         // Enrich `frontiers` with storage frontiers.
-        for (object_id, collection) in self.active_collections() {
+        for (object_id, collection) in self.collections.iter().filter(|(_id, c)| !c.is_dropped()) {
             let replica_id = collection
                 .cluster_id()
                 .and_then(|c| self.replicas.get(&c))
                 .copied();
             if let Some(replica_id) = replica_id {
                 let upper = collection.write_frontier.clone();
-                frontiers.insert((object_id, replica_id), upper);
+                frontiers.insert((*object_id, replica_id), upper);
             }
         }
         for (object_id, export) in self.active_exports() {
@@ -2474,20 +2512,37 @@ where
         Ok(())
     }
 
-    /// Iterate over collections that have not been dropped.
-    fn active_collections(&self) -> impl Iterator<Item = (GlobalId, &CollectionState<T>)> {
-        self.collections
-            .iter()
-            .filter(|(_id, c)| !c.is_dropped())
-            .map(|(id, c)| (*id, c))
-    }
-
     /// Iterate over exports that have not been dropped.
     fn active_exports(&self) -> impl Iterator<Item = (GlobalId, &ExportState<T>)> {
         self.exports
             .iter()
             .filter(|(_id, e)| !e.is_dropped())
             .map(|(id, e)| (*id, e))
+    }
+
+    /// Returns the frontier of read capabilities and the write frontier for all
+    /// active collections.
+    ///
+    /// This is different from [StorageController::collection_frontiers] which
+    /// returns the implied capability and the write frontier.
+    ///
+    /// A collection is "active" when it has a non empty frontier of read
+    /// capabilties.
+    fn active_collection_frontiers(&self) -> Vec<(GlobalId, Antichain<T>, Antichain<T>)> {
+        let res = self
+            .collections
+            .iter()
+            .filter(|(_id, c)| !c.is_dropped())
+            .map(|(id, c)| {
+                (
+                    id.clone(),
+                    c.read_capabilities.frontier().to_owned(),
+                    c.write_frontier.clone(),
+                )
+            })
+            .collect_vec();
+
+        res
     }
 
     /// Return the since frontier at which we can read from all the given
@@ -3248,7 +3303,7 @@ where
             }
 
             // Fill in the storage dependencies.
-            let collection = self.collection_mut(id).expect("known to exist");
+            let collection = self.collections.get_mut(&id).expect("known to exist");
 
             assert!(
                 PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
@@ -3424,5 +3479,78 @@ where
         self.collection_status_manager
             .append_updates(sink_status_updates, IntrospectionType::SinkStatusHistory)
             .await;
+    }
+
+    fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, StorageError<T>> {
+        self.collections
+            .get(&id)
+            .ok_or(StorageError::IdentifierMissing(id))
+    }
+}
+
+/// State maintained about individual collections.
+#[derive(Debug)]
+pub struct CollectionState<T> {
+    /// Description with which the collection was created
+    pub description: CollectionDescription<T>,
+
+    /// Accumulation of read capabilities for the collection.
+    ///
+    /// This accumulation will always contain `self.implied_capability`, but may also contain
+    /// capabilities held by others who have read dependencies on this collection.
+    pub read_capabilities: MutableAntichain<T>,
+    /// The implicit capability associated with collection creation.  This should never be less
+    /// than the since of the associated persist collection.
+    pub implied_capability: Antichain<T>,
+    /// The policy to use to downgrade `self.implied_capability`.
+    pub read_policy: ReadPolicy<T>,
+
+    /// Storage identifiers on which this collection depends.
+    pub storage_dependencies: Vec<GlobalId>,
+
+    /// Reported write frontier.
+    pub write_frontier: Antichain<T>,
+
+    pub collection_metadata: CollectionMetadata,
+}
+
+impl<T: Timestamp> CollectionState<T> {
+    /// Creates a new collection state, with an initial read policy valid from `since`.
+    pub fn new(
+        description: CollectionDescription<T>,
+        since: Antichain<T>,
+        write_frontier: Antichain<T>,
+        storage_dependencies: Vec<GlobalId>,
+        metadata: CollectionMetadata,
+    ) -> Self {
+        let mut read_capabilities = MutableAntichain::new();
+        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
+        Self {
+            description,
+            read_capabilities,
+            implied_capability: since.clone(),
+            read_policy: ReadPolicy::NoPolicy {
+                initial_since: since,
+            },
+            storage_dependencies,
+            write_frontier,
+            collection_metadata: metadata,
+        }
+    }
+
+    /// Returns the cluster to which the collection is bound, if applicable.
+    pub fn cluster_id(&self) -> Option<StorageInstanceId> {
+        match &self.description.data_source {
+            DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
+            DataSource::Webhook
+            | DataSource::Introspection(_)
+            | DataSource::Other(_)
+            | DataSource::Progress => None,
+        }
+    }
+
+    /// Returns whether the collection was dropped.
+    pub fn is_dropped(&self) -> bool {
+        self.read_capabilities.is_empty()
     }
 }
