@@ -346,27 +346,35 @@ impl Coordinator {
             role_metadata: session.role_metadata().clone(),
         };
 
-        // Acquire read holds at all the REFRESH AT times.
-        // Note that we already acquired a possibly non-precise read hold at mz_now() in the purification,
-        // if any of the REFRESH options involve mz_now(). But now we can acquire precise read holds, because by now
-        // the REFRESH AT expressions have been evaluated, so we can handle something like
-        // `mz_now()::text::int8 + 10000`;
+        // Check whether we can read all inputs at all the REFRESH AT times.
         if let Some(refresh_schedule) = refresh_schedule {
             if !refresh_schedule.ats.is_empty() && matches!(explain_ctx, ExplainContext::None) {
+                // Purification has acquired the earliest possible read holds if there are any
+                // REFRESH options.
+                let read_holds = self
+                    .txn_read_holds
+                    .get(session.conn_id())
+                    .expect("purification acquired read holds if there are REFRESH ATs");
+                let least_valid_read = read_holds.least_valid_read();
+                for refresh_at_ts in &refresh_schedule.ats {
+                    if !least_valid_read.less_equal(refresh_at_ts) {
+                        return Err(AdapterError::InputNotReadableAtRefreshAtTime(
+                            *refresh_at_ts,
+                            least_valid_read,
+                        ));
+                    }
+                }
+                // Also check that no new id has appeared in `sufficient_collections` (e.g. a new
+                // index), otherwise we might be missing some read holds.
                 let ids = self
                     .index_oracle(*cluster_id)
                     .sufficient_collections(resolved_ids.0.iter());
-                for refresh_at_ts in &refresh_schedule.ats {
-                    match self.acquire_read_holds_auto_cleanup(session, *refresh_at_ts, &ids, true)
-                    {
-                        Ok(()) => {}
-                        Err(earliest_possible) => {
-                            return Err(AdapterError::InputNotReadableAtRefreshAtTime(
-                                *refresh_at_ts,
-                                earliest_possible,
-                            ));
-                        }
-                    };
+                if !ids.difference(&read_holds.inner.id_bundle()).is_empty() {
+                    return Err(AdapterError::ChangedPlan(
+                        "the set of possible inputs changed during the creation of the \
+                         materialized view"
+                            .to_string(),
+                    ));
                 }
             }
         }

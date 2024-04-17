@@ -832,26 +832,6 @@ impl crate::coord::Coordinator {
         Ok(read_holds)
     }
 
-    /// Attempt to acquire read holds on the indicated collections at the indicated `time`.
-    /// This is similar to [Self::acquire_read_holds], but instead of returning the read holds,
-    /// it arranges for them to be automatically released at the end of the transaction.
-    ///
-    /// If we are unable to acquire a read hold at the provided `time` for a specific id, then
-    /// depending on the `precise` argument, we either fall back to acquiring a read hold at
-    /// the lowest possible time for that id, or return an error. The returned error contains
-    /// those collection sinces that were later than the specified time.
-    pub(crate) fn acquire_read_holds_auto_cleanup(
-        &mut self,
-        session: &Session,
-        time: Timestamp,
-        id_bundle: &CollectionIdBundle,
-        precise: bool,
-    ) -> Result<(), Vec<(Antichain<Timestamp>, CollectionIdBundle)>> {
-        let read_holds = self.acquire_read_holds(time, id_bundle, precise)?;
-        self.store_transaction_read_holds(session, read_holds);
-        Ok(())
-    }
-
     /// Stash transaction read holds. They will be released when the transaction
     /// is cleaned up.
     pub(crate) fn store_transaction_read_holds(
