@@ -285,7 +285,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             // Store all partitions from the resume_upper so we can create a frontier that comprises
             // timestamps for partitions representing the full range of UUIDs to advance our main
             // capabilities.
-            let mut repl_partitions: partitions::GtidReplicationPartitions = resume_upper.into();
+            let mut data_partitions =
+                partitions::GtidReplicationPartitions::from(resume_upper.clone());
+            let mut progress_partitions = partitions::GtidReplicationPartitions::from(resume_upper);
 
             let mut repl_context = context::ReplContext::new(
                 &config,
@@ -301,7 +303,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 rewinds,
             );
 
-            let mut next_gtid: Option<GtidPartition> = None;
+            let mut active_tx: Option<(Uuid, NonZeroU64)> = None;
 
             while let Some(event) = repl_context.stream.next().await {
                 use mysql_async::binlog::events::*;
@@ -313,50 +315,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     Some(EventData::XidEvent(_)) => {
                         // We've received a transaction commit event, which means that we've seen
                         // all events for the current GTID and we can advance the frontier beyond.
-                        if let Some(mut new_gtid) = next_gtid.take() {
-                            // Increment the transaction-id to the next GTID we should see from this source-id
-                            match new_gtid.timestamp_mut() {
-                                GtidState::Active(time) => {
-                                    *time = time.checked_add(1).unwrap();
-                                }
-                                _ => unreachable!(),
-                            }
+                        let (source_id, tx_id) = active_tx.take().expect("unexpected xid event");
 
-                            if let Err(err) = repl_partitions.update(new_gtid) {
-                                return Ok(return_definite_error(
-                                    err,
-                                    &output_indexes,
-                                    &mut data_output,
-                                    data_cap_set,
-                                    &mut definite_error_handle,
-                                    definite_error_cap_set,
-                                )
-                                .await);
-                            }
-                            let new_upper = repl_partitions.frontier();
-                            repl_context.advance("xid_event", new_upper);
-                        }
-                    }
-                    // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
-                    Some(EventData::GtidEvent(event)) => {
-                        let source_id = Uuid::from_bytes(event.sid());
-                        let received_tx_id =
-                            GtidState::Active(NonZeroU64::new(event.gno()).unwrap());
+                        // Increment the transaction-id to the next GTID we should see from this source-id
+                        let next_tx_id = tx_id.checked_add(1).unwrap();
+                        let next_gtid =
+                            GtidPartition::new_singleton(source_id, GtidState::Active(next_tx_id));
 
-                        // Store this GTID as a partition timestamp for ease of use in publishing data
-                        next_gtid = Some(GtidPartition::new_singleton(source_id, received_tx_id));
-                    }
-                    Some(EventData::RowsEvent(data)) => {
-                        let new_gtid = next_gtid
-                            .as_ref()
-                            .expect("gtid cap should be set by previous GtidEvent");
-
-                        events::handle_rows_event(data, &mut repl_context, new_gtid).await?;
-
-                        // Advance the frontier up to the point right before this GTID, since we
-                        // might still see other events that are part of this same GTID, such as
-                        // row events for multiple tables or large row events split into multiple.
-                        if let Err(err) = repl_partitions.update(new_gtid.clone()) {
+                        if let Err(err) = data_partitions.advance_frontier(next_gtid) {
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
@@ -367,42 +333,98 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             )
                             .await);
                         }
-                        let new_upper = repl_partitions.frontier();
+                        let new_upper = data_partitions.frontier();
+                        repl_context.downgrade_data_cap_set("xid_event", new_upper);
+                    }
+                    // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
+                    Some(EventData::GtidEvent(event)) => {
+                        let source_id = Uuid::from_bytes(event.sid());
+                        let tx_id = NonZeroU64::new(event.gno()).unwrap();
 
-                        repl_context.advance("rows_event", new_upper);
+                        // We are potentially about to ingest a big transaction that we don't want
+                        // to store in memory. For this reason we are immediately downgrading our
+                        // progress frontier to one that includes the upcoming transaction. This
+                        // will cause a remap binding to be minted right away and so the data of
+                        // the transaction will not accumulate in the reclock operator.
+                        let next_tx_id = tx_id.checked_add(1).unwrap();
+                        let next_gtid =
+                            GtidPartition::new_singleton(source_id, GtidState::Active(next_tx_id));
+
+                        if let Err(err) = progress_partitions.advance_frontier(next_gtid) {
+                            return Ok(return_definite_error(
+                                err,
+                                &output_indexes,
+                                &mut data_output,
+                                data_cap_set,
+                                &mut definite_error_handle,
+                                definite_error_cap_set,
+                            )
+                            .await);
+                        }
+                        let new_upper = progress_partitions.frontier();
+                        repl_context.downgrade_progress_cap_set("xid_event", new_upper);
+
+                        // Store the information of the active transaction for the subsequent events
+                        active_tx = Some((source_id, tx_id));
+                    }
+                    Some(EventData::RowsEvent(data)) => {
+                        let (source_id, tx_id) = active_tx
+                            .clone()
+                            .expect("gtid cap should be set by previous GtidEvent");
+                        let cur_gtid =
+                            GtidPartition::new_singleton(source_id, GtidState::Active(tx_id));
+
+                        events::handle_rows_event(data, &mut repl_context, &cur_gtid).await?;
+
+                        // Advance the frontier up to the point right before this GTID, since we
+                        // might still see other events that are part of this same GTID, such as
+                        // row events for multiple tables or large row events split into multiple.
+                        if let Err(err) = data_partitions.advance_frontier(cur_gtid) {
+                            return Ok(return_definite_error(
+                                err,
+                                &output_indexes,
+                                &mut data_output,
+                                data_cap_set,
+                                &mut definite_error_handle,
+                                definite_error_cap_set,
+                            )
+                            .await);
+                        }
+                        let new_upper = data_partitions.frontier();
+                        repl_context.downgrade_data_cap_set("rows_event", new_upper);
                     }
                     Some(EventData::QueryEvent(event)) => {
-                        let new_gtid = next_gtid
-                            .as_ref()
+                        let (source_id, tx_id) = active_tx
+                            .clone()
                             .expect("gtid cap should be set by previous GtidEvent");
+                        let cur_gtid =
+                            GtidPartition::new_singleton(source_id, GtidState::Active(tx_id));
 
                         let should_advance =
-                            events::handle_query_event(event, &mut repl_context, new_gtid).await?;
+                            events::handle_query_event(event, &mut repl_context, &cur_gtid).await?;
 
                         if should_advance {
-                            if let Some(mut new_gtid) = next_gtid.take() {
-                                // Increment the transaction-id to the next GTID we should see from this source-id
-                                match new_gtid.timestamp_mut() {
-                                    GtidState::Active(time) => {
-                                        *time = time.checked_add(1).unwrap();
-                                    }
-                                    _ => unreachable!(),
-                                }
+                            active_tx = None;
+                            // Increment the transaction-id to the next GTID we should see from this source-id
+                            let next_tx_id = tx_id.checked_add(1).unwrap();
+                            let next_gtid = GtidPartition::new_singleton(
+                                source_id,
+                                GtidState::Active(next_tx_id),
+                            );
 
-                                if let Err(err) = repl_partitions.update(new_gtid) {
-                                    return Ok(return_definite_error(
-                                        err,
-                                        &output_indexes,
-                                        &mut data_output,
-                                        data_cap_set,
-                                        &mut definite_error_handle,
-                                        definite_error_cap_set,
-                                    )
-                                    .await);
-                                }
-                                let new_upper = repl_partitions.frontier();
-                                repl_context.advance("query_event", new_upper);
+                            if let Err(err) = data_partitions.advance_frontier(next_gtid) {
+                                return Ok(return_definite_error(
+                                    err,
+                                    &output_indexes,
+                                    &mut data_output,
+                                    data_cap_set,
+                                    &mut definite_error_handle,
+                                    definite_error_cap_set,
+                                )
+                                .await);
                             }
+                            let new_upper = data_partitions.frontier();
+                            repl_context.downgrade_data_cap_set("query_event", new_upper);
                         }
                     }
                     _ => {
