@@ -944,7 +944,7 @@ pub fn plan_subscribe(
     }))
 }
 
-pub fn describe_table(
+pub fn describe_copy_from_table(
     scx: &StatementContext,
     table_name: <Aug as AstInfo>::ItemName,
     columns: Vec<Ident>,
@@ -953,14 +953,32 @@ pub fn describe_table(
     Ok(StatementDesc::new(Some(desc)))
 }
 
+pub fn describe_copy_item(
+    scx: &StatementContext,
+    object_name: <Aug as AstInfo>::ItemName,
+    columns: Vec<Ident>,
+) -> Result<StatementDesc, PlanError> {
+    let (_, desc, _) = query::plan_copy_item(scx, object_name, columns)?;
+    Ok(StatementDesc::new(Some(desc)))
+}
+
 pub fn describe_copy(
     scx: &StatementContext,
-    CopyStatement { relation, .. }: CopyStatement<Aug>,
+    CopyStatement {
+        relation,
+        direction,
+        ..
+    }: CopyStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    Ok(match relation {
-        CopyRelation::Table { name, columns } => describe_table(scx, name, columns)?,
-        CopyRelation::Select(stmt) => describe_select(scx, stmt)?,
-        CopyRelation::Subscribe(stmt) => describe_subscribe(scx, stmt)?,
+    Ok(match (relation, direction) {
+        (CopyRelation::Named { name, columns }, CopyDirection::To) => {
+            describe_copy_item(scx, name, columns)?
+        }
+        (CopyRelation::Named { name, columns }, CopyDirection::From) => {
+            describe_copy_from_table(scx, name, columns)?
+        }
+        (CopyRelation::Select(stmt), _) => describe_select(scx, stmt)?,
+        (CopyRelation::Subscribe(stmt), _) => describe_subscribe(scx, stmt)?,
     }
     .with_is_copy())
 }
@@ -1131,7 +1149,7 @@ pub fn plan_copy(
     }
     match (&direction, &target) {
         (CopyDirection::To, CopyTarget::Stdout) => match relation {
-            CopyRelation::Table { .. } => sql_bail!("table with COPY TO unsupported"),
+            CopyRelation::Named { .. } => sql_bail!("named with COPY TO STDOUT unsupported"),
             CopyRelation::Select(stmt) => {
                 Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
             }
@@ -1140,7 +1158,7 @@ pub fn plan_copy(
             }
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
-            CopyRelation::Table { name, columns } => {
+            CopyRelation::Named { name, columns } => {
                 plan_copy_from(scx, name, columns, format, options)
             }
             _ => sql_bail!("COPY FROM {} not supported", target),
@@ -1149,7 +1167,7 @@ pub fn plan_copy(
             scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
 
             let stmt = match relation {
-                CopyRelation::Table { name, columns } => {
+                CopyRelation::Named { name, columns } => {
                     if !columns.is_empty() {
                         // TODO(mouli): Add support for this
                         sql_bail!("specifying columns for COPY <table_name> TO commands not yet supported; use COPY (SELECT...) TO ... instead");

@@ -38,7 +38,7 @@ fn doc_display_pass<'a, T: AstDisplay>(v: &T) -> RcDoc<'a, ()> {
 
 pub(crate) fn doc_copy<T: AstInfo>(v: &CopyStatement<T>) -> RcDoc {
     let relation = match &v.relation {
-        CopyRelation::Table { name, columns } => {
+        CopyRelation::Named { name, columns } => {
             let mut relation = doc_display_pass(name);
             if !columns.is_empty() {
                 relation = bracket_doc(

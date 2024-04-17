@@ -410,34 +410,16 @@ pub fn plan_insert_query(
     ))
 }
 
-pub fn plan_copy_from(
+pub fn plan_copy_item(
     scx: &StatementContext,
-    table_name: ResolvedItemName,
+    item_name: ResolvedItemName,
     columns: Vec<Ident>,
 ) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
-    let table = scx.get_item_by_resolved_name(&table_name)?;
+    let item = scx.get_item_by_resolved_name(&item_name)?;
 
-    // Validate the target of the insert.
-    if table.item_type() != CatalogItemType::Table {
-        sql_bail!(
-            "cannot insert into {} '{}'",
-            table.item_type(),
-            table_name.full_name_str()
-        );
-    }
-    let mut desc = table
-        .desc(&scx.catalog.resolve_full_name(table.name()))?
+    let mut desc = item
+        .desc(&scx.catalog.resolve_full_name(item.name()))?
         .into_owned();
-    let _ = table
-        .table_details()
-        .expect("attempted to insert into non-table");
-
-    if table.id().is_system() {
-        sql_bail!(
-            "cannot insert into system table '{}'",
-            table_name.full_name_str()
-        );
-    }
 
     let mut ordering = Vec::with_capacity(columns.len());
 
@@ -463,7 +445,7 @@ pub fn plan_copy_from(
                 sql_bail!(
                     "column {} of relation {} does not exist",
                     c.as_str().quoted(),
-                    table_name.full_name_str().quoted()
+                    item_name.full_name_str().quoted()
                 );
             }
         }
@@ -474,7 +456,38 @@ pub fn plan_copy_from(
         desc = RelationDesc::new(RelationType::new(source_types), names);
     };
 
-    Ok((table.id(), desc, ordering))
+    Ok((item.id(), desc, ordering))
+}
+
+pub fn plan_copy_from(
+    scx: &StatementContext,
+    table_name: ResolvedItemName,
+    columns: Vec<Ident>,
+) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
+    let table = scx.get_item_by_resolved_name(&table_name)?;
+
+    // Validate the target of the insert.
+    if table.item_type() != CatalogItemType::Table {
+        sql_bail!(
+            "cannot insert into {} '{}'",
+            table.item_type(),
+            table_name.full_name_str()
+        );
+    }
+
+    let _ = table
+        .table_details()
+        .expect("attempted to insert into non-table");
+
+    if table.id().is_system() {
+        sql_bail!(
+            "cannot insert into system table '{}'",
+            table_name.full_name_str()
+        );
+    }
+    let (id, desc, ordering) = plan_copy_item(scx, table_name, columns)?;
+
+    Ok((id, desc, ordering))
 }
 
 /// Builds a plan that adds the default values for the missing columns and re-orders
