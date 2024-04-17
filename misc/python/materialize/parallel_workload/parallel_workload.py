@@ -148,7 +148,7 @@ def run(
     for i in range(num_threads):
         weights: list[float]
         if complexity == Complexity.DDL:
-            weights = [60, 30, 30, 30, 100]
+            weights = [60, 30, 30, 30, 10]
         elif complexity == Complexity.DML:
             weights = [60, 30, 30, 30, 0]
         elif complexity == Complexity.Read:
@@ -358,7 +358,7 @@ def run(
                 print(f"{thread.name} still running: {worker.exe.last_log}")
         print("Threads have not stopped within 5 minutes, exiting hard")
         # TODO(def-): Switch to failing exit code when #23582 is fixed
-        os._exit(0)
+        os._exit(1)
 
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
