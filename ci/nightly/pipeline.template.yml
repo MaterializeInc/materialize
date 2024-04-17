@@ -187,13 +187,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--redpanda]
-        # TODO(def-) Remove when #19097 is fixed
-        retry:
-          automatic:
-            - exit_status: 1
-              limit: 1
-            - exit_status: 255 # Timeout due to panic
-              limit: 1
 
       - id: redpanda-testdrive-aarch64
         label: ":panda_face: :racing_car: testdrive aarch64"
@@ -219,13 +212,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--kafka-default-partitions=5]
-        # TODO(def-) Remove when #19097 is fixed
-        retry:
-          automatic:
-            - exit_status: 1
-              limit: 1
-            - exit_status: 255 # Timeout due to panic
-              limit: 1
 
       - id: testdrive-replicas-4
         label: ":racing_car: testdrive 4 replicas"
@@ -238,13 +224,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--replicas=4]
-        # TODO(def-) Remove when #19097 is fixed
-        retry:
-          automatic:
-            - exit_status: 1
-              limit: 1
-            - exit_status: 255 # Timeout due to panic
-              limit: 1
 
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
@@ -257,32 +236,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--default-size=1]
-        # TODO(def-) Remove when #19097 is fixed
-        retry:
-          automatic:
-            - exit_status: 1
-              limit: 1
-            - exit_status: 255 # Timeout due to panic
-              limit: 1
 
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--default-size=8]
-        # TODO(def-) Remove when #19097 is fixed
-        retry:
-          automatic:
-            - exit_status: 1
-              limit: 1
-            - exit_status: 255 # Timeout due to panic
-              limit: 1
 
       - id: testdrive-in-cloudtest
         label: Full Testdrive in Cloudtest (K8s)
@@ -295,13 +260,6 @@ steps:
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_full_testdrive.py]
         sanitizer: skip
-        # TODO(def-) Remove when #19097 is fixed
-        retry:
-          automatic:
-            - exit_status: 1
-              limit: 1
-            - exit_status: 255 # Timeout due to panic
-              limit: 1
 
       - id: persistence-testdrive
         label: ":racing_car: testdrive with --persistent-user-tables"
@@ -1366,7 +1324,8 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64
+          # TODO: Decrease when #26675 is fixed
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
