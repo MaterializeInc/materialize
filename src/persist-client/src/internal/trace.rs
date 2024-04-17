@@ -134,6 +134,31 @@ impl<T: PartialEq> PartialEq for ThinSpineBatch<T> {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ThinMerge<T> {
+    pub(crate) since: Antichain<T>,
+    pub(crate) remaining_work: usize,
+    pub(crate) active_compaction: Option<ActiveCompaction>,
+}
+
+impl<T: Clone> ThinMerge<T> {
+    fn fueling(merge: &FuelingMerge<T>) -> Self {
+        ThinMerge {
+            since: merge.since.clone(),
+            remaining_work: merge.remaining_work,
+            active_compaction: None,
+        }
+    }
+
+    fn fueled(batch: &SpineBatch<T>) -> Self {
+        ThinMerge {
+            since: batch.desc.since().clone(),
+            remaining_work: 0,
+            active_compaction: batch.active_compaction.clone(),
+        }
+    }
+}
+
 /// This is a "flattened" representation of a Trace. Goals:
 /// - small updates to the trace should result in small differences in the `FlatTrace`;
 /// - two `FlatTrace`s should be efficient to diff;
@@ -163,7 +188,7 @@ pub struct FlatTrace<T> {
     /// In-progress merges. We store this by spine id instead of level to prepare for some possible
     /// generalizations to spine (merging N of M batches at a level). This is also a natural place
     /// to store incremental merge progress in the future.
-    pub(crate) fueling_merges: BTreeMap<SpineId, FuelingMerge<T>>,
+    pub(crate) merges: BTreeMap<SpineId, ThinMerge<T>>,
 }
 
 impl<T: Timestamp + Lattice> Trace<T> {
@@ -174,7 +199,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
         // this doesn't need to be mutable.
         let hollow_batches = BTreeMap::new();
         let mut spine_batches = BTreeMap::new();
-        let mut fueling_merges = BTreeMap::new();
+        let mut merges = BTreeMap::new();
 
         let mut push_spine_batch = |level: usize, batch: &SpineBatch<T>| {
             let id = batch.id();
@@ -199,16 +224,28 @@ impl<T: Timestamp + Lattice> Trace<T> {
         for (level, state) in self.spine.merging.iter().enumerate() {
             for batch in &state.batches {
                 push_spine_batch(level, batch);
+                if let Some(c) = &batch.active_compaction {
+                    let previous = merges.insert(batch.id, ThinMerge::fueled(batch));
+                    assert!(
+                        previous.is_none(),
+                        "recording a compaction for a batch that already exists! (level={level}, id={:?}, compaction={c:?})",
+                        batch.id,
+                    )
+                }
             }
             if let Some(IdFuelingMerge { id, merge }) = state.merge.as_ref() {
-                fueling_merges.insert(*id, merge.clone());
+                let previous = merges.insert(*id, ThinMerge::fueling(merge));
+                assert!(
+                    previous.is_none(),
+                    "fueling a merge for a batch that already exists! (level={level}, id={id:?}, merge={merge:?})"
+                )
             }
         }
 
         if !self.roundtrip_structure {
             assert!(hollow_batches.is_empty());
             spine_batches.clear();
-            fueling_merges.clear();
+            merges.clear();
         }
 
         FlatTrace {
@@ -216,7 +253,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
             legacy_batches,
             hollow_batches,
             spine_batches,
-            fueling_merges,
+            merges,
         }
     }
     pub(crate) fn unflatten(value: FlatTrace<T>) -> Result<Self, String> {
@@ -225,7 +262,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
             legacy_batches,
             mut hollow_batches,
             spine_batches,
-            mut fueling_merges,
+            mut merges,
         } = value;
 
         // If the flattened representation has spine batches, we know to preserve the structure for
@@ -342,6 +379,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 id,
                 desc: batch.desc,
                 parts,
+                active_compaction,
                 len,
             };
 
@@ -349,9 +387,15 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
             state.push_batch(batch);
             if let Some(id) = state.id() {
-                state.merge = fueling_merges
-                    .remove(&id)
-                    .map(|merge| IdFuelingMerge { id, merge });
+                if let Some(merge) = merges.remove(&id) {
+                    state.merge = Some(IdFuelingMerge {
+                        id,
+                        merge: FuelingMerge {
+                            since: merge.since,
+                            remaining_work: merge.remaining_work,
+                        },
+                    })
+                }
             }
         }
 
@@ -383,7 +427,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
             }
         }
         check_empty("hollow batches", hollow_batches.len())?;
-        check_empty("merges", fueling_merges.len())?;
+        check_empty("merges", merges.len())?;
 
         debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
 
@@ -580,11 +624,17 @@ pub struct IdHollowBatch<T> {
     pub batch: Arc<HollowBatch<T>>,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+pub struct ActiveCompaction {
+    pub start_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct SpineBatch<T> {
     id: SpineId,
     desc: Description<T>,
     parts: Vec<IdHollowBatch<T>>,
+    active_compaction: Option<ActiveCompaction>,
     // A cached version of parts.iter().map(|x| x.len).sum()
     len: usize,
 }
@@ -599,6 +649,7 @@ impl<T> SpineBatch<T> {
             desc: batch.batch.desc.clone(),
             len: batch.batch.len,
             parts: vec![batch],
+            active_compaction: None,
         }
     }
 }
@@ -754,6 +805,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             id,
             parts,
             desc,
+            active_compaction: _,
             len: _,
         } = self;
         // first, determine if a subset of parts can be cleanly replaced by the merge res
@@ -785,6 +837,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                     desc: desc.to_owned(),
                     len: new_parts.iter().map(|x| x.batch.len).sum(),
                     parts: new_parts,
+                    active_compaction: None,
                 };
                 if new_spine_batch.len() > self.len() {
                     return ApplyMergeResult::NotAppliedTooManyUpdates;
@@ -798,17 +851,20 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
 
     #[cfg(test)]
     fn describe(&self, extended: bool) -> String {
-        match (extended, self) {
-            (
-                false,
-                SpineBatch {
-                    id,
-                    parts,
-                    desc,
-                    len,
-                },
-            ) => format!(
-                "[{}-{}]{:?}{:?}{}/{}",
+        let SpineBatch {
+            id,
+            parts,
+            desc,
+            active_compaction,
+            len,
+        } = self;
+        let compaction = match active_compaction {
+            None => "".to_owned(),
+            Some(c) => format!(" (c@{})", c.start_ms),
+        };
+        match extended {
+            false => format!(
+                "[{}-{}]{:?}{:?}{}/{}{compaction}",
                 id.0,
                 id.1,
                 desc.lower().elements(),
@@ -816,17 +872,9 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 parts.len(),
                 len
             ),
-            (
-                true,
-                SpineBatch {
-                    id,
-                    desc,
-                    parts,
-                    len,
-                },
-            ) => {
+            true => {
                 format!(
-                    "[{}-{}]{:?}{:?}{:?} {}/{}{}",
+                    "[{}-{}]{:?}{:?}{:?} {}/{}{}{compaction}",
                     id.0,
                     id.1,
                     desc.lower().elements(),
@@ -923,6 +971,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
             desc,
             len,
             parts: merged_parts,
+            active_compaction: None,
         })
     }
 }

@@ -24,7 +24,7 @@ message ProtoU64Description {
 }
 
 message ProtoHollowBatchPart {
-   oneof kind {
+    oneof kind {
         string key = 1;
         bytes inline = 5;
     }
@@ -76,14 +76,19 @@ message ProtoIdSpineBatch {
     ProtoSpineBatch batch = 2;
 }
 
-message ProtoFuelingMerge {
-    ProtoU64Antichain since = 1;
-    uint64 remaining_work = 2;
+message ProtoCompaction {
+    uint64 start_ms = 1;
 }
 
-message ProtoIdFuelingMerge {
+message ProtoMerge {
+    ProtoU64Antichain since = 1;
+    uint64 remaining_work = 2;
+    ProtoCompaction active_compaction = 3;
+}
+
+message ProtoIdMerge {
     ProtoSpineId id = 1;
-    ProtoFuelingMerge merge = 2;
+    ProtoMerge merge = 2;
 }
 
 message ProtoHollowRollup {
@@ -96,7 +101,7 @@ message ProtoTrace {
     repeated ProtoHollowBatch legacy_batches = 2;
     repeated ProtoIdHollowBatch hollow_batches = 3;
     repeated ProtoIdSpineBatch spine_batches = 4;
-    repeated ProtoIdFuelingMerge merges = 5;
+    repeated ProtoIdMerge merges = 5;
 }
 
 message ProtoLeasedReaderState {

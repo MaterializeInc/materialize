@@ -30,7 +30,7 @@ use crate::internal::state::{
     ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State, StateCollections,
     WriterState,
 };
-use crate::internal::trace::{FueledMergeRes, FuelingMerge, SpineId, ThinSpineBatch, Trace};
+use crate::internal::trace::{FueledMergeRes, SpineId, ThinMerge, ThinSpineBatch, Trace};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig, ShardId};
@@ -81,7 +81,7 @@ pub struct StateDiff<T> {
     pub(crate) legacy_batches: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
     pub(crate) hollow_batches: Vec<StateFieldDiff<SpineId, Arc<HollowBatch<T>>>>,
     pub(crate) spine_batches: Vec<StateFieldDiff<SpineId, ThinSpineBatch<T>>>,
-    pub(crate) fueling_merges: Vec<StateFieldDiff<SpineId, FuelingMerge<T>>>,
+    pub(crate) merges: Vec<StateFieldDiff<SpineId, ThinMerge<T>>>,
 }
 
 impl<T: Timestamp + Codec64> StateDiff<T> {
@@ -108,7 +108,7 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             legacy_batches: Vec::default(),
             hollow_batches: Vec::default(),
             spine_batches: Vec::default(),
-            fueling_merges: Vec::default(),
+            merges: Vec::default(),
         }
     }
 
@@ -210,9 +210,9 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             &mut diffs.spine_batches,
         );
         diff_field_sorted_iter(
-            from_flat.fueling_merges.iter(),
-            to_flat.fueling_merges.iter(),
-            &mut diffs.fueling_merges,
+            from_flat.merges.iter(),
+            to_flat.merges.iter(),
+            &mut diffs.merges,
         );
         diffs
     }
@@ -380,7 +380,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             legacy_batches: diff_legacy_batches,
             hollow_batches: diff_hollow_batches,
             spine_batches: diff_spine_batches,
-            fueling_merges: diff_fueling_merges,
+            merges: diff_merges,
         } = diff;
         if self.seqno == diff_seqno_to {
             return Ok(());
@@ -422,7 +422,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
 
         let structure_unchanged = diff_hollow_batches.is_empty()
             && diff_spine_batches.is_empty()
-            && diff_fueling_merges.is_empty();
+            && diff_merges.is_empty();
         let spine_unchanged =
             diff_since.is_empty() && diff_legacy_batches.is_empty() && structure_unchanged;
 
@@ -477,7 +477,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                 &mut flat.hollow_batches,
             )?;
             apply_diffs_map("spine_batches", diff_spine_batches, &mut flat.spine_batches)?;
-            apply_diffs_map("merges", diff_fueling_merges, &mut flat.fueling_merges)?;
+            apply_diffs_map("merges", diff_merges, &mut flat.merges)?;
         }
 
         if let Some(flat) = flat {

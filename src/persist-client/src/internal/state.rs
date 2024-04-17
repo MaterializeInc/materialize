@@ -1784,7 +1784,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
         let () = s.serialize_field("batches", &trace.legacy_batches.keys().collect::<Vec<_>>())?;
         let () = s.serialize_field("hollow_batches", &trace.hollow_batches)?;
         let () = s.serialize_field("spine_batches", &trace.spine_batches)?;
-        let () = s.serialize_field("fueling_merges", &trace.fueling_merges)?;
+        let () = s.serialize_field("merges", &trace.merges)?;
         s.end()
     }
 }
