@@ -27,8 +27,7 @@ use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
-use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
@@ -305,6 +304,7 @@ pub struct BatchBuilderConfig {
     pub(crate) blob_target_size: usize,
     pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
+    pub(crate) batch_columnar_format: BatchColumnarFormat,
     pub(crate) inline_writes_single_max_bytes: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
@@ -316,6 +316,13 @@ pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
     "persist_batch_delete_enabled",
     false,
     "Whether to actually delete blobs when batch delete is called (Materialize).",
+);
+
+/// The columnar format we write down a batch with.
+pub(crate) const BATCH_COLUMNAR_FORMAT: Config<&'static str> = Config::new(
+    "persist_batch_columnar_format",
+    BatchColumnarFormat::default().as_str(),
+    "Columnar format for a batch written to Persist (Materialize).",
 );
 
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
@@ -355,6 +362,7 @@ impl BatchBuilderConfig {
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
+            batch_columnar_format: BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value)),
             inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),

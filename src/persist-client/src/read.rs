@@ -476,6 +476,7 @@ where
     /// [`Subscribe`], which contains a [`Listen`], to fetch batches.
     async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
         let fetched_part = fetch_leased_part(
+            &self.handle.cfg,
             &part,
             self.handle.blob.as_ref(),
             Arc::clone(&self.handle.metrics),
@@ -1160,9 +1161,11 @@ where
         let reader_id = self.reader_id.clone();
         let schemas = self.schemas.clone();
         let mut lease_returner = self.lease_returner.clone();
+        let persist_cfg = self.cfg.clone();
         let stream = async_stream::stream! {
             for part in snap {
                 let mut fetched_part = fetch_leased_part(
+                    &persist_cfg,
                     &part,
                     blob.as_ref(),
                     Arc::clone(&metrics),

@@ -9,7 +9,7 @@
 
 //! Fetching batches of data from persist's backing store
 
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Instant;
@@ -18,6 +18,7 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_dyncfg::{Config, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -35,6 +36,7 @@ use crate::batch::{
     proto_fetch_batch_filter, ProtoFetchBatchFilter, ProtoFetchBatchFilterListen, ProtoLease,
     ProtoLeasedBatchPart,
 };
+use crate::cfg::PersistConfig;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
@@ -43,6 +45,30 @@ use crate::internal::paths::BlobKey;
 use crate::internal::state::{BatchPart, HollowBatchPart};
 use crate::read::LeasedReaderId;
 use crate::ShardId;
+
+/// The columnar format we write down a batch with.
+pub const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
+    "persist_part_decode_format",
+    PartDecodeFormat::default().as_str(),
+    "Format we'll use to decode a Persist 'Part' (Materialize).",
+);
+
+#[derive(Debug, Clone)]
+pub(crate) struct BatchFetcherConfig {
+    pub(crate) part_decode_format: ConfigValHandle<String>,
+}
+
+impl BatchFetcherConfig {
+    pub fn new(value: &PersistConfig) -> Self {
+        BatchFetcherConfig {
+            part_decode_format: PART_DECODE_FORMAT.handle(value),
+        }
+    }
+
+    pub fn part_decode_format(&self) -> PartDecodeFormat {
+        PartDecodeFormat::from_str(self.part_decode_format.get().as_str())
+    }
+}
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
 #[derive(Debug)]
@@ -54,6 +80,7 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    pub(crate) cfg: BatchFetcherConfig,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_metrics: Arc<ShardMetrics>,
@@ -137,6 +164,7 @@ where
             schemas: self.schemas.clone(),
             filter: part.filter.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
+            structured_part_audit: self.cfg.part_decode_format(),
             _phantom: PhantomData,
         };
         Ok(fetched_blob)
@@ -235,6 +263,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoFetchBatchFilter> for FetchBatchFilte
 /// Note to check the `LeasedBatchPart` documentation for how to handle the
 /// returned value.
 pub(crate) async fn fetch_leased_part<K, V, T, D>(
+    cfg: &PersistConfig,
     part: &LeasedBatchPart<T>,
     blob: &(dyn Blob + Send + Sync),
     metrics: Arc<Metrics>,
@@ -270,12 +299,14 @@ where
         // process.
         panic!("{} could not fetch batch part: {}", reader_id, blob_key)
     });
+    let part_cfg = BatchFetcherConfig::new(cfg);
     FetchedPart::new(
         metrics,
         encoded_part,
         schemas,
         part.filter.clone(),
         part.filter_pushdown_audit,
+        part_cfg.part_decode_format(),
         part.part.stats(),
     )
 }
@@ -474,6 +505,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     schemas: Schemas<K, V>,
     filter: FetchBatchFilter<T>,
     filter_pushdown_audit: bool,
+    structured_part_audit: PartDecodeFormat,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -500,6 +532,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             schemas: self.schemas.clone(),
             filter: self.filter.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
+            structured_part_audit: self.structured_part_audit.clone(),
             _phantom: self._phantom.clone(),
         }
     }
@@ -540,6 +573,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
             self.schemas.clone(),
             self.filter.clone(),
             self.filter_pushdown_audit,
+            self.structured_part_audit,
             stats,
         )
     }
@@ -586,6 +620,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         schemas: Schemas<K, V>,
         ts_filter: FetchBatchFilter<T>,
         filter_pushdown_audit: bool,
+        structured_part_audit: PartDecodeFormat,
         stats: Option<&LazyPartStats>,
     ) -> Self {
         let filter_pushdown_audit = if filter_pushdown_audit {
@@ -1001,6 +1036,63 @@ impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for 
             leased_seqno: lease.seqno.map(|x| x.into_rust()).transpose()?,
             filter_pushdown_audit: proto.filter_pushdown_audit,
         })
+    }
+}
+
+/// Format we'll use when decoding a [`Part`].
+#[derive(Debug, Copy, Clone)]
+pub enum PartDecodeFormat {
+    /// Decode from opaque `Codec` data.
+    Row {
+        /// Will also decode the structured data, and validate it matches.
+        validate_structured: bool,
+    },
+}
+
+impl PartDecodeFormat {
+    /// Returns a default value for [`PartDecodeFormat`].
+    pub const fn default() -> Self {
+        // IMPORTANT: By default we will not decode or validate our structured format until it's
+        // more stable.
+        PartDecodeFormat::Row {
+            validate_structured: false,
+        }
+    }
+
+    /// Parses a [`PartDecodeFormat`] from the provided string, falling back to the default if the
+    /// provided value is unrecognized.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "row" => PartDecodeFormat::Row {
+                validate_structured: false,
+            },
+            "row_with_validate" => PartDecodeFormat::Row {
+                validate_structured: true,
+            },
+            x => {
+                let default = PartDecodeFormat::default();
+                tracing::error!("Invalid part decode format: '{x}', falling back to {default}");
+                default
+            }
+        }
+    }
+
+    /// Returns a string representation of [`PartDecodeFormat`].
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            PartDecodeFormat::Row {
+                validate_structured: false,
+            } => "row",
+            PartDecodeFormat::Row {
+                validate_structured: true,
+            } => "row_with_validate",
+        }
+    }
+}
+
+impl fmt::Display for PartDecodeFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

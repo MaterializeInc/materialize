@@ -26,13 +26,70 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
+use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
 use crate::gen::persist::{
     ProtoBatchFormat, ProtoBatchPartInline, ProtoU64Antichain, ProtoU64Description,
 };
 use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
-use crate::indexed::columnar::ColumnarRecords;
+use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::location::Blob;
 use crate::metrics::ColumnarMetrics;
+
+/// Column format of a batch.
+#[derive(Debug, Copy, Clone)]
+pub enum BatchColumnarFormat {
+    /// Rows are encoded to `ProtoRow` and then a batch is written down as a Parquet with a schema
+    /// of `(k, v, t, d)`, where `k` are the serialized bytes.
+    Row,
+    /// Rows are encoded to `ProtoRow` and a columnar struct. The batch is written down as Parquet
+    /// with a schema of `(k, k_c, v, v_c, t, d)`, where `k` are the serialized bytes and `k_c` is
+    /// nested columnar data.
+    Both,
+}
+
+impl BatchColumnarFormat {
+    /// Returns a default value for [`BatchColumnarFormat`].
+    pub const fn default() -> Self {
+        // IMPORTANT: Default to only writing Row data and not our newer structured format.
+        BatchColumnarFormat::Row
+    }
+
+    /// Returns a [`BatchColumnarFormat`] for a given `&str`, falling back to a default value if
+    /// provided `&str` is invalid.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "row" => BatchColumnarFormat::Row,
+            "both" => BatchColumnarFormat::Both,
+            x => {
+                let default = BatchColumnarFormat::default();
+                tracing::error!("Invalid batch columnar type: {x}, falling back to {default}");
+                default
+            }
+        }
+    }
+
+    /// Returns a string representation for the [`BatchColumnarFormat`].
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            BatchColumnarFormat::Row => "row",
+            BatchColumnarFormat::Both => "both",
+        }
+    }
+
+    /// Returns if we should encode a Batch in a structured format.
+    pub const fn is_structured(&self) -> bool {
+        match self {
+            BatchColumnarFormat::Row => false,
+            BatchColumnarFormat::Both => true,
+        }
+    }
+}
+
+impl fmt::Display for BatchColumnarFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// The metadata necessary to reconstruct a list of [BlobTraceBatchPart]s.
 ///
