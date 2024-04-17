@@ -278,6 +278,29 @@ impl<T: TimelyTimestamp + Lattice> ReadHoldsInner<T> {
         since
     }
 
+    /// Returns the frontier at which this [ReadHoldsInner] is holding back the
+    /// since of the collection identified by `id`. This does not mean that the
+    /// overall since of the collection is what we report here. Only that it is
+    /// _at least_ held back to the reported frontier by this read hold.
+    ///
+    /// This method is not meant to be fast, use wisely!
+    pub fn since(&self, desired_id: &GlobalId) -> Antichain<T> {
+        let mut since = Antichain::new();
+
+        if let Some(hold) = self.storage_holds.get(desired_id) {
+            since.extend(hold.frontier().to_owned());
+        }
+
+        for ((_instance, id), hold) in self.compute_holds.iter() {
+            if id != desired_id {
+                continue;
+            }
+            since.extend(hold.frontier().to_owned());
+        }
+
+        since
+    }
+
     pub fn merge(&mut self, other: Self) {
         for (id, mut other_hold) in other.storage_holds {
             let hold = self.storage_holds.entry(id).or_default();
