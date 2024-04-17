@@ -588,9 +588,11 @@ mz_aws_connections
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
+mz_cluster_schedules
 mz_comments
 mz_internal_cluster_replicas
 mz_kafka_sources
+mz_materialized_view_refresh_strategies
 mz_object_dependencies
 mz_optimizer_notices
 mz_postgres_sources
@@ -704,7 +706,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-49
+51
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

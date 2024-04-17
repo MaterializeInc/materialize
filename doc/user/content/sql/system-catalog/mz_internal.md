@@ -130,6 +130,17 @@ the most recent status for each AWS PrivateLink connection in the system.
 | `last_status_change_at` | [`timestamp with time zone`] | Wall-clock timestamp of the connection status change.|
 | `status` | [`text`] | | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`. |
 
+### `mz_cluster_schedules`
+
+The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each cluster.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_schedules -->
+| Field                               | Type         | Meaning                                                       |
+|-------------------------------------|--------------|---------------------------------------------------------------|
+| `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters).|
+| `type`                              | [`text`]     | `on-refresh`, or `manual` (the default)                       |
+| `refresh_rehydration_time_estimate` | [`interval`] | The interval given in the `REHYDRATION TIME ESTIMATE` option. |
+
 ### `mz_cluster_replica_frontiers`
 
 The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
@@ -374,6 +385,19 @@ At this time, we do not make any guarantees about the freshness of these numbers
 | `global_lag`              | [`interval`]     | The amount of time the materialization lags behind its root inputs (sources and tables). |
 | `slowest_local_input_id`  | [`text`]         | The ID of the slowest direct input.                                                      |
 | `slowest_global_input_id` | [`text`]         | The ID of the slowest root input.                                                        |
+
+### `mz_materialized_view_refresh_strategies`
+
+The `mz_materialized_view_refresh_strategies` table shows each `REFRESH` option specified for each materialized view. If a materialized view has multiple `REFRESH` options, then this table will contain a row for each refresh option.
+
+<!-- RELATION_SPEC mz_internal.mz_materialized_view_refresh_strategies -->
+| Field                  | Type       | Meaning                                                                                       |
+|------------------------|------------|-----------------------------------------------------------------------------------------------|
+| `materialized_view_id` | [`text`]   | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views)  |
+| `type`                 | [`text`]   | `at`, `every`, or `on-commit` (the default)                                                   |
+| `interval`             | [`interval`] | The refresh interval of a `REFRESH EVERY` option, or null if the `type` is not `every`.            |
+| `aligned_to`           | [`timestamp with time zone`] | The `ALIGNED TO` option of a `REFRESH EVERY` option, or null if the `type` is not `every`.|
+| `at`                   | [`timestamp with time zone`] | The time of a `REFRESH AT`, or null if the `type` is not `at`.              |
 
 ### `mz_object_dependencies`
 

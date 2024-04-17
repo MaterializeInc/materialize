@@ -1078,6 +1078,29 @@ NULL
 70
 100
 
+## REFRESH AT CREATION + REFRESH EVERY ALIGNED TO
+## We create an MV that would be first refreshed only much later, if it were not for the REFRESH AT CREATION.
+statement ok
+CREATE MATERIALIZED VIEW mv_multiple_refresh_options WITH (
+    REFRESH AT CREATION,
+    REFRESH EVERY '1 day' ALIGNED TO mz_now()::text::int8 + 1000000
+) AS
+SELECT DISTINCT 5*x FROM t2;
+
+# Should return quickly due to the creation refresh.
+query I
+SELECT * FROM mv_multiple_refresh_options;
+----
+NULL
+0
+5
+20
+35
+50
+150
+350
+500
+
 ## EXPLAIN shouldn't try to grab read holds in `create_materialized_view_validate`
 
 statement ok
@@ -1318,3 +1341,68 @@ CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMA
 
 statement error db error: ERROR: invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "1000000000000 days"
 CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1000000000000 days'));
+
+## Introspection
+
+query TTTBB
+SELECT
+  name,
+  type,
+  "interval",
+  now() - aligned_to < INTERVAL '30 minutes',
+  now() - at < INTERVAL '30 minutes'
+FROM mz_internal.mz_materialized_view_refresh_strategies mvrs, mz_catalog.mz_materialized_views mv
+WHERE mv.id = mvrs.materialized_view_id
+ORDER BY name;
+----
+const_mv  every  24:00:00  true  NULL
+const_mv2  at  NULL  NULL  true
+mv  on-commit  NULL  NULL  NULL
+mv10  at  NULL  NULL  true
+mv11  at  NULL  NULL  true
+mv12  every  00:00:00.001  true  NULL
+mv3  at  NULL  NULL  true
+mv3  at  NULL  NULL  true
+mv4  at  NULL  NULL  true
+mv5  at  NULL  NULL  true
+mv6  at  NULL  NULL  true
+mv7  at  NULL  NULL  true
+mv8  at  NULL  NULL  true
+mv9  every  00:00:08  true  NULL
+mv_aligned_to_future  every  00:00:10  true  NULL
+mv_aligned_to_past  every  00:00:10  true  NULL
+mv_assertion_at_begin  on-commit  NULL  NULL  NULL
+mv_assertion_at_end  on-commit  NULL  NULL  NULL
+mv_assertion_plus_refresh_every  every  00:00:08  true  NULL
+mv_desugar1  at  NULL  NULL  true
+mv_desugar2  every  24:00:00  true  NULL
+mv_good_assertion_on_renamed_column  on-commit  NULL  NULL  NULL
+mv_greatest  at  NULL  NULL  true
+mv_misordered_assertions  on-commit  NULL  NULL  NULL
+mv_multiple_refresh_options  at  NULL  NULL  true
+mv_multiple_refresh_options  every  24:00:00  true  NULL
+mv_no_assertions  on-commit  NULL  NULL  NULL
+mv_no_creation_refresh  every  27:46:40  true  NULL
+mv_on_commit  on-commit  NULL  NULL  NULL
+mv_two_assertions  on-commit  NULL  NULL  NULL
+
+statement ok
+CREATE CLUSTER c_rehydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+
+query TTT
+SELECT name, cs.type, cs.refresh_rehydration_time_estimate
+FROM mz_internal.mz_cluster_schedules cs, mz_catalog.mz_clusters c
+WHERE c.id = cs.cluster_id
+ORDER BY name;
+----
+c_rehydration_time_estimate  on-refresh  00:16:35
+c_schedule_1  on-refresh  00:00:00
+c_schedule_2  manual  NULL
+c_schedule_3  on-refresh  00:00:00
+c_schedule_4  manual  NULL
+c_schedule_5  manual  NULL
+mz_introspection  manual  NULL
+mz_probe  manual  NULL
+mz_support  manual  NULL
+mz_system  manual  NULL
+quickstart  manual  NULL

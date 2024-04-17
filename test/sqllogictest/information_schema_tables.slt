@@ -357,6 +357,10 @@ mz_cluster_replica_utilization
 VIEW
 materialize
 mz_internal
+mz_cluster_schedules
+BASE TABLE
+materialize
+mz_internal
 mz_comments
 BASE TABLE
 materialize
@@ -535,6 +539,10 @@ materialize
 mz_internal
 mz_materialization_lag
 VIEW
+materialize
+mz_internal
+mz_materialized_view_refresh_strategies
+BASE TABLE
 materialize
 mz_internal
 mz_message_batch_counts_received_raw

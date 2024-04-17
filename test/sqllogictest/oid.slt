@@ -1054,3 +1054,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16942  mz_notices_redacted
 16943  mz_notices_ind
 16945  mz_role_parameters
+16946  mz_materialized_view_refresh_strategies
+16947  mz_cluster_schedules
