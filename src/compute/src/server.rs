@@ -42,7 +42,6 @@ use tokio::sync::mpsc::error::SendError;
 use tracing::{info, trace, warn};
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
-use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
 
 /// Caller-provided configuration for compute.
@@ -460,6 +459,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
                 compute_state.report_compute_frontiers();
+                compute_state.log_input_frontiers();
                 compute_state.report_dropped_collections();
                 compute_state.report_operator_hydration();
             }
@@ -750,17 +750,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     }
                 };
 
-                // Compensate what already was sent to logging sources.
-                if let Some(logger) = &compute_state.compute_logger {
-                    if let Some(time) = collection.reported_frontier.logging_time() {
-                        logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
-                    }
-                    if let Some(time) = new_reported_frontier.logging_time() {
-                        logger.log(ComputeEvent::Frontier { id, time, diff: 1 });
-                    }
-                }
-
-                collection.reported_frontier = new_reported_frontier;
+                collection.set_reported_frontier(new_reported_frontier);
 
                 // Sink tokens should be retained for retained dataflows, and dropped for dropped
                 // dataflows.

@@ -49,6 +49,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
+use timely::dataflow::operators::probe;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::scheduling::Scheduler;
@@ -59,7 +60,7 @@ use uuid::Uuid;
 
 use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
 use crate::logging;
-use crate::logging::compute::ComputeEvent;
+use crate::logging::compute::{CollectionLogging, ComputeEvent};
 use crate::metrics::ComputeMetrics;
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
@@ -193,6 +194,25 @@ impl ComputeState {
         self.collections
             .get_mut(&id)
             .expect("collection must exist")
+    }
+
+    /// Construct a new frontier probe for the given input and add it to the state of the given
+    /// collections.
+    ///
+    /// The caller is responsible for attaching the returned probe handle to the respective
+    /// dataflow input stream.
+    pub fn input_probe_for(
+        &mut self,
+        input_id: GlobalId,
+        collection_ids: impl Iterator<Item = GlobalId>,
+    ) -> probe::Handle<Timestamp> {
+        let probe = probe::Handle::default();
+        for id in collection_ids {
+            if let Some(collection) = self.collections.get_mut(&id) {
+                collection.input_probes.insert(input_id, probe.clone());
+            }
+        }
+        probe
     }
 
     /// Apply the current `worker_config` to the compute state.
@@ -360,9 +380,19 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         for object_id in dataflow.export_ids() {
             let mut collection = CollectionState::new();
 
-            collection.reported_frontier = ReportedFrontier::NotReported {
+            if let Some(logger) = self.compute_state.compute_logger.clone() {
+                let logging = CollectionLogging::new(
+                    object_id,
+                    logger,
+                    dataflow_index,
+                    dataflow.import_ids(),
+                );
+                collection.logging = Some(logging);
+            }
+
+            collection.set_reported_frontier(ReportedFrontier::NotReported {
                 lower: as_of.clone(),
-            };
+            });
 
             let existing = self.compute_state.collections.insert(object_id, collection);
             if existing.is_some() {
@@ -370,19 +400,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     id = ?object_id,
                     "existing collection for newly created dataflow",
                 );
-            }
-
-            // Log dataflow construction and frontier construction.
-            if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                logger.log(ComputeEvent::Export {
-                    id: object_id,
-                    dataflow_index,
-                });
-                logger.log(ComputeEvent::Frontier {
-                    id: object_id,
-                    time: timely::progress::Timestamp::minimum(),
-                    diff: 1,
-                });
             }
         }
 
@@ -473,14 +490,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
-        // Remove frontier logging.
-        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(ComputeEvent::ExportDropped { id });
-            if let Some(time) = collection.reported_frontier.logging_time() {
-                logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
-            }
-        }
-
         // We need to emit a final response reporting the dropping of this collection,
         // unless:
         //  * The collection is a subscribe, in which case we will emit a
@@ -488,7 +497,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         //  * The collection has already advanced to the empty frontier, in which case
         //    the final `FrontierUpper` response already serves the purpose of reporting
         //    the end of the dataflow.
-        if !collection.is_subscribe() && !collection.reported_frontier.is_empty() {
+        if !collection.is_subscribe() && !collection.reported_frontier().is_empty() {
             self.compute_state.dropped_collections.push(id);
         }
     }
@@ -510,7 +519,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.compute_state.traces.set(id, trace);
 
             // Initialize compute and logging state for the logging index.
-            let collection = CollectionState::new();
+            let mut collection = CollectionState::new();
+
+            let logging =
+                CollectionLogging::new(id, logger.clone(), dataflow_index, std::iter::empty());
+            collection.logging = Some(logging);
+
             let existing = self.compute_state.collections.insert(id, collection);
             if existing.is_some() {
                 error!(
@@ -518,13 +532,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     "existing collection for newly initialized logging export",
                 );
             }
-
-            logger.log(ComputeEvent::Export { id, dataflow_index });
-            logger.log(ComputeEvent::Frontier {
-                id,
-                time: timely::progress::Timestamp::minimum(),
-                diff: 1,
-            });
         }
 
         // Sanity check.
@@ -561,7 +568,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 continue;
             }
 
-            match &collection.reported_frontier {
+            match collection.reported_frontier() {
                 ReportedFrontier::Reported(old_frontier) => {
                     // In steady state it is not expected for `old_frontier` to be beyond
                     // `new_frontier`. However, during reconcilation this can happen as we
@@ -578,23 +585,19 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 }
             }
 
-            let new_reported_frontier = ReportedFrontier::Reported(new_frontier.clone());
-
-            if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                if let Some(time) = collection.reported_frontier.logging_time() {
-                    logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
-                }
-                if let Some(time) = new_reported_frontier.logging_time() {
-                    logger.log(ComputeEvent::Frontier { id, time, diff: 1 });
-                }
-            }
-
             new_uppers.push((id, new_frontier.clone()));
-            collection.reported_frontier = new_reported_frontier;
+            collection.set_reported_frontier(ReportedFrontier::Reported(new_frontier.clone()));
         }
 
         for (id, upper) in new_uppers {
             self.send_compute_response(ComputeResponse::FrontierUpper { id, upper });
+        }
+    }
+
+    /// Update logging with the current dataflow input frontiers.
+    pub fn log_input_frontiers(&mut self) {
+        for collection in self.compute_state.collections.values_mut() {
+            collection.log_input_frontiers();
         }
     }
 
@@ -626,7 +629,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             // The compute protocol forbids reporting `Status` about collections that have advanced
             // to the empty frontier, so we ignore updates for those.
             let collection = self.compute_state.collections.get(&event.export_id);
-            if collection.map_or(true, |c| c.reported_frontier.is_empty()) {
+            if collection.map_or(true, |c| c.reported_frontier().is_empty()) {
                 continue;
             }
 
@@ -705,7 +708,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     SubscribeResponse::DroppedAt(_) => Antichain::new(),
                 };
 
-                match &collection.reported_frontier {
+                match collection.reported_frontier() {
                     ReportedFrontier::Reported(old_frontier) => {
                         assert!(
                             PartialOrder::less_than(old_frontier, &new_frontier),
@@ -721,26 +724,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     }
                 }
 
-                let new_reported_frontier = ReportedFrontier::Reported(new_frontier);
-
-                if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    if let Some(time) = collection.reported_frontier.logging_time() {
-                        logger.log(ComputeEvent::Frontier {
-                            id: sink_id,
-                            time,
-                            diff: -1,
-                        });
-                    }
-                    if let Some(time) = new_reported_frontier.logging_time() {
-                        logger.log(ComputeEvent::Frontier {
-                            id: sink_id,
-                            time,
-                            diff: 1,
-                        });
-                    }
-                }
-
-                collection.reported_frontier = new_reported_frontier;
+                collection.set_reported_frontier(ReportedFrontier::Reported(new_frontier));
             } else {
                 // Presumably tracking state for this subscribe was already dropped by
                 // `drop_collection`. There is nothing left to do for logging.
@@ -1335,20 +1319,12 @@ impl ReportedFrontier {
             Self::NotReported { .. } => false,
         }
     }
-
-    /// Return a timestamp suitable for logging the reported frontier.
-    pub fn logging_time(&self) -> Option<Timestamp> {
-        match self {
-            Self::Reported(frontier) => frontier.get(0).copied(),
-            Self::NotReported { .. } => Some(timely::progress::Timestamp::minimum()),
-        }
-    }
 }
 
 /// State maintained for a compute collection.
 pub struct CollectionState {
     /// Tracks the frontier that has been reported to the controller.
-    pub reported_frontier: ReportedFrontier,
+    reported_frontier: ReportedFrontier,
     /// A token that should be dropped when this collection is dropped to clean up associated
     /// sink state.
     ///
@@ -1358,6 +1334,10 @@ pub struct CollectionState {
     ///
     /// Only `Some` if the collection is a sink and *not* a subscribe.
     pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
+    /// Frontier probes for every input to the collection.
+    pub input_probes: BTreeMap<GlobalId, probe::Handle<Timestamp>>,
+    /// Logging state maintained for this collection.
+    logging: Option<CollectionLogging>,
 }
 
 impl CollectionState {
@@ -1366,11 +1346,43 @@ impl CollectionState {
             reported_frontier: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
+            input_probes: Default::default(),
+            logging: None,
         }
     }
 
     fn is_subscribe(&self) -> bool {
         self.sink_token.is_some() && self.sink_write_frontier.is_none()
+    }
+
+    /// Return the frontier that has been reported to the controller.
+    pub fn reported_frontier(&self) -> &ReportedFrontier {
+        &self.reported_frontier
+    }
+
+    /// Set the frontier that has been reported to the controller.
+    pub fn set_reported_frontier(&mut self, frontier: ReportedFrontier) {
+        if let Some(logging) = &mut self.logging {
+            let time = match &frontier {
+                ReportedFrontier::Reported(frontier) => frontier.get(0).copied(),
+                ReportedFrontier::NotReported { .. } => Some(Timestamp::MIN),
+            };
+            logging.set_frontier(time);
+        }
+
+        self.reported_frontier = frontier;
+    }
+
+    /// Update logging with the current input frontiers.
+    fn log_input_frontiers(&mut self) {
+        let Some(logging) = &mut self.logging else {
+            return;
+        };
+
+        for (id, probe) in &self.input_probes {
+            let new_time = probe.with_frontier(|frontier| frontier.as_option().copied());
+            logging.set_import_frontier(*id, new_time);
+        }
     }
 }
 

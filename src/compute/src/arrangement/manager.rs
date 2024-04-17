@@ -15,16 +15,15 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::{antichain_join, Lattice};
-use differential_dataflow::operators::arrange::ShutdownButton;
+use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
 use differential_dataflow::trace::TraceReader;
 use mz_repr::{Diff, GlobalId, Timestamp};
-use timely::dataflow::operators::CapabilitySet;
+use timely::dataflow::operators::{probe, CapabilitySet, Probe};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::timestamp::Refines;
 
-use crate::logging::compute::{LogImportFrontiers, Logger};
 use crate::metrics::TraceMetrics;
 use crate::render::context::MzArrangementImport;
 use crate::typedefs::{ErrAgent, RowRowAgent};
@@ -144,15 +143,13 @@ impl SpecializedTraceHandle {
 
     /// Maps the underlying trace handle to a `MzArrangementImport`,
     /// while readjusting times by `since` and `until`.
-    pub fn import_frontier_logged<'g, G, T>(
+    pub fn import_frontier<'g, G, T>(
         &mut self,
         scope: &Child<'g, G, T>,
         name: &str,
         since: Antichain<Timestamp>,
         until: Antichain<Timestamp>,
-        logger: Option<Logger>,
-        idx_id: GlobalId,
-        export_ids: Vec<GlobalId>,
+        input_probe: probe::Handle<Timestamp>,
     ) -> (
         MzArrangementImport<Child<'g, G, T>, Timestamp>,
         ShutdownButton<CapabilitySet<Timestamp>>,
@@ -165,10 +162,9 @@ impl SpecializedTraceHandle {
             SpecializedTraceHandle::RowRow(handle) => {
                 let (oks, oks_button) =
                     handle.import_frontier_core(&scope.parent, name, since, until);
-                let oks = if let Some(logger) = logger {
-                    oks.log_import_frontiers(logger, idx_id, export_ids)
-                } else {
-                    oks
+                let oks = Arranged {
+                    stream: oks.stream.probe_with(&input_probe),
+                    trace: oks.trace,
                 };
                 (MzArrangementImport::RowRow(oks.enter(scope)), oks_button)
             }
