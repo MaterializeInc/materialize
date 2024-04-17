@@ -23,8 +23,8 @@ use arrow2::io::parquet::write::{
 };
 use parquet2::write::{DynIter, FileWriter, WriteOptions as ParquetWriteOptions};
 
-use crate::codec_impls::{UnitSchema, UNIT_SCHEMA};
-use crate::columnar::{PartDecoder, PartEncoder, Schema};
+use crate::codec_impls::UnitSchema;
+use crate::columnar::{PartDecoder, Schema};
 use crate::part::{Part, PartBuilder};
 
 /// Encodes the given part into our parquet-based serialization format.
@@ -100,26 +100,9 @@ pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
     schema: &S,
     value: &T,
 ) -> Result<(), String> {
-    let (cfg, builder) = PartBuilder::new(schema, &UNIT_SCHEMA);
-    let PartBuilder {
-        key,
-        val,
-        mut ts,
-        mut diff,
-    } = builder;
-
-    let mut key_encoder = schema.encoder(key)?;
-    let mut val_encoder = UNIT_SCHEMA.encoder(val)?;
-
-    key_encoder.encode(value);
-    val_encoder.encode(&());
-    ts.push(1u64);
-    diff.push(1i64);
-
-    let key_columns = key_encoder.finish();
-    let val_columns = val_encoder.finish();
-
-    let part = cfg.into_part(key_columns, val_columns, ts, diff)?;
+    let mut builder = PartBuilder::new(schema, &UnitSchema)?;
+    builder.push(value, &(), 1u64, 1i64);
+    let part = builder.finish();
 
     // Sanity check that we can compute stats.
     let _stats = part.key_stats().expect("stats should be compute-able");

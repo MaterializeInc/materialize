@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use mz_dyncfg::{Config, ConfigSet};
 use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_persist_types::columnar::{PartEncoder, Schema};
 use mz_persist_types::part::PartBuilder;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec;
@@ -129,30 +128,18 @@ pub(crate) fn part_stats_for_legacy_part<K: Codec, V: Codec>(
     // This is a laughably inefficient placeholder implementation of stats
     // on the old part format. We don't intend to make this fast, rather we
     // intend to compute stats on the new part format.
-    let (cfg, builder) = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref());
-    let PartBuilder {
-        key,
-        val,
-        mut ts,
-        mut diff,
-    } = builder;
-
-    let mut key_encoder = schemas.key.encoder(key)?;
-    let mut val_encoder = schemas.val.encoder(val)?;
-
+    let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
     for x in part {
         for ((k, v), t, d) in x.iter() {
             let k = K::decode(k)?;
             let v = V::decode(v)?;
-            key_encoder.encode(&k);
-            val_encoder.encode(&v);
-            ts.push(i64::from_le_bytes(t));
-            diff.push(i64::from_le_bytes(d));
+            let t = i64::from_le_bytes(t);
+            let d = i64::from_le_bytes(d);
+
+            builder.push(&k, &v, t, d);
         }
     }
-    let key_cols = key_encoder.finish();
-    let val_cols = val_encoder.finish();
-    let part = cfg.into_part(key_cols, val_cols, ts, diff)?;
+    let part = builder.finish();
 
     PartStats::new(&part)
 }

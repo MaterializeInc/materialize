@@ -13,8 +13,8 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
-use mz_persist_types::codec_impls::UNIT_SCHEMA;
-use mz_persist_types::columnar::{PartDecoder, PartEncoder, Schema};
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::columnar::PartDecoder;
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::Codec;
 use mz_repr::adt::date::Date;
@@ -270,29 +270,11 @@ fn decode_legacy(part: &ColumnarRecords) -> Row {
 }
 
 fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {
-    let (cfg, builder) = PartBuilder::new(schema, &UNIT_SCHEMA);
-    let PartBuilder {
-        key,
-        val,
-        mut ts,
-        mut diff,
-    } = builder;
-
-    let ((), mut key_encoder) = schema.encoder(key).unwrap();
-    let mut val_encoder = UNIT_SCHEMA.encoder(val).unwrap();
-
+    let mut builder = PartBuilder::new(schema, &UnitSchema).expect("success");
     for row in rows.iter() {
-        key_encoder.encode(row);
-        val_encoder.encode(&());
-        ts.push(1u64);
-        diff.push(1i64);
+        builder.push(row, &(), 1u64, 1i64);
     }
-
-    let key_cols = key_encoder.finish();
-    let val_cols = val_encoder.finish();
-
-    let part = cfg.into_part(key_cols, val_cols, ts, diff).unwrap();
-    part
+    builder.finish()
 }
 
 fn bench_roundtrip(c: &mut Criterion) {
@@ -347,25 +329,12 @@ fn bench_roundtrip(c: &mut Criterion) {
         b.iter(|| std::hint::black_box(encode_legacy(&rows)));
     });
     c.bench_function("roundtrip_encode_structured", |b| {
-        let (_cfg, builder) = PartBuilder::new(&schema, &UNIT_SCHEMA);
-        let PartBuilder {
-            key,
-            val,
-            mut ts,
-            mut diff,
-        } = builder;
-
-        let ((), mut key_encoder) = schema.encoder(key).unwrap();
-        let mut val_encoder = UNIT_SCHEMA.encoder(val).unwrap();
-
+        let mut builder = PartBuilder::new(&schema, &UnitSchema).expect("success");
         b.iter(|| {
             for row in rows.iter() {
-                key_encoder.encode(row);
-                val_encoder.encode(&());
-                ts.push(1u64);
-                diff.push(1i64);
+                builder.push(row, &(), 1u64, 1i64);
             }
-            std::hint::black_box((&mut key_encoder, &mut val_encoder, &mut ts, &mut diff));
+            std::hint::black_box(&mut builder);
         });
     });
 

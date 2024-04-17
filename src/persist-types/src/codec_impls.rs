@@ -36,9 +36,6 @@ use crate::dyn_struct::{
 use crate::stats::{BytesStats, NoneStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
 use crate::{Codec, Codec64, Opaque, ShardId};
 
-/// Static instance of [`UnitSchema`] provided for convenience.
-pub static UNIT_SCHEMA: UnitSchema = UnitSchema;
-
 /// An implementation of [Schema] for [()].
 #[derive(Debug, Default)]
 pub struct UnitSchema;

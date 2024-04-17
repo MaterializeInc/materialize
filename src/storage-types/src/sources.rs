@@ -1092,8 +1092,7 @@ impl PartEncoder<SourceData> for SourceDataEncoder {
         // Collect all of the columns from the inner RowEncoder to a single 'ok' column.
         let (_, ok_validity) = self.ok_validity.into_parts();
         let (ok_len, ok_cols) = self.ok.finish();
-        let ok_col = DynStructMut::from_parts(self.ok_cfg, ok_len, ok_validity, ok_cols)
-            .expect("parts to roundtrip");
+        let ok_col = DynStructMut::from_parts(self.ok_cfg, ok_len, ok_validity, ok_cols);
 
         let ok_col = DynColumnMut::new::<Option<DynStruct>>(Box::new(ok_col));
         let err_col = DynColumnMut::new::<Option<Vec<u8>>>(self.err);
