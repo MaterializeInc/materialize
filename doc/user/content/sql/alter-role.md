@@ -26,8 +26,6 @@ Field               | Use
 
 #### `alter_role_set`
 
-{{< public-preview />}}
-
 {{< diagram "alter-role-set.svg" >}}
 
 Field               | Use
