@@ -38,7 +38,9 @@ use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey, WriterKey};
-use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};
+use crate::internal::trace::{
+    ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
+};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
@@ -908,6 +910,16 @@ where
         } else {
             Vec::new()
         };
+
+        for req in &merge_reqs {
+            self.trace.claim_compaction(
+                req.id,
+                ActiveCompaction {
+                    start_ms: heartbeat_timestamp_ms,
+                },
+            )
+        }
+
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
         writer_state.most_recent_write_token = idempotency_token.clone();
         // The writer's most recent upper should only go forward.

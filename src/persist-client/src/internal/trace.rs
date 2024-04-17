@@ -503,6 +503,17 @@ impl<T: Timestamp + Lattice> Trace<T> {
         Self::remove_redundant_merge_reqs(merge_reqs)
     }
 
+    pub fn claim_compaction(&mut self, id: SpineId, compaction: ActiveCompaction) {
+        // TODO: we ought to be able to look up the id for a batch by binary searching the levels.
+        // In the meantime, search backwards, since most compactions are for recent batches.
+        for batch in self.spine.spine_batches_mut().rev() {
+            if batch.id == id {
+                batch.active_compaction = Some(compaction);
+                break;
+            }
+        }
+    }
+
     /// The same as [Self::push_batch] but without the `FueledMergeReq`s, which
     /// account for a surprising amount of cpu in prod. #18368
     pub(crate) fn push_batch_no_merge_reqs(&mut self, batch: HollowBatch<T>) {
