@@ -414,9 +414,10 @@ pub trait TimestampProvider {
             );
             candidate
         } else {
-            coord_bail!(self.generate_timestamp_not_valid_error_msg(
+            coord_bail!(generate_timestamp_not_valid_error_msg(
                 id_bundle,
                 compute_instance,
+                &read_holds,
                 candidate
             ));
         };
@@ -488,52 +489,36 @@ pub trait TimestampProvider {
         }
         frontier
     }
+}
 
-    fn generate_timestamp_not_valid_error_msg(
-        &self,
-        id_bundle: &CollectionIdBundle,
-        compute_instance: ComputeInstanceId,
-        candidate: mz_repr::Timestamp,
-    ) -> String {
-        let invalid_indexes =
-            if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-                compute_ids
-                    .iter()
-                    .filter_map(|id| {
-                        let since = self.compute_read_frontier(compute_instance, *id).to_owned();
-                        if since.less_equal(&candidate) {
-                            None
-                        } else {
-                            Some(since)
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+fn generate_timestamp_not_valid_error_msg(
+    id_bundle: &CollectionIdBundle,
+    compute_instance: ComputeInstanceId,
+    read_holds: &ReadHolds<mz_repr::Timestamp>,
+    candidate: mz_repr::Timestamp,
+) -> String {
+    let mut invalid = Vec::new();
 
-        // TODO: Before, we were using the frontier of read capabilities, not the
-        // implied capability here. The real fix will be to instead report
-        // an error based on the ReadHolds that we could acquire.
-        let invalid_sources = self
-            .storage_frontiers(id_bundle.storage_ids.iter().cloned().collect())
-            .into_iter()
-            .filter_map(|(_id, since, _upper)| {
-                if since.less_equal(&candidate) {
-                    None
-                } else {
-                    Some(since)
-                }
-            });
-        let invalid = invalid_indexes
-            .into_iter()
-            .chain(invalid_sources)
-            .collect::<Vec<_>>();
-        format!(
-            "Timestamp ({}) is not valid for all inputs: {:?}",
-            candidate, invalid,
-        )
+    if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
+        for id in compute_ids {
+            let since = read_holds.since(id);
+            if !since.less_equal(&candidate) {
+                invalid.push((*id, since));
+            }
+        }
     }
+
+    for id in id_bundle.storage_ids.iter() {
+        let since = read_holds.since(id);
+        if !since.less_equal(&candidate) {
+            invalid.push((*id, since));
+        }
+    }
+
+    format!(
+        "Timestamp ({}) is not valid for all inputs: {:?}",
+        candidate, invalid,
+    )
 }
 
 impl Coordinator {
