@@ -136,6 +136,7 @@ impl DynColumnMut {
         typ.data_fn(NewUntypedDataFn)
     }
 
+    #[cfg(debug_assertions)]
     pub(crate) fn typ(&self) -> &DataType {
         &self.0
     }

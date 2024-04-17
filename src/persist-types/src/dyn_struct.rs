@@ -338,44 +338,20 @@ impl ColumnPush<Option<DynStruct>> for DynStructMut {
 impl DynStructMut {
     /// Create a [`DynStructMut`] from individual parts.
     ///
-    /// Returns an error if the data types in `cfg` do not match those in the
-    /// provided `cols`.
+    /// Note: it's up to the user to ensure the provided `cfg` has the same column types as the
+    /// provided `cols`. We can't validate it here because [`DataType`]s are not easily comparable.
     pub fn from_parts(
         cfg: DynStructCfg,
         len: usize,
         validity: Option<MutableBitmap>,
         cols: Vec<DynColumnMut>,
-    ) -> Result<Self, String> {
-        let data_types_match = cfg
-            .cols
-            .iter()
-            .map(|(_name, data_type, _stats)| data_type)
-            .zip(cols.iter().map(|col| col.typ()))
-            .all(|(dt_a, dt_b)| dt_a == dt_b);
-        if !data_types_match {
-            let cfg_cols = cfg
-                .cols
-                .iter()
-                .map(|(_, data_type, _)| data_type)
-                .cloned()
-                .collect::<Vec<_>>();
-            let other_cols = cols
-                .iter()
-                .map(|col| col.typ())
-                .cloned()
-                .collect::<Vec<_>>();
-
-            return Err(format!(
-                "found mismatched column types! cfg: {cfg_cols:?}, other: {other_cols:?}"
-            ));
-        }
-
-        Ok(DynStructMut {
+    ) -> Self {
+        DynStructMut {
             cfg,
             len,
             validity,
             cols,
-        })
+        }
     }
 
     /// Returns the number of elements in this column

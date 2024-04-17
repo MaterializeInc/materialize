@@ -173,7 +173,8 @@ pub(crate) mod sealed {
 /// while DataType is object-safe and has exhaustiveness checking. A Data impl
 /// can be mapped to its corresponding DataType via [ColumnCfg::as_type] and
 /// back via DataType::data_fn.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
+#[cfg_attr(debug_assertions, derive(PartialEq))]
 pub struct DataType {
     /// Whether this type is optional.
     pub optional: bool,
