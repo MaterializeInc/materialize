@@ -266,93 +266,87 @@ pub async fn purify_statement(
 }
 
 /// Updates the CREATE SINK statement with materialize comments
-/// if `enable_sink_doc_on_option` feature flag is enabled
 pub(crate) fn add_materialize_comments(
     catalog: &dyn SessionCatalog,
     stmt: &mut CreateSinkStatement<Aug>,
 ) -> Result<(), PlanError> {
     // updating avro format with comments so that they are frozen in the `create_sql`
-    // only if the feature is enabled
-    if catalog.system_vars().enable_sink_doc_on_option() {
-        let from_id = stmt.from.item_id();
-        let from = catalog.get_item(from_id);
-        let object_ids = from.references().0.clone().into_iter().chain_one(from.id());
+    let from_id = stmt.from.item_id();
+    let from = catalog.get_item(from_id);
+    let object_ids = from.references().0.clone().into_iter().chain_one(from.id());
 
-        // add comments to the avro doc comments
-        if let Some(Format::Avro(AvroSchema::Csr {
-            csr_connection:
-                CsrConnectionAvro {
-                    connection:
-                        CsrConnection {
-                            connection: _,
-                            options,
-                        },
-                    ..
-                },
-        })) = &mut stmt.format
-        {
-            let user_provided_comments = &options
-                .iter()
-                .filter_map(|CsrConfigOption { name, .. }| match name {
-                    CsrConfigOptionName::AvroDocOn(doc_on) => Some(doc_on.clone()),
-                    _ => None,
-                })
-                .collect::<BTreeSet<_>>();
+    // add comments to the avro doc comments
+    if let Some(Format::Avro(AvroSchema::Csr {
+        csr_connection:
+            CsrConnectionAvro {
+                connection:
+                    CsrConnection {
+                        connection: _,
+                        options,
+                    },
+                ..
+            },
+    })) = &mut stmt.format
+    {
+        let user_provided_comments = &options
+            .iter()
+            .filter_map(|CsrConfigOption { name, .. }| match name {
+                CsrConfigOptionName::AvroDocOn(doc_on) => Some(doc_on.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
 
-            // Adding existing comments if not already provided by user
-            for object_id in object_ids {
-                let item = catalog.get_item(&object_id);
-                let full_name = catalog.resolve_full_name(item.name());
-                let full_resolved_name = ResolvedItemName::Item {
-                    id: object_id,
-                    qualifiers: item.name().qualifiers.clone(),
-                    full_name: full_name.clone(),
-                    print_id: !matches!(
-                        item.item_type(),
-                        CatalogItemType::Func | CatalogItemType::Type
-                    ),
+        // Adding existing comments if not already provided by user
+        for object_id in object_ids {
+            let item = catalog.get_item(&object_id);
+            let full_name = catalog.resolve_full_name(item.name());
+            let full_resolved_name = ResolvedItemName::Item {
+                id: object_id,
+                qualifiers: item.name().qualifiers.clone(),
+                full_name: full_name.clone(),
+                print_id: !matches!(
+                    item.item_type(),
+                    CatalogItemType::Func | CatalogItemType::Type
+                ),
+            };
+
+            if let Some(comments_map) = catalog.get_item_comments(&object_id) {
+                // Getting comment on the item
+                let doc_on_item_key = AvroDocOn {
+                    identifier: DocOnIdentifier::Type(full_resolved_name.clone()),
+                    for_schema: DocOnSchema::All,
                 };
-
-                if let Some(comments_map) = catalog.get_item_comments(&object_id) {
-                    // Getting comment on the item
-                    let doc_on_item_key = AvroDocOn {
-                        identifier: DocOnIdentifier::Type(full_resolved_name.clone()),
-                        for_schema: DocOnSchema::All,
-                    };
-                    if !user_provided_comments.contains(&doc_on_item_key) {
-                        if let Some(root_comment) = comments_map.get(&None) {
-                            options.push(CsrConfigOption {
-                                name: CsrConfigOptionName::AvroDocOn(doc_on_item_key),
-                                value: Some(mz_sql_parser::ast::WithOptionValue::Value(
-                                    Value::String(root_comment.clone()),
-                                )),
-                            });
-                        }
+                if !user_provided_comments.contains(&doc_on_item_key) {
+                    if let Some(root_comment) = comments_map.get(&None) {
+                        options.push(CsrConfigOption {
+                            name: CsrConfigOptionName::AvroDocOn(doc_on_item_key),
+                            value: Some(mz_sql_parser::ast::WithOptionValue::Value(Value::String(
+                                root_comment.clone(),
+                            ))),
+                        });
                     }
+                }
 
-                    // Getting comments on columns in the item
-                    if let Ok(desc) = item.desc(&full_name) {
-                        for (pos, column_name) in desc.iter_names().enumerate() {
-                            let comment = comments_map.get(&Some(pos + 1));
-                            if let Some(comment_str) = comment {
-                                let doc_on_column_key = AvroDocOn {
-                                    identifier: DocOnIdentifier::Column(
-                                        ResolvedColumnName::Column {
-                                            relation: full_resolved_name.clone(),
-                                            name: column_name.to_owned(),
-                                            index: pos,
-                                        },
-                                    ),
-                                    for_schema: DocOnSchema::All,
-                                };
-                                if !user_provided_comments.contains(&doc_on_column_key) {
-                                    options.push(CsrConfigOption {
-                                        name: CsrConfigOptionName::AvroDocOn(doc_on_column_key),
-                                        value: Some(mz_sql_parser::ast::WithOptionValue::Value(
-                                            Value::String(comment_str.clone()),
-                                        )),
-                                    });
-                                }
+                // Getting comments on columns in the item
+                if let Ok(desc) = item.desc(&full_name) {
+                    for (pos, column_name) in desc.iter_names().enumerate() {
+                        let comment = comments_map.get(&Some(pos + 1));
+                        if let Some(comment_str) = comment {
+                            let doc_on_column_key = AvroDocOn {
+                                identifier: DocOnIdentifier::Column(ResolvedColumnName::Column {
+                                    relation: full_resolved_name.clone(),
+                                    name: column_name.to_owned(),
+                                    index: pos,
+                                }),
+                                for_schema: DocOnSchema::All,
+                            };
+                            if !user_provided_comments.contains(&doc_on_column_key) {
+                                options.push(CsrConfigOption {
+                                    name: CsrConfigOptionName::AvroDocOn(doc_on_column_key),
+                                    value: Some(mz_sql_parser::ast::WithOptionValue::Value(
+                                        Value::String(comment_str.clone()),
+                                    )),
+                                });
                             }
                         }
                     }

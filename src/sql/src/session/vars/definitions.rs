@@ -1930,20 +1930,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_sink_doc_on_option,
-        desc: "DOC ON option for sinks",
-        default: false,
-        internal: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_assert_not_null,
-        desc: "ASSERT NOT NULL for materialized views",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_alter_swap,
         desc: "the ALTER SWAP feature for objects",
         default: true,

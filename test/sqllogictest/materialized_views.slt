@@ -567,22 +567,6 @@ DROP TABLE t CASCADE
 statement ok
 DROP CLUSTER other CASCADE
 
-# `ASSERT NOT NULL` in materialized views
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_assert_not_null to OFF;
-----
-COMPLETE 0
-
-## Feature flag should be off by default
-statement error ASSERT NOT NULL for materialized views is not supported
-CREATE MATERIALIZED VIEW mv_feature_off(x) WITH (ASSERT NOT NULL x) AS VALUES (1);
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_assert_not_null to ON;
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t2 (x int, y int, z int);
 
