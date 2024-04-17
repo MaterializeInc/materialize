@@ -11,41 +11,51 @@ menu:
 {{< private-preview />}}
 
 By default, all user-defined sources, tables, materialized views, and indexes have a history
-retention period of one second. Materialize provides the option to adjust the history
+retention period of one second. You can adjust the history
 retention period on these objects for time travel queries.
 
 The common use cases for adjusting the history retention period are:
 * Lossless, continuous subscriptions to your changing results. See the
 [`SUBSCRIBE` documentation](/sql/subscribe#durable-lossless-subscriptions) for examples of
 how to create this type of subscription.
-* Accessing results as they were at a specific historical period in time.
+* Accessing a past version of results at a specific point in time.
 
 ## Configuring the history retention period for an object
-The history retention period for an object can be configured at creation time within the `CREATE`
-statement, by setting the `RETAIN HISTORY` `WITH` option. See the respective `CREATE`
-reference documentation for each object type for syntax.
 
-The history retention period for an object can also be adjusted at any time, via the `ALTER`
-statement. See the respective `ALTER` reference documentation for each object type for syntax.
+You can change the history retention period for [sources](/sql/create-source/),
+[tables](/sql/create-table/), [materialized views](/sql/create-materialized-view/),
+and [indexes](/sql/create-index/). To configure a history retention period for
+an object that is different to the default (1 second), use the `RETAIN HISTORY`
+option in the respective `CREATE` statement. This value can be adjusted at any
+time using the respective `ALTER` statement.
 
-The history retention period is represented as an
-[interval](https://materialize.com/docs/sql/types/interval/) value like `'1hr'`.
+[//]: # "TODO(morsapaes) Include example."
 
 ### Increasing the history retention period
-Increasing the history retention period for an object causes the currently retained historical
-data and all newly produced data's history to be retained for the longer time period.
-For sources, tables and materialized views: increasing the history retention period will not restore
-older historical data that was already outside the previous history retention period before the change.
-For indexes: if all of the underlying source, table, and materialized view historical data is available
-for the increased history retention period, the index can use that data to backfill as far back
-as that underlying historical data is available.
+
+Increasing the history retention period for an object causes both the retained
+historical data and subsequently produced historical data to be retained for
+the specified time period.
+
+* **For sources, tables and materialized views:** increasing the history retention
+  period will not restore older historical data that was already outside the
+  previous history retention period before the change.
+
+* **For indexes:** if all of the underlying source, table, and materialized view
+  historical data is available for the increased history retention period, the
+  index can use that data to backfill as far back as the underlying historical
+  data is available.
 
 ### Decreasing the history retention period
+
 Decreasing the history retention period for an object causes:
-* Newly produced data's history to be retained for the new, shorter history retention period.
-* Historical data outside the new, shorter history retention period to no longer be retained. If you
-subsequently increase the history rention period again, the older historical data may already
-be unavailable.
+
+* Newly produced historical data to be retained for the new, shorter history
+  retention period.
+
+* Historical data outside the new, shorter history retention period to no longer
+  be retained. If you subsequently increase the history retention period again,
+  the older historical data may already be unavailable.
 
 ### Observe the configured history retention period
 <!-- TODO(mjibson): replace this section with a mention of the catalog table/column
@@ -55,23 +65,26 @@ To see what history retention period has been configured for an object, run the
 for an example.
 
 ## Considerations
+
 ### Resource usage
-Changing the history retention period for an object can have resource usage implications for
-your system.
 
-##### For sources, tables and materialized views:
-Increasing the history retention period for these objects increases the amount of historical
-data that is retained in Materialize durable storage. As such, your storage
-resource usage may go up, incurring storage costs.
+Changing the history retention period for an object can have resource usage
+implications in Materialize.
 
-##### For indexes
-Increasing the rentetion period for an index increases the amount of historical data that
-is retained in memory within the cluster on which the index resides. As such, the memory
-usage for that cluster may go up, and you may need to size up your cluster, which would
-incur costs in the form of additional compute credits.
+* **For sources, tables and materialized views:** increasing the history
+    retention period for these objects increases the amount of historical data
+    that is retained in the storage layer. You can expect storage resource
+    utilization to increase, which may incur additional costs.
 
-### Data removal
-The retention period represents the minimum amount of historical data guaranteed to be
-retained by Materialize. Data clean up is processed in the background, so older data
-may be accessible for a period of time between when it falls outside the retention
-period and when it is cleaned up.
+* **For indexes:** increasing the history retention period for an index
+    increases the amount of historical data that is retained in memory in the
+    cluster maintaining the index. You can expect memory resource utilization
+    for that cluster to go up, which might require you to size up your cluster
+    and consume additional compute credits.
+
+### History removal
+
+The history retention period represents the minimum amount of historical data
+guaranteed to be retained by Materialize. History clean up is processed in the
+background, so older history may be accessible for the period of time between when
+it falls outside the retention period and when it is cleaned up.
