@@ -2161,7 +2161,8 @@ impl Coordinator {
     /// This method expects all dataflow plans to be available, so it must run after
     /// [`Coordinator::bootstrap_dataflow_plans`].
     fn collect_dataflow_storage_constraints(&self) -> BTreeMap<GlobalId, StorageConstraints> {
-        let is_storage_collection = |id: &GlobalId| self.controller.storage.collection(*id).is_ok();
+        let is_storage_collection =
+            |id: &GlobalId| self.controller.storage.check_exists(*id).is_ok();
 
         // Collect index imports and direct storage constraints for all dataflows.
         let mut index_imports: BTreeMap<_, Vec<_>> = Default::default();
@@ -2278,10 +2279,10 @@ impl Coordinator {
         // we only need to provide output starting from their `since`s, so these serve as upper
         // bounds for our `as_of`.
         let mut max_as_of = Antichain::new();
-        for id in &storage_constraints.dependants {
-            let since = self.storage_implied_capability(*id);
-            let upper = self.storage_write_frontier(*id);
-            max_as_of.meet_assign(&since.join(upper));
+        let dependent_frontiers =
+            self.storage_frontiers(storage_constraints.dependants.iter().cloned().collect());
+        for (_id, since, upper) in dependent_frontiers {
+            max_as_of.meet_assign(&since.join(&upper));
         }
 
         // For compute reconciliation to recognize that an existing dataflow can be reused, we want
@@ -2334,13 +2335,20 @@ impl Coordinator {
         } else if let Some(sink_id) = dataflow.persist_sink_ids().next() {
             // Materialized view dataflow.
 
-            write_frontier = self.storage_write_frontier(sink_id).clone();
+            let (_since, upper) = self
+                .controller
+                .storage
+                .collection_frontiers(sink_id)
+                .expect("collection does not exist");
+
             // Materialized view dataflows are only depended on by their target storage collection,
             // so `write_frontier` should never be greater than `max_as_of`.
             soft_assert_or_log!(
-                PartialOrder::less_equal(&write_frontier, &max_as_of),
+                PartialOrder::less_equal(&upper, &max_as_of),
                 "`write_frontier` unexpectedly greater than `max_as_of`",
             );
+
+            write_frontier = upper;
 
             // If the target storage collection of a materialized view is already sealed, there is
             // no need to install a dataflow in the first place.

@@ -57,12 +57,12 @@ impl Coordinator {
                                     self.catalog().get_entry(id).item()
                                 {
                                     if mv.refresh_schedule.is_some() {
-                                        Some(&self
+                                        let (_since, write_frontier) = self
                                             .controller
                                             .storage
-                                            .collection(*id)
-                                            .expect("the storage controller should know about MVs that exist in the catalog")
-                                            .write_frontier)
+                                              .collection_frontiers(*id)
+                                            .expect("the storage controller should know about MVs that exist in the catalog");
+                                        Some(write_frontier)
                                     } else {
                                         None
                                     }
@@ -77,7 +77,7 @@ impl Coordinator {
                             rehydration_time_estimate,
                             refresh_mv_write_frontiers
                                 .into_iter()
-                                .fold(Antichain::new(), |ac1, ac2| Lattice::meet(&ac1, ac2)),
+                                .fold(Antichain::new(), |ac1, ac2| Lattice::meet(&ac1, &ac2)),
                         ));
                     }
                 }

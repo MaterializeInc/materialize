@@ -232,11 +232,9 @@ impl Coordinator {
         let live_shards: BTreeSet<_> = self
             .controller
             .storage
-            .collections()
-            // A collection is dropped if its read capability has been advanced
-            // to the empty antichain.
-            .filter(|(_id, collection)| !collection.read_capabilities.is_empty())
-            .flat_map(|(_id, collection)| {
+            .active_collection_metadatas()
+            .into_iter()
+            .flat_map(|(_id, collection_metadata)| {
                 let CollectionMetadata {
                     data_shard,
                     remap_shard,
@@ -251,8 +249,8 @@ impl Coordinator {
                     persist_location: _,
                     relation_desc: _,
                     txns_shard: _,
-                } = &collection.collection_metadata;
-                [*remap_shard, *status_shard, Some(*data_shard)].into_iter()
+                } = collection_metadata;
+                [remap_shard, status_shard, Some(data_shard)].into_iter()
             })
             .filter_map(|shard| shard)
             .collect();

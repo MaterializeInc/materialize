@@ -36,7 +36,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use timely::PartialOrder;
+use timely::{Container, PartialOrder};
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
@@ -999,13 +999,22 @@ where
 
         // Validate sources have `since.less_equal(as_of)`.
         for source_id in dataflow.source_imports.keys() {
-            let since = &self
+            // NOTE: This provides only some level of protection. If the
+            // caller has not acquired read holds the since might move on
+            // concurrently.
+            //
+            // TODO: We are comparing against the implied capability here, which
+            // is being held back because adapter acquired read holds via
+            // controlling the policy. Once we add support for Storage
+            // ReadHolds, we should acquire read holds from storage here and
+            // assert that they are good for the as_of that we're planning to
+            // install our dataflow with.
+            let (since, _upper) = self
                 .storage_controller
-                .collection(*source_id)
-                .map_err(|_| DataflowCreationError::CollectionMissing(*source_id))?
-                .read_capabilities
-                .frontier();
-            if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
+                .collection_frontiers(*source_id)
+                .map_err(|_| DataflowCreationError::CollectionMissing(*source_id))?;
+
+            if !(timely::order::PartialOrder::less_equal(&since, as_of)) {
                 Err(DataflowCreationError::SinceViolation(*source_id))?;
             }
 
@@ -1096,14 +1105,15 @@ where
         // storage metadata needed by the compute instance.
         let mut source_imports = BTreeMap::new();
         for (id, (si, monotonic)) in dataflow.source_imports {
-            let collection = self
+            let collection_metadata = self
                 .storage_controller
-                .collection(id)
+                .collection_metadata(id)
                 .map_err(|_| DataflowCreationError::CollectionMissing(id))?;
+
             let desc = SourceInstanceDesc {
-                storage_metadata: collection.collection_metadata.clone(),
+                storage_metadata: collection_metadata.clone(),
                 arguments: si.arguments,
-                typ: collection.description.desc.typ().clone(),
+                typ: si.typ.clone(),
             };
             source_imports.insert(id, (desc, monotonic));
         }
@@ -1114,9 +1124,8 @@ where
                 ComputeSinkConnection::Persist(conn) => {
                     let metadata = self
                         .storage_controller
-                        .collection(id)
+                        .collection_metadata(id)
                         .map_err(|_| DataflowCreationError::CollectionMissing(id))?
-                        .collection_metadata
                         .clone();
                     let conn = PersistSinkConnection {
                         value_desc: conn.value_desc,
@@ -1232,20 +1241,26 @@ where
             // to run again.
             true
         } else {
-            // Check dependency frontiers to determine if all inputs are available.
-            // An input is available when its frontier is greater than the `as_of`, i.e., all input
-            // data up to and including the `as_of` has been sealed.
+            // Check dependency frontiers to determine if all inputs are
+            // available. An input is available when its frontier is greater
+            // than the `as_of`, i.e., all input data up to and including the
+            // `as_of` has been sealed.
             let compute_frontiers = collection.compute_dependencies.iter().map(|id| {
                 let dep = &self.compute.expect_collection(*id);
                 &dep.write_frontier
             });
-            let storage_frontiers = collection.storage_dependencies.iter().map(|id| {
-                let dep = &self.storage_controller.collection(*id).expect("must exist");
-                &dep.write_frontier
-            });
-            compute_frontiers
+
+            let storage_frontiers = self
+                .storage_controller
+                .collections_frontiers(collection.storage_dependencies.clone())
+                .expect("must exist");
+            let storage_frontiers = storage_frontiers.iter().map(|(_id, _since, upper)| upper);
+
+            let ready = compute_frontiers
                 .chain(storage_frontiers)
-                .all(|frontier| PartialOrder::less_than(&as_of, &frontier.borrow()))
+                .all(|frontier| PartialOrder::less_than(&as_of, &frontier.borrow()));
+
+            ready
         };
 
         if ready {
@@ -1311,14 +1326,21 @@ where
         target_replica: Option<ReplicaId>,
         peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
+        let owned_since;
         let since = match &peek_target {
             PeekTarget::Index { .. } => self.compute.collection(id)?.read_capabilities.frontier(),
-            PeekTarget::Persist { .. } => self
-                .storage_controller
-                .collection(id)
-                .map_err(|_| PeekError::CollectionMissing(id))?
-                .implied_capability
-                .borrow(),
+            PeekTarget::Persist { .. } => {
+                // NOTE: This provides only some level of protection. If the
+                // caller has not acquired read holds the since might move on
+                // concurrently.
+                let (since, _upper) = self
+                    .storage_controller
+                    .collection_frontiers(id)
+                    .map_err(|_| PeekError::CollectionMissing(id))?;
+
+                owned_since = since;
+                owned_since.borrow()
+            }
         };
         if !since.less_equal(&timestamp) {
             return Err(PeekError::SinceViolation(id));
@@ -1590,7 +1612,7 @@ where
         let storage_updates: Vec<_> = updates
             .iter()
             .filter_map(|(&id, upper)| {
-                let found = self.storage_controller.collection(id).is_ok();
+                let found = self.storage_controller.check_exists(id).is_ok();
                 found.then_some((id, upper.clone()))
             })
             .collect();
@@ -1977,12 +1999,21 @@ where
 
             let compute_frontiers = collection.compute_dependencies.iter().flat_map(|dep_id| {
                 let collection = self.compute.collections.get(dep_id);
-                collection.map(|c| &c.write_frontier)
+                collection.map(|c| c.write_frontier.clone())
             });
-            let storage_frontiers = collection.storage_dependencies.iter().flat_map(|dep_id| {
-                let collection = &self.storage_controller.collection(*dep_id).ok();
-                collection.map(|c| &c.write_frontier)
-            });
+
+            let existing_storage_dependencies = collection
+                .storage_dependencies
+                .iter()
+                .filter(|id| self.storage_controller.check_exists(**id).is_ok())
+                .copied()
+                .collect::<Vec<_>>();
+            let storage_frontiers = self
+                .storage_controller
+                .collections_frontiers(existing_storage_dependencies)
+                .expect("missing storage collections")
+                .into_iter()
+                .map(|(_id, _since, upper)| upper);
 
             let mut new_capability = Antichain::new();
             for frontier in compute_frontiers.chain(storage_frontiers) {

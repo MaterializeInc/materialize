@@ -39,7 +39,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData};
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::MutableAntichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
@@ -277,7 +277,7 @@ pub trait StorageTxn<T> {
 
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
-    type Timestamp;
+    type Timestamp: TimelyTimestamp;
 
     /// Marks the end of any initialization commands.
     ///
@@ -292,11 +292,51 @@ pub trait StorageController: Debug {
     /// Get the current configuration, including parameters updated with `update_parameters`.
     fn config(&self) -> &StorageConfiguration;
 
-    /// Acquire an immutable reference to the collection state, should it exist.
-    fn collection(
+    /// Returns the [CollectionMetadata] of the collection identified by `id`.
+    fn collection_metadata(
         &self,
         id: GlobalId,
-    ) -> Result<&CollectionState<Self::Timestamp>, StorageError<Self::Timestamp>>;
+    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>>;
+
+    /// Returns the since/upper frontiers of the identified collection.
+    fn collection_frontiers(
+        &self,
+        id: GlobalId,
+    ) -> Result<
+        (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
+        StorageError<Self::Timestamp>,
+    >;
+
+    /// Returns the since/upper frontiers of the identified collections.
+    ///
+    /// Having a method that returns both frontiers at the same time, for all
+    /// requested collections, ensures that we can get a consistent "snapshot"
+    /// of collection state. If we had separate methods instead, and/or would
+    /// allow getting frontiers for collections one at a time, it could happen
+    /// that collection state changes concurrently, while information is
+    /// gathered.
+    fn collections_frontiers(
+        &self,
+        id: Vec<GlobalId>,
+    ) -> Result<
+        Vec<(
+            GlobalId,
+            Antichain<Self::Timestamp>,
+            Antichain<Self::Timestamp>,
+        )>,
+        StorageError<Self::Timestamp>,
+    >;
+
+    /// Acquire an iterator over [CollectionMetadata] for all active
+    /// collections.
+    ///
+    /// A collection is "active" when it has a non empty frontier of read
+    /// capabilties.
+    fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
+
+    /// Checks whether a collection exists under the given `GlobalId`. Returns
+    /// an error if the collection does not exist.
+    fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Creates a storage instance with the specified ID.
     ///
@@ -331,17 +371,6 @@ pub trait StorageController: Debug {
 
     /// Disconnects the storage instance from the specified replica.
     fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId);
-
-    /// Acquire a mutable reference to the collection state, should it exist.
-    fn collection_mut(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError<Self::Timestamp>>;
-
-    /// Acquire an iterator over all collection states.
-    fn collections(
-        &self,
-    ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_>;
 
     /// Create the sources described in the individual RunIngestionCommand commands.
     ///
@@ -675,73 +704,6 @@ pub trait StorageController: Debug {
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
-}
-
-/// State maintained about individual collections.
-#[derive(Debug)]
-pub struct CollectionState<T> {
-    /// Description with which the collection was created
-    pub description: CollectionDescription<T>,
-
-    /// Accumulation of read capabilities for the collection.
-    ///
-    /// This accumulation will always contain `self.implied_capability`, but may also contain
-    /// capabilities held by others who have read dependencies on this collection.
-    pub read_capabilities: MutableAntichain<T>,
-    /// The implicit capability associated with collection creation.  This should never be less
-    /// than the since of the associated persist collection.
-    pub implied_capability: Antichain<T>,
-    /// The policy to use to downgrade `self.implied_capability`.
-    pub read_policy: ReadPolicy<T>,
-
-    /// Storage identifiers on which this collection depends.
-    pub storage_dependencies: Vec<GlobalId>,
-
-    /// Reported write frontier.
-    pub write_frontier: Antichain<T>,
-
-    pub collection_metadata: CollectionMetadata,
-}
-
-impl<T: Timestamp> CollectionState<T> {
-    /// Creates a new collection state, with an initial read policy valid from `since`.
-    pub fn new(
-        description: CollectionDescription<T>,
-        since: Antichain<T>,
-        write_frontier: Antichain<T>,
-        storage_dependencies: Vec<GlobalId>,
-        metadata: CollectionMetadata,
-    ) -> Self {
-        let mut read_capabilities = MutableAntichain::new();
-        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
-        Self {
-            description,
-            read_capabilities,
-            implied_capability: since.clone(),
-            read_policy: ReadPolicy::NoPolicy {
-                initial_since: since,
-            },
-            storage_dependencies,
-            write_frontier,
-            collection_metadata: metadata,
-        }
-    }
-
-    /// Returns the cluster to which the collection is bound, if applicable.
-    pub fn cluster_id(&self) -> Option<StorageInstanceId> {
-        match &self.description.data_source {
-            DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
-            DataSource::Webhook
-            | DataSource::Introspection(_)
-            | DataSource::Other(_)
-            | DataSource::Progress => None,
-        }
-    }
-
-    /// Returns whether the collection was dropped.
-    pub fn is_dropped(&self) -> bool {
-        self.read_capabilities.is_empty()
-    }
 }
 
 /// State maintained about individual exports.

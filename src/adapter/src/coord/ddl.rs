@@ -1015,7 +1015,7 @@ impl Coordinator {
         sink: &Sink,
     ) -> Result<(), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
-        self.controller.storage.collection(sink.from)?;
+        self.controller.storage.check_exists(sink.from)?;
 
         let status_id = Some(
             self.catalog()
