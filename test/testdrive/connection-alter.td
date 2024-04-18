@@ -7,10 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# TODO: Remove skip when #19097 is fixed
-$ skip-if
-SELECT true
-
 $ set-arg-default single-replica-cluster=quickstart
 #
 # Test basic connection functionality

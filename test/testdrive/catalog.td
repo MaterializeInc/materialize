@@ -309,6 +309,12 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+
+# TODO: Remove skip when #19097 is fixed
+$ skip-end
+$ skip-if
+SELECT true
+
 > CREATE SINK snk
   IN CLUSTER ${arg.single-replica-cluster}
   FROM source_data
