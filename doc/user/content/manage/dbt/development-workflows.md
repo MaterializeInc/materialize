@@ -87,6 +87,7 @@ in your dbt run invocations:
 ```bash
 dbt run --select "my_dbt_project_name"   # runs all models in your project
 dbt run --select "my_dbt_model"          # runs a specific model
+dbt run --select "my_model+"             # select my_model and all downstream dependencies
 dbt run --select "path.to.my.models"     # runs all models in a specific directory
 dbt run --select "my_package.some_model" # runs a specific model in a specific package
 dbt run --select "tag:nightly"           # runs models with the "nightly" tag
