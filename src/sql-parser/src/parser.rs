@@ -5374,14 +5374,14 @@ impl<'a> Parser<'a> {
             let columns = self
                 .parse_parenthesized_column_list(Optional)
                 .map_parser_err(StatementKind::Copy)?;
-            CopyRelation::Table { name, columns }
+            CopyRelation::Named { name, columns }
         };
         let (direction, target) = match self
             .expect_one_of_keywords(&[FROM, TO])
             .map_parser_err(StatementKind::Copy)?
         {
             FROM => {
-                if let CopyRelation::Table { .. } = relation {
+                if let CopyRelation::Named { .. } = relation {
                     // Ok.
                 } else {
                     return parser_err!(

@@ -306,7 +306,7 @@ impl_display_t!(InsertStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CopyRelation<T: AstInfo> {
-    Table {
+    Named {
         name: T::ItemName,
         columns: Vec<Ident>,
     },
@@ -419,7 +419,7 @@ impl<T: AstInfo> AstDisplay for CopyStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("COPY ");
         match &self.relation {
-            CopyRelation::Table { name, columns } => {
+            CopyRelation::Named { name, columns } => {
                 f.write_node(name);
                 if !columns.is_empty() {
                     f.write_str("(");
