@@ -112,9 +112,10 @@ pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
     let part = decode_part(&mut std::io::Cursor::new(&encoded), schema, &UnitSchema)
         .map_err(|err| err.to_string())?;
 
+    let mut actual = T::default();
     assert_eq!(part.len(), 1);
     let part = part.key_ref();
-    let actual = schema.decoder(part)?.decode(0);
+    schema.decoder(part)?.decode(0, &mut actual);
     if &actual != value {
         Err(format!(
             "validate_roundtrip expected {:?} but got {:?}",

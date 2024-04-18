@@ -349,7 +349,7 @@ fn bench_roundtrip(c: &mut Criterion) {
 
         b.iter(|| {
             for idx in 0..rows.len() {
-                decoder.decode_into(idx, &mut row);
+                decoder.decode(idx, &mut row);
                 // We create a packer which clears the row.
                 let _ = row.packer();
             }

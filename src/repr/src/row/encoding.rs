@@ -736,13 +736,7 @@ impl RowDecoder {
 }
 
 impl PartDecoder<Row> for RowDecoder {
-    fn decode(&self, idx: usize) -> Row {
-        let mut val = Row::default();
-        self.decode_into(idx, &mut val);
-        val
-    }
-
-    fn decode_into(&self, idx: usize, val: &mut Row) {
+    fn decode(&self, idx: usize, val: &mut Row) {
         let mut packer = val.packer();
         for decoder in self.col_decoders.iter() {
             decoder.decode(idx, &mut packer);

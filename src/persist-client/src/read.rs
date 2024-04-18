@@ -147,7 +147,15 @@ where
             }
         }
     }
+}
 
+impl<K, V, T, D> Subscribe<K, V, T, D>
+where
+    K: Debug + Codec + Default,
+    V: Debug + Codec + Default,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
     /// fetches and returns the data from within it.
     #[instrument(level = "debug", fields(shard = %self.listen.handle.machine.shard_id()))]
@@ -184,7 +192,15 @@ where
     pub async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
         self.listen.fetch_batch_part(part).await
     }
+}
 
+impl<K, V, T, D> Subscribe<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
         self.listen
@@ -267,19 +283,6 @@ where
             frontier: as_of.clone(),
             as_of,
         }
-    }
-
-    /// Convert listener into futures::Stream
-    pub fn into_stream(
-        mut self,
-    ) -> impl Stream<Item = ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
-        async_stream::stream!({
-            loop {
-                for msg in self.fetch_next().await {
-                    yield msg;
-                }
-            }
-        })
     }
 
     /// An exclusive upper bound on the progress of this Listen.
@@ -383,7 +386,15 @@ where
 
         (parts, self.frontier.clone())
     }
+}
 
+impl<K, V, T, D> Listen<K, V, T, D>
+where
+    K: Debug + Codec + Default,
+    V: Debug + Codec + Default,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     /// Attempt to pull out the next values of this subscription.
     ///
     /// The updates received in [ListenEvent::Updates] should be assumed to be in arbitrary order
@@ -411,6 +422,54 @@ where
         ret
     }
 
+    /// Convert listener into futures::Stream
+    pub fn into_stream(
+        mut self,
+    ) -> impl Stream<Item = ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
+        async_stream::stream!({
+            loop {
+                for msg in self.fetch_next().await {
+                    yield msg;
+                }
+            }
+        })
+    }
+
+    /// Test helper to read from the listener until the given frontier is
+    /// reached. Because compaction can arbitrarily combine batches, we only
+    /// return the final progress info.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn read_until(
+        &mut self,
+        ts: &T,
+    ) -> (
+        Vec<((Result<K, String>, Result<V, String>), T, D)>,
+        Antichain<T>,
+    ) {
+        let mut updates = Vec::new();
+        let mut frontier = Antichain::from_elem(T::minimum());
+        while self.frontier.less_than(ts) {
+            for event in self.fetch_next().await {
+                match event {
+                    ListenEvent::Updates(mut x) => updates.append(&mut x),
+                    ListenEvent::Progress(x) => frontier = x,
+                }
+            }
+        }
+        // Unlike most tests, intentionally don't consolidate updates here
+        // because Listen replays them at the original fidelity.
+        (updates, frontier)
+    }
+}
+
+impl<K, V, T, D> Listen<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     /// Fetches the contents of `part` and returns its lease.
     ///
     /// This is broken out into its own function to provide a trivial means for
@@ -440,33 +499,6 @@ where
     /// happens.
     pub async fn expire(self) {
         self.handle.expire().await
-    }
-
-    /// Test helper to read from the listener until the given frontier is
-    /// reached. Because compaction can arbitrarily combine batches, we only
-    /// return the final progress info.
-    #[cfg(test)]
-    #[track_caller]
-    pub async fn read_until(
-        &mut self,
-        ts: &T,
-    ) -> (
-        Vec<((Result<K, String>, Result<V, String>), T, D)>,
-        Antichain<T>,
-    ) {
-        let mut updates = Vec::new();
-        let mut frontier = Antichain::from_elem(T::minimum());
-        while self.frontier.less_than(ts) {
-            for event in self.fetch_next().await {
-                match event {
-                    ListenEvent::Updates(mut x) => updates.append(&mut x),
-                    ListenEvent::Progress(x) => frontier = x,
-                }
-            }
-        }
-        // Unlike most tests, intentionally don't consolidate updates here
-        // because Listen replays them at the original fidelity.
-        (updates, frontier)
     }
 }
 
@@ -1100,7 +1132,15 @@ where
             parts,
         })
     }
+}
 
+impl<K, V, T, D> ReadHandle<K, V, T, D>
+where
+    K: Debug + Codec + Ord + Default,
+    V: Debug + Codec + Ord + Default,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     /// Generates a [Self::snapshot], and streams out all of the updates
     /// it contains in bounded memory.
     ///
