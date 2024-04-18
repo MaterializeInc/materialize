@@ -120,6 +120,7 @@ default-members = [
     "src/sqllogictest",
     "src/testdrive",
     "test/metabase/smoketest",
+    "src/pgtest",
 ]
 
 exclude = [
