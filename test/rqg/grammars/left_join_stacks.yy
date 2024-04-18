@@ -66,80 +66,80 @@ table_name:
 left_join1:
   # Join against ft:
     LEFT JOIN table_name AS d1 ON( ft.col_name = d1.col_name )
-  | LEFT JOIN table_name AS d1 ON( ft.k = d1.k AND ft.v = d1.v )
+  | LEFT JOIN table_name AS d1 ON( ft.col_name = d1.col_name AND ft.col_name = d1.col_name )
 ;
 
 left_join2:
   # Join against ft:
     LEFT JOIN table_name AS d2 ON( ft.col_name = d2.col_name )
-  | LEFT JOIN table_name AS d2 ON( ft.k = d2.k AND ft.v = d2.v )
+  | LEFT JOIN table_name AS d2 ON( ft.col_name = d2.col_name AND ft.col_name = d2.col_name )
   # Join against d1:
   | LEFT JOIN table_name AS d2 ON( d1.col_name = d2.col_name )
-  | LEFT JOIN table_name AS d2 ON( d1.k = d2.k AND d1.v = d2.v )
+  | LEFT JOIN table_name AS d2 ON( d1.col_name = d2.col_name AND d1.col_name = d2.col_name )
 ;
 
 left_join3:
   # Join against ft:
     LEFT JOIN table_name AS d3 ON( ft.col_name = d3.col_name )
-  | LEFT JOIN table_name AS d3 ON( ft.k = d3.k AND ft.v = d3.v )
+  | LEFT JOIN table_name AS d3 ON( ft.col_name = d3.col_name AND ft.col_name = d3.col_name )
   # Join against d1:
   | LEFT JOIN table_name AS d3 ON( d1.col_name = d3.col_name )
-  | LEFT JOIN table_name AS d3 ON( d1.k = d3.k AND d1.v = d3.v )
+  | LEFT JOIN table_name AS d3 ON( d1.col_name = d3.col_name AND d1.col_name = d3.col_name )
   # Join against d2:
   | LEFT JOIN table_name AS d3 ON( d2.col_name = d3.col_name )
-  | LEFT JOIN table_name AS d3 ON( d2.k = d3.k AND d2.v = d3.v )
+  | LEFT JOIN table_name AS d3 ON( d2.col_name = d3.col_name AND d2.col_name = d3.col_name )
 ;
 
 left_join4:
   # Join against ft:
     LEFT JOIN table_name AS d4 ON( ft.col_name = d4.col_name )
-  | LEFT JOIN table_name AS d4 ON( ft.k = d4.k AND ft.v = d4.v )
+  | LEFT JOIN table_name AS d4 ON( ft.col_name = d4.col_name AND ft.col_name = d4.col_name )
   # Join against d1:
   | LEFT JOIN table_name AS d4 ON( d1.col_name = d4.col_name )
-  | LEFT JOIN table_name AS d4 ON( d1.k = d4.k AND d1.v = d4.v )
+  | LEFT JOIN table_name AS d4 ON( d1.col_name = d4.col_name AND d1.col_name = d4.col_name )
   # Join against d2:
   | LEFT JOIN table_name AS d4 ON( d2.col_name = d4.col_name )
-  | LEFT JOIN table_name AS d4 ON( d2.k = d4.k AND d2.v = d4.v )
+  | LEFT JOIN table_name AS d4 ON( d2.col_name = d4.col_name AND d2.col_name = d4.col_name )
   # Join against d3:
   | LEFT JOIN table_name AS d4 ON( d3.col_name = d4.col_name )
-  | LEFT JOIN table_name AS d4 ON( d3.k = d4.k AND d3.v = d4.v )
+  | LEFT JOIN table_name AS d4 ON( d3.col_name = d4.col_name AND d3.col_name = d4.col_name )
 ;
 
 left_join5:
   # Join against ft:
     LEFT JOIN table_name AS d5 ON( ft.col_name = d5.col_name )
-  | LEFT JOIN table_name AS d5 ON( ft.k = d5.k AND ft.v = d5.v )
+  | LEFT JOIN table_name AS d5 ON( ft.col_name = d5.col_name AND ft.col_name = d5.col_name )
   # Join against d1:
   | LEFT JOIN table_name AS d5 ON( d1.col_name = d5.col_name )
-  | LEFT JOIN table_name AS d5 ON( d1.k = d5.k AND d1.v = d5.v )
+  | LEFT JOIN table_name AS d5 ON( d1.col_name = d5.col_name AND d1.col_name = d5.col_name )
   # Join against d2:
   | LEFT JOIN table_name AS d5 ON( d2.col_name = d5.col_name )
-  | LEFT JOIN table_name AS d5 ON( d2.k = d5.k AND d2.v = d5.v )
+  | LEFT JOIN table_name AS d5 ON( d2.col_name = d5.col_name AND d2.col_name = d5.col_name )
   # Join against d3:
   | LEFT JOIN table_name AS d5 ON( d3.col_name = d5.col_name )
-  | LEFT JOIN table_name AS d5 ON( d3.k = d5.k AND d3.v = d5.v )
+  | LEFT JOIN table_name AS d5 ON( d3.col_name = d5.col_name AND d3.col_name = d5.col_name )
   # Join against d4:
   | LEFT JOIN table_name AS d5 ON( d4.col_name = d5.col_name )
-  | LEFT JOIN table_name AS d5 ON( d4.k = d5.k AND d4.v = d5.v )
+  | LEFT JOIN table_name AS d5 ON( d4.col_name = d5.col_name AND d4.col_name = d5.col_name )
 ;
 
 left_join6:
   # Join against ft:
     LEFT JOIN table_name AS d6 ON( ft.col_name = d6.col_name )
-  | LEFT JOIN table_name AS d6 ON( ft.k = d6.k AND ft.v = d6.v )
+  | LEFT JOIN table_name AS d6 ON( ft.col_name = d6.col_name AND ft.col_name = d6.col_name )
   # Join against d1:
   | LEFT JOIN table_name AS d6 ON( d1.col_name = d6.col_name )
-  | LEFT JOIN table_name AS d6 ON( d1.k = d6.k AND d1.v = d6.v )
+  | LEFT JOIN table_name AS d6 ON( d1.col_name = d6.col_name AND d1.col_name = d6.col_name )
   # Join against d2:
   | LEFT JOIN table_name AS d6 ON( d2.col_name = d6.col_name )
-  | LEFT JOIN table_name AS d6 ON( d2.k = d6.k AND d2.v = d6.v )
+  | LEFT JOIN table_name AS d6 ON( d2.col_name = d6.col_name AND d2.col_name = d6.col_name )
   # Join against d3:
   | LEFT JOIN table_name AS d6 ON( d3.col_name = d6.col_name )
-  | LEFT JOIN table_name AS d6 ON( d3.k = d6.k AND d3.v = d6.v )
+  | LEFT JOIN table_name AS d6 ON( d3.col_name = d6.col_name AND d3.col_name = d6.col_name )
   # Join against d4:
   | LEFT JOIN table_name AS d6 ON( d4.col_name = d6.col_name )
-  | LEFT JOIN table_name AS d6 ON( d4.k = d6.k AND d4.v = d6.v )
+  | LEFT JOIN table_name AS d6 ON( d4.col_name = d6.col_name AND d4.col_name = d6.col_name )
   # Join against d5:
   | LEFT JOIN table_name AS d6 ON( d5.col_name = d6.col_name )
-  | LEFT JOIN table_name AS d6 ON( d5.k = d6.k AND d5.v = d6.v )
+  | LEFT JOIN table_name AS d6 ON( d5.col_name = d6.col_name AND d5.col_name = d6.col_name )
 ;
