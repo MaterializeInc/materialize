@@ -259,9 +259,6 @@ where
             .join("upsert")
             .join(source_config.id.to_string())
             .join(source_config.worker_id.to_string());
-        let legacy_rocksdb_dir = scratch_directory
-            .join(source_config.id.to_string())
-            .join(source_config.worker_id.to_string());
 
         let env = instance_context.rocksdb_env.clone();
 
@@ -280,7 +277,6 @@ where
                     AutoSpillBackend::new(
                         RocksDBParams {
                             instance_path: rocksdb_dir,
-                            legacy_instance_path: legacy_rocksdb_dir,
                             env,
                             tuning_config: tuning,
                             shared_metrics: rocksdb_shared_metrics,
@@ -307,7 +303,6 @@ where
                     rocksdb::RocksDB::new(
                         mz_rocksdb::RocksDBInstance::new(
                             &rocksdb_dir,
-                            &legacy_rocksdb_dir,
                             mz_rocksdb::InstanceOptions::defaults_with_env(env),
                             tuning,
                             rocksdb_shared_metrics,

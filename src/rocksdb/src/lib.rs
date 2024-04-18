@@ -227,9 +227,6 @@ where
     /// serialize and deserialize the keys and values.
     pub async fn new<M, O, IM>(
         instance_path: &Path,
-        // An old path to the db that we should cleanup. Used to migrate paths.
-        // TODO(guswynn): remove this once a release with it goes out.
-        legacy_instance_path: &Path,
         options: InstanceOptions,
         tuning_config: RocksDBConfig,
         shared_metrics: M,
@@ -244,7 +241,6 @@ where
         let dynamic_config = tuning_config.dynamic.clone();
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
-            let legacy_instance_path_owned = legacy_instance_path.to_owned();
             mz_ore::task::spawn_blocking(
                 || {
                     format!(
@@ -260,15 +256,6 @@ where
                             e.display_with_causes(),
                         );
                     }
-                    if let Err(e) =
-                        DB::destroy(&RocksDBOptions::default(), &*legacy_instance_path_owned)
-                    {
-                        tracing::warn!(
-                            "failed to cleanup legacy rocksdb dir on creation {}: {}",
-                            legacy_instance_path_owned.display(),
-                            e.display_with_causes(),
-                        );
-                    }
                 },
             )
             .await?;
@@ -278,14 +265,12 @@ where
         let (tx, rx): (mpsc::Sender<Command<K, V>>, _) = mpsc::channel(10);
 
         let instance_path = instance_path.to_owned();
-        let legacy_instance_path = legacy_instance_path.to_owned();
         let (creation_error_tx, creation_error_rx) = oneshot::channel();
         std::thread::spawn(move || {
             rocksdb_core_loop(
                 options,
                 tuning_config,
                 instance_path,
-                legacy_instance_path,
                 rx,
                 shared_metrics,
                 instance_metrics,
@@ -475,7 +460,6 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
     options: InstanceOptions,
     tuning_config: RocksDBConfig,
     instance_path: PathBuf,
-    legacy_instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     shared_metrics: M,
     instance_metrics: IM,
@@ -734,13 +718,6 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
         tracing::warn!(
             "failed to cleanup rocksdb dir at {}: {}",
             instance_path.display(),
-            e.display_with_causes(),
-        );
-    }
-    if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*legacy_instance_path) {
-        tracing::warn!(
-            "failed to cleanup legacy rocksdb dir at {}: {}",
-            legacy_instance_path.display(),
             e.display_with_causes(),
         );
     }
