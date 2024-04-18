@@ -263,18 +263,23 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 return WaitForTxnsProgress;
             }
         };
-        // See if any txns writes are >= our timestamp, if so, we can read all
-        // the way past the write.
+
+        // If we're before the most recent registration, it's always safe to
+        // read to that point normally. If we're before a known write then we
+        // can read all the way past the write. So we see if either of these
+        // are true and read to the later event.
+        let last_reg = data_times.last_reg();
+        let mut read_to = last_reg.register_ts.clone();
         if let Some(latest_write) = data_times.writes.back() {
-            if &ts <= latest_write {
-                return ReadDataTo(latest_write.step_forward());
-            }
+            read_to = std::cmp::max(read_to, latest_write.step_forward());
+        }
+        if ts < read_to {
+            return ReadDataTo(read_to);
         }
 
         // The most recent forget is set, which means it's not registered as of
         // the latest information we have. Emit logical progress up to the
         // forget and then read to the current progress point normally.
-        let last_reg = data_times.last_reg();
         if let Some(forget_ts) = &last_reg.forget_ts {
             assert!(*forget_ts < self.progress_exclusive);
             if ts <= *forget_ts {
@@ -286,12 +291,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 // we redo the data_listen_next unit test.
                 return WaitForTxnsProgress;
             }
-        }
-
-        // If we're before the most recent registration, it's always safe to
-        // read to that point normally.
-        if ts < last_reg.register_ts {
-            return ReadDataTo(last_reg.register_ts.clone());
         }
 
         // No writes were > ts, look to see if the txns upper has advanced
@@ -1186,18 +1185,18 @@ mod tests {
         assert_eq!(c.data_snapshot(d0, 12), ds(None, 12, 14));
         assert_eq!(c.data_snapshot(d0, 13), ds(None, 13, 14));
 
-        assert_eq!(c.data_listen_next(&d0, 0), ReadDataTo(8));
-        assert_eq!(c.data_listen_next(&d0, 1), ReadDataTo(8));
-        assert_eq!(c.data_listen_next(&d0, 2), ReadDataTo(8));
-        assert_eq!(c.data_listen_next(&d0, 3), ReadDataTo(8));
-        assert_eq!(c.data_listen_next(&d0, 4), ReadDataTo(8));
-        assert_eq!(c.data_listen_next(&d0, 5), ReadDataTo(8));
-        assert_eq!(c.data_listen_next(&d0, 6), ReadDataTo(8));
-        assert_eq!(c.data_listen_next(&d0, 7), ReadDataTo(8));
-        assert_eq!(c.data_listen_next(&d0, 8), EmitLogicalProgress(14));
-        assert_eq!(c.data_listen_next(&d0, 9), EmitLogicalProgress(14));
-        assert_eq!(c.data_listen_next(&d0, 10), EmitLogicalProgress(14));
-        assert_eq!(c.data_listen_next(&d0, 11), EmitLogicalProgress(14));
+        assert_eq!(c.data_listen_next(&d0, 0), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 1), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 2), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 3), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 4), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 5), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 6), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 7), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 8), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 9), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 10), ReadDataTo(12));
+        assert_eq!(c.data_listen_next(&d0, 11), ReadDataTo(12));
         assert_eq!(c.data_listen_next(&d0, 12), EmitLogicalProgress(14));
         assert_eq!(c.data_listen_next(&d0, 13), EmitLogicalProgress(14));
         assert_eq!(c.data_listen_next(&d0, 14), WaitForTxnsProgress);
