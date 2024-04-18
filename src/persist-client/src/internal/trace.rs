@@ -371,6 +371,10 @@ impl<T> Trace<T> {
         }
     }
 
+    pub fn spine_batches(&self) -> impl Iterator<Item = &SpineBatch<T>> {
+        self.spine.spine_batches()
+    }
+
     pub fn batches(&self) -> impl Iterator<Item = &HollowBatch<T>> {
         self.spine
             .spine_batches()
@@ -534,7 +538,7 @@ pub struct IdHollowBatch<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum SpineBatch<T> {
+pub(crate) enum SpineBatch<T> {
     Merged(IdHollowBatch<T>),
     Fueled {
         id: SpineId,
@@ -588,6 +592,24 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 debug_assert_eq!(parts.last().map(|x| x.id.1), Some(id.1));
                 *id
             }
+        }
+    }
+
+    pub fn is_compact(&self) -> bool {
+        // This definition is extremely likely to change, but for now, we consider a batch
+        // "compact" if it's a merged batch of a single run.
+        match self {
+            SpineBatch::Merged(b) => b.batch.runs.is_empty(),
+            SpineBatch::Fueled { .. } => false,
+        }
+    }
+
+    pub fn is_merging(&self) -> bool {
+        // We can't currently tell if a fueled merge is in progress or dropped on the floor,
+        // but for now we assume that it is active.
+        match self {
+            SpineBatch::Merged(_) => false,
+            SpineBatch::Fueled { .. } => true,
         }
     }
 

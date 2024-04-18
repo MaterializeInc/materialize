@@ -329,6 +329,26 @@ impl StateVersions {
                 shard_metrics
                     .inline_part_bytes
                     .set(u64::cast_from(size_metrics.inline_part_bytes));
+
+                {
+                    // Capture and report spine-batch-specific metrics.
+                    let mut compact_batches = 0;
+                    let mut compacting_batches = 0;
+                    let mut noncompact_batches = 0;
+                    for batch in new_state.collections.trace.spine_batches() {
+                        if batch.is_compact() {
+                            compact_batches += 1;
+                        } else if batch.is_merging() {
+                            compacting_batches += 1;
+                        } else {
+                            noncompact_batches += 1;
+                        }
+                    }
+                    shard_metrics.compact_batches.set(compact_batches);
+                    shard_metrics.compacting_batches.set(compacting_batches);
+                    shard_metrics.noncompact_batches.set(noncompact_batches);
+                }
+
                 Ok((CaSResult::Committed, new))
             }
             CaSResult::ExpectationMismatch => {
