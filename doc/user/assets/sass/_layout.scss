@@ -46,6 +46,20 @@
     overflow-x: scroll;
 }
 
+table.inline-headings {
+    th, td {
+        p {
+            margin-top: 0.3em;
+            margin-bottom: 0.3em;
+            padding-left: 2em;
+        }
+        p.heading {
+            margin-bottom: -0.1em;
+            text-indent: -1.75em;
+        }
+    }
+}
+
 .relative {
     position: relative;
 }
