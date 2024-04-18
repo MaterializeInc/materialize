@@ -200,6 +200,11 @@ pub(super) async fn handle_rows_event(
     event: RowsEventData<'_>,
     ctx: &mut ReplContext<'_>,
     new_gtid: &GtidPartition,
+    event_buffer: &mut Vec<(
+        (usize, Result<Row, DefiniteError>),
+        GtidPartition,
+        mz_repr::Diff,
+    )>,
 ) -> Result<(), TransientError> {
     let (id, worker_id) = (ctx.config.id, ctx.config.worker_id);
 
@@ -229,11 +234,13 @@ pub(super) async fn handle_rows_event(
 
     trace!(%id, "timely-{worker_id} handling RowsEvent for {table:?}");
 
+    // Capability for this event.
+    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
+
     // Iterate over the rows in this RowsEvent. Each row is a pair of 'before_row', 'after_row',
     // to accomodate for updates and deletes (which include a before_row),
     // and updates and inserts (which inclued an after row).
     let mut final_row = Row::default();
-    let mut container = Vec::new();
     let mut rows_iter = event.rows(table_map_event);
     let mut rewind_count = 0;
     let mut additions = 0;
@@ -268,12 +275,10 @@ pub(super) async fn handle_rows_event(
             let data = (*output_index, event);
 
             // Rewind this update if it was already present in the snapshot
-            if let Some(([data_cap, _upper_cap], rewind_req)) = ctx.rewinds.get(&table) {
+            if let Some(([_rewind_data_cap, _upper_cap], rewind_req)) = ctx.rewinds.get(&table) {
                 if !rewind_req.snapshot_upper.less_equal(new_gtid) {
                     rewind_count += 1;
-                    ctx.data_output
-                        .give(data_cap, (data.clone(), GtidPartition::minimum(), -diff))
-                        .await;
+                    event_buffer.push((data.clone(), GtidPartition::minimum(), -diff));
                 }
             }
             if diff > 0 {
@@ -281,18 +286,35 @@ pub(super) async fn handle_rows_event(
             } else {
                 retractions += 1;
             }
-            container.push((data, new_gtid.clone(), diff));
+            ctx.data_output
+                .give(&gtid_cap, (data, new_gtid.clone(), diff))
+                .await;
         }
     }
 
-    // Flush this data
-    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-    trace!(%id, "timely-{worker_id} sending container for {new_gtid:?} \
-                 with {} updates ({} additions, {} retractions) and {} \
-                 rewinds", container.len(), additions, retractions, rewind_count);
-    ctx.data_output
-        .give_container(&gtid_cap, &mut container)
-        .await;
+    // We want to emit data in individual pieces to allow timely to break large chunks of data into
+    // containers. Naively interleaving new data and rewinds in the loop above defeats a timely
+    // optimization that caches push buffers if the `.give()` time has not changed.
+    //
+    // Instead, we buffer rewind events into a reusable buffer, and emit all at once here at the end.
+
+    if !event_buffer.is_empty() {
+        let ([rewind_data_cap, _], _) = ctx.rewinds.get(&table).unwrap();
+        for d in event_buffer.drain(..) {
+            ctx.data_output.give(rewind_data_cap, d).await;
+        }
+    }
+
+    trace!(
+        %id,
+        "timely-{worker_id} sent updates for {new_gtid:?} \
+            with {} updates ({} additions, {} retractions) and {} \
+            rewinds",
+        additions + retractions,
+        additions,
+        retractions,
+        rewind_count,
+    );
 
     Ok(())
 }

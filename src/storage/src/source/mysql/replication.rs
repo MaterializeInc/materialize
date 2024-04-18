@@ -307,6 +307,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
             let mut active_tx: Option<(Uuid, NonZeroU64)> = None;
 
+            let mut row_event_buffer = Vec::new();
+
             while let Some(event) = repl_context.stream.next().await {
                 use mysql_async::binlog::events::*;
                 let event = event?;
@@ -376,7 +378,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         let cur_gtid =
                             GtidPartition::new_singleton(source_id, GtidState::Active(tx_id));
 
-                        events::handle_rows_event(data, &mut repl_context, &cur_gtid).await?;
+                        events::handle_rows_event(
+                            data,
+                            &mut repl_context,
+                            &cur_gtid,
+                            &mut row_event_buffer,
+                        )
+                        .await?;
 
                         // Advance the frontier up to the point right before this GTID, since we
                         // might still see other events that are part of this same GTID, such as
