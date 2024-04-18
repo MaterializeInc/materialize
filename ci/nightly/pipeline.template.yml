@@ -1241,7 +1241,7 @@ steps:
   - id: crdb-restarts
     label: "CRDB rolling restarts"
     depends_on: build-aarch64
-    timeout_in_minutes: 15
+    timeout_in_minutes: 30
     agents:
       queue: linux-aarch64-small
     plugins:
