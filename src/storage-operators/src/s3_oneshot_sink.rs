@@ -56,6 +56,7 @@ pub fn copy_to<G, F>(
     aws_connection: AwsConnection,
     sink_id: GlobalId,
     connection_id: GlobalId,
+    params: CopyToParameters,
     worker_callback: F,
 ) where
     G: Scope<Timestamp = Timestamp>,
@@ -87,6 +88,7 @@ pub fn copy_to<G, F>(
             input_collection,
             up_to,
             start_stream,
+            params,
         ),
         S3SinkFormat::Parquet => render_upload_operator::<G, parquet::ParquetUploader>(
             scope.clone(),
@@ -98,6 +100,7 @@ pub fn copy_to<G, F>(
             input_collection,
             up_to,
             start_stream,
+            params,
         ),
     };
 
@@ -351,6 +354,7 @@ fn render_upload_operator<G, T>(
     input_collection: Collection<G, ((Row, u64), ()), Diff>,
     up_to: Antichain<G::Timestamp>,
     start_stream: Stream<G, Result<(), String>>,
+    params: CopyToParameters,
 ) -> Stream<G, Result<u64, String>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -415,6 +419,7 @@ where
                                             connection_details.clone(),
                                             &sink_id,
                                             batch,
+                                            params.clone(),
                                         )?)
                                     }
                                 };
@@ -435,7 +440,7 @@ where
                     AsyncEvent::Progress(frontier) => {
                         if PartialOrder::less_equal(&up_to, &frontier) {
                             for uploader in s3_uploaders.values_mut() {
-                                uploader.flush().await?;
+                                uploader.finish().await?;
                             }
                             // We are done, send the final count.
                             return Ok(row_count);
@@ -453,6 +458,21 @@ where
     });
 
     completion_stream
+}
+
+/// dyncfg parameters for the copy_to operator, stored in this struct to avoid
+/// requiring storage to depend on the compute crate. See `src/compute-types/src/dyncfgs.rs`
+/// for the definition of these parameters.
+#[derive(Clone, Debug)]
+pub struct CopyToParameters {
+    // The ratio (defined as a percentage) of row-group size to max-file-size.
+    // See the `parquet` module for more details on how this is used.
+    pub parquet_row_group_ratio: usize,
+    // The ratio (defined as a percentage) of arrow-builder size to row-group size.
+    // See the `parquet` module for more details on how this is used.
+    pub arrow_builder_buffer_ratio: usize,
+    // The size of each part in the multi-part upload to use when uploading files to S3.
+    pub s3_multipart_part_size_bytes: usize,
 }
 
 /// Helper to manage object keys created by this sink based on the S3 URI provided
@@ -519,10 +539,11 @@ trait CopyToS3Uploader: Sized {
         connection_details: S3UploadInfo,
         sink_id: &GlobalId,
         batch: u64,
+        params: CopyToParameters,
     ) -> Result<Self, anyhow::Error>;
     /// Append a row to the internal buffer, and optionally flush the buffer to S3.
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error>;
     /// Flush the full remaining internal buffer to S3, and close all open resources.
     /// This will be called when the input stream is finished.
-    async fn flush(&mut self) -> Result<(), anyhow::Error>;
+    async fn finish(&mut self) -> Result<(), anyhow::Error>;
 }

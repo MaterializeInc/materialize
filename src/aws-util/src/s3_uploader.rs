@@ -275,7 +275,7 @@ impl S3MultiPartUploader {
     }
 
     /// Internal method, returns the number of bytes processed till now.
-    fn added_bytes(&self) -> u64 {
+    pub fn added_bytes(&self) -> u64 {
         self.total_bytes_uploaded + self.buffer_size()
     }
 

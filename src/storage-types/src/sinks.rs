@@ -855,4 +855,4 @@ impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
 }
 
 pub const MIN_S3_SINK_FILE_SIZE: ByteSize = ByteSize::mb(16);
-pub const MAX_S3_SINK_FILE_SIZE: ByteSize = ByteSize::gb(10);
+pub const MAX_S3_SINK_FILE_SIZE: ByteSize = ByteSize::gb(4);

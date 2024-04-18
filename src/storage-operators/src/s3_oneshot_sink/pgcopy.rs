@@ -9,17 +9,17 @@
 
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
-use bytesize::ByteSize;
 use mz_aws_util::s3_uploader::{
     CompletedUpload, S3MultiPartUploadError, S3MultiPartUploader, S3MultiPartUploaderConfig,
 };
+use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_pgcopy::{encode_copy_format, CopyFormatParams};
 use mz_repr::{GlobalId, RelationDesc, Row};
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use tracing::info;
 
-use super::{CopyToS3Uploader, S3KeyManager};
+use super::{CopyToParameters, CopyToS3Uploader, S3KeyManager};
 
 /// Required state to upload batches to S3
 pub(super) struct PgCopyUploader {
@@ -47,6 +47,8 @@ pub(super) struct PgCopyUploader {
     /// Currently at a time this will only store one single encoded row
     /// before getting added to the `current_file_uploader`'s buffer.
     buf: Vec<u8>,
+    /// Upload parameters.
+    params: CopyToParameters,
 }
 
 impl CopyToS3Uploader for PgCopyUploader {
@@ -55,6 +57,7 @@ impl CopyToS3Uploader for PgCopyUploader {
         connection_details: S3UploadInfo,
         sink_id: &GlobalId,
         batch: u64,
+        params: CopyToParameters,
     ) -> Result<PgCopyUploader, anyhow::Error> {
         match connection_details.format {
             S3SinkFormat::PgCopy(format_params) => Ok(PgCopyUploader {
@@ -67,13 +70,14 @@ impl CopyToS3Uploader for PgCopyUploader {
                 file_index: 0,
                 current_file_uploader: None,
                 buf: Vec::new(),
+                params,
             }),
             _ => anyhow::bail!("Expected PgCopy format"),
         }
     }
 
     /// Finishes any remaining in-progress upload.
-    async fn flush(&mut self) -> Result<(), anyhow::Error> {
+    async fn finish(&mut self) -> Result<(), anyhow::Error> {
         if let Some(uploader) = self.current_file_uploader.take() {
             // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
             let handle =
@@ -125,7 +129,7 @@ impl CopyToS3Uploader for PgCopyUploader {
 impl PgCopyUploader {
     /// Creates the uploader for the next file and starts the multi part upload.
     async fn start_new_file_upload(&mut self) -> Result<(), anyhow::Error> {
-        self.flush().await?;
+        self.finish().await?;
         assert!(self.current_file_uploader.is_none());
 
         self.file_index += 1;
@@ -140,13 +144,14 @@ impl PgCopyUploader {
             .expect("sdk_config should always be present");
         let max_file_size = self.max_file_size;
         // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
+        let part_size_limit = u64::cast_from(self.params.s3_multipart_part_size_bytes);
         let handle = mz_ore::task::spawn(|| "s3_uploader::try_new", async move {
             let uploader = S3MultiPartUploader::try_new(
                 &sdk_config,
                 bucket,
                 object_key,
                 S3MultiPartUploaderConfig {
-                    part_size_limit: ByteSize::mib(10).as_u64(),
+                    part_size_limit,
                     file_size_limit: max_file_size,
                 },
             )
@@ -247,6 +252,11 @@ mod tests {
             },
             &sink_id,
             batch,
+            CopyToParameters {
+                s3_multipart_part_size_bytes: 10 * 1024 * 1024,
+                arrow_builder_buffer_ratio: 100,
+                parquet_row_group_ratio: 100,
+            },
         )?;
         let mut row = Row::default();
         // Even though this will exceed max_file_size, it should be successfully uploaded in a single file.
@@ -260,7 +270,7 @@ mod tests {
         row.packer().push(Datum::from("5678"));
         uploader.append_row(&row).await?;
 
-        uploader.flush().await?;
+        uploader.finish().await?;
 
         // Based on the max_file_size, the uploader should have uploaded two
         // files, part-0001.csv and part-0002.csv
