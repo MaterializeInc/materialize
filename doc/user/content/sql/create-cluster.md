@@ -34,7 +34,7 @@ to be associated with a cluster:
 ### Initial state
 
 Each Materialize region initially contains a [pre-installed cluster](/sql/show-clusters/#pre-installed-clusters)
-named `quickstart` with a size of `xsmall` and a replication factor of `1`. You
+named `quickstart` with a size of `25cc` and a replication factor of `1`. You
 can drop or alter this cluster to suit your needs.
 
 ### Choosing a cluster
