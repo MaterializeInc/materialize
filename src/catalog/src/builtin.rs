@@ -2633,7 +2633,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: Lazy<BuiltinView> = Lazy::new
         occurred_at as last_status_change_at,
         status
     FROM latest_events
-    JOIN mz_connections AS conns
+    JOIN mz_catalog.mz_connections AS conns
     ON conns.id = latest_events.connection_id",
     access: vec![PUBLIC_SELECT],
 });
@@ -2840,11 +2840,11 @@ pub static MZ_SOURCE_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     (
         SELECT subsources.id AS self, sources.id AS parent
         FROM
-            mz_sources AS subsources
+            mz_catalog.mz_sources AS subsources
                 JOIN
                     mz_internal.mz_object_dependencies AS deps
                     ON subsources.id = deps.referenced_object_id
-                JOIN mz_sources AS sources ON sources.id = deps.object_id
+                JOIN mz_catalog.mz_sources AS sources ON sources.id = deps.object_id
     ),
      -- Determine which collection's ID to use for the status
     id_of_status_to_use AS
@@ -2890,7 +2890,7 @@ SELECT
     error,
     details
 FROM
-    mz_sources
+    mz_catalog.mz_sources
         LEFT JOIN latest_events_to_use AS e ON mz_sources.id = e.source_id
 WHERE mz_sources.id NOT LIKE 's%';",
     access: vec![PUBLIC_SELECT],
@@ -2925,7 +2925,7 @@ SELECT
     coalesce(status, 'created') as status,
     error,
     details
-FROM mz_sinks
+FROM mz_catalog.mz_sinks
 LEFT JOIN latest_events ON mz_sinks.id = latest_events.sink_id
 WHERE
     -- This is a convenient way to filter out system sinks, like the status_history table itself.
@@ -4101,10 +4101,10 @@ pub static PG_AUTH_MEMBERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     grantor.oid AS grantor,
     -- Materialize hasn't implemented admin_option.
     false as admin_option
-FROM mz_role_members membership
-JOIN mz_roles role ON membership.role_id = role.id
-JOIN mz_roles member ON membership.member = member.id
-JOIN mz_roles grantor ON membership.grantor = grantor.id",
+FROM mz_catalog.mz_role_members membership
+JOIN mz_catalog.mz_roles role ON membership.role_id = role.id
+JOIN mz_catalog.mz_roles member ON membership.member = member.id
+JOIN mz_catalog.mz_roles grantor ON membership.grantor = grantor.id",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -4727,7 +4727,7 @@ SELECT
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
     m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent
 FROM
-    mz_cluster_replicas AS r
+    mz_catalog.mz_cluster_replicas AS r
         JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
     access: vec![PUBLIC_SELECT],
@@ -5088,9 +5088,9 @@ SELECT
     role.name AS role_name,
     -- ADMIN OPTION isn't implemented.
     'NO' AS is_grantable
-FROM mz_role_members membership
-JOIN mz_roles role ON membership.role_id = role.id
-JOIN mz_roles member ON membership.member = member.id
+FROM mz_catalog.mz_role_members membership
+JOIN mz_catalog.mz_roles role ON membership.role_id = role.id
+JOIN mz_catalog.mz_roles member ON membership.member = member.id
 WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USAGE')",
     access: vec![PUBLIC_SELECT],
 });
@@ -5127,7 +5127,7 @@ pub static INFORMATION_SCHEMA_ENABLED_ROLES: Lazy<BuiltinView> = Lazy::new(|| Bu
     column_defs: None,
     sql: "
 SELECT name AS role_name
-FROM mz_roles
+FROM mz_catalog.mz_roles
 WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
     access: vec![PUBLIC_SELECT],
 });
@@ -5658,8 +5658,8 @@ pub static MZ_SHOW_MATERIALIZED_VIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
     oid: oid::VIEW_MZ_SHOW_MATERIALIZED_VIEWS_OID,
     column_defs: None,
     sql: "SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
-FROM mz_materialized_views AS mviews
-JOIN mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
+FROM mz_catalog.mz_materialized_views AS mviews
+JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -5677,7 +5677,7 @@ pub static MZ_SHOW_INDEXES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     objs.schema_id AS schema_id,
     clusters.id AS cluster_id
 FROM
-    mz_indexes AS idxs
+    mz_catalog.mz_indexes AS idxs
     JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
     JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = idxs.cluster_id
     LEFT JOIN
@@ -5691,9 +5691,9 @@ FROM
                 ORDER BY idx_cols.index_position ASC
             ) AS key
         FROM
-            mz_indexes AS idxs
-            JOIN mz_index_columns idx_cols ON idxs.id = idx_cols.index_id
-            LEFT JOIN mz_columns obj_cols ON
+            mz_catalog.mz_indexes AS idxs
+            JOIN mz_catalog.mz_index_columns idx_cols ON idxs.id = idx_cols.index_id
+            LEFT JOIN mz_catalog.mz_columns obj_cols ON
                 idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         GROUP BY idxs.id) AS keys
     ON idxs.id = keys.id",
@@ -5737,9 +5737,9 @@ pub static MZ_SHOW_ROLE_MEMBERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     r2.name AS member,
     r3.name AS grantor
 FROM mz_catalog.mz_role_members rm
-JOIN mz_roles r1 ON r1.id = rm.role_id
-JOIN mz_roles r2 ON r2.id = rm.member
-JOIN mz_roles r3 ON r3.id = rm.grantor
+JOIN mz_catalog.mz_roles r1 ON r1.id = rm.role_id
+JOIN mz_catalog.mz_roles r2 ON r2.id = rm.member
+JOIN mz_catalog.mz_roles r3 ON r3.id = rm.grantor
 ORDER BY role"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5769,9 +5769,9 @@ pub static MZ_SHOW_SYSTEM_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinVi
     privileges.privilege_type AS privilege_type
 FROM
     (SELECT mz_internal.mz_aclexplode(ARRAY[privileges]).*
-    FROM mz_system_privileges) AS privileges
-LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
-LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+    FROM mz_catalog.mz_system_privileges) AS privileges
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5806,10 +5806,10 @@ pub static MZ_SHOW_CLUSTER_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
     privileges.privilege_type AS privilege_type
 FROM
     (SELECT mz_internal.mz_aclexplode(privileges).*, name
-    FROM mz_clusters
+    FROM mz_catalog.mz_clusters
     WHERE id NOT LIKE 's%') AS privileges
-LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
-LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5844,10 +5844,10 @@ pub static MZ_SHOW_DATABASE_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| Builtin
     privileges.privilege_type AS privilege_type
 FROM
     (SELECT mz_internal.mz_aclexplode(privileges).*, name
-    FROM mz_databases
+    FROM mz_catalog.mz_databases
     WHERE id NOT LIKE 's%') AS privileges
-LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
-LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5883,11 +5883,11 @@ pub static MZ_SHOW_SCHEMA_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinVi
     privileges.privilege_type AS privilege_type
 FROM
     (SELECT mz_internal.mz_aclexplode(privileges).*, database_id, name
-    FROM mz_schemas
+    FROM mz_catalog.mz_schemas
     WHERE id NOT LIKE 's%') AS privileges
-LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
-LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
-LEFT JOIN mz_databases databases ON privileges.database_id = databases.id
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_databases databases ON privileges.database_id = databases.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5927,10 +5927,10 @@ FROM
     (SELECT mz_internal.mz_aclexplode(privileges).*, schema_id, name, type
     FROM mz_catalog.mz_objects
     WHERE id NOT LIKE 's%') AS privileges
-LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
-LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
-LEFT JOIN mz_schemas schemas ON privileges.schema_id = schemas.id
-LEFT JOIN mz_databases databases ON schemas.database_id = databases.id
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_schemas schemas ON privileges.schema_id = schemas.id
+LEFT JOIN mz_catalog.mz_databases databases ON schemas.database_id = databases.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -6005,11 +6005,11 @@ pub static MZ_SHOW_DEFAULT_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
         ELSE grantee.name
     END AS grantee,
 	unnest(mz_internal.mz_format_privileges(defaults.privileges)) AS privilege_type
-FROM mz_default_privileges defaults
-LEFT JOIN mz_roles AS object_owner ON defaults.role_id = object_owner.id
-LEFT JOIN mz_roles AS grantee ON defaults.grantee = grantee.id
-LEFT JOIN mz_databases AS databases ON defaults.database_id = databases.id
-LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
+FROM mz_catalog.mz_default_privileges defaults
+LEFT JOIN mz_catalog.mz_roles AS object_owner ON defaults.role_id = object_owner.id
+LEFT JOIN mz_catalog.mz_roles AS grantee ON defaults.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_databases AS databases ON defaults.database_id = databases.id
+LEFT JOIN mz_catalog.mz_schemas AS schemas ON defaults.schema_id = schemas.id
 WHERE defaults.grantee NOT LIKE 's%'
     AND defaults.database_id IS NULL OR defaults.database_id NOT LIKE 's%'
     AND defaults.schema_id IS NULL OR defaults.schema_id NOT LIKE 's%'"#,
@@ -6098,7 +6098,7 @@ indexes AS (
         i.id AS object_id,
         h.replica_id,
         COALESCE(h.hydrated, false) AS hydrated
-    FROM mz_indexes i
+    FROM mz_catalog.mz_indexes i
     LEFT JOIN mz_internal.mz_compute_hydration_statuses h
         ON (h.object_id = i.id)
 ),
@@ -6107,7 +6107,7 @@ materialized_views AS (
         i.id AS object_id,
         h.replica_id,
         COALESCE(h.hydrated, false) AS hydrated
-    FROM mz_materialized_views i
+    FROM mz_catalog.mz_materialized_views i
     LEFT JOIN mz_internal.mz_compute_hydration_statuses h
         ON (h.object_id = i.id)
 ),
@@ -6117,14 +6117,14 @@ materialized_views AS (
 -- Webhook sources are an exception to this rule.
 sources_maintained_by_dataflows AS (
     SELECT id, cluster_id
-    FROM mz_sources
+    FROM mz_catalog.mz_sources
     WHERE cluster_id IS NOT NULL AND type != 'webhook'
 ),
 -- Cluster IDs are missing for subsources in `mz_sources` (#24235), so we need
 -- to add them manually here by looking up the parent sources.
 subsources_with_clusters AS (
     SELECT ss.id, ps.cluster_id
-    FROM mz_sources ss
+    FROM mz_catalog.mz_sources ss
     JOIN mz_internal.mz_object_dependencies d
         ON (d.referenced_object_id = ss.id)
     JOIN sources_maintained_by_dataflows ps
@@ -6143,7 +6143,7 @@ sources AS (
         ss.rehydration_latency IS NOT NULL AS hydrated
     FROM sources_with_clusters s
     LEFT JOIN mz_internal.mz_source_statistics ss USING (id)
-    JOIN mz_cluster_replicas r
+    JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 ),
 sinks AS (
@@ -6151,9 +6151,9 @@ sinks AS (
         s.id AS object_id,
         r.id AS replica_id,
         ss.status = 'running' AS hydrated
-    FROM mz_sinks s
+    FROM mz_catalog.mz_sinks s
     LEFT JOIN mz_internal.mz_sink_statuses ss USING (id)
-    JOIN mz_cluster_replicas r
+    JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 )
 SELECT * FROM indexes
@@ -6175,11 +6175,11 @@ pub static MZ_MATERIALIZATION_LAG: Lazy<BuiltinView> = Lazy::new(|| BuiltinView 
 WITH MUTUALLY RECURSIVE
     -- IDs of objects for which we want to know the lag.
     materializations (id text) AS (
-        SELECT id FROM mz_indexes
+        SELECT id FROM mz_catalog.mz_indexes
         UNION ALL
-        SELECT id FROM mz_materialized_views
+        SELECT id FROM mz_catalog.mz_materialized_views
         UNION ALL
-        SELECT id FROM mz_sinks
+        SELECT id FROM mz_catalog.mz_sinks
     ),
     -- Compute dependencies enriched with sink dependencies.
     dataflow_dependencies (id text, dep_id text) AS (
@@ -6188,7 +6188,7 @@ WITH MUTUALLY RECURSIVE
         UNION ALL
         SELECT object_id, referenced_object_id
         FROM mz_internal.mz_object_dependencies
-        JOIN mz_sinks ON (id = object_id)
+        JOIN mz_catalog.mz_sinks ON (id = object_id)
     ),
     -- Direct dependencies of materializations.
     direct_dependencies (id text, dep_id text) AS (
