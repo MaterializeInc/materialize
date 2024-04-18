@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.7.6 - 2024-04-17
 
 * **Breaking change.** The `source` and `sink` materialization types no longer
     accept arbitrary SQL statements, and now accept the `cluster` configuration
