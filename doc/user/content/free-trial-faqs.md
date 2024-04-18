@@ -29,7 +29,7 @@ Cluster     | Size      | Replication factor | Credits per hour
 `compute`   | `50cc`    | 2                  | 1 (0.5 each)
 `quickstart`| `25cc`    | 1                  | 0.25
 
-In this case, your credit consumption rate would be 2.5 credits per hour, which
+In this case, your credit consumption rate would be 1.75 credits per hour, which
 is under the rate limit of 4 credits per hour.
 
 ## How long does a free trial last?
