@@ -1709,7 +1709,7 @@ macro_rules! privilege_fn {
                     OR $1 IS NULL
                     OR $2 IS NULL
                     OR $3 IS NULL
-                    OR $1 NOT IN (SELECT oid FROM mz_roles)
+                    OR $1 NOT IN (SELECT oid FROM mz_catalog.mz_roles)
                     OR $2 NOT IN (SELECT oid FROM {catalog_tbl})
                     THEN NULL
                     ELSE COALESCE(
@@ -1729,7 +1729,7 @@ macro_rules! privilege_fn {
                                         {catalog_tbl}.oid = $2
                                 )
                                     AS user_privs (privilege)
-                                LEFT JOIN mz_roles ON
+                                LEFT JOIN mz_catalog.mz_roles ON
                                         mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
                             WHERE
                                 mz_internal.mz_aclitem_grantee(privilege) = '{public_role}' OR pg_has_role($1, mz_roles.oid, 'USAGE')
@@ -2423,8 +2423,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 OR $2 IS NULL
                 OR $3 IS NULL
                 THEN NULL
-                WHEN $1 NOT IN (SELECT oid FROM mz_roles)
-                OR $2 NOT IN (SELECT oid FROM mz_roles)
+                WHEN $1 NOT IN (SELECT oid FROM mz_catalog.mz_roles)
+                OR $2 NOT IN (SELECT oid FROM mz_catalog.mz_roles)
                 THEN false
                 ELSE $2::text IN (SELECT UNNEST(mz_internal.mz_role_oid_memberships() -> $1::text))
                 END",
@@ -3532,7 +3532,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 OR $1 IS NULL
                 OR $2 IS NULL
                 OR $3 IS NULL
-                OR $1 NOT IN (SELECT oid FROM mz_roles)
+                OR $1 NOT IN (SELECT oid FROM mz_catalog.mz_roles)
                 THEN NULL
                 ELSE COALESCE(
                     (
@@ -3551,7 +3551,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                                     mz_clusters.name = $2
                             )
                                 AS user_privs (privilege)
-                            LEFT JOIN mz_roles ON
+                            LEFT JOIN mz_catalog.mz_roles ON
                                     mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
                         WHERE
                             mz_internal.mz_aclitem_grantee(privilege) = '{}' OR pg_has_role($1, mz_roles.oid, 'USAGE')
@@ -3595,7 +3595,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 WHEN NOT mz_internal.mz_validate_privileges($2)
                 OR $1 IS NULL
                 OR $2 IS NULL
-                OR $1 NOT IN (SELECT oid FROM mz_roles)
+                OR $1 NOT IN (SELECT oid FROM mz_catalog.mz_roles)
                 THEN NULL
                 ELSE COALESCE(
                     (
@@ -3604,8 +3604,8 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                                 mz_internal.mz_acl_item_contains_privilege(privileges, $2)
                             )
                                 AS has_system_privilege
-                        FROM mz_system_privileges
-                        LEFT JOIN mz_roles ON
+                        FROM mz_catalog.mz_system_privileges
+                        LEFT JOIN mz_catalog.mz_roles ON
                                 mz_internal.mz_aclitem_grantee(privileges) = mz_roles.id
                         WHERE
                             mz_internal.mz_aclitem_grantee(privileges) = '{}' OR pg_has_role($1, mz_roles.oid, 'USAGE')
@@ -4168,7 +4168,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                         SELECT
                             (
                                 SELECT s.oid
-                                FROM mz_schemas AS s
+                                FROM mz_catalog.mz_schemas AS s
                                 LEFT JOIN mz_databases AS d ON s.database_id = d.id
                                 WHERE
                                     (
@@ -4194,7 +4194,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 WHEN $1 IS NULL THEN NULL
                 ELSE (
                     mz_unsafe.mz_error_if_null(
-                        (SELECT oid FROM mz_roles WHERE name = $1),
+                        (SELECT oid FROM mz_catalog.mz_roles WHERE name = $1),
                         'role \"' || $1 || '\" does not exist'
                     )
                 )
