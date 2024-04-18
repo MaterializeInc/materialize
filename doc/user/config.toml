@@ -165,8 +165,14 @@ weight= 14
 [[menu.main]]
 name = "Monitoring"
 identifier = "monitor"
+weight= 5
 parent = "manage"
+
+[[menu.main]]
+identifier = "manage-dbt"
+name = "Use dbt to manage Materialize"
 weight= 10
+parent = "manage"
 
 
 #
