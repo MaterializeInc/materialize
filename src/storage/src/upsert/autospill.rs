@@ -37,6 +37,7 @@ pub(crate) struct RocksDBParams {
     pub(crate) tuning_config: RocksDBConfig,
     pub(crate) shared_metrics: Arc<mz_rocksdb::RocksDBSharedMetrics>,
     pub(crate) instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
+    pub(crate) cleanup_tries: usize,
 }
 
 pub struct AutoSpillBackend<O> {
@@ -72,13 +73,14 @@ where
             tuning_config,
             shared_metrics,
             instance_metrics,
+            cleanup_tries,
         } = rocksdb_params;
         tracing::info!("spilling to disk for upsert at {:?}", instance_path);
 
         RocksDB::new(
             mz_rocksdb::RocksDBInstance::new(
                 instance_path,
-                mz_rocksdb::InstanceOptions::defaults_with_env(env.clone()),
+                mz_rocksdb::InstanceOptions::defaults_with_env(env.clone(), *cleanup_tries),
                 tuning_config.clone(),
                 Arc::clone(shared_metrics),
                 Arc::clone(instance_metrics),

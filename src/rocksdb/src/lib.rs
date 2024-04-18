@@ -56,6 +56,10 @@ pub enum Error {
     /// A tokio thread used by the implementation panicked.
     #[error("tokio thread panicked")]
     TokioPanic(#[from] tokio::task::JoinError),
+
+    /// A tokio thread used by the implementation panicked.
+    #[error("failed to cleanup in time")]
+    CleanupTimeout(#[from] tokio::time::error::Elapsed),
 }
 
 /// Fixed options to configure a [`RocksDBInstance`]. These are not tuning parameters,
@@ -64,6 +68,9 @@ pub struct InstanceOptions {
     /// Whether or not to clear state at the instance
     /// path before starting.
     pub cleanup_on_new: bool,
+
+    /// If `cleanup_on_new`, how many times to try.
+    pub cleanup_tries: usize,
 
     /// Whether or not to write writes
     /// to the wal. This is not in `RocksDBTuningParameters` because it
@@ -76,9 +83,10 @@ pub struct InstanceOptions {
 
 impl InstanceOptions {
     /// A new `Options` object with reasonable defaults.
-    pub fn defaults_with_env(env: rocksdb::Env) -> Self {
+    pub fn defaults_with_env(env: rocksdb::Env, cleanup_tries: usize) -> Self {
         InstanceOptions {
             cleanup_on_new: true,
+            cleanup_tries,
             use_wal: false,
             env,
         }
@@ -241,24 +249,46 @@ where
         let dynamic_config = tuning_config.dynamic.clone();
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
-            mz_ore::task::spawn_blocking(
-                || {
-                    format!(
-                        "RocksDB instance at {}: cleanup on creation",
-                        instance_path.display()
+
+            // We require that cleanup of the DB succeeds. Otherwise, we could open a DB with old,
+            // incorrect data. Because of races with dataflow shutdown, we retry a few times here.
+            // 1s with a 2x backoff is ~30s after 5 tries.
+            //
+            // TODO(guswynn): remove this when we can wait on dataflow cleanup asynchronously in
+            // the controller.
+            let retry = mz_ore::retry::Retry::default()
+                .max_tries(options.cleanup_tries)
+                // Large DB's could take multiple seconds to run.
+                .initial_backoff(std::time::Duration::from_secs(1));
+
+            retry
+                .retry_async_canceling(|_rs| async {
+                    let instance_path_owned = instance_path_owned.clone();
+                    mz_ore::task::spawn_blocking(
+                        || {
+                            format!(
+                                "RocksDB instance at {}: cleanup on creation",
+                                instance_path.display()
+                            )
+                        },
+                        move || {
+                            if let Err(e) =
+                                DB::destroy(&RocksDBOptions::default(), &*instance_path_owned)
+                            {
+                                tracing::warn!(
+                                    "failed to cleanup rocksdb dir on creation {}: {}",
+                                    instance_path_owned.display(),
+                                    e.display_with_causes(),
+                                );
+                                Err(Error::from(e))
+                            } else {
+                                Ok(())
+                            }
+                        },
                     )
-                },
-                move || {
-                    if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*instance_path_owned) {
-                        tracing::warn!(
-                            "failed to cleanup rocksdb dir on creation {}: {}",
-                            instance_path_owned.display(),
-                            e.display_with_causes(),
-                        );
-                    }
-                },
-            )
-            .await?;
+                    .await?
+                })
+                .await?;
         }
 
         // The buffer can be small here, as all interactions with it take `&mut self`.

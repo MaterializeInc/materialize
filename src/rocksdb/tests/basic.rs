@@ -50,7 +50,7 @@ async fn basic() -> Result<(), anyhow::Error> {
 
     let mut instance = RocksDBInstance::<String, String>::new(
         t.path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?),
+        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
         RocksDBConfig::new(Default::default(), None),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
@@ -141,7 +141,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance1 = RocksDBInstance::<String, String>::new(
         t.path().join("1").as_path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?),
+        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
         rocksdb_config.clone(),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
@@ -163,7 +163,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance2 = RocksDBInstance::<String, String>::new(
         t.path().join("2").as_path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?),
+        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
         rocksdb_config.clone(),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
@@ -188,7 +188,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance3 = RocksDBInstance::<String, String>::new(
         t.path().join("3").as_path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?),
+        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
         rocksdb_config,
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,

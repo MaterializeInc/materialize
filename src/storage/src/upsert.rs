@@ -217,6 +217,8 @@ where
     // this, to prevent unnecessary work.
     let wait_for_input_resumption =
         dyncfgs::DELAY_SOURCES_PAST_REHYDRATION.get(storage_configuration.config_set());
+    let rocksdb_cleanup_tries =
+        dyncfgs::STORAGE_ROCKSDB_CLEANUP_TRIES.get(storage_configuration.config_set());
 
     // Whether or not to partially drain the input buffer
     // to prevent buffering of the _upstream_ snapshot.
@@ -281,6 +283,7 @@ where
                             tuning_config: tuning,
                             shared_metrics: rocksdb_shared_metrics,
                             instance_metrics: rocksdb_instance_metrics,
+                            cleanup_tries: rocksdb_cleanup_tries,
                         },
                         spill_threshold,
                         rocksdb_in_use_metric,
@@ -303,7 +306,10 @@ where
                     rocksdb::RocksDB::new(
                         mz_rocksdb::RocksDBInstance::new(
                             &rocksdb_dir,
-                            mz_rocksdb::InstanceOptions::defaults_with_env(env),
+                            mz_rocksdb::InstanceOptions::defaults_with_env(
+                                env,
+                                rocksdb_cleanup_tries,
+                            ),
                             tuning,
                             rocksdb_shared_metrics,
                             rocksdb_instance_metrics,
