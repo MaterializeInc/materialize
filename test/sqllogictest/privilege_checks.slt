@@ -1751,11 +1751,6 @@ CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_sink_doc_on_option = true;
-----
-COMPLETE 0
-
 simple conn=joe,user=joe
 EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') KEY (a) NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (DOC ON COLUMN ty.a = 'comment') ENVELOPE UPSERT;
 ----
@@ -1798,11 +1793,6 @@ EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_con
 }
 EOF
 COMPLETE 1
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_sink_doc_on_option = false;
-----
-COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON SCHEMA materialize.public FROM joe;

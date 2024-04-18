@@ -2520,9 +2520,6 @@ pub fn plan_create_materialized_view(
 
     let as_of = stmt.as_of.map(Timestamp::from);
 
-    if !assert_not_null.is_empty() {
-        scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
-    }
     let compaction_window = retain_history
         .map(|cw| {
             scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
@@ -3044,10 +3041,6 @@ fn kafka_sink_builder(
                 && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
             {
                 sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
-            }
-
-            if !value_doc_options.is_empty() || !key_doc_options.is_empty() {
-                scx.require_feature_flag(&vars::ENABLE_SINK_DOC_ON_OPTION)?;
             }
 
             let options = AvroSchemaOptions {
