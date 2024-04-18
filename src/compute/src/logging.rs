@@ -37,7 +37,7 @@ pub use crate::logging::initialize::initialize;
 /// Logs events as a timely stream, with progress statements.
 struct BatchLogger<T, E, P>
 where
-    P: EventPusher<Timestamp, (Duration, E, T)>,
+    P: EventPusher<Timestamp, Vec<(Duration, E, T)>>,
 {
     /// Time in milliseconds of the current expressed capability.
     time_ms: Timestamp,
@@ -53,7 +53,7 @@ where
 
 impl<T, E, P> BatchLogger<T, E, P>
 where
-    P: EventPusher<Timestamp, (Duration, E, T)>,
+    P: EventPusher<Timestamp, Vec<(Duration, E, T)>>,
 {
     /// Batch size in bytes for batches
     const BATCH_SIZE_BYTES: usize = 1 << 13;
@@ -121,7 +121,7 @@ where
 }
 impl<T, E, P> Drop for BatchLogger<T, E, P>
 where
-    P: EventPusher<Timestamp, (Duration, E, T)>,
+    P: EventPusher<Timestamp, Vec<(Duration, E, T)>>,
 {
     fn drop(&mut self) {
         self.event_pusher
@@ -135,7 +135,7 @@ where
 /// initialization code more convenient.
 #[derive(Clone)]
 struct EventQueue<E> {
-    link: Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, E)>>,
+    link: Rc<EventLink<Timestamp, Vec<(Duration, WorkerIdentifier, E)>>>,
     activator: RcActivator,
 }
 

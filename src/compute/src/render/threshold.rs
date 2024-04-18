@@ -13,7 +13,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::Data;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
@@ -48,7 +48,7 @@ where
         > + 'static,
     T2::ValOwned: Columnation + Data,
     T2::Batch: Batch,
-    T2::Batcher: Batcher<Item = ((T1::KeyOwned, T2::ValOwned), G::Timestamp, Diff)>,
+    T2::Builder: Builder<Input = ((T1::KeyOwned, T2::ValOwned), G::Timestamp, Diff)>,
     L: Fn(&Diff) -> bool + 'static,
     Arranged<G, TraceAgent<T2>>: ArrangementSize,
 {

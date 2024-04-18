@@ -514,11 +514,11 @@ impl PendingWork {
         P: Push<
             Bundle<
                 (mz_repr::Timestamp, Subtime),
-                (
+                Vec<(
                     Result<Row, DataflowError>,
                     (mz_repr::Timestamp, Subtime),
                     Diff,
-                ),
+                )>,
             >,
         >,
         YFn: Fn(Instant, usize) -> bool,

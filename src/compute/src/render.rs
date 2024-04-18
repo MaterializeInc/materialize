@@ -615,7 +615,7 @@ where
         Tr1::ValOwned: Columnation + ExchangeData,
         Tr2: Trace + TraceReader<Time = G::Timestamp, Diff = Diff> + 'static,
         Tr2::Batch: Batch,
-        Tr2::Batcher: Batcher<Item = ((Tr1::KeyOwned, Tr1::ValOwned), G::Timestamp, Diff)>,
+        Tr2::Batcher: Batcher<Input = Vec<((Tr1::KeyOwned, Tr1::ValOwned), G::Timestamp, Diff)>>,
         Arranged<G, TraceAgent<Tr2>>: ArrangementSize,
     {
         use differential_dataflow::trace::cursor::MyTrait;

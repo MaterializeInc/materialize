@@ -46,7 +46,7 @@ pub trait MzReplay<T: Timestamp, D: Data, A: ActivatorTrait>: Sized {
 impl<T: Timestamp, D: Data, I, A: ActivatorTrait + 'static> MzReplay<T, D, A> for I
 where
     I: IntoIterator,
-    <I as IntoIterator>::Item: EventIterator<T, D> + 'static,
+    <I as IntoIterator>::Item: EventIterator<T, Vec<D>> + 'static,
 {
     /// Replay a collection of [EventIterator]s into a Timely stream.
     ///

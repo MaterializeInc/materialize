@@ -123,8 +123,13 @@ fn drain_through_mfp<T>(
     extensions: &[(Row, Diff)],
     mfp_plan: &MfpPlan,
     until: &Antichain<Timestamp>,
-    ok_output: &mut ConsolidateBuffer<T, Row, Diff, Tee<T, (Row, T, Diff)>>,
-    err_output: &mut ConsolidateBuffer<T, DataflowError, Diff, Tee<T, (DataflowError, T, Diff)>>,
+    ok_output: &mut ConsolidateBuffer<T, Row, Diff, Tee<T, Vec<(Row, T, Diff)>>>,
+    err_output: &mut ConsolidateBuffer<
+        T,
+        DataflowError,
+        Diff,
+        Tee<T, Vec<(DataflowError, T, Diff)>>,
+    >,
 ) where
     T: crate::render::RenderTimestamp,
 {

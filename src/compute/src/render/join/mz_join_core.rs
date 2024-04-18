@@ -584,7 +584,7 @@ where
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     fn work<L, I, YFn>(
         &mut self,
-        output: &mut OutputHandle<T, (D, T, Diff), Tee<T, (D, T, Diff)>>,
+        output: &mut OutputHandle<T, (D, T, Diff), Tee<T, Vec<(D, T, Diff)>>>,
         mut result: L,
         yield_fn: YFn,
         work: &mut usize,

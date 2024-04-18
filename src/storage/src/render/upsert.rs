@@ -35,7 +35,7 @@ use mz_timely_util::builder_async::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
@@ -917,7 +917,7 @@ impl<G: Scope> UpsertErrorEmitter<G>
         &mut AsyncOutputHandle<
             <G as ScopeParent>::Timestamp,
             Vec<(OutputIndex, HealthStatusUpdate)>,
-            TeeCore<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
+            Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
         >,
         &Capability<<G as ScopeParent>::Timestamp>,
     )
@@ -934,7 +934,7 @@ async fn process_upsert_state_error<G: Scope>(
     health_output: &mut AsyncOutputHandle<
         <G as ScopeParent>::Timestamp,
         Vec<(OutputIndex, HealthStatusUpdate)>,
-        TeeCore<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
+        Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,
 ) {
