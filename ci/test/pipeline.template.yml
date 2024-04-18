@@ -492,7 +492,7 @@ steps:
     label: Cloudtest %N
     depends_on: build-aarch64
     parallelism: 8
-    timeout_in_minutes: 35
+    timeout_in_minutes: 40
     inputs:
       - test/cloudtest
       - misc/python/materialize/cloudtest
