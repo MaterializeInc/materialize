@@ -3,16 +3,18 @@ title: "Time travel and history retention periods"
 description: "Understanding time travel and history retention periods"
 menu:
   main:
-    parent: manage
-    name: "Time travel and history data retention periods"
-    weight: 13
+    parent: 'sql-patterns'
+    name: "Time travel and history retention periods"
 ---
 
 {{< private-preview />}}
 
+The history retention period of an object is the duration for which historical versions
+of the object (also known as historical data or time-versioned data) are retained.
+
 By default, all user-defined sources, tables, materialized views, and indexes have a history
-retention period of one second. You can adjust the history
-retention period on these objects for time travel queries.
+retention period of one second. For the purpose of time travel queries, you can adjust the
+history retention period on these objects.
 
 The common use cases for adjusting the history retention period are:
 * Lossless, continuous subscriptions to your changing results. See the
@@ -28,6 +30,12 @@ and [indexes](/sql/create-index/). To configure a history retention period for
 an object that is different to the default (1 second), use the `RETAIN HISTORY`
 option in the respective `CREATE` statement. This value can be adjusted at any
 time using the respective `ALTER` statement.
+
+<!-- TODO(mjibson): replace this paragraph with a mention of the catalog table/column
+     once it's available -->
+To see what history retention period has been configured for an object, run the
+`SHOW CREATE ...` statement for the given object. See [`SHOW CREATE SOURCE`](/sql/show-create-source/)
+for an example.
 
 [//]: # "TODO(morsapaes) Include example."
 
@@ -57,12 +65,6 @@ Decreasing the history retention period for an object causes:
   be retained. If you subsequently increase the history retention period again,
   the older historical data may already be unavailable.
 
-### Observe the configured history retention period
-<!-- TODO(mjibson): replace this section with a mention of the catalog table/column
-    once it's available -->
-To see what history retention period has been configured for an object, run the
-`SHOW CREATE ...` statement for the given object. See [`SHOW CREATE SOURCE`](/sql/show-create-source/)
-for an example.
 
 ## Considerations
 
@@ -82,9 +84,55 @@ implications in Materialize.
     for that cluster to go up, which might require you to size up your cluster
     and consume additional compute credits.
 
+#### Best practices
+Given the additional memory costs associated with increasing the history retention period
+on indexes, if you don't need the performance benefits of an index - in particular for 
+the use case of lossless, continuous subscribes - it's better to create a
+materialized view for your subscription query and configure the history retention period
+on that materialized view.
+
+Similarly, because of the increased storage costs and processing time for the additional
+historical data on whichever object has an increasde history retention period, it's better
+to configure the retention the history retention period on
+the index or materialized view directly powering the subscribe, rather than all the
+way through the dependency chain from the source to the index or materialized view.
+
 ### History removal
 
 The history retention period represents the minimum amount of historical data
 guaranteed to be retained by Materialize. History clean up is processed in the
 background, so older history may be accessible for the period of time between when
 it falls outside the retention period and when it is cleaned up.
+
+
+## Examples
+### Creating a materialized view with retain history configured
+```sql
+CREATE MATERIALIZED VIEW winning_bids
+WITH (RETAIN HISTORY FOR '1hr') AS
+SELECT auction_id,
+       bid_id,
+       item,
+       amount
+FROM highest_bid_per_auction
+WHERE end_time < mz_now();
+```
+
+### Modifying retain history
+```sql
+ALTER MATERIALIZED VIEW winning_bids SET (RETAIN HISTORY FOR '1hr');
+```
+
+### Observing retain history
+```sql
+SHOW CREATE MATERIALIZED VIEW winning_bids;
+```
+```nofmt
+              name               |                                                                                                                       create_sql
+---------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ materialize.public.winning_bids | CREATE MATERIALIZED VIEW "materialize"."public"."winning_bids" IN CLUSTER "quickstart" WITH (RETAIN HISTORY = FOR '1hr') AS SELECT * FROM "materialize"."public"."highest_bid_per_auction" WHERE "end_time" < "mz_catalog"."mz_now"()
+```
+
+### Subscribe as of a timestamp in the past
+```sql
+SUBSCRIBE TO winning_bids WITH (PROGRESS, SNAPSHOT=false) AS OF 1713467627903;
