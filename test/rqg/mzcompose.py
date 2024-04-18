@@ -22,9 +22,7 @@ from materialize.mzcompose.services.rqg import RQG
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
 )
-from materialize.version_list import (
-    resolve_ancestor_image_tag,
-)
+from materialize.version_list import resolve_ancestor_image_tag
 
 SERVICES = [RQG()]
 
@@ -32,16 +30,23 @@ SERVICES = [RQG()]
 class Dataset(Enum):
     SIMPLE = 1
     DBT3 = 2
+    STAR_SCHEMA = 3
 
     def files(self) -> list[str]:
         match self:
             case Dataset.SIMPLE:
-                return ["simple.sql"]
+                return ["conf/mz/simple.sql"]
             case Dataset.DBT3:
                 # With Postgres, CREATE MATERIALZIED VIEW from dbt3-ddl.sql will produce
                 # a view thats is empty unless REFRESH MATERIALIZED VIEW from dbt3-ddl-refresh-mvs.sql
                 # is also run after the data has been loaded by dbt3-s0.0001.dump
-                return ["dbt3-ddl.sql", "dbt3-s0.0001.dump", "dbt3-ddl-refresh-mvs.sql"]
+                return [
+                    "conf/mz/dbt3-ddl.sql",
+                    "conf/mz/dbt3-s0.0001.dump",
+                    "conf/mz/dbt3-ddl-refresh-mvs.sql",
+                ]
+            case Dataset.STAR_SCHEMA:
+                return ["/workdir/datasets/star_schema.sql"]
             case _:
                 assert False
 
@@ -70,9 +75,13 @@ class Workload:
     reference_implementation: ReferenceImplementation | None
     dataset: Dataset | None = None
     duration: int = 30 * 60
+    queries: int = 100000000
     disabled: bool = False
     threads: int = 4
     validator: str | None = None
+
+    def dataset_files(self) -> list[str]:
+        return self.dataset.files() if self.dataset is not None else []
 
 
 WORKLOADS = [
@@ -127,19 +136,38 @@ WORKLOADS = [
         reference_implementation=None,
         validator="QueryProperties,RepeatableRead",
     ),
+    # Added as part of MaterializeInc/materialize#25340.
+    Workload(
+        name="left-join-stacks",
+        dataset=Dataset.STAR_SCHEMA,
+        grammar="/workdir/grammars/left_join_stacks.yy",
+        reference_implementation=ReferenceImplementation.POSTGRES,
+        validator="ResultsetComparatorSimplify",
+        queries=1000,  # Reduced no. of queries because the grammar is quite focused.
+    ),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
-        "--this-tag", help="Run Materialize with this git tag on port 16875"
+        "--this-tag",
+        help="Run Materialize with this git tag on port 16875",
     )
     parser.add_argument(
         "--other-tag",
+        action=StoreOtherTag,
         help="Run Materialize with this git tag on port 26875 (for workloads that compare two MZ instances)",
     )
     parser.add_argument(
-        "--grammar", type=str, help="Override the default grammar of the workload"
+        "--grammar",
+        type=str,
+        help="Override the default grammar of the workload",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        action="append",
+        help="Override the dataset files for the workload",
     )
     parser.add_argument(
         "--starting-rule",
@@ -149,7 +177,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--duration",
         type=int,
-        help="Run the Workload for the specifid time in seconds",
+        help="Run the Workload for the specified time in seconds",
+    )
+    parser.add_argument(
+        "--queries",
+        type=int,
+        help="Run the Workload for the specified number of queries",
     )
     parser.add_argument(
         "--threads",
@@ -193,40 +226,35 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -> None:
+    def materialize_image(tag: str | None) -> str | None:
+        return f"materialize/materialized:{tag}" if tag else None
+
+    # A list of psql-compatible services participating in the test
     participants: list[Service] = [
         Materialized(
             name="mz_this",
             ports=["16875:6875", "16876:6876", "16877:6877", "16878:6878"],
-            image=f"materialize/materialized:{args.this_tag}"
-            if args.this_tag
-            else None,
+            image=materialize_image(args.this_tag),
             use_default_volumes=False,
         ),
     ]
 
+    # A list of psql URLs for dataset initialization
     psql_urls = ["postgresql://materialize@mz_this:6875/materialize"]
 
-    if args.other_tag == "common-ancestor":
-        args.other_tag = resolve_ancestor_image_tag(
-            ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
-        )
-        print(f"Resolving --other-tag to {args.other_tag}")
-
     # If we have --other-tag, assume we want to run a comparison test against Materialize
-    reference_implementation = (
+    reference_impl = (
         ReferenceImplementation.MATERIALIZE
         if args.other_tag and workload.reference_implementation is not None
         else workload.reference_implementation
     )
 
-    match reference_implementation:
+    match reference_impl:
         case ReferenceImplementation.MATERIALIZE:
             participants.append(
                 Materialized(
                     name="mz_other",
-                    image=f"materialize/materialized:{args.other_tag}"
-                    if args.other_tag
-                    else None,
+                    image=materialize_image(args.other_tag),
                     ports=["26875:6875", "26876:6876", "26877:6877", "26878:6878"],
                     use_default_volumes=False,
                 )
@@ -240,46 +268,53 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
         case _:
             assert False
 
-    files = [] if workload.dataset is None else workload.dataset.files()
-
-    dsn2 = (
-        [f"--dsn2=dbi:Pg:{reference_implementation.dsn()}"]
-        if reference_implementation is not None
-        else []
-    )
-
-    duration = args.duration if args.duration is not None else workload.duration
-    grammar = args.grammar or workload.grammar
-    threads = args.threads or workload.threads
+    dsn1 = "dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875"
+    dsn2 = f"dbi:Pg:{reference_impl.dsn()}" if reference_impl else None
+    dataset = args.dataset if args.dataset is not None else workload.dataset_files()
+    grammar = str(args.grammar) if args.grammar is not None else workload.grammar
+    queries = int(args.queries) if args.queries is not None else workload.queries
+    threads = int(args.threads) if args.threads is not None else workload.threads
+    duration = int(args.duration) if args.duration is not None else workload.duration
 
     with c.override(*participants):
         try:
             c.up(*[p.name for p in participants])
 
-            for file in files:
+            for file in dataset:
                 for psql_url in psql_urls:
                     print(f"--- Populating {psql_url} with {file} ...")
-                    c.exec("rqg", "bash", "-c", f"psql -f conf/mz/{file} {psql_url}")
+                    c.exec("rqg", "bash", "-c", f"psql -f {file} {psql_url}")
 
             c.exec(
                 "rqg",
                 "perl",
                 "gentest.pl",
-                "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875",
-                *dsn2,
+                f"--seed={args.seed}",
+                f"--dsn1={dsn1}",
+                f"--dsn2={dsn2}" if dsn2 else "",
                 f"--grammar={grammar}",
-                f"--validator={workload.validator}"
-                if workload.validator is not None
-                else "",
-                f"--starting-rule={args.starting_rule}"
-                if args.starting_rule is not None
-                else "",
-                "--queries=100000000",
+                f"--queries={queries}",
                 f"--threads={threads}",
                 f"--duration={duration}",
-                f"--seed={args.seed}",
+                f"--validator={workload.validator}" if workload.validator else "",
+                f"--starting-rule={args.starting_rule}" if args.starting_rule else "",
                 "--sqltrace" if args.sqltrace else "",
                 "--skip-recursive-rules" if args.skip_recursive_rules else "",
             )
         finally:
             c.capture_logs()
+
+
+class StoreOtherTag(argparse.Action):
+    """Resolve common ancestor during argument parsing"""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if values == "common-ancestor":
+            tag = resolve_ancestor_image_tag(
+                ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
+            )
+            print(f"Resolving --other-tag to {tag}")
+        else:
+            tag = str(values)
+
+        setattr(namespace, self.dest, tag)
