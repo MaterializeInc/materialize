@@ -386,28 +386,11 @@ enum DrainStyle<'a, T> {
     AtTime(T),
 }
 
-/// The state of a key during an upsert batch process.
-struct CommandState<FromTime> {
-    /// A value filled in by `multi_get`.
-    value: types::UpsertValueAndSize<Option<FromTime>>,
-    /// Whether or not to skip this key when `multi-putting`.
-    skipped: bool,
-}
-
-impl<FromTime> Default for CommandState<FromTime> {
-    fn default() -> Self {
-        Self {
-            value: Default::default(),
-            skipped: false,
-        }
-    }
-}
-
 /// Helper method for `upsert_inner` used to stage `data` updates
 /// from the input timely edge.
 async fn drain_staged_input<S, G, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
-    commands_state: &mut indexmap::IndexMap<UpsertKey, CommandState<FromTime>>,
+    commands_state: &mut indexmap::IndexMap<UpsertKey, types::UpsertValueAndSize<Option<FromTime>>>,
     output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
     drain_style: DrainStyle<'_, T>,
@@ -442,10 +425,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     multi_get_scratch.clear();
     multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
     match state
-        .multi_get(
-            multi_get_scratch.drain(..),
-            commands_state.values_mut().map(|cs| &mut cs.value),
-        )
+        .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
         .await
     {
         Ok(_) => {}
@@ -484,8 +464,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
             panic!("key missing from commands_state");
         };
 
-        let command_state = command_state.get_mut();
-        let existing_value = &mut command_state.value.value;
+        let existing_value = &mut command_state.get_mut().value;
 
         if let Some(cs) = existing_value.as_mut() {
             cs.ensure_decoded(bincode_opts);
@@ -496,12 +475,11 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         // is from snapshotting, which always sorts below new values/deletes.
         let existing_order = existing_value.as_ref().and_then(|cs| cs.order().as_ref());
         if existing_order >= Some(&from_time.0) {
-            // Mark this key as skipped. A skipped key is not written back
-            // to upsert state. This key could show up in a later timestamp and override this.
-            command_state.skipped = true;
+            // Skip this update. If no later updates adjust this key, then we just
+            // end up writing the same value back to state. If there
+            // is nothing in the state, `existing_order` is `None`, and this
+            // does not occur.
             continue;
-        } else {
-            command_state.skipped = false;
         }
 
         match value {
@@ -529,21 +507,17 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     }
 
     match state
-        .multi_put(commands_state.drain(..).filter_map(|(k, cv)| {
-            if !cv.skipped {
-                Some((
-                    k,
-                    types::PutValue {
-                        value: cv.value.value.map(|cv| cv.into_decoded()),
-                        previous_value_metadata: cv.value.metadata.map(|v| ValueMetadata {
-                            size: v.size.try_into().expect("less than i64 size"),
-                            is_tombstone: v.is_tombstone,
-                        }),
-                    },
-                ))
-            } else {
-                None
-            }
+        .multi_put(commands_state.drain(..).map(|(k, cv)| {
+            (
+                k,
+                types::PutValue {
+                    value: cv.value.map(|cv| cv.into_decoded()),
+                    previous_value_metadata: cv.metadata.map(|v| ValueMetadata {
+                        size: v.size.try_into().expect("less than i64 size"),
+                        is_tombstone: v.is_tombstone,
+                    }),
+                },
+            )
         }))
         .await
     {
@@ -806,7 +780,7 @@ where
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.
-        let mut commands_state: indexmap::IndexMap<_, CommandState<FromTime>> =
+        let mut commands_state: indexmap::IndexMap<_, types::UpsertValueAndSize<Option<FromTime>>> =
             indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
