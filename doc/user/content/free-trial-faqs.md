@@ -27,7 +27,7 @@ Cluster     | Size      | Replication factor | Credits per hour
 ------------|-----------|--------------------|-----------------
 `ingest`    | `50cc`    | 1                  | 0.5
 `compute`   | `50cc`    | 2                  | 1 (0.5 each)
-`quickstart`| `100cc`   | 1                  | 1
+`quickstart`| `25cc`    | 1                  | 0.25
 
 In this case, your credit consumption rate would be 2.5 credits per hour, which
 is under the rate limit of 4 credits per hour.
@@ -53,12 +53,12 @@ SELECT sum(s.credits_per_hour) AS credit_consumption_rate
 
 For example, if you start your free trial by following the [getting started guide](/get-started/quickstart),
 or if you otherwise only use the pre-installed `quickstart` cluster
-(`100cc`), you will end up consuming `1` credit per hour:
+(`25cc`), you will end up consuming `.25` credit per hour:
 
 ```nofmt
  credit_consumption_rate
 -------------------------
-                      1
+                     .25
 (1 row)
 ```
 
