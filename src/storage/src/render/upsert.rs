@@ -475,7 +475,10 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         // is from snapshotting, which always sorts below new values/deletes.
         let existing_order = existing_value.as_ref().and_then(|cs| cs.order().as_ref());
         if existing_order >= Some(&from_time.0) {
-            command_state.remove();
+            // Skip this update. If no later updates adjust this key, then we just
+            // end up writing the same value back to state. If there
+            // is nothing in the state, `existing_order` is `None`, and this
+            // does not occur.
             continue;
         }
 
