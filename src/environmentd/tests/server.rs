@@ -4028,7 +4028,7 @@ async fn test_startup_cluster_notice_with_http_options() {
     [
       {
         "message": "cluster \"i_do_not_exist\" does not exist",
-        "code": "01000",
+        "code": "MZ007",
         "severity": "notice",
         "hint": "Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS."
       }
@@ -4081,7 +4081,9 @@ async fn test_startup_cluster_notice() {
             severity: "NOTICE",
             parsed_severity: None,
             code: SqlState(
-                E01000,
+                Other(
+                    "MZ005",
+                ),
             ),
             message: "default cluster \"quickstart\" does not exist",
             detail: None,
@@ -4126,7 +4128,9 @@ async fn test_startup_cluster_notice() {
             severity: "NOTICE",
             parsed_severity: None,
             code: SqlState(
-                E01000,
+                Other(
+                    "MZ005",
+                ),
             ),
             message: "role default cluster \"non_existant\" does not exist",
             detail: None,
