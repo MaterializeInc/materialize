@@ -73,12 +73,14 @@ mysql_common = { version = "0.32.1", default-features = false, features = ["binl
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
+num = { version = "0.4.1" }
 num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128", "libm"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
+parquet = { version = "51.0.0", default-features = false, features = ["arrow", "snap"] }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
@@ -194,12 +196,14 @@ mysql_common = { version = "0.32.1", default-features = false, features = ["binl
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
+num = { version = "0.4.1" }
 num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128", "libm"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
+parquet = { version = "51.0.0", default-features = false, features = ["arrow", "snap"] }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }

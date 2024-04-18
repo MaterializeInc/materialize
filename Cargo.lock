@@ -6440,6 +6440,7 @@ name = "mz-testdrive"
 version = "0.98.0-dev"
 dependencies = [
  "anyhow",
+ "arrow",
  "async-compression",
  "async-trait",
  "atty",
@@ -7153,6 +7154,7 @@ dependencies = [
  "num-bigint",
  "paste",
  "seq-macro",
+ "snap",
  "thrift",
  "twox-hash",
 ]
@@ -10535,6 +10537,7 @@ dependencies = [
  "native-tls",
  "nix",
  "nom",
+ "num",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -10543,6 +10546,7 @@ dependencies = [
  "openssl-sys",
  "ordered-float 4.2.0",
  "parking_lot",
+ "parquet",
  "phf",
  "phf_shared",
  "postgres",

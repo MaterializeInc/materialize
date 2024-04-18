@@ -12,7 +12,8 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::bail;
-use parquet::file::reader::FileReader;
+use arrow::util::display::ArrayFormatter;
+use arrow::util::display::FormatOptions;
 use regex::Regex;
 
 use crate::action::{ControlFlow, State};
@@ -142,20 +143,32 @@ pub async fn run_verify_keys(
 }
 
 fn rows_from_parquet(bytes: bytes::Bytes) -> Vec<String> {
-    let reader = parquet::file::reader::SerializedFileReader::new(bytes).unwrap();
-    reader
-        .get_row_iter(None)
-        .unwrap()
-        .map(|row| {
-            let row = row.unwrap();
-            let mut row_str = String::new();
-            for (i, (_name, field)) in row.get_column_iter().enumerate() {
-                row_str.push_str(&field.to_string());
-                if i < row.len() - 1 {
-                    row_str.push_str(" ");
+    let reader =
+        parquet::arrow::arrow_reader::ParquetRecordBatchReader::try_new(bytes, 1_000_000).unwrap();
+
+    let mut ret = vec![];
+    let format_options = FormatOptions::default();
+    for batch in reader {
+        let batch = batch.unwrap();
+        let converters = batch
+            .columns()
+            .iter()
+            .map(|a| match a.data_type() {
+                d if d.is_nested() => panic!("cant handle nested types"),
+                _ => ArrayFormatter::try_new(a.as_ref(), &format_options).unwrap(),
+            })
+            .collect::<Vec<_>>();
+
+        for row_idx in 0..batch.num_rows() {
+            let mut buf = String::new();
+            for (col_idx, converter) in converters.iter().enumerate() {
+                if col_idx > 0 {
+                    buf.push_str(" ");
                 }
+                converter.value(row_idx).write(&mut buf).unwrap();
             }
-            row_str
-        })
-        .collect::<Vec<_>>()
+            ret.push(buf);
+        }
+    }
+    ret
 }

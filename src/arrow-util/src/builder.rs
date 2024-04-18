@@ -27,7 +27,15 @@ pub struct ArrowBuilder {
 
 impl ArrowBuilder {
     /// Initializes a new ArrowBuilder with the schema of the provided RelationDesc.
-    pub fn new(desc: &RelationDesc, default_capacity: usize) -> Result<Self, anyhow::Error> {
+    /// `item_capacity` is used to initialize the capacity of each column's builder which defines
+    /// the number of values that can be appended to each column before reallocating.
+    /// `data_capacity` is used to initialize the buffer size of the string and binary builders.
+    /// Errors if the relation contains an unimplemented type.
+    pub fn new(
+        desc: &RelationDesc,
+        item_capacity: usize,
+        data_capacity: usize,
+    ) -> Result<Self, anyhow::Error> {
         let mut columns = vec![];
         let mut errs = vec![];
         let mut seen_names = BTreeMap::new();
@@ -37,6 +45,7 @@ impl ArrowBuilder {
             // 1. The arrow crate will accidentally reuse the same buffers for the columns
             // 2. Many parquet readers will error when trying to read the file metadata
             // Instead we append a number to the end of the column name for any duplicates.
+            // TODO(roshan): We should document this when writing the copy-to-s3 MZ docs.
             seen_names
                 .entry(col_name.clone())
                 .and_modify(|e: &mut u32| {
@@ -50,7 +59,8 @@ impl ArrowBuilder {
                         col_name,
                         col_type.nullable,
                         data_type,
-                        default_capacity,
+                        item_capacity,
+                        data_capacity,
                     )?);
                 }
                 Err(err) => errs.push(err.to_string()),
@@ -65,6 +75,7 @@ impl ArrowBuilder {
         })
     }
 
+    /// Returns a copy of the schema of the ArrowBuilder.
     pub fn schema(&self) -> Schema {
         let mut fields = vec![];
         for col in self.columns.iter() {
@@ -89,7 +100,7 @@ impl ArrowBuilder {
     }
 
     /// Appends a row to the builder.
-    /// Errors if the row contains an unimplemented type.
+    /// Errors if the row contains an unimplemented or out-of-range value.
     pub fn add_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
         for (col, datum) in self.columns.iter_mut().zip(row.iter()) {
             col.inner.append_datum(datum)?;
@@ -115,12 +126,18 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<DataType, anyhow
         ScalarType::Float32 => DataType::Float32,
         ScalarType::Float64 => DataType::Float64,
         ScalarType::Date => DataType::Date32,
-        ScalarType::Time => DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
+        // The resolution of our time and timestamp types is microseconds, which is lucky
+        // since the original parquet 'ConvertedType's support microsecond resolution but not
+        // nanosecond resolution. The newer parquet 'LogicalType's support nanosecond resolution,
+        // but many readers don't support them yet.
+        ScalarType::Time => DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
         ScalarType::Timestamp { .. } => {
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None)
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
         }
         ScalarType::TimestampTz { .. } => DataType::Timestamp(
-            arrow::datatypes::TimeUnit::Nanosecond,
+            arrow::datatypes::TimeUnit::Microsecond,
+            // When appending values we always use UTC timestamps, and setting this to a non-empty
+            // value allows readers to know that tz-aware timestamps can be compared directly.
             Some("+00:00".into()),
         ),
         ScalarType::Bytes => DataType::LargeBinary,
@@ -140,7 +157,8 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<DataType, anyhow
         }
         ScalarType::String => DataType::LargeUtf8,
         ScalarType::MzTimestamp => {
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None)
+            // MZ timestamps are in milliseconds
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None)
         }
         // arrow::datatypes::IntervalUnit::MonthDayNano is not yet implemented in the arrow parquet writer
         // https://github.com/apache/arrow-rs/blob/0d031cc8aa81296cb1bdfedea7a7cb4ec6aa54ea/parquet/src/arrow/arrow_writer/mod.rs#L859
@@ -162,45 +180,60 @@ impl ArrowColumn {
         field_name: String,
         nullable: bool,
         data_type: DataType,
-        capacity: usize,
+        item_capacity: usize,
+        data_capacity: usize,
     ) -> Result<Self, anyhow::Error> {
         let inner: ColBuilder = match &data_type {
             DataType::Boolean => {
-                ColBuilder::BooleanBuilder(BooleanBuilder::with_capacity(capacity))
+                ColBuilder::BooleanBuilder(BooleanBuilder::with_capacity(item_capacity))
             }
-            DataType::Int16 => ColBuilder::Int16Builder(Int16Builder::with_capacity(capacity)),
-            DataType::Int32 => ColBuilder::Int32Builder(Int32Builder::with_capacity(capacity)),
-            DataType::Int64 => ColBuilder::Int64Builder(Int64Builder::with_capacity(capacity)),
-            DataType::UInt8 => ColBuilder::UInt8Builder(UInt8Builder::with_capacity(capacity)),
-            DataType::UInt16 => ColBuilder::UInt16Builder(UInt16Builder::with_capacity(capacity)),
-            DataType::UInt32 => ColBuilder::UInt32Builder(UInt32Builder::with_capacity(capacity)),
-            DataType::UInt64 => ColBuilder::UInt64Builder(UInt64Builder::with_capacity(capacity)),
+            DataType::Int16 => ColBuilder::Int16Builder(Int16Builder::with_capacity(item_capacity)),
+            DataType::Int32 => ColBuilder::Int32Builder(Int32Builder::with_capacity(item_capacity)),
+            DataType::Int64 => ColBuilder::Int64Builder(Int64Builder::with_capacity(item_capacity)),
+            DataType::UInt8 => ColBuilder::UInt8Builder(UInt8Builder::with_capacity(item_capacity)),
+            DataType::UInt16 => {
+                ColBuilder::UInt16Builder(UInt16Builder::with_capacity(item_capacity))
+            }
+            DataType::UInt32 => {
+                ColBuilder::UInt32Builder(UInt32Builder::with_capacity(item_capacity))
+            }
+            DataType::UInt64 => {
+                ColBuilder::UInt64Builder(UInt64Builder::with_capacity(item_capacity))
+            }
             DataType::Float32 => {
-                ColBuilder::Float32Builder(Float32Builder::with_capacity(capacity))
+                ColBuilder::Float32Builder(Float32Builder::with_capacity(item_capacity))
             }
             DataType::Float64 => {
-                ColBuilder::Float64Builder(Float64Builder::with_capacity(capacity))
+                ColBuilder::Float64Builder(Float64Builder::with_capacity(item_capacity))
             }
-            DataType::Date32 => ColBuilder::Date32Builder(Date32Builder::with_capacity(capacity)),
-            DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond) => {
-                ColBuilder::Time64NanosecondBuilder(Time64NanosecondBuilder::with_capacity(
-                    capacity,
+            DataType::Date32 => {
+                ColBuilder::Date32Builder(Date32Builder::with_capacity(item_capacity))
+            }
+            DataType::Time64(arrow::datatypes::TimeUnit::Microsecond) => {
+                ColBuilder::Time64MicrosecondBuilder(Time64MicrosecondBuilder::with_capacity(
+                    item_capacity,
                 ))
             }
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
-                ColBuilder::TimestampNanosecondBuilder(TimestampNanosecondBuilder::with_capacity(
-                    capacity,
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
+                ColBuilder::TimestampMicrosecondBuilder(TimestampMicrosecondBuilder::with_capacity(
+                    item_capacity,
                 ))
             }
-            DataType::LargeBinary => {
-                ColBuilder::LargeBinaryBuilder(LargeBinaryBuilder::with_capacity(capacity, 1024))
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
+                ColBuilder::TimestampMillisecondBuilder(TimestampMillisecondBuilder::with_capacity(
+                    item_capacity,
+                ))
             }
-            DataType::Utf8 => {
-                ColBuilder::StringBuilder(StringBuilder::with_capacity(capacity, 1024))
-            }
-            DataType::LargeUtf8 => {
-                ColBuilder::LargeStringBuilder(LargeStringBuilder::with_capacity(capacity, 1024))
-            }
+            DataType::LargeBinary => ColBuilder::LargeBinaryBuilder(
+                LargeBinaryBuilder::with_capacity(item_capacity, data_capacity),
+            ),
+            DataType::Utf8 => ColBuilder::StringBuilder(StringBuilder::with_capacity(
+                item_capacity,
+                data_capacity,
+            )),
+            DataType::LargeUtf8 => ColBuilder::LargeStringBuilder(
+                LargeStringBuilder::with_capacity(item_capacity, data_capacity),
+            ),
             _ => anyhow::bail!("{:?} unimplemented", data_type),
         };
         Ok(Self {
@@ -255,8 +288,9 @@ make_col_builder!(
     Float32Builder,
     Float64Builder,
     Date32Builder,
-    Time64NanosecondBuilder,
-    TimestampNanosecondBuilder,
+    Time64MicrosecondBuilder,
+    TimestampMicrosecondBuilder,
+    TimestampMillisecondBuilder,
     LargeBinaryBuilder,
     StringBuilder,
     LargeStringBuilder
@@ -280,22 +314,22 @@ impl ColBuilder {
             (ColBuilder::Date32Builder(builder), Datum::Date(d)) => {
                 builder.append_value(d.unix_epoch_days())
             }
-            (ColBuilder::Time64NanosecondBuilder(builder), Datum::Time(t)) => {
-                let nanos_since_midnight = i64::cast_from(t.num_seconds_from_midnight())
-                    * 1_000_000_000
-                    + i64::cast_from(t.nanosecond());
-                builder.append_value(nanos_since_midnight)
+            (ColBuilder::Time64MicrosecondBuilder(builder), Datum::Time(t)) => {
+                let micros_since_midnight = i64::cast_from(t.num_seconds_from_midnight())
+                    * 1_000_000
+                    + i64::cast_from(t.nanosecond().checked_div(1000).unwrap());
+                builder.append_value(micros_since_midnight)
             }
-            (ColBuilder::TimestampNanosecondBuilder(builder), Datum::Timestamp(ts)) => {
-                builder.append_value(ts.and_utc().timestamp_nanos_opt().expect("checked"))
+            (ColBuilder::TimestampMicrosecondBuilder(builder), Datum::Timestamp(ts)) => {
+                builder.append_value(ts.and_utc().timestamp_micros())
             }
-            (ColBuilder::TimestampNanosecondBuilder(builder), Datum::TimestampTz(ts)) => {
-                builder.append_value(ts.timestamp_nanos_opt().expect("checked"))
+            (ColBuilder::TimestampMicrosecondBuilder(builder), Datum::TimestampTz(ts)) => {
+                builder.append_value(ts.timestamp_micros())
             }
             (ColBuilder::LargeBinaryBuilder(builder), Datum::Bytes(b)) => builder.append_value(b),
             (ColBuilder::StringBuilder(builder), Datum::String(s)) => builder.append_value(s),
             (ColBuilder::LargeStringBuilder(builder), Datum::String(s)) => builder.append_value(s),
-            (ColBuilder::TimestampNanosecondBuilder(builder), Datum::MzTimestamp(ts)) => {
+            (ColBuilder::TimestampMillisecondBuilder(builder), Datum::MzTimestamp(ts)) => {
                 builder.append_value(ts.try_into().expect("checked"))
             }
             (_builder, datum) => {
