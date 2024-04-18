@@ -908,7 +908,11 @@ where
         let merge_reqs = if batch.desc.upper() != batch.desc.lower() {
             self.trace.push_batch(batch.clone())
         } else {
-            Vec::new()
+            let timeout_time_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
+            self.trace
+                .fueled_merge_reqs_before_ms(timeout_time_ms)
+                .take(1)
+                .collect()
         };
 
         for req in &merge_reqs {

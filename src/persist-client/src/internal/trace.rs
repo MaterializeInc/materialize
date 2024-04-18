@@ -537,21 +537,27 @@ impl<T: Timestamp + Lattice> Trace<T> {
         ApplyMergeResult::NotAppliedNoMatch
     }
 
-    pub(crate) fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
+    /// Obtain all fueled merge reqs that either have no active compaction, or the previous
+    /// compaction was started at or before the threshold time.
+    pub(crate) fn fueled_merge_reqs_before_ms(
+        &self,
+        threshold_ms: u64,
+    ) -> impl Iterator<Item = FueledMergeReq<T>> + '_ {
         self.spine
             .spine_batches()
-            .filter_map(|b| {
-                if b.is_compact() {
-                    None
-                } else {
-                    Some(FueledMergeReq {
-                        id: b.id,
-                        desc: b.desc.clone(),
-                        inputs: b.parts.clone(),
-                    })
-                }
+            .filter(|b| !b.is_compact())
+            .filter(move |b| {
+                // Either there's no active compaction, or the last active compaction
+                // is not after the timeout timestamp.
+                b.active_compaction
+                    .as_ref()
+                    .map_or(true, move |c| c.start_ms <= threshold_ms)
             })
-            .collect()
+            .map(|b| FueledMergeReq {
+                id: b.id,
+                desc: b.desc.clone(),
+                inputs: b.parts.clone(),
+            })
     }
 
     // This is only called with the results of one `insert` and so the length of
