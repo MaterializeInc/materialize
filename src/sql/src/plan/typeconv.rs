@@ -30,7 +30,7 @@ use crate::plan::scope::Scope;
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
     let invoke = crate::func::sql_impl(expr);
     CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
-        let mut out = invoke(ecx.qcx, vec![from_type.clone()]).ok()?;
+        let mut out = invoke(ecx.qcx, vec![from_type.clone()]).expect("must succeed");
         Some(move |e| {
             out.splice_parameters(&[e], 0);
             out
