@@ -1,6 +1,20 @@
 # Test various NOTICE expectations.
 
 send
+Query {"query": "DROP TABLE IF EXISTS t CASCADE"}
+Query {"query": "DROP ROLE IF EXISTS joe"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP ROLE"}
+ReadyForQuery {"status":"I"}
+
+send
 Query {"query": "create table t(a int, b int)"}
 Query {"query": "create index t_idx_a on t(a)"}
 Query {"query": "create materialized view mv1 as select * from t where b=7"}
@@ -22,7 +36,8 @@ Query {"query": "drop index t_idx_a"}
 Query {"query": "drop index v1_idx_a"}
 ----
 
-until
+# Ignore the notice messages because they change sometimes based on when things are internally dropped.
+until err_field_typs=SC
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -55,7 +70,7 @@ CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.mv1. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP MATERIALIZED VIEW"}
@@ -72,14 +87,14 @@ CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE MATERIALIZED VIEW"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.mv2. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.v1_idx_a. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP INDEX"}
