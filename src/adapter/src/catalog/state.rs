@@ -810,15 +810,10 @@ impl CatalogState {
 
     pub(crate) fn deserialize_plan(
         &self,
-        id: GlobalId,
         create_sql: &str,
         force_if_exists_skip: bool,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        // TODO - The `None` needs to be changed if we ever allow custom
-        // logical compaction windows in user-defined objects.
-        let pcx = PlanContext::zero()
-            .with_planning_id(id)
-            .with_ignore_if_exists_errors(force_if_exists_skip);
+        let pcx = PlanContext::zero().with_ignore_if_exists_errors(force_if_exists_skip);
         let mut session_catalog = self.for_system_session();
         Self::parse_plan(create_sql, Some(&pcx), &mut session_catalog)
     }
@@ -854,10 +849,9 @@ impl CatalogState {
         id: GlobalId,
         create_sql: &str,
     ) -> Result<CatalogItem, AdapterError> {
-        // TODO - The `None` needs to be changed if we ever allow custom
-        // logical compaction windows in user-defined objects.
-        let pcx = PlanContext::zero().with_planning_id(id);
-        self.parse_item(id, create_sql, Some(&pcx), false, None)
+        // TODO - The custom_logical_compaction_window `None` needs to be changed if we ever allow
+        // custom logical compaction windows in user-defined objects.
+        self.parse_item(id, create_sql, None, false, None)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.

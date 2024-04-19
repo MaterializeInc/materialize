@@ -1601,7 +1601,6 @@ impl Params {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Copy)]
 pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
-    pub planning_id: Option<GlobalId>,
     pub ignore_if_exists_errors: bool,
 }
 
@@ -1609,7 +1608,6 @@ impl PlanContext {
     pub fn new(wall_time: DateTime<Utc>) -> Self {
         Self {
             wall_time,
-            planning_id: None,
             ignore_if_exists_errors: false,
         }
     }
@@ -1620,14 +1618,8 @@ impl PlanContext {
     pub fn zero() -> Self {
         PlanContext {
             wall_time: now::to_datetime(NOW_ZERO()),
-            planning_id: None,
             ignore_if_exists_errors: false,
         }
-    }
-
-    pub fn with_planning_id(mut self, id: GlobalId) -> Self {
-        self.planning_id = Some(id);
-        self
     }
 
     pub fn with_ignore_if_exists_errors(mut self, value: bool) -> Self {
