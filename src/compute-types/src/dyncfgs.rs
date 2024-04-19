@@ -109,6 +109,29 @@ pub const HYDRATION_CONCURRENCY: Config<usize> = Config::new(
     "Controls how many compute dataflows may hydrate concurrently.",
 );
 
+/// See `src/storage-operators/src/s3_oneshot_sink/parquet.rs` for more details.
+pub const COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO: Config<usize> = Config::new(
+    "copy_to_s3_parquet_row_group_file_ratio",
+    20,
+    "The ratio (defined as a percentage) of row-group size to max-file-size. \
+        Must be <= 100.",
+);
+
+/// See `src/storage-operators/src/s3_oneshot_sink/parquet.rs` for more details.
+pub const COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO: Config<usize> = Config::new(
+    "copy_to_s3_arrow_builder_buffer_ratio",
+    150,
+    "The ratio (defined as a percentage) of arrow-builder size to row-group size. \
+        Must be >= 100.",
+);
+
+/// The size of each part in the multi-part upload to use when uploading files to S3.
+pub const COPY_TO_S3_MULTIPART_PART_SIZE_BYTES: Config<usize> = Config::new(
+    "copy_to_s3_multipart_part_size_bytes",
+    1024 * 1024 * 8,
+    "The size of each part in a multipart upload to S3.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -124,4 +147,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&LGALLOC_BACKGROUND_INTERVAL)
         .add(&LGALLOC_SLOW_CLEAR_BYTES)
         .add(&HYDRATION_CONCURRENCY)
+        .add(&COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO)
+        .add(&COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO)
+        .add(&COPY_TO_S3_MULTIPART_PART_SIZE_BYTES)
 }

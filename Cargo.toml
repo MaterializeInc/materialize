@@ -3,6 +3,7 @@ members = [
     "src/adapter",
     "src/adapter-types",
     "src/alloc",
+    "src/arrow-util",
     "src/audit-log",
     "src/avro",
     "src/aws-util",

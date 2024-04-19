@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
+arrow = { version = "51.0.0", default-features = false }
 async-stream = "0.3.3"
 aws-types = "1.1.1"
 bytesize = "1.1.0"
@@ -18,6 +19,7 @@ differential-dataflow = "0.12.0"
 futures = "0.3.25"
 http = "0.2.8"
 mz-aws-util = { path = "../aws-util" }
+mz-arrow-util = { path = "../arrow-util" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
@@ -27,11 +29,13 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-repr = { path = "../repr" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
+parquet = { version = "51.0.0", default-features = false, features = ["arrow", "snap"] }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 sentry = { version = "0.29.1" }
 serde = { version = "1.0.152", features = ["derive"] }
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
+thiserror = "1.0.37"
 tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util", "time"] }
 tracing = "0.1.37"
 uuid = { version = "1.7.0", features = ["v4"] }

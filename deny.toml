@@ -11,6 +11,7 @@ multiple-versions = "deny"
 skip = [
     # One-time exception for base64 due to its prevalence in the crate graph.
     { name = "base64", version = "0.13.1" },
+    { name = "base64", version = "0.21.5" },
     # `syn` is a core crate that a huge part of the ecosystem either directly, or
     # transitively depends on. They just released v2.0 which not all crates have
     # migrated to yet.
@@ -19,6 +20,12 @@ skip = [
     # allowing these duplicate dependencies until the rest of the ecosystem catches
     # up.
     { name = "socket2", version = "0.4.9" },
+    # held back by regex 1.7.0 depended on by arrow-string and bindgen
+    { name = "regex-syntax", version = "0.6.28" },
+    # held back by thrift 0.17.0 depended on by parquet 51.0.0
+    { name = "ordered-float", version = "2.10.1" },
+    # held back by 'ciborium' which is depended on by 'criterion'
+    { name = "half", version = "1.6.0" },
     { name = "windows-sys", version = "0.42.0" },
     { name = "windows_aarch64_gnullvm", version = "0.42.0" },
     { name = "windows_aarch64_msvc", version = "0.42.0" },
@@ -62,8 +69,6 @@ skip = [
     # TODO(parkmycar): In a followup/stacked PR, get rid of these duplicates.
     { name = "bstr", version = "0.2.14" },
     { name = "regex-automata", version = "0.1.9" },
-    { name = "zstd", version = "0.12.4" },
-    { name = "zstd-safe", version = "6.0.6" },
 ]
 
 # Use `tracing` instead.
@@ -94,18 +99,14 @@ name = "strum-macros"
 name = "log"
 wrappers = [
     "deadpool-postgres",
-    "env_logger",
     "eventsource-client",
     "fail",
-    "generator",
     "globset",
-    "hyper-rustls",
     "jsonpath_lib",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "mio",
     "native-tls",
-    "opentls",
     "os_info",
     "postgres",
     "pprof",
@@ -115,11 +116,9 @@ wrappers = [
     "reqwest",
     "tokio-postgres",
     "tokio-tungstenite",
-    "tokio-util",
     "tracing-log",
     "tracing",
     "tungstenite",
-    "ureq",
     "want",
     "wasm-bindgen-backend",
     "workspace-hack",
@@ -135,38 +134,25 @@ name = "rustls"
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
-  "aws-http",
   "bindgen",
   "bstr",
-  "clap",
   "console",
   "criterion",
-  "crossbeam-epoch",
   "crossbeam-utils",
   "dynfmt",
-  "fail",
   "findshlibs",
-  "indicatif",
   "insta",
   "launchdarkly-server-sdk",
   "launchdarkly-server-sdk-evaluation",
   "mysql_async",
   "mysql_common",
   "native-tls",
-  "opentelemetry",
-  "parse_duration",
-  "procfs",
   "prometheus",
   "proptest",
   "prost-build",
   "rayon-core",
-  "reqwest",
   "schannel",
   "sharded-slab",
-  "tracing-core",
-  "tracing-log",
-  "tracing-subscriber",
-  "wasm-bindgen-backend",
   "which",
 ]
 

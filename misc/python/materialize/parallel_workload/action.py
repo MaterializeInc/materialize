@@ -373,6 +373,7 @@ class CopyToS3Action(Action):
                 "in the same timedomain",
                 'is not allowed from the "mz_introspection" cluster',
                 "copy has been terminated because underlying relation",
+                "Relation contains unimplemented arrow types",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -389,7 +390,8 @@ class CopyToS3Action(Action):
         with exe.db.lock:
             location = exe.db.s3_path
             exe.db.s3_path += 1
-        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')"
+        format = "csv" if self.rng.choice([True, False]) else "parquet"
+        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
 
         exe.execute(query, explainable=False, http=Http.NO, fetch=False)
         return True

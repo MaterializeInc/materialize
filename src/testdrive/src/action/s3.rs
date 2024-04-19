@@ -12,6 +12,8 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::bail;
+use arrow::util::display::ArrayFormatter;
+use arrow::util::display::FormatOptions;
 use regex::Regex;
 
 use crate::action::{ControlFlow, State};
@@ -30,22 +32,41 @@ pub async fn run_verify_data(
     println!("Verifying contents of S3 bucket {bucket} key {key}...");
 
     let client = mz_aws_util::s3::new_client(&state.aws_config);
-    let files = client
-        .list_objects_v2()
-        .bucket(&bucket)
-        .prefix(&format!("{}/", key))
-        .send()
-        .await?;
-    if files.contents.is_none() {
-        bail!("no files found in bucket {bucket} key {key}");
+
+    // List the path until the INCOMPLETE sentinel file disappears so we know the
+    // data is complete.
+    let mut attempts = 0;
+    let all_files;
+    loop {
+        attempts += 1;
+        if attempts > 10 {
+            bail!("found incomplete sentinel file in path {key} after 10 attempts")
+        }
+
+        let files = client
+            .list_objects_v2()
+            .bucket(&bucket)
+            .prefix(&format!("{}/", key))
+            .send()
+            .await?;
+        match files.contents {
+            Some(files)
+                if files
+                    .iter()
+                    .any(|obj| obj.key().map_or(false, |key| key.contains("INCOMPLETE"))) =>
+            {
+                thread::sleep(Duration::from_secs(1))
+            }
+            None => bail!("no files found in bucket {bucket} key {key}"),
+            Some(files) => {
+                all_files = files;
+                break;
+            }
+        }
     }
 
     let mut rows = vec![];
-    for obj in files.contents.unwrap().iter() {
-        if obj.key().map_or(false, |key| key.contains("INCOMPLETE")) {
-            bail!("found incomplete sentinel file in path: {obj:?}")
-        }
-
+    for obj in all_files.iter() {
         let file = client
             .get_object()
             .bucket(&bucket)
@@ -53,8 +74,16 @@ pub async fn run_verify_data(
             .send()
             .await?;
         let bytes = file.body.collect().await?.into_bytes();
-        let actual_body = str::from_utf8(bytes.as_ref())?;
-        rows.extend(actual_body.lines().map(|l| l.to_string()));
+
+        let new_rows = match obj.key().unwrap() {
+            key if key.ends_with(".csv") => {
+                let actual_body = str::from_utf8(bytes.as_ref())?;
+                actual_body.lines().map(|l| l.to_string()).collect()
+            }
+            key if key.ends_with(".parquet") => rows_from_parquet(bytes),
+            key => bail!("unexpected file type: {key}"),
+        };
+        rows.extend(new_rows);
     }
     if sort_rows {
         expected_body.sort();
@@ -111,4 +140,35 @@ pub async fn run_verify_keys(
     }
 
     bail!("Did not find matching files in bucket {bucket} prefix {prefix_path}");
+}
+
+fn rows_from_parquet(bytes: bytes::Bytes) -> Vec<String> {
+    let reader =
+        parquet::arrow::arrow_reader::ParquetRecordBatchReader::try_new(bytes, 1_000_000).unwrap();
+
+    let mut ret = vec![];
+    let format_options = FormatOptions::default();
+    for batch in reader {
+        let batch = batch.unwrap();
+        let converters = batch
+            .columns()
+            .iter()
+            .map(|a| match a.data_type() {
+                d if d.is_nested() => panic!("cant handle nested types"),
+                _ => ArrayFormatter::try_new(a.as_ref(), &format_options).unwrap(),
+            })
+            .collect::<Vec<_>>();
+
+        for row_idx in 0..batch.num_rows() {
+            let mut buf = String::new();
+            for (col_idx, converter) in converters.iter().enumerate() {
+                if col_idx > 0 {
+                    buf.push_str(" ");
+                }
+                converter.value(row_idx).write(&mut buf).unwrap();
+            }
+            ret.push(buf);
+        }
+    }
+    ret
 }

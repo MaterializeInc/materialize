@@ -47,7 +47,7 @@ ordered-float = { version = "4.2.0", features = ["serde"] }
 paste = "1.0.11"
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 regex = "1.7.0"
-regex-syntax = "0.6.28"
+regex-syntax = "0.8.3"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.89"
 sha1 = "0.10.5"
