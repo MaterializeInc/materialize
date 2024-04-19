@@ -18,7 +18,7 @@ import time
 from threading import Thread
 
 CLUSTERD_COMMAND_RE = re.compile(
-    r"--internal-http-listen-addr=(?P<socket>[^ ]*).*--opentelemetry-resource=cluster_id=(?P<cluster_id>[^ ]*).*--opentelemetry-resource=replica_id=(?P<replica_id>[^ ]*)"
+    r"--internal-http-listen-addr=(?P<socket>[^ ]*).*--opentelemetry-resource=cluster_id=(?P<cluster_id>[^ ]*).*--opentelemetry-resource=replica_id=(?P<replica_id>[^ ]*).*/(?P<process>[0-9]+)\.pid"
 )
 
 
@@ -34,7 +34,7 @@ def main() -> int:
 
     args = parser.parse_args()
     mzcompose = ["bin/mzcompose", "--find", args.composition, "--mz-quiet"]
-    time_str = time.strftime("%Y-%m-%d_%H:%M:%S")
+    time_str = time.strftime("%Y-%m-%d_%H_%M_%S")
     threads = []
 
     def run(service: str, backend: list[str], suffix: str = ""):
@@ -99,7 +99,7 @@ def main() -> int:
                                     match.group("socket"),
                                     "http:/prof/heap",
                                 ],
-                                f"-cluster-{match.group('cluster_id')}-replica-{match.group('replica_id')}",
+                                f"-cluster-{match.group('cluster_id')}-replica-{match.group('replica_id')}-process-{match.group('process')}",
                             ),
                         )
                     )
