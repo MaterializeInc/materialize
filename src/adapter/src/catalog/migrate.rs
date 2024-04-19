@@ -129,7 +129,7 @@ pub(crate) async fn migrate(
 
     let conn_cat = state.for_system_session();
 
-    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
+    rewrite_items(tx, &conn_cat, |_tx, conn_cat, _id, stmt| {
         let _catalog_version = catalog_version.clone();
         Box::pin(async move {
             // Add per-item, post-planning AST migrations below. Most
@@ -146,6 +146,7 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
+            ast_rewrite_create_source_pg_database_details(conn_cat, stmt)?;
             Ok(())
         })
     })
@@ -229,6 +230,89 @@ fn ast_rewrite_create_source_loadgen_options_0_92_0(
     }
 
     Rewriter.visit_statement_mut(stmt);
+
+    Ok(())
+}
+
+fn ast_rewrite_create_source_pg_database_details(
+    cat: &ConnCatalog<'_>,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::visit_mut::VisitMut;
+    use mz_sql::ast::{
+        CreateSourceConnection, CreateSourceStatement, PgConfigOptionName, RawItemName, Value,
+        WithOptionValue,
+    };
+    use mz_sql::catalog::SessionCatalog;
+    use mz_storage_types::sources::postgres::ProtoPostgresSourcePublicationDetails;
+    use prost::Message;
+
+    struct Rewriter<'a> {
+        cat: &'a ConnCatalog<'a>,
+    }
+
+    impl<'ast> VisitMut<'ast, Raw> for Rewriter<'_> {
+        fn visit_create_source_statement_mut(
+            &mut self,
+            node: &'ast mut CreateSourceStatement<Raw>,
+        ) {
+            match &mut node.connection {
+                CreateSourceConnection::Postgres {
+                    connection,
+                    options,
+                } => {
+                    let details = options
+                        .iter_mut()
+                        .find(|o| o.name == PgConfigOptionName::Details)
+                        .expect("PG sources must have details");
+
+                    let details_val = match &mut details.value {
+                        Some(WithOptionValue::Value(Value::String(details))) => details,
+                        _ => unreachable!("PG source details' value must be a string"),
+                    };
+
+                    let details = hex::decode(details_val.clone())
+                        .expect("PG source details must be a hex-encoded string");
+                    let mut details = ProtoPostgresSourcePublicationDetails::decode(&*details)
+                        .expect("PG source details must be a hex-encoded protobuf");
+
+                    let conn = match connection {
+                        RawItemName::Name(connection) => {
+                            let connection =
+                                mz_sql::normalize::unresolved_item_name(connection.clone())
+                                    .expect("PG source connection name must be valid");
+                            self.cat
+                                .resolve_item(&connection)
+                                .expect("PG source connection must exist")
+                        }
+                        RawItemName::Id(id, _) => {
+                            let gid = id
+                                .parse()
+                                .expect("RawItenName::Id must be uncorrupted GlobalId");
+                            self.cat.state().get_entry(&gid)
+                        }
+                    };
+
+                    let conn = conn
+                        .connection()
+                        .expect("PG source connection must reference a connection");
+
+                    match &conn {
+                        mz_storage_types::connections::Connection::Postgres(pg) => {
+                            // Store the connection's database in the details.
+                            details.database = pg.database.clone();
+                        }
+                        _ => unreachable!("PG sources must use PG connections"),
+                    };
+
+                    *details_val = hex::encode(details.encode_to_vec());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Rewriter { cat }.visit_statement_mut(stmt);
 
     Ok(())
 }

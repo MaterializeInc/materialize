@@ -280,6 +280,7 @@ pub struct PostgresSourcePublicationDetails {
     /// The None value indicates an unknown timeline, to account for sources that existed
     /// prior to this field being introduced
     pub timeline_id: Option<u64>,
+    pub database: String,
 }
 
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
@@ -288,6 +289,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
             tables: self.tables.iter().map(|t| t.into_proto()).collect(),
             slot: self.slot.clone(),
             timeline_id: self.timeline_id.clone(),
+            database: self.database.clone(),
         }
     }
 
@@ -300,6 +302,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
                 .collect::<Result<_, _>>()?,
             slot: proto.slot,
             timeline_id: proto.timeline_id,
+            database: proto.database,
         })
     }
 }
@@ -310,6 +313,7 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
             tables: _,
             slot,
             timeline_id,
+            database,
         } = self;
 
         let compatibility_checks = [
@@ -323,6 +327,7 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
                 },
                 "timeline_id",
             ),
+            (database == &other.database, "database"),
         ];
 
         for (compatible, field) in compatibility_checks {

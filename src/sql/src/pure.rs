@@ -878,6 +878,7 @@ async fn purify_create_source(
                     Uuid::new_v4().to_string().replace('-', "")
                 ),
                 timeline_id: Some(timeline_id),
+                database: connection.database,
             };
             options.push(PgConfigOption {
                 name: PgConfigOptionName::Details,
@@ -1542,6 +1543,7 @@ async fn purify_alter_source(
         tables: publication_tables,
         slot: pg_source_connection.publication_details.slot.clone(),
         timeline_id,
+        database: pg_source_connection.publication_details.database,
     };
 
     *details = Some(WithOptionValue::Value(Value::String(hex::encode(
