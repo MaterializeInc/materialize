@@ -3781,7 +3781,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.97.0"
+version = "0.97.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3906,7 +3906,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.97.0"
+version = "0.97.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4059,7 +4059,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.97.0"
+version = "0.97.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -4295,7 +4295,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.97.0"
+version = "0.97.1"
 dependencies = [
  "anyhow",
  "askama",
@@ -5028,7 +5028,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.97.0"
+version = "0.97.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -6125,7 +6125,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.97.0"
+version = "0.97.1"
 dependencies = [
  "anyhow",
  "async-compression",
