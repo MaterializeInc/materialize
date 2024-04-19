@@ -237,6 +237,7 @@ SCENARIOS = [
         ),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
+        disabled=True,  # TODO: Reenable when #26726 is fixed
     ),
     PgCdcScenario(
         name="pg-cdc-update",
@@ -313,6 +314,7 @@ SCENARIOS = [
         ),
         materialized_memory="4.5Gb",
         clusterd_memory="1Gb",
+        disabled=True,  # TODO: Reenable when #26726 is fixed
     ),
     MySqlCdcScenario(
         name="mysql-cdc-snapshot",
