@@ -286,10 +286,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 return EmitLogicalProgress(forget_ts.step_forward());
             } else if ts < self.progress_exclusive {
                 return ReadDataTo(self.progress_exclusive.clone());
-            } else {
-                // TODO(txn): Make sure to add a regression test for this when
-                // we redo the data_listen_next unit test.
-                return WaitForTxnsProgress;
             }
         }
 
