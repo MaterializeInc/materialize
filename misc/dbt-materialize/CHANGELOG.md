@@ -1,6 +1,11 @@
 # dbt-materialize Changelog
 
-## 1.7.6 - 2024-04-17
+## 1.7.7 - 2024-04-19
+
+* Tweak [`deploy_permission_validation]`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_permission_validation.sql)
+  macro to work around [#26738](https://github.com/MaterializeInc/materialize/issues/26738).
+
+## 1.7.6 - 2024-04-18
 
 * **Breaking change.** The `source` and `sink` materialization types no longer
     accept arbitrary SQL statements, and now accept the `cluster` configuration
