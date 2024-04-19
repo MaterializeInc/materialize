@@ -356,6 +356,13 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SpineMetrics {
+    pub compact_batches: u64,
+    pub compacting_batches: u64,
+    pub noncompact_batches: u64,
+}
+
 impl<T> Trace<T> {
     pub fn since(&self) -> &Antichain<T> {
         &self.spine.since
@@ -369,10 +376,6 @@ impl<T> Trace<T> {
         for batch in self.batches() {
             f(batch);
         }
-    }
-
-    pub fn spine_batches(&self) -> impl Iterator<Item = &SpineBatch<T>> {
-        self.spine.spine_batches()
     }
 
     pub fn batches(&self) -> impl Iterator<Item = &HollowBatch<T>> {
@@ -506,6 +509,20 @@ impl<T: Timestamp + Lattice> Trace<T> {
             }
         }
         ret
+    }
+
+    pub fn spine_metrics(&self) -> SpineMetrics {
+        let mut metrics = SpineMetrics::default();
+        for batch in self.spine.spine_batches() {
+            if batch.is_compact() {
+                metrics.compact_batches += 1;
+            } else if batch.is_merging() {
+                metrics.compacting_batches += 1;
+            } else {
+                metrics.noncompact_batches += 1;
+            }
+        }
+        metrics
     }
 }
 
