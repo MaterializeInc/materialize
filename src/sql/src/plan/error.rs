@@ -37,6 +37,7 @@ use crate::catalog::{
 use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
+use crate::plan::typeconv::CastContext;
 use crate::plan::ObjectType;
 use crate::pure::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
@@ -120,6 +121,12 @@ pub enum PlanError {
     InvalidTimestampPrecision(InvalidTimestampPrecisionError),
     InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
+    InvalidCast {
+        name: String,
+        ccx: CastContext,
+        from: String,
+        to: String,
+    },
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
     Parser(ParserError),
@@ -558,6 +565,17 @@ impl fmt::Display for PlanError {
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
+            }
+            Self::InvalidCast { name, ccx, from, to } =>{
+                write!(
+                    f,
+                    "{name} does not support {ccx}casting from {from} to {to}",
+                    ccx = if matches!(ccx, CastContext::Implicit) {
+                        "implicitly "
+                    } else {
+                        ""
+                    },
+                )
             }
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)

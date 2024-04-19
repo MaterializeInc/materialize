@@ -30,7 +30,8 @@ use crate::plan::scope::Scope;
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
     let invoke = crate::func::sql_impl(expr);
     CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
-        let mut out = invoke(ecx.qcx, vec![from_type.clone()]).expect("must succeed");
+        // Oddly, this needs to be able to gracefully fail so we can detect unmet dependencies.
+        let mut out = invoke(ecx.qcx, vec![from_type.clone()]).ok()?;
         Some(move |e| {
             out.splice_parameters(&[e], 0);
             out
@@ -1171,17 +1172,12 @@ pub fn plan_cast(
     // face of intermediate expressions.
     let cast_inner = |from, to, expr| match get_cast(ecx, ccx, from, to) {
         Some(cast) => Ok(cast(expr)),
-        None => sql_bail!(
-            "{} does not support {}casting from {} to {}",
-            ecx.name,
-            if ccx == CastContext::Implicit {
-                "implicitly "
-            } else {
-                ""
-            },
-            ecx.humanize_scalar_type(from),
-            ecx.humanize_scalar_type(to),
-        ),
+        None => Err(PlanError::InvalidCast {
+            name: ecx.name.into(),
+            ccx,
+            from: ecx.humanize_scalar_type(from),
+            to: ecx.humanize_scalar_type(to),
+        }),
     };
 
     // Get cast which might include parameter rewrites + generating intermediate
