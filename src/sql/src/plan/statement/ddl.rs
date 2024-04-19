@@ -1854,17 +1854,10 @@ pub(crate) fn load_generator_ast_to_generator(
     let mut available_subsources = BTreeMap::new();
     for (i, (name, desc)) in load_generator.views().iter().enumerate() {
         let name = FullItemName {
-            database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
-            schema: match load_generator {
-                LoadGenerator::Counter { .. } => "counter".into(),
-                LoadGenerator::Marketing => "marketing".into(),
-                LoadGenerator::Auction => "auction".into(),
-                LoadGenerator::Datums => "datums".into(),
-                LoadGenerator::Tpch { .. } => "tpch".into(),
-                LoadGenerator::KeyValue { .. } => "key_value".into(),
-                // Please use `snake_case` for any multi-word load generators
-                // that you add.
-            },
+            database: RawDatabaseSpecifier::Name(
+                mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME.to_owned(),
+            ),
+            schema: load_generator.schema_name().into(),
             item: name.to_string(),
         };
         // The zero-th output is the main output

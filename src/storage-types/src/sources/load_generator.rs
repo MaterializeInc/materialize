@@ -144,7 +144,20 @@ pub enum LoadGenerator {
     KeyValue(KeyValueLoadGenerator),
 }
 
+pub const LOAD_GENERATOR_DATABASE_NAME: &str = "mz_load_generators";
+
 impl LoadGenerator {
+    pub fn schema_name(&self) -> &'static str {
+        match self {
+            LoadGenerator::Counter { .. } => "counter",
+            LoadGenerator::Marketing => "marketing",
+            LoadGenerator::Auction => "auction",
+            LoadGenerator::Datums => "datums",
+            LoadGenerator::Tpch { .. } => "tpch",
+            LoadGenerator::KeyValue { .. } => "key_value",
+        }
+    }
+
     /// Returns the list of table names and their column types that this generator generates
     pub fn views(&self) -> Vec<(&str, RelationDesc)> {
         match self {
