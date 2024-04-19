@@ -15,7 +15,6 @@
 
 //! Vector utilities.
 
-use std::cmp::Ordering;
 use std::mem::{align_of, size_of};
 
 #[cfg(feature = "smallvec")]
@@ -145,6 +144,11 @@ pub trait VecExt<T> {
     fn drain_filter_swapping<F>(&mut self, filter: F) -> DrainFilterSwapping<'_, T, F>
     where
         F: FnMut(&mut T) -> bool;
+
+    /// Returns whether the vector is sorted using the given comparator function.
+    fn is_sorted_by<F>(&self, compare: F) -> bool
+    where
+        F: FnMut(&T, &T) -> bool;
 }
 
 /// Extension methods for `Vec<T>` where `T: PartialOrd`
@@ -167,22 +171,27 @@ impl<T> VecExt<T> for Vec<T> {
             pred: filter,
         }
     }
+
+    // implementation is from Vec::is_sorted_by, but with `windows` instead of
+    // the unstable `array_windows`
+    fn is_sorted_by<F>(&self, mut compare: F) -> bool
+    where
+        F: FnMut(&T, &T) -> bool,
+    {
+        self.windows(2).all(|win| compare(&win[0], &win[1]))
+    }
 }
 
 impl<T> PartialOrdVecExt<T> for Vec<T>
 where
     T: PartialOrd,
 {
-    // implementation is from Vec::is_sorted_by, but with `windows` instead of
-    // the unstable `array_windows`
     fn is_sorted(&self) -> bool {
-        self.windows(2)
-            .all(|win| win[0].partial_cmp(&win[1]).map_or(false, Ordering::is_le))
+        self.is_sorted_by(|a, b| a <= b)
     }
 
     fn is_strictly_sorted(&self) -> bool {
-        self.windows(2)
-            .all(|win| win[0].partial_cmp(&win[1]).map_or(false, Ordering::is_lt))
+        self.is_sorted_by(|a, b| a < b)
     }
 }
 
