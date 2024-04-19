@@ -20,13 +20,13 @@
 -- Have OWNERSHIP rights on the production clusters and schemas
 {% macro deploy_validate_permissions(clusters=[], schemas=[]) %}
 
-{% set is_not_super_user %}
-    SELECT mz_is_superuser() IS FALSE;
+{% set is_super_user %}
+    SELECT mz_is_superuser();
 {% endset %}
 
-{% set not_super_user = run_query(is_not_super_user) %}
+{% set super_user = run_query(is_super_user) %}
 {% if execute %}
-    {% if not_super_user.rows[0][0] %}
+    {% if not super_user.rows[0][0] %}
         {{ internal_ensure_database_permission() }}
         {{ internal_ensure_createcluster_permission() }}
         {{ internal_ensure_schema_ownership(schemas) }}
