@@ -18,7 +18,7 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
@@ -486,7 +486,7 @@ where
         + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
         + 'static,
     Tr::Batch: Batch,
-    Tr::Batcher: Batcher<Item = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
+    Tr::Builder: Builder<Input = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
     Arranged<G, TraceAgent<Tr>>: ArrangementSize,
 {
     let mut datum_vec = mz_repr::DatumVec::new();

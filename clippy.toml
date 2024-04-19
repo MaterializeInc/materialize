@@ -57,6 +57,7 @@ disallowed-methods = [
     { path = "differential_dataflow::operators::arrange::arrangement::Arrange::arrange", reason = "use the `MzArrange::mz_arrange_named` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::Arrange::arrange_named", reason = "use the `MzArrange::mz_arrange_named` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::Arrange::arrange_core", reason = "use the `MzArrange::mz_arrange_core` function instead" },
+    { path = "differential_dataflow::operators::arrange::arrangement::arrange_core", reason = "use the `MzArrange::mz_arrange_core` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::Arranged::reduce_abelian", reason = "use the `MzArrange::mz_arrange_core` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::Arranged::reduce_core", reason = "use the `MzArrange::mz_arrange_core` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::ArrangeByKey::arrange_by_key", reason = "use the `MzArrange::mz_arrange_named` function instead" },

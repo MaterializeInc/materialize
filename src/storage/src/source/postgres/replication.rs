@@ -101,7 +101,7 @@ use postgres_protocol::message::backend::{
 };
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -445,7 +445,7 @@ async fn raw_stream<'a>(
     stats_output: &'a mut AsyncOutputHandle<
         MzOffset,
         Vec<ProgressStatisticsUpdate>,
-        TeeCore<MzOffset, Vec<ProgressStatisticsUpdate>>,
+        Tee<MzOffset, Vec<ProgressStatisticsUpdate>>,
     >,
     stats_cap: &'a Capability<MzOffset>,
 ) -> Result<

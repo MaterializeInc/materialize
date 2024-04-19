@@ -1068,7 +1068,7 @@ where
             '_,
             C::Time,
             I::Item,
-            timely::dataflow::channels::pushers::Tee<C::Time, I::Item>,
+            timely::dataflow::channels::pushers::Tee<C::Time, Vec<I::Item>>,
         >,
     ) where
         I: IntoIterator,

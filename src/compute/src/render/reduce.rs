@@ -20,7 +20,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::cursor::MyTrait;
-use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, ExchangeData};
 use mz_compute_types::plan::reduce::{
     reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
@@ -510,7 +510,8 @@ where
         S: Scope<Timestamp = G::Timestamp>,
         T1: Trace<KeyOwned = Row, Time = G::Timestamp, Diff = Diff> + 'static,
         T1::Batch: Batch,
-        T1::Batcher: Batcher<Item = ((Row, T1::ValOwned), G::Timestamp, Diff)>,
+        T1::Batcher: Batcher<Input = Vec<((Row, T1::ValOwned), G::Timestamp, Diff)>>,
+        T1::Builder: Builder<Input = ((Row, T1::ValOwned), G::Timestamp, Diff)>,
         for<'a> T1::Key<'a>: std::fmt::Debug + ToDatumIter,
         T1::ValOwned: Columnation + ExchangeData + Default,
         Arranged<S, TraceAgent<T1>>: ArrangementSize,
@@ -522,7 +523,7 @@ where
                 Diff = Diff,
             > + 'static,
         T2::Batch: Batch,
-        T2::Batcher: Batcher<Item = ((Row, T2::ValOwned), G::Timestamp, Diff)>,
+        T2::Builder: Builder<Input = ((Row, T2::ValOwned), G::Timestamp, Diff)>,
         Arranged<S, TraceAgent<T2>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -872,7 +873,7 @@ where
             + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
             + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
+        Tr::Builder: Builder<Input = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -1146,7 +1147,7 @@ where
             + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
             + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
+        Tr::Builder: Builder<Input = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();

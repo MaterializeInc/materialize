@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
 
 use mysql_async::BinlogStream;
-use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::progress::Antichain;
 use tracing::trace;
@@ -38,7 +38,7 @@ pub(super) struct ReplContext<'a> {
     pub(super) data_output: &'a mut AsyncOutputHandle<
         GtidPartition,
         Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
-        TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+        Tee<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
     >,
     pub(super) data_cap_set: &'a mut CapabilitySet<GtidPartition>,
     pub(super) upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
@@ -59,7 +59,7 @@ impl<'a> ReplContext<'a> {
         data_output: &'a mut AsyncOutputHandle<
             GtidPartition,
             Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
-            TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+            Tee<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
         >,
         data_cap_set: &'a mut CapabilitySet<GtidPartition>,
         upper_cap_set: &'a mut CapabilitySet<GtidPartition>,

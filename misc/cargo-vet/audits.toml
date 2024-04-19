@@ -69,7 +69,7 @@ notes = "Reads and writes files under a prefix controlled by the caller."
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:448e158aa9ff9f944eabb3a0a87d9801513251a6"
+version = "0.12.0@git:07ed40c3c44e6fc43efa5decdaa6e57ba9ce7fac"
 
 [[audits.domain]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -91,6 +91,11 @@ user input to be inlined (i.e. allowing injection attacks).
 who = "Sean Loiselle <sean@materialize.io>"
 criteria = "safe-to-deploy"
 version = "0.3.26"
+
+[[audits.flatcontainer]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
 
 [[audits.funty]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -295,22 +300,22 @@ delta = "3.8.0 -> 3.8.1"
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
+version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
 
 [[audits.timely_bytes]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
+version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
 
 [[audits.timely_communication]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
+version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
 
 [[audits.timely_logging]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
+version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
 
 [[audits.tokio-postgres]]
 who = "Roshan Jobanputra <roshan@materialize.com>"

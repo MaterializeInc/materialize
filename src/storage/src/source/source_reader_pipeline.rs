@@ -420,7 +420,7 @@ impl futures::Stream for RemapClock {
 fn remap_operator<G, FromTime, M>(
     scope: &G,
     config: RawSourceCreationConfig,
-    mut source_upper_rx: InstrumentedUnboundedReceiver<Event<FromTime, Infallible>, M>,
+    mut source_upper_rx: InstrumentedUnboundedReceiver<Event<FromTime, Vec<Infallible>>, M>,
     remap_relation_desc: RelationDesc,
 ) -> (Collection<G, FromTime, Diff>, PressOnDropButton)
 where
@@ -567,11 +567,11 @@ fn reclock_operator<G, FromTime, D, M>(
     mut source_rx: InstrumentedUnboundedReceiver<
         Event<
             FromTime,
-            (
+            Vec<(
                 (usize, Result<SourceMessage, SourceReaderError>),
                 FromTime,
                 D,
-            ),
+            )>,
         >,
         M,
     >,

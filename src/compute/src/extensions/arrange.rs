@@ -12,7 +12,7 @@ use std::rc::Rc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
@@ -50,21 +50,12 @@ where
         Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<
-            Item = (
+            Input = Vec<(
                 (Self::Key, Self::Val),
                 <Self::Scope as ScopeParent>::Timestamp,
                 Self::R,
-            ),
+            )>,
             Time = <Self::Scope as ScopeParent>::Timestamp,
-        >,
-        Tr::Builder: Builder<
-            Item = (
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            ),
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Output = Tr::Batch,
         >,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 
@@ -78,30 +69,21 @@ where
     where
         P: ParallelizationContract<
             <Self::Scope as ScopeParent>::Timestamp,
-            (
+            Vec<(
                 (Self::Key, Self::Val),
                 <Self::Scope as ScopeParent>::Timestamp,
                 Self::R,
-            ),
+            )>,
         >,
         Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<
-            Item = (
+            Input = Vec<(
                 (Self::Key, Self::Val),
                 <Self::Scope as ScopeParent>::Timestamp,
                 Self::R,
-            ),
+            )>,
             Time = <Self::Scope as ScopeParent>::Timestamp,
-        >,
-        Tr::Builder: Builder<
-            Item = (
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            ),
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Output = Tr::Batch,
         >,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 }
@@ -126,9 +108,7 @@ where
         R: ExchangeData,
         Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K, V), G::Timestamp, R), Time = G::Timestamp>,
-        Tr::Builder:
-            Builder<Item = ((K, V), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Input = Vec<((K, V), G::Timestamp, R)>, Time = G::Timestamp>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
@@ -138,31 +118,26 @@ where
 
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K, V), G::Timestamp, R)>,
+        P: ParallelizationContract<G::Timestamp, Vec<((K, V), G::Timestamp, R)>>,
         Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<
-            Item = (
+            Input = Vec<(
                 (Self::Key, Self::Val),
                 <Self::Scope as ScopeParent>::Timestamp,
                 Self::R,
-            ),
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-        >,
-        Tr::Builder: Builder<
-            Item = (
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            ),
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Output = Tr::Batch,
+            )>,
         >,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        self.arrange_core(pact, name).log_arrangement_size()
+        differential_dataflow::operators::arrange::arrangement::arrange_core(
+            &self.inner,
+            pact,
+            name,
+        )
+        .log_arrangement_size()
     }
 }
 
@@ -195,9 +170,7 @@ where
         R: ExchangeData,
         Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp>,
-        Tr::Builder:
-            Builder<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Input = Vec<((K, ()), G::Timestamp, R)>, Time = G::Timestamp>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0.map(|d| (d, ())).mz_arrange(name)
@@ -205,12 +178,10 @@ where
 
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K, ()), G::Timestamp, R)>,
+        P: ParallelizationContract<G::Timestamp, Vec<((K, ()), G::Timestamp, R)>>,
         Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp>,
-        Tr::Builder:
-            Builder<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
+        Tr::Batcher: Batcher<Input = Vec<((K, ()), G::Timestamp, R)>, Time = G::Timestamp>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0.map(|d| (d, ())).mz_arrange_core(pact, name)

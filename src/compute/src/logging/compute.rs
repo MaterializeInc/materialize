@@ -472,7 +472,7 @@ struct ArrangementSizeState {
 }
 
 type Update<D> = (D, Timestamp, Diff);
-type Pusher<D> = Counter<Timestamp, Update<D>, Tee<Timestamp, Update<D>>>;
+type Pusher<D> = Counter<Timestamp, Vec<Update<D>>, Tee<Timestamp, Vec<Update<D>>>>;
 type OutputSession<'a, D> = Session<'a, Timestamp, Vec<Update<D>>, Pusher<D>>;
 
 /// Bundled output sessions used by the demux operator.

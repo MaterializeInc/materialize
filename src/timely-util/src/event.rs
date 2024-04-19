@@ -11,7 +11,7 @@
 //!
 //! This is roughly based on [timely::dataflow::operators::capture::event].
 
-use timely::dataflow::operators::capture::{EventCore, EventPusherCore};
+use timely::dataflow::operators::capture::{Event, EventPusher};
 
 use crate::activator::RcActivator;
 
@@ -33,8 +33,8 @@ impl<E> ActivatedEventPusher<E> {
     }
 }
 
-impl<T, D, E: EventPusherCore<T, D>> EventPusherCore<T, D> for ActivatedEventPusher<E> {
-    fn push(&mut self, event: EventCore<T, D>) {
+impl<T, D, E: EventPusher<T, D>> EventPusher<T, D> for ActivatedEventPusher<E> {
+    fn push(&mut self, event: Event<T, D>) {
         self.inner.push(event);
         self.activator.activate();
     }

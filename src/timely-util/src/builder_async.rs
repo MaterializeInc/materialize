@@ -20,11 +20,11 @@ use std::task::{Context, Poll, Waker};
 
 use futures_util::task::ArcWake;
 use timely::communication::{Message, Pull, Push};
-use timely::dataflow::channels::pact::ParallelizationContractCore;
+use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::counter::CounterCore as PushCounter;
-use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::channels::BundleCore;
+use timely::dataflow::channels::pushers::counter::Counter as PushCounter;
+use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{
     InputHandleCore, OperatorInfo, OutputHandleCore, OutputWrapper,
@@ -73,7 +73,7 @@ where
     T: Timestamp,
     D: Container,
     C: InputConnection<T> + 'static,
-    P: Pull<BundleCore<T, D>> + 'static,
+    P: Pull<Bundle<T, D>> + 'static,
 {
     fn accept_input(&mut self) {
         let mut queue = self.queue.borrow_mut();
@@ -114,7 +114,7 @@ struct InputHandleQueue<
     T: Timestamp,
     D: Container,
     C: InputConnection<T>,
-    P: Pull<BundleCore<T, D>> + 'static,
+    P: Pull<Bundle<T, D>> + 'static,
 > {
     queue: Rc<RefCell<VecDeque<Event<T, C::Capability, D>>>>,
     waker: Rc<Cell<Option<Waker>>>,
@@ -197,7 +197,7 @@ pub trait CapabilityTrait<T: Timestamp> {
     ) -> Session<'a, T, D, PushCounter<T, D, P>>
     where
         D: Container,
-        P: Push<BundleCore<T, D>>;
+        P: Push<Bundle<T, D>>;
 }
 
 impl<T: Timestamp> CapabilityTrait<T> for InputCapability<T> {
@@ -208,7 +208,7 @@ impl<T: Timestamp> CapabilityTrait<T> for InputCapability<T> {
     ) -> Session<'a, T, D, PushCounter<T, D, P>>
     where
         D: Container,
-        P: Push<BundleCore<T, D>>,
+        P: Push<Bundle<T, D>>,
     {
         handle.session(self)
     }
@@ -222,13 +222,13 @@ impl<T: Timestamp> CapabilityTrait<T> for Capability<T> {
     ) -> Session<'a, T, D, PushCounter<T, D, P>>
     where
         D: Container,
-        P: Push<BundleCore<T, D>>,
+        P: Push<Bundle<T, D>>,
     {
         handle.session(self)
     }
 }
 
-pub struct AsyncOutputHandle<T: Timestamp, D: Container, P: Push<BundleCore<T, D>> + 'static> {
+pub struct AsyncOutputHandle<T: Timestamp, D: Container, P: Push<Bundle<T, D>> + 'static> {
     // The field order is important here as the handle is borrowing from the wrapper. See also the
     // safety argument in the constructor
     handle: Rc<RefCell<OutputHandleCore<'static, T, D, P>>>,
@@ -240,7 +240,7 @@ impl<T, D, P> AsyncOutputHandle<T, D, P>
 where
     T: Timestamp,
     D: Container,
-    P: Push<BundleCore<T, D>> + 'static,
+    P: Push<Bundle<T, D>> + 'static,
 {
     fn new(wrapper: OutputWrapper<T, D, P>, index: usize) -> Self {
         let mut wrapper = Rc::new(Box::pin(wrapper));
@@ -284,7 +284,7 @@ impl<'a, T, D, P> AsyncOutputHandle<T, Vec<D>, P>
 where
     T: Timestamp,
     D: Data,
-    P: Push<BundleCore<T, Vec<D>>> + 'static,
+    P: Push<Bundle<T, Vec<D>>> + 'static,
 {
     #[allow(clippy::unused_async)]
     pub async fn give<C: CapabilityTrait<T>>(&mut self, cap: &C, data: D) {
@@ -293,7 +293,7 @@ where
     }
 }
 
-impl<T: Timestamp, D: Container, P: Push<BundleCore<T, D>> + 'static> Clone
+impl<T: Timestamp, D: Container, P: Push<Bundle<T, D>> + 'static> Clone
     for AsyncOutputHandle<T, D, P>
 {
     fn clone(&self) -> Self {
@@ -378,7 +378,7 @@ pub trait OutputIndex {
     fn index(&self) -> usize;
 }
 
-impl<T: Timestamp, D: Container> OutputIndex for AsyncOutputHandle<T, D, TeeCore<T, D>> {
+impl<T: Timestamp, D: Container> OutputIndex for AsyncOutputHandle<T, D, Tee<T, D>> {
     fn index(&self) -> usize {
         self.index
     }
@@ -418,7 +418,7 @@ impl<G: Scope> OperatorBuilder<G> {
         output: &dyn OutputIndex,
     ) -> AsyncInputHandle<G::Timestamp, D, ConnectedToOne>
     where
-        P: ParallelizationContractCore<G::Timestamp, D>,
+        P: ParallelizationContract<G::Timestamp, D>,
     {
         let index = output.index();
         assert!(index < self.builder.shape().outputs());
@@ -433,7 +433,7 @@ impl<G: Scope> OperatorBuilder<G> {
         outputs: [&dyn OutputIndex; N],
     ) -> AsyncInputHandle<G::Timestamp, D, ConnectedToMany<N>>
     where
-        P: ParallelizationContractCore<G::Timestamp, D>,
+        P: ParallelizationContract<G::Timestamp, D>,
     {
         let indices = outputs.map(|output| output.index());
         for index in indices {
@@ -449,7 +449,7 @@ impl<G: Scope> OperatorBuilder<G> {
         pact: P,
     ) -> AsyncInputHandle<G::Timestamp, D, Disconnected>
     where
-        P: ParallelizationContractCore<G::Timestamp, D>,
+        P: ParallelizationContract<G::Timestamp, D>,
     {
         self.new_input_connection(stream, pact, Disconnected)
     }
@@ -462,7 +462,7 @@ impl<G: Scope> OperatorBuilder<G> {
         connection: C,
     ) -> AsyncInputHandle<G::Timestamp, D, C>
     where
-        P: ParallelizationContractCore<G::Timestamp, D>,
+        P: ParallelizationContract<G::Timestamp, D>,
         C: InputConnection<G::Timestamp> + 'static,
     {
         self.input_frontiers
@@ -494,7 +494,7 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn new_output<D: Container>(
         &mut self,
     ) -> (
-        AsyncOutputHandle<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
+        AsyncOutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
         StreamCore<G, D>,
     ) {
         let index = self.builder.shape().outputs();

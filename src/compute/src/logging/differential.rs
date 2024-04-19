@@ -187,7 +187,7 @@ pub(super) fn construct<A: Allocate>(
     })
 }
 
-type Pusher<D> = Tee<Timestamp, (D, Timestamp, Diff)>;
+type Pusher<D> = Tee<Timestamp, Vec<(D, Timestamp, Diff)>>;
 type OutputBuffer<'a, 'b, D> = ConsolidateBuffer<'a, 'b, Timestamp, D, Diff, Pusher<D>>;
 
 /// Bundled output buffers used by the demux operator.

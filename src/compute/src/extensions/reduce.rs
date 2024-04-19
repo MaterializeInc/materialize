@@ -34,8 +34,7 @@ where
         T2::ValOwned: Data,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        T2::Builder:
-            Builder<Output = T2::Batch, Item = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        T2::Builder: Builder<Input = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwned, T2::Diff)>)
             + 'static,
         Arranged<G, TraceAgent<T2>>: ArrangementSize;
@@ -55,8 +54,7 @@ where
         T2::ValOwned: Data,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        T2::Builder:
-            Builder<Output = T2::Batch, Item = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        T2::Builder: Builder<Input = ((T1::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwned, T2::Diff)>)
             + 'static,
         Arranged<G, TraceAgent<T2>>: ArrangementSize,
@@ -92,8 +90,7 @@ where
         T1::ValOwned: Data,
         T1::Diff: Abelian,
         T1::Batch: Batch,
-        T1::Builder:
-            Builder<Output = T1::Batch, Item = ((T1::KeyOwned, T1::ValOwned), T1::Time, T1::Diff)>,
+        T1::Builder: Builder<Input = ((T1::KeyOwned, T1::ValOwned), T1::Time, T1::Diff)>,
         L1: FnMut(Tr::Key<'_>, &[(Tr::Val<'_>, Tr::Diff)], &mut Vec<(T1::ValOwned, T1::Diff)>)
             + 'static,
         T2: Trace
@@ -102,8 +99,7 @@ where
         T2::ValOwned: Data,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        T2::Builder:
-            Builder<Output = T2::Batch, Item = ((T2::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        T2::Builder: Builder<Input = ((T2::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
         L2: FnMut(Tr::Key<'_>, &[(Tr::Val<'_>, Tr::Diff)], &mut Vec<(T2::ValOwned, T2::Diff)>)
             + 'static,
         Arranged<G, TraceAgent<T1>>: ArrangementSize,
@@ -130,8 +126,7 @@ where
         T1::ValOwned: Data,
         T1::Diff: Abelian,
         T1::Batch: Batch,
-        T1::Builder:
-            Builder<Output = T1::Batch, Item = ((T1::KeyOwned, T1::ValOwned), T1::Time, T1::Diff)>,
+        T1::Builder: Builder<Input = ((T1::KeyOwned, T1::ValOwned), T1::Time, T1::Diff)>,
         L1: FnMut(Tr::Key<'_>, &[(Tr::Val<'_>, Tr::Diff)], &mut Vec<(T1::ValOwned, T1::Diff)>)
             + 'static,
         T2: Trace
@@ -140,8 +135,7 @@ where
         T2::ValOwned: Data,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        T2::Builder:
-            Builder<Output = T2::Batch, Item = ((T2::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        T2::Builder: Builder<Input = ((T2::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
         L2: FnMut(Tr::Key<'_>, &[(Tr::Val<'_>, Tr::Diff)], &mut Vec<(T2::ValOwned, T2::Diff)>)
             + 'static,
         Arranged<G, TraceAgent<T1>>: ArrangementSize,

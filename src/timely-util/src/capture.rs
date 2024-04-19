@@ -14,15 +14,15 @@
 // limitations under the License.
 
 use mz_ore::channel::{InstrumentedChannelMetric, InstrumentedUnboundedSender};
-use timely::dataflow::operators::capture::{EventCore, EventPusherCore};
+use timely::dataflow::operators::capture::{Event, EventPusher};
 
-pub struct UnboundedTokioCapture<T, D, M>(pub InstrumentedUnboundedSender<EventCore<T, D>, M>);
+pub struct UnboundedTokioCapture<T, D, M>(pub InstrumentedUnboundedSender<Event<T, Vec<D>>, M>);
 
-impl<T, D, M> EventPusherCore<T, D> for UnboundedTokioCapture<T, D, M>
+impl<T, D, M> EventPusher<T, Vec<D>> for UnboundedTokioCapture<T, D, M>
 where
     M: InstrumentedChannelMetric,
 {
-    fn push(&mut self, event: EventCore<T, D>) {
+    fn push(&mut self, event: Event<T, Vec<D>>) {
         // NOTE: An Err(x) result just means "data not accepted" most likely
         //       because the receiver is gone. No need to panic.
         let _ = self.0.send(event);

@@ -40,7 +40,7 @@ use timely::progress::Timestamp;
 /// time changes, or if the buffer capacity is reached.
 pub struct ConsolidateBuffer<'a, 'b, T, D: Data, R: Semigroup, P>
 where
-    P: Push<Bundle<T, (D, T, R)>> + 'a,
+    P: Push<Bundle<T, Vec<(D, T, R)>>> + 'a,
     T: Data + Timestamp + 'a,
     D: 'a,
 {
@@ -56,7 +56,7 @@ where
 impl<'a, 'b, T, D: Data, R: Semigroup, P> ConsolidateBuffer<'a, 'b, T, D, R, P>
 where
     T: Data + Timestamp + 'a,
-    P: Push<Bundle<T, (D, T, R)>> + 'a,
+    P: Push<Bundle<T, Vec<(D, T, R)>>> + 'a,
 {
     /// Create a new [ConsolidateBuffer], wrapping the provided session.
     ///
@@ -155,7 +155,7 @@ where
 
 impl<'a, 'b, T, D: Data, R: Semigroup, P> Drop for ConsolidateBuffer<'a, 'b, T, D, R, P>
 where
-    P: Push<Bundle<T, (D, T, R)>> + 'a,
+    P: Push<Bundle<T, Vec<(D, T, R)>>> + 'a,
     T: Data + Timestamp + 'a,
     D: 'a,
 {

@@ -23,9 +23,9 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as Operato
 use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHandle};
 use timely::dataflow::operators::Capability;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::{Antichain, Timestamp};
-use timely::{Data, ExchangeData, PartialOrder};
+use timely::{Container, Data, ExchangeData, PartialOrder};
 
 use crate::buffer::ConsolidateBuffer;
 use crate::builder_async::{
@@ -64,11 +64,11 @@ where
         ) -> Box<
             dyn FnMut(
                     &mut InputHandle<G::Timestamp, D1, P::Puller>,
-                    &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
-                    &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, E>>,
+                    &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, Vec<D2>>>,
+                    &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, Vec<E>>>,
                 ) + 'static,
         >,
-        P: ParallelizationContract<G::Timestamp, D1>;
+        P: ParallelizationContract<G::Timestamp, Vec<D1>>;
 
     /// Creates a new dataflow operator that partitions its input stream by a parallelization
     /// strategy pact, and repeatedly schedules logic, the future returned by the function passed
@@ -80,10 +80,10 @@ where
             Capability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, Vec<D2>>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, D1>;
+        P: ParallelizationContract<G::Timestamp, Vec<D1>>;
 
     /// Creates a new dataflow operator that partitions its input streams by a parallelization
     /// strategy pact, and repeatedly schedules logic, the future returned by the function passed
@@ -104,11 +104,11 @@ where
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, Vec<D3>>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P1: ParallelizationContract<G::Timestamp, D1>,
-        P2: ParallelizationContract<G::Timestamp, D2>;
+        P1: ParallelizationContract<G::Timestamp, Vec<D1>>,
+        P2: ParallelizationContract<G::Timestamp, Vec<D2>>;
 
     /// Creates a new dataflow operator that partitions its input stream by a parallelization
     /// strategy pact, and repeatedly schedules logic which can read from the input stream and
@@ -117,7 +117,7 @@ where
     where
         B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, D1>;
+        P: ParallelizationContract<G::Timestamp, Vec<D1>>;
 
     /// Like [`timely::dataflow::operators::map::Map::map`], but `logic`
     /// is allowed to fail. The first returned stream will contain the
@@ -233,7 +233,11 @@ where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice,
-        Ba: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp> + 'static;
+        Ba: Batcher<
+                Input = Vec<((D1, ()), G::Timestamp, R)>,
+                Output = ((D1, ()), G::Timestamp, R),
+                Time = G::Timestamp,
+            > + 'static;
 
     /// Consolidates the collection.
     fn consolidate_named<Ba>(self, name: &str) -> Self
@@ -241,7 +245,11 @@ where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice,
-        Ba: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp> + 'static;
+        Ba: Batcher<
+                Input = Vec<((D1, ()), G::Timestamp, R)>,
+                Output = ((D1, ()), G::Timestamp, R),
+                Time = G::Timestamp,
+            > + 'static;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -264,11 +272,11 @@ where
         ) -> Box<
             dyn FnMut(
                     &mut InputHandle<G::Timestamp, D1, P::Puller>,
-                    &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
-                    &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, E>>,
+                    &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, Vec<D2>>>,
+                    &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, Vec<E>>>,
                 ) + 'static,
         >,
-        P: ParallelizationContract<G::Timestamp, D1>,
+        P: ParallelizationContract<G::Timestamp, Vec<D1>>,
     {
         let mut builder = OperatorBuilderRc::new(name.into(), self.scope());
         builder.set_notify(false);
@@ -300,10 +308,10 @@ where
             Capability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, Vec<D2>>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, D1>,
+        P: ParallelizationContract<G::Timestamp, Vec<D1>>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
@@ -336,11 +344,11 @@ where
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, Vec<D3>>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P1: ParallelizationContract<G::Timestamp, D1>,
-        P2: ParallelizationContract<G::Timestamp, D2>,
+        P1: ParallelizationContract<G::Timestamp, Vec<D1>>,
+        P2: ParallelizationContract<G::Timestamp, Vec<D2>>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
@@ -365,7 +373,7 @@ where
     where
         B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, D1>,
+        P: ParallelizationContract<G::Timestamp, Vec<D1>>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
@@ -553,7 +561,11 @@ where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice + Ord,
-        Ba: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp> + 'static,
+        Ba: Batcher<
+                Input = Vec<((D1, ()), G::Timestamp, R)>,
+                Output = ((D1, ()), G::Timestamp, R),
+                Time = G::Timestamp,
+            > + 'static,
     {
         if must_consolidate {
             // We employ AHash below instead of the default hasher in DD to obtain
@@ -598,7 +610,11 @@ where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice + Ord,
-        Ba: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp> + 'static,
+        Ba: Batcher<
+                Input = Vec<((D1, ()), G::Timestamp, R)>,
+                Output = ((D1, ()), G::Timestamp, R),
+                Time = G::Timestamp,
+            > + 'static,
     {
         let exchange =
             Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed().into());
@@ -613,13 +629,17 @@ where
 /// The source is defined by a name, and a constructor which takes a default capability and an
 /// output handle to a future. The future is then repeatedly scheduled, and is expected to
 /// eventually send data and downgrade and release capabilities.
-pub fn source_async<G: Scope, D, B, BFut>(scope: &G, name: String, constructor: B) -> Stream<G, D>
+pub fn source_async<G: Scope, C, B, BFut>(
+    scope: &G,
+    name: String,
+    constructor: B,
+) -> StreamCore<G, C>
 where
-    D: Data,
+    C: Container,
     B: FnOnce(
         Capability<G::Timestamp>,
         OperatorInfo,
-        AsyncOutputHandle<G::Timestamp, Vec<D>, Tee<G::Timestamp, D>>,
+        AsyncOutputHandle<G::Timestamp, C, Tee<G::Timestamp, C>>,
     ) -> BFut,
     BFut: Future + 'static,
 {
@@ -652,8 +672,12 @@ where
     K: Data,
     V: Data,
     R: Data + Semigroup,
-    B: Batcher<Item = ((K, V), G::Timestamp, R), Time = G::Timestamp> + 'static,
-    P: ParallelizationContract<G::Timestamp, ((K, V), G::Timestamp, R)>,
+    B: Batcher<
+            Input = Vec<((K, V), G::Timestamp, R)>,
+            Output = ((K, V), G::Timestamp, R),
+            Time = G::Timestamp,
+        > + 'static,
+    P: ParallelizationContract<G::Timestamp, Vec<((K, V), G::Timestamp, R)>>,
 {
     collection
         .inner
@@ -747,9 +771,9 @@ struct ConsolidateBuilder<K: Data, V: Data, T: Timestamp, R: Data> {
 }
 
 impl<K: Data, V: Data, T: Timestamp, R: Data> Builder for ConsolidateBuilder<K, V, T, R> {
-    type Item = ((K, V), T, R);
+    type Input = ((K, V), T, R);
     type Time = T;
-    type Output = Vec<Vec<Self::Item>>;
+    type Output = Vec<Vec<Self::Input>>;
 
     fn new() -> Self {
         Self {
@@ -761,7 +785,7 @@ impl<K: Data, V: Data, T: Timestamp, R: Data> Builder for ConsolidateBuilder<K, 
         Self::new()
     }
 
-    fn push(&mut self, element: Self::Item) {
+    fn push(&mut self, element: Self::Input) {
         if let Some(last) = self.buffer.last_mut() {
             if last.len() < last.capacity() {
                 last.push(element);
@@ -769,12 +793,12 @@ impl<K: Data, V: Data, T: Timestamp, R: Data> Builder for ConsolidateBuilder<K, 
             }
         }
         let mut new =
-            Vec::with_capacity(timely::container::buffer::default_capacity::<Self::Item>());
+            Vec::with_capacity(timely::container::buffer::default_capacity::<Self::Input>());
         new.push(element);
         self.buffer.push(new);
     }
 
-    fn copy(&mut self, element: &Self::Item) {
+    fn copy(&mut self, element: &Self::Input) {
         self.push(element.clone())
     }
 
