@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 
+use mz_arrow_util::builder::ArrowBuilder;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
@@ -1007,7 +1008,11 @@ fn plan_copy_to_expr(
             CopyCsvFormatParams::try_new(None, None, None, None, None)
                 .map_err(|e| sql_err!("{}", e))?,
         )),
-        CopyFormat::Parquet => S3SinkFormat::Parquet,
+        CopyFormat::Parquet => {
+            // Validate that the output desc can be formatted as parquet
+            ArrowBuilder::validate_desc(&desc).map_err(|e| sql_err!("{}", e))?;
+            S3SinkFormat::Parquet
+        }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
         CopyFormat::Text => bail_unsupported!("FORMAT TEXT"),
     };

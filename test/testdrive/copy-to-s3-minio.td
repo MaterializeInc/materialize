@@ -208,3 +208,23 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/2
 
 $ s3-verify-data bucket=copytos3 key=parquet_test/3
 false inf 1970-01-01T00:00:00.001 32767 2147483647 9223372036854775807 2010-10-10 10:10:10 2010-10-10T10:10:10 aaaa 5c7841414141 това е d182d0b5d0bad181d182
+
+# Confirm that unimplemented types will early exit before writing to s3
+! COPY (SELECT '0 day'::interval)  TO 's3://copytos3/parquet_test/5'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'parquet'
+  );
+contains:Cannot encode the following columns/types: ["interval: Interval"]
+
+# now should succeed since incomplete sentinel was never written
+> COPY (SELECT 1::int)  TO 's3://copytos3/parquet_test/5'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'parquet'
+  );
+
+$ s3-verify-data bucket=copytos3 key=parquet_test/5
+1
