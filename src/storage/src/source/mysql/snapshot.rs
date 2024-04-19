@@ -419,11 +419,22 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     return Ok(());
                 }
 
+                // We have established a snapshot frontier so we can broadcast the rewind requests
+                for table in reader_snapshot_table_info.keys() {
+                    trace!(%id, "timely-{worker_id} producing rewind request for {table}");
+                    let req = RewindRequest {
+                        table: table.clone(),
+                        snapshot_upper: snapshot_gtid_frontier.clone(),
+                    };
+                    rewinds_handle.give(&rewind_cap_set[0], req).await;
+                }
+                *rewind_cap_set = CapabilitySet::new();
+
                 // Read the snapshot data from the tables
                 let mut final_row = Row::default();
 
                 let mut snapshot_staged = 0;
-                for (table, (output_index, table_desc)) in &reader_snapshot_table_info {
+                for (table, (output_index, table_desc)) in reader_snapshot_table_info {
                     let query = format!("SELECT * FROM {}", table);
                     trace!(%id, "timely-{worker_id} reading snapshot from \
                                  table '{table}':\n{table_desc:?}");
@@ -431,7 +442,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     let mut count = 0;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
-                        let event = match pack_mysql_row(&mut final_row, row, table_desc) {
+                        let event = match pack_mysql_row(&mut final_row, row, &table_desc) {
                             Ok(row) => Ok(row),
                             // Produce a DefiniteError in the stream for any rows that fail to decode
                             Err(err @ MySqlError::ValueDecodeError { .. }) => {
@@ -442,7 +453,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         raw_handle
                             .give(
                                 &data_cap_set[0],
-                                ((*output_index, event), GtidPartition::minimum(), 1),
+                                ((output_index, event), GtidPartition::minimum(), 1),
                             )
                             .await;
                         count += 1;
@@ -463,23 +474,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     trace!(%id, "timely-{worker_id} snapshotted {count} records from \
                                  table '{table}'");
                 }
-
-                // We are done with the snapshot so now we will emit rewind requests. It is
-                // important that this happens after the snapshot has finished because this is what
-                // unblocks the replication operator and we want this to happen serially. It might
-                // seem like a good idea to read the replication stream concurrently with the
-                // snapshot but it actually leads to a lot of data being staged for the future,
-                // which needlesly consumed memory in the cluster.
-                for table in reader_snapshot_table_info.keys() {
-                    trace!(%id, "timely-{worker_id} producing rewind request for {table}");
-                    let req = RewindRequest {
-                        table: table.clone(),
-                        snapshot_upper: snapshot_gtid_frontier.clone(),
-                    };
-                    rewinds_handle.give(&rewind_cap_set[0], req).await;
-                }
-                *rewind_cap_set = CapabilitySet::new();
-
                 if snapshot_staged < snapshot_total {
                     error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow
                                  bigger than records staged {snapshot_staged}");
