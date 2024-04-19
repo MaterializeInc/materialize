@@ -37,7 +37,7 @@ def main() -> int:
     time_str = time.strftime("%Y-%m-%d_%H:%M:%S")
     threads = []
 
-    def run(service: str, backend: list[str], suffix: str = ""):
+    def run(service: str, backend: list[str], suffix: str):
         heap_profile = subprocess.run(
             mzcompose + ["exec", service, "curl", "--silent"] + backend,
             text=False,
@@ -72,14 +72,14 @@ def main() -> int:
             threads.append(
                 Thread(
                     target=run,
-                    args=(service["Service"], ["http://127.0.0.1:6878/heap"]),
+                    args=(service["Service"], ["http://127.0.0.1:6878/heap"], ""),
                 )
             )
         elif service["Image"].startswith("materialize/materialized:"):
             threads.append(
                 Thread(
                     target=run,
-                    args=(service["Service"], ["http://127.0.0.1:6878/prof/heap"]),
+                    args=(service["Service"], ["http://127.0.0.1:6878/prof/heap"], ""),
                 )
             )
 
@@ -89,6 +89,10 @@ def main() -> int:
                 capture_output=True,
             ).stdout.splitlines():
                 if match := CLUSTERD_COMMAND_RE.search(line):
+                    cluster_id = match.group("cluster_id")
+                    replica_id = match.group("replica_id")
+                    suffix = f"-cluster-{cluster_id}-replica-{replica_id}"
+                    print(f"Suffix: {suffix}")
                     threads.append(
                         Thread(
                             target=run,
@@ -99,7 +103,7 @@ def main() -> int:
                                     match.group("socket"),
                                     "http:/prof/heap",
                                 ],
-                                f"-cluster-{match.group('cluster_id')}-replica-{match.group('replica_id')}",
+                                suffix,
                             ),
                         )
                     )
