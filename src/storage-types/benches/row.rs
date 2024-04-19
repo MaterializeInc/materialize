@@ -13,7 +13,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{PartDecoder, PartEncoder, Schema};
+use mz_persist_types::columnar::{PartDecoder, Schema};
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::Codec;
 use mz_repr::{ColumnType, Datum, ProtoRow, RelationDesc, Row, ScalarType};
@@ -44,18 +44,11 @@ fn decode_legacy(part: &ColumnarRecords) -> SourceData {
 }
 
 fn encode_structured(schema: &RelationDesc, data: &[SourceData]) -> Part {
-    let mut part = PartBuilder::new::<SourceData, _, _, _>(schema, &UnitSchema);
-    let mut part_mut = part.get_mut();
-    let mut encoder = <RelationDesc as Schema<SourceData>>::encoder(schema, part_mut.key).unwrap();
+    let mut builder = PartBuilder::new(schema, &UnitSchema).expect("success");
     for data in data.iter() {
-        encoder.encode(data);
+        builder.push(data, &(), 1u64, 1i64);
     }
-    drop(encoder);
-    for _ in data.iter() {
-        part_mut.ts.push(1u64);
-        part_mut.diff.push(1i64);
-    }
-    part.finish().unwrap()
+    builder.finish()
 }
 
 fn decode_structured(schema: &RelationDesc, part: &Part, len: usize) -> SourceData {

@@ -16,14 +16,13 @@ use arrow2::datatypes::{DataType as ArrowLogicalType, Field};
 use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
-use crate::columnar::Schema;
-use crate::dyn_struct::{
-    ColumnsMut, ColumnsRef, DynStructCfg, DynStructCol, DynStructMut, ValidityRef,
-};
+use crate::columnar::{PartEncoder, Schema};
+use crate::dyn_col::DynColumnRef;
+use crate::dyn_struct::{ColumnsRef, DynStructCfg, DynStructCol, DynStructMut, ValidityRef};
 use crate::stats::StructStats;
 use crate::Codec64;
 
-/// A columnar representation of one blob's worth of data.
+/// A structured columnar representation of one blob's worth of data.
 #[derive(Debug)]
 pub struct Part {
     len: usize,
@@ -222,73 +221,108 @@ impl Part {
 
 /// An in-progress columnar constructor for one blob's worth of data.
 #[derive(Debug)]
-pub struct PartBuilder {
-    key: DynStructMut,
-    val: DynStructMut,
-    ts: Vec<i64>,
-    diff: Vec<i64>,
+pub struct PartBuilder<K, KS: Schema<K>, V, VS: Schema<V>> {
+    /// Configuration for the `key` column.
+    key_cfg: DynStructCfg,
+    /// Encoder for the `key` column.
+    key_encoder: KS::Encoder,
+    /// Configuration for the `val` column.
+    val_cfg: DynStructCfg,
+    /// Encoder for the val column.
+    val_encoder: VS::Encoder,
+
+    /// The ts column.
+    ts: Codec64Mut,
+    /// The diff column.
+    diff: Codec64Mut,
 }
 
-impl PartBuilder {
-    /// Returns a new PartBuilder with the given schema.
-    pub fn new<K, KS: Schema<K>, V, VS: Schema<V>>(key_schema: &KS, val_schema: &VS) -> Self {
-        let key = ColumnMut::<DynStructCfg>::new(&key_schema.columns());
-        let val = ColumnMut::<DynStructCfg>::new(&val_schema.columns());
-        let ts = Vec::new();
-        let diff = Vec::new();
-        PartBuilder { key, val, ts, diff }
-    }
+impl<K, KS: Schema<K>, V, VS: Schema<V>> PartBuilder<K, KS, V, VS> {
+    /// Returns a new [`PartBuilder`] that can be used to build a [`Part`].
+    pub fn new(key_schema: &KS, val_schema: &VS) -> Result<Self, String> {
+        let key = DynStructMut::new(&key_schema.columns());
+        let key_cfg = key.cfg().clone();
+        let key_encoder = key_schema.encoder(key.as_mut())?;
 
-    /// Returns a [PartMut] for this in-progress part.
-    pub fn get_mut<'a>(&'a mut self) -> PartMut<'a> {
-        let len = self.diff.len();
-        debug_assert_eq!(self.key.len(), len);
-        debug_assert_eq!(self.val.len(), len);
-        debug_assert_eq!(self.ts.len(), len);
-        PartMut {
-            key: self.key.as_mut(),
-            val: self.val.as_mut(),
-            ts: Codec64Mut(&mut self.ts),
-            diff: Codec64Mut(&mut self.diff),
-        }
-    }
+        let val = DynStructMut::new(&val_schema.columns());
+        let val_cfg = val.cfg().clone();
+        let val_encoder = val_schema.encoder(val.as_mut())?;
 
-    /// Completes construction of the [Part].
-    pub fn finish(self) -> Result<Part, String> {
-        let key = DynStructCol::from(self.key);
-        let val = DynStructCol::from(self.val);
-        let ts = Buffer::from(self.ts);
-        let diff = Buffer::from(self.diff);
+        let ts = Codec64Mut(Vec::new());
+        let diff = Codec64Mut(Vec::new());
 
-        let len = diff.len();
-        let part = Part {
-            len,
-            key,
-            val,
+        let builder = PartBuilder {
+            key_cfg,
+            key_encoder,
+            val_cfg,
+            val_encoder,
             ts,
             diff,
         };
-        let () = part.validate()?;
-        Ok(part)
+
+        Ok(builder)
+    }
+
+    /// Push a new row onto this [`PartBuilder`].
+    pub fn push<T: Codec64, D: Codec64>(&mut self, k: &K, v: &V, t: T, d: D) {
+        self.key_encoder.encode(k);
+        self.val_encoder.encode(v);
+        self.ts.push(t);
+        self.diff.push(d);
+    }
+
+    /// Consumes self returning a [`Part`].
+    pub fn finish(self) -> Part {
+        let Self {
+            key_cfg,
+            key_encoder,
+            val_cfg,
+            val_encoder,
+            ts,
+            diff,
+        } = self;
+
+        let (key_len, key_cols) = key_encoder.finish();
+        let (val_len, val_cols) = val_encoder.finish();
+
+        assert!(key_len == val_len);
+        assert!(key_len == ts.len());
+        assert!(key_len == diff.len());
+
+        let key = DynStructCol {
+            len: key_len,
+            cfg: key_cfg,
+            validity: None,
+            cols: key_cols.into_iter().map(DynColumnRef::from).collect(),
+        };
+
+        let val = DynStructCol {
+            len: val_len,
+            cfg: val_cfg,
+            validity: None,
+            cols: val_cols.into_iter().map(DynColumnRef::from).collect(),
+        };
+
+        Part {
+            len: key_len,
+            key,
+            val,
+            ts: Buffer::from(ts.0),
+            diff: Buffer::from(diff.0),
+        }
     }
 }
 
-/// Mutable access to the columns in a [PartBuilder].
-pub struct PartMut<'a> {
-    /// The key column.
-    pub key: ColumnsMut<'a>,
-    /// The val column.
-    pub val: ColumnsMut<'a>,
-    /// The ts column.
-    pub ts: Codec64Mut<'a>,
-    /// The diff column.
-    pub diff: Codec64Mut<'a>,
-}
+/// Mutable access to a column of a [`Codec64`] implementor.
+#[derive(Debug)]
+pub struct Codec64Mut(Vec<i64>);
 
-/// Mutable access to a column of a Codec64 implementor.
-pub struct Codec64Mut<'a>(&'a mut Vec<i64>);
+impl Codec64Mut {
+    /// Returns the length of the column.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 
-impl Codec64Mut<'_> {
     /// Pushes the given value into this column.
     pub fn push<X: Codec64>(&mut self, val: X) {
         self.0.push(i64::from_le_bytes(Codec64::encode(&val)));
@@ -300,6 +334,7 @@ mod tests {
     use std::marker::PhantomData;
 
     use super::*;
+    use crate::codec_impls::UnitSchema;
 
     // Make sure that the API structs are Sync + Send, so that they can be used in async tasks.
     // NOTE: This is a compile-time only test. If it compiles, we're good.
@@ -310,6 +345,8 @@ mod tests {
         }
 
         assert!(is_send_sync::<Part>(PhantomData));
-        assert!(is_send_sync::<PartBuilder>(PhantomData));
+        assert!(is_send_sync::<PartBuilder<(), UnitSchema, (), UnitSchema>>(
+            PhantomData
+        ));
     }
 }

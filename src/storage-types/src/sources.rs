@@ -23,7 +23,10 @@ use itertools::Itertools;
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
-use mz_persist_types::dyn_struct::{DynStruct, DynStructCfg, ValidityMut, ValidityRef};
+use mz_persist_types::dyn_col::DynColumnMut;
+use mz_persist_types::dyn_struct::{
+    DynStruct, DynStructCfg, DynStructMut, ValidityMut, ValidityRef,
+};
 use mz_persist_types::stats::StatsFn;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -953,7 +956,6 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
 #[repr(transparent)]
 pub struct SourceData(pub Result<Row, DataflowError>);
 
-#[cfg(test)]
 impl Default for SourceData {
     fn default() -> Self {
         SourceData(Ok(Row::default()))
@@ -1053,16 +1055,17 @@ impl Codec for SourceData {
 /// This mostly delegates the encoding logic to [RowEncoder], but flatmaps in
 /// an Err column.
 #[derive(Debug)]
-pub struct SourceDataEncoder<'a> {
-    len: &'a mut usize,
-    ok_validity: ValidityMut<'a>,
-    ok: RowEncoder<'a>,
-    err: &'a mut <Option<Vec<u8>> as Data>::Mut,
+pub struct SourceDataEncoder {
+    len: usize,
+    ok_cfg: DynStructCfg,
+    ok_validity: ValidityMut,
+    ok: RowEncoder,
+    err: Box<<Option<Vec<u8>> as Data>::Mut>,
 }
 
-impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
+impl PartEncoder<SourceData> for SourceDataEncoder {
     fn encode(&mut self, val: &SourceData) {
-        *self.len += 1;
+        self.len += 1;
         match val.as_ref() {
             Ok(row) => {
                 self.ok_validity.push(true);
@@ -1070,7 +1073,7 @@ impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
                 for (encoder, datum) in self.ok.col_encoders().iter_mut().zip(row.iter()) {
                     encoder.encode(datum);
                 }
-                ColumnPush::<Option<Vec<u8>>>::push(self.err, None);
+                ColumnPush::<Option<Vec<u8>>>::push(self.err.as_mut(), None);
             }
             Err(err) => {
                 self.ok_validity.push(false);
@@ -1079,9 +1082,23 @@ impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
                     encoder.encode_default();
                 }
                 let err = err.into_proto().encode_to_vec();
-                ColumnPush::<Option<Vec<u8>>>::push(self.err, Some(err.as_slice()));
+                ColumnPush::<Option<Vec<u8>>>::push(self.err.as_mut(), Some(err.as_slice()));
             }
         }
+    }
+
+    fn finish(self) -> (usize, Vec<DynColumnMut>) {
+        // Collect all of the columns from the inner RowEncoder to a single 'ok' column.
+        let (_, ok_validity) = self.ok_validity.into_parts();
+        let (ok_len, ok_cols) = self.ok.finish();
+        let ok_col = DynStructMut::from_parts(self.ok_cfg, ok_len, ok_validity, ok_cols);
+
+        let ok_col = DynColumnMut::new::<Option<DynStruct>>(Box::new(ok_col));
+        let err_col = DynColumnMut::new::<Option<Vec<u8>>>(self.err);
+
+        let cols = vec![ok_col, err_col];
+
+        (self.len, cols)
     }
 }
 
@@ -1127,8 +1144,7 @@ impl PartDecoder<SourceData> for SourceDataDecoder {
 }
 
 impl Schema<SourceData> for RelationDesc {
-    type Encoder<'a> = SourceDataEncoder<'a>;
-
+    type Encoder = SourceDataEncoder;
     type Decoder = SourceDataDecoder;
 
     fn columns(&self) -> DynStructCfg {
@@ -1169,16 +1185,18 @@ impl Schema<SourceData> for RelationDesc {
         })
     }
 
-    fn encoder<'a>(
+    fn encoder(
         &self,
-        mut cols: mz_persist_types::dyn_struct::ColumnsMut<'a>,
-    ) -> Result<Self::Encoder<'a>, String> {
+        mut cols: mz_persist_types::dyn_struct::ColumnsMut,
+    ) -> Result<Self::Encoder, String> {
         let ok = cols.col::<Option<DynStruct>>("ok")?;
         let err = cols.col::<Option<Vec<u8>>>("err")?;
         let (len, ()) = cols.finish()?;
+        let ok_cfg = ok.cfg().clone();
         let (ok_validity, ok) = RelationDesc::encoder(self, ok.as_opt_mut())?;
         Ok(SourceDataEncoder {
             len,
+            ok_cfg,
             ok_validity,
             ok,
             err,

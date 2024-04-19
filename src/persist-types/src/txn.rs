@@ -53,9 +53,9 @@ impl TxnsEntry {
 /// shard (which will allow mz to present it as a normal introspection source).
 pub trait TxnsCodec: Debug {
     /// The `K` type used in the txns shard.
-    type Key: Debug + Codec;
+    type Key: Debug + Codec + Default;
     /// The `V` type used in the txns shard.
-    type Val: Debug + Codec;
+    type Val: Debug + Codec + Default;
 
     /// Returns the Schemas to use with [Self::Key] and [Self::Val].
     fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema);

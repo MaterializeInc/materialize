@@ -14,7 +14,7 @@ use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{PartDecoder, PartEncoder};
+use mz_persist_types::columnar::PartDecoder;
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::Codec;
 use mz_repr::adt::date::Date;
@@ -270,18 +270,11 @@ fn decode_legacy(part: &ColumnarRecords) -> Row {
 }
 
 fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {
-    let mut part = PartBuilder::new(schema, &UnitSchema);
-    let mut part_mut = part.get_mut();
-    let ((), mut encoder) = schema.encoder(part_mut.key).unwrap();
+    let mut builder = PartBuilder::new(schema, &UnitSchema).expect("success");
     for row in rows.iter() {
-        encoder.encode(row);
+        builder.push(row, &(), 1u64, 1i64);
     }
-    drop(encoder);
-    for _ in rows.iter() {
-        part_mut.ts.push(1u64);
-        part_mut.diff.push(1i64);
-    }
-    part.finish().unwrap()
+    builder.finish()
 }
 
 fn bench_roundtrip(c: &mut Criterion) {
@@ -336,18 +329,12 @@ fn bench_roundtrip(c: &mut Criterion) {
         b.iter(|| std::hint::black_box(encode_legacy(&rows)));
     });
     c.bench_function("roundtrip_encode_structured", |b| {
-        let mut part_builder = PartBuilder::new(&schema, &UnitSchema);
-        let mut part_mut = part_builder.get_mut();
-
-        let ((), mut key_encoder) = schema.encoder(part_mut.key).unwrap();
-
+        let mut builder = PartBuilder::new(&schema, &UnitSchema).expect("success");
         b.iter(|| {
-            for row in &rows {
-                key_encoder.encode(row);
-                part_mut.ts.push(1u64);
-                part_mut.diff.push(1i64);
+            for row in rows.iter() {
+                builder.push(row, &(), 1u64, 1i64);
             }
-            std::hint::black_box((&mut key_encoder, &mut part_mut.ts, &mut part_mut.diff));
+            std::hint::black_box(&mut builder);
         });
     });
 

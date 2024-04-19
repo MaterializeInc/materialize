@@ -180,8 +180,8 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         data_read: &mut ReadHandle<K, V, T, D>,
     ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
     where
-        K: Debug + Codec + Ord,
-        V: Debug + Codec + Ord,
+        K: Debug + Codec + Ord + Default,
+        V: Debug + Codec + Ord + Default,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");

@@ -152,7 +152,9 @@ impl PersistLocation {
 /// The [std::string::ToString::to_string] format of this may be stored durably
 /// or otherwise used as an interchange format. It can be parsed back using
 /// [str::parse] or [std::str::FromStr::from_str].
-#[derive(Arbitrary, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Arbitrary, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct ShardId([u8; 16]);
 

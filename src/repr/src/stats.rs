@@ -169,7 +169,7 @@ impl<'a> JsonDatums<'a> {
 #[cfg(test)]
 mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{Data, PartEncoder};
+    use mz_persist_types::columnar::Data;
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::{
         ColumnStats, DynStats, ProtoStructStats, StructStats, TrimStats,
@@ -183,17 +183,12 @@ mod tests {
         schema: &RelationDesc,
         datums: impl IntoIterator<Item = &'a Row>,
     ) {
-        let mut part = PartBuilder::new(schema, &UnitSchema);
-        {
-            let mut part_mut = part.get_mut();
-            let ((), mut encoder) = schema.encoder(part_mut.key).unwrap();
-            for datum in datums {
-                encoder.encode(datum);
-                part_mut.ts.push(1u64);
-                part_mut.diff.push(1i64);
-            }
+        let mut builder = PartBuilder::new(schema, &UnitSchema).expect("success");
+        for datum in datums {
+            builder.push(datum, &(), 1u64, 1i64);
         }
-        let part = part.finish().unwrap();
+        let part = builder.finish();
+
         let expected = part.key_stats().unwrap();
         let mut actual: ProtoStructStats = RustType::into_proto(&expected);
         // It's not particularly easy to give StructStats a PartialEq impl, but

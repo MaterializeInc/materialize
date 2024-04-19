@@ -46,7 +46,7 @@ use crate::maelstrom::txn_list_append_single::codec_impls::{
 use crate::maelstrom::Args;
 
 /// Key of the persist shard used by [Transactor]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MaelstromKey(u64);
 
 /// Val of the persist shard used by [Transactor]
@@ -749,8 +749,7 @@ mod codec_impls {
     pub struct MaelstromKeySchema;
 
     impl Schema<MaelstromKey> for MaelstromKeySchema {
-        type Encoder<'a> = SimpleEncoder<'a, MaelstromKey, u64>;
-
+        type Encoder = SimpleEncoder<MaelstromKey, u64>;
         type Decoder = SimpleDecoder<MaelstromKey, u64>;
 
         fn columns(&self) -> DynStructCfg {
@@ -761,7 +760,7 @@ mod codec_impls {
             SimpleSchema::<MaelstromKey, u64>::decoder(cols, |val, ret| ret.0 = val)
         }
 
-        fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
             SimpleSchema::<MaelstromKey, u64>::encoder(cols, |val| val.0)
         }
     }
@@ -793,8 +792,7 @@ mod codec_impls {
     pub struct MaelstromValSchema;
 
     impl Schema<MaelstromVal> for MaelstromValSchema {
-        type Encoder<'a> = SimpleEncoder<'a, MaelstromVal, Vec<u8>>;
-
+        type Encoder = SimpleEncoder<MaelstromVal, Vec<u8>>;
         type Decoder = SimpleDecoder<MaelstromVal, Vec<u8>>;
 
         fn columns(&self) -> DynStructCfg {
@@ -807,7 +805,7 @@ mod codec_impls {
             })
         }
 
-        fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
             SimpleSchema::<MaelstromVal, Vec<u8>>::push_encoder(cols, |col, val| {
                 let mut buf = Vec::new();
                 MaelstromVal::encode(val, &mut buf);
