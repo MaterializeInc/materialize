@@ -329,6 +329,18 @@ impl StateVersions {
                 shard_metrics
                     .inline_part_bytes
                     .set(u64::cast_from(size_metrics.inline_part_bytes));
+
+                let spine_metrics = new_state.collections.trace.spine_metrics();
+                shard_metrics
+                    .compact_batches
+                    .set(spine_metrics.compact_batches);
+                shard_metrics
+                    .compacting_batches
+                    .set(spine_metrics.compacting_batches);
+                shard_metrics
+                    .noncompact_batches
+                    .set(spine_metrics.noncompact_batches);
+
                 Ok((CaSResult::Committed, new))
             }
             CaSResult::ExpectationMismatch => {

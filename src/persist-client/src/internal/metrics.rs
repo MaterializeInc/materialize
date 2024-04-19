@@ -1220,6 +1220,9 @@ pub struct ShardsMetrics {
     rewrite_part_count: UIntGaugeVec,
     inline_part_count: UIntGaugeVec,
     inline_part_bytes: UIntGaugeVec,
+    compact_batches: UIntGaugeVec,
+    compacting_batches: UIntGaugeVec,
+    noncompact_batches: UIntGaugeVec,
     inline_backpressure_count: IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
@@ -1420,6 +1423,21 @@ impl ShardsMetrics {
                 help: "total size of parts inline in shard metadata",
                 var_labels: ["shard", "name"],
             )),
+            compact_batches: registry.register(metric!(
+                name: "mz_persist_shard_compact_batches",
+                help: "number of fully compact batches in the shard",
+                var_labels: ["shard", "name"],
+            )),
+            compacting_batches: registry.register(metric!(
+                name: "mz_persist_shard_compacting_batches",
+                help: "number of batches in the shard with compactions in progress",
+                var_labels: ["shard", "name"],
+            )),
+            noncompact_batches: registry.register(metric!(
+                name: "mz_persist_shard_noncompact_batches",
+                help: "number of batches in the shard that aren't compact and have no ongoing compaction",
+                var_labels: ["shard", "name"],
+            )),
             inline_backpressure_count: registry.register(metric!(
                 name: "mz_persist_shard_inline_backpressure_count",
                 help: "count of CaA attempts retried because of inline backpressure",
@@ -1505,6 +1523,9 @@ pub struct ShardMetrics {
     pub rewrite_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub inline_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub inline_part_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub compact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub compacting_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub noncompact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub inline_backpressure_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
@@ -1623,6 +1644,15 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             inline_part_bytes: shards_metrics
                 .inline_part_bytes
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            compact_batches: shards_metrics
+                .compact_batches
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            compacting_batches: shards_metrics
+                .compacting_batches
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            noncompact_batches: shards_metrics
+                .noncompact_batches
                 .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             inline_backpressure_count: shards_metrics
                 .inline_backpressure_count

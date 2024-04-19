@@ -427,6 +427,13 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SpineMetrics {
+    pub compact_batches: u64,
+    pub compacting_batches: u64,
+    pub noncompact_batches: u64,
+}
+
 impl<T> Trace<T> {
     pub fn since(&self) -> &Antichain<T> {
         &self.spine.since
@@ -574,6 +581,20 @@ impl<T: Timestamp + Lattice> Trace<T> {
         }
         ret
     }
+
+    pub fn spine_metrics(&self) -> SpineMetrics {
+        let mut metrics = SpineMetrics::default();
+        for batch in self.spine.spine_batches() {
+            if batch.is_compact() {
+                metrics.compact_batches += 1;
+            } else if batch.is_merging() {
+                metrics.compacting_batches += 1;
+            } else {
+                metrics.noncompact_batches += 1;
+            }
+        }
+        metrics
+    }
 }
 
 /// A log of what transitively happened during a Spine operation: e.g.
@@ -605,7 +626,7 @@ pub struct IdHollowBatch<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum SpineBatch<T> {
+pub(crate) enum SpineBatch<T> {
     Merged(IdHollowBatch<T>),
     Fueled {
         id: SpineId,
@@ -659,6 +680,24 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 debug_assert_eq!(parts.last().map(|x| x.id.1), Some(id.1));
                 *id
             }
+        }
+    }
+
+    pub fn is_compact(&self) -> bool {
+        // This definition is extremely likely to change, but for now, we consider a batch
+        // "compact" if it's a merged batch of a single run.
+        match self {
+            SpineBatch::Merged(b) => b.batch.runs.is_empty(),
+            SpineBatch::Fueled { .. } => false,
+        }
+    }
+
+    pub fn is_merging(&self) -> bool {
+        // We can't currently tell if a fueled merge is in progress or dropped on the floor,
+        // but for now we assume that it is active.
+        match self {
+            SpineBatch::Merged(_) => false,
+            SpineBatch::Fueled { .. } => true,
         }
     }
 
