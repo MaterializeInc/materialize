@@ -242,6 +242,8 @@ pub(crate) fn attempt_left_join_magic(
                         .iter()
                         .map(|(_, r)| MirScalarExpr::column(r - oa - ba).call_is_null().not()),
                 )
+                // Retain only the keys referenced on the right side of the LEFT
+                // JOIN equations.
                 .project(
                     equations
                         .iter()
@@ -263,11 +265,19 @@ pub(crate) fn attempt_left_join_magic(
                 .project({
                     // By default, we'll place post-pended nulls in each location.
                     // We will overwrite this with instructions to find augmenting values.
+
+                    // Start with a projection that retains the last |rt|
+                    // columns corresponding to the NULLs from the above
+                    // .map(...) call.
                     let mut projection =
                         (equations.len()..equations.len() + rt.len()).collect::<Vec<_>>();
+                    // Replace NULLs columns corresponding to rhs columns
+                    // referenced in an ON equation with the actual rhs value
+                    // (located at `index`).
                     for (index, (_, right)) in equations.iter().enumerate() {
                         projection[*right - oa - ba] = index;
                     }
+
                     projection
                 });
 
