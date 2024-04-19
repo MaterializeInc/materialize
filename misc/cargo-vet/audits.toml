@@ -92,6 +92,11 @@ who = "Sean Loiselle <sean@materialize.io>"
 criteria = "safe-to-deploy"
 version = "0.3.26"
 
+[[audits.flatcontainer]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+
 [[audits.funty]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -295,22 +300,22 @@ delta = "3.8.0 -> 3.8.1"
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f""
+version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
 
 [[audits.timely_bytes]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f""
+version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
 
 [[audits.timely_communication]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f""
+version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
 
 [[audits.timely_logging]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f""
+version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
 
 [[audits.tokio-postgres]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
