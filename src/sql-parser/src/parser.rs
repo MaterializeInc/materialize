@@ -583,9 +583,6 @@ impl<'a> Parser<'a> {
             Token::Keyword(NULLIF) => self.parse_nullif_expr(),
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
-            Token::Keyword(INTERVAL) => {
-                Ok(Expr::Value(Value::Interval(self.parse_interval_value()?)))
-            }
             Token::Keyword(NOT) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),

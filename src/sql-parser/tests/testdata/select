@@ -1734,3 +1734,17 @@ SELECT * FROM t JOIN t USING (a) AS OF
 error: Expected a timestamp value after 'AS OF', found EOF
 SELECT * FROM t JOIN t USING (a) AS OF
                                       ^
+
+parse-statement
+SELECT interval
+----
+SELECT interval
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("interval")]), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT interval + '1h'
+----
+SELECT interval + '1h'
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Identifier([Ident("interval")]), expr2: Some(Value(String("1h"))) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
