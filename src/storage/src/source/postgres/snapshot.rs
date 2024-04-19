@@ -349,6 +349,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 use_snapshot(&client, &snapshot).await?;
             }
 
+            // We have established a snapshot LSN so we can broadcast the rewind requests
+            for &oid in reader_snapshot_table_info.keys() {
+                trace!(%id, "timely-{worker_id} producing rewind request for {oid}");
+                let req = RewindRequest { oid, snapshot_lsn };
+                rewinds_handle.give(&rewind_cap_set[0], req).await;
+            }
+            *rewind_cap_set = CapabilitySet::new();
+
             let upstream_info = match mz_postgres_util::publication_info(
                 &config.config.connection_context.ssh_tunnel_manager,
                 &connection_config,
@@ -459,19 +467,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     }
                 }
             }
-
-            // We are done with the snapshot so now we will emit rewind requests. It is important
-            // that this happens after the snapshot has finished because this is what unblocks the
-            // replication operator and we want this to happen serially. It might seem like a good
-            // idea to read the replication stream concurrently with the snapshot but it actually
-            // leads to a lot of data being staged for the future, which needlesly consumed memory
-            // in the cluster.
-            for &oid in reader_snapshot_table_info.keys() {
-                trace!(%id, "timely-{worker_id} producing rewind request for {oid}");
-                let req = RewindRequest { oid, snapshot_lsn };
-                rewinds_handle.give(&rewind_cap_set[0], req).await;
-            }
-            *rewind_cap_set = CapabilitySet::new();
 
             if snapshot_staged < snapshot_total {
                 error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow
