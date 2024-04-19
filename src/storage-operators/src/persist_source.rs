@@ -1387,7 +1387,7 @@ mod tests {
     fn consumer_operator<G: Scope, O: Backpressureable + std::fmt::Debug>(
         scope: G,
         input: &Stream<G, O>,
-        feedback: timely::dataflow::operators::feedback::Handle<G, std::convert::Infallible>,
+        feedback: timely::dataflow::operators::feedback::Handle<G, Vec<std::convert::Infallible>>,
     ) -> UnboundedSender<()> {
         let (tx, mut rx) = unbounded_channel::<()>();
         let mut consumer = AsyncOperatorBuilder::new("consumer".to_string(), scope);
