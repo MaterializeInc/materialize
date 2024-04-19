@@ -11,7 +11,7 @@ menu:
 
 If you run into a snag or need support during the trial period, join the [Materialize Slack community](https://materialize.com/s/chat) or [open an issue](https://github.com/MaterializeInc/materialize/issues/new/choose). Slack is the best place to get timely help from Materialize employees and other users!
 
-If you're a paying customer, you can also refer to our [customer support portal](https://support.materialize.com/).
+If you're a paying customer, you may also have access to premium support via a shared channel within your company's Slack or Microsoft Teams workspace.
 
 ## Checking service status
 
