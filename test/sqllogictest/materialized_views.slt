@@ -1105,6 +1105,156 @@ SELECT mz_unsafe.mz_sleep(2);
 statement ok
 EXPLAIN REPLAN MATERIALIZED VIEW mv8;
 
+## Indexes on REFRESH MVs
+
+statement ok
+CREATE MATERIALIZED VIEW mvi1 WITH (REFRESH EVERY '8s' ALIGNED TO mz_now()::string::int8 + 2000) AS
+SELECT 5*x FROM t3;
+
+statement ok
+CREATE DEFAULT INDEX on mvi1;
+
+query I
+SELECT * FROM mvi1;
+----
+25
+30
+
+query I
+(SELECT * FROM mvi1)
+UNION ALL
+(SELECT * FROM t3);
+----
+5
+6
+25
+30
+
+statement ok
+INSERT INTO t3 values (7);
+
+# Not visible yet.
+query I
+SELECT * FROM mvi1;
+----
+25
+30
+
+query I
+(SELECT * FROM mvi1)
+UNION ALL
+(SELECT * FROM t3);
+----
+5
+6
+7
+25
+30
+
+statement ok
+SELECT mz_unsafe.mz_sleep(8+1);
+
+# Visible now.
+query I
+SELECT * FROM mvi1;
+----
+25
+30
+35
+
+query I
+(SELECT * FROM mvi1)
+UNION ALL
+(SELECT * FROM t3);
+----
+5
+6
+7
+25
+30
+35
+
+# First refresh immediately, next one much later.
+statement ok
+CREATE MATERIALIZED VIEW mvi2 WITH (REFRESH EVERY '10 hours') AS
+SELECT DISTINCT x+x+x FROM t3;
+
+statement ok
+CREATE DEFAULT INDEX on mvi2;
+
+query I
+SELECT * FROM mvi2;
+----
+15
+18
+21
+
+query I
+(SELECT * FROM mvi2)
+UNION ALL
+(SELECT * FROM t3);
+----
+5
+6
+7
+15
+18
+21
+
+# There is a last refresh.
+statement ok
+CREATE MATERIALIZED VIEW mvi3 WITH (REFRESH AT CREATION, REFRESH AT mz_now()::string::int8 + 2000) AS
+SELECT DISTINCT 5*x FROM t3;
+
+statement ok
+CREATE DEFAULT INDEX ON mvi3;
+
+query I
+SELECT * FROM mvi3
+----
+25
+30
+35
+
+query I
+(SELECT * FROM mvi3)
+UNION ALL
+(SELECT * FROM t3);
+----
+5
+6
+7
+25
+30
+35
+
+# Check that it's still queryable after the last refresh, but new input changes are not taken into account.
+statement ok
+SELECT mz_unsafe.mz_sleep(2+1);
+
+statement ok
+INSERT INTO t3 VALUES (-1);
+
+query I
+SELECT * FROM mvi3
+----
+25
+30
+35
+
+query I
+(SELECT * FROM mvi3)
+UNION ALL
+(SELECT * FROM t3);
+----
+-1
+5
+6
+7
+25
+30
+35
+
 # ----------------------------------------
 # Automated cluster scheduling for REFRESH
 # ----------------------------------------
@@ -1332,7 +1482,7 @@ query TTTBB
 SELECT
   name,
   type,
-  "interval",
+  interval,
   now() - aligned_to < INTERVAL '30 minutes',
   now() - at < INTERVAL '30 minutes'
 FROM mz_internal.mz_materialized_view_refresh_strategies mvrs, mz_catalog.mz_materialized_views mv
@@ -1369,6 +1519,10 @@ mv_no_assertions  on-commit  NULL  NULL  NULL
 mv_no_creation_refresh  every  27:46:40  true  NULL
 mv_on_commit  on-commit  NULL  NULL  NULL
 mv_two_assertions  on-commit  NULL  NULL  NULL
+mvi1  every  00:00:08  true  NULL
+mvi2  every  10:00:00  true  NULL
+mvi3  at  NULL  NULL  true
+mvi3  at  NULL  NULL  true
 
 statement ok
 CREATE CLUSTER c_rehydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));

@@ -1595,6 +1595,8 @@ impl Coordinator {
         debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
 
+        let local_read_ts_for_index_bootstrapping = self.get_local_read_ts().await;
+
         for entry in &entries {
             debug!(
                 "coordinator init: installing {} {}",
@@ -1666,6 +1668,7 @@ impl Coordinator {
                             idx.cluster_id,
                             storage_constraints,
                             compaction_window,
+                            local_read_ts_for_index_bootstrapping,
                         );
                         df_desc.set_as_of(as_of);
 
@@ -1725,6 +1728,7 @@ impl Coordinator {
                         mview.cluster_id,
                         storage_constraints,
                         mview.custom_logical_compaction_window.unwrap_or_default(),
+                        local_read_ts_for_index_bootstrapping,
                     );
                     df_desc.set_as_of(as_of);
 
@@ -2248,6 +2252,7 @@ impl Coordinator {
         cluster_id: ComputeInstanceId,
         storage_constraints: StorageConstraints,
         compaction_window: CompactionWindow,
+        local_read_ts: Timestamp,
     ) -> (Antichain<Timestamp>, ReadHolds<Timestamp>) {
         // Supporting multi-export dataflows is not impossible but complicates the logic, so we
         // punt on it until we actually want to create such dataflows.
@@ -2323,7 +2328,14 @@ impl Coordinator {
                     !max_compaction_frontier.is_empty(),
                     "`max_compaction_frontier` unexpectedly empty",
                 );
-                max_compaction_frontier
+                // We hold back the `as_of` to near the current time. This is needed for indexes on
+                // REFRESH MVs, because otherwise the `as_of` would be near the next refresh time,
+                // making the index unreadable until then.
+                //
+                // This is fine for Compute reconciliation, because Adapter was keeping a read hold
+                // on indexes before the restart at the Oracle read ts (see `advance_timelines`),
+                // and the Oracle read ts can't go backwards between restarts.
+                max_compaction_frontier.meet(&Antichain::from_elem(local_read_ts))
             } else {
                 // The write frontier is empty. This can happen for constant collections, and for
                 // an index on a REFRESH MV that is past its last refresh. Installing an index with
@@ -2393,6 +2405,7 @@ impl Coordinator {
             min_as_of = ?min_as_of.elements(),
             max_as_of = ?max_as_of.elements(),
             warmup_frontier = ?warmup_frontier.elements(),
+            ?local_read_ts,
             write_frontier = ?write_frontier.elements(),
             ?compaction_window,
             ?storage_constraints,
