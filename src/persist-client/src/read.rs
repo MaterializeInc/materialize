@@ -43,7 +43,7 @@ use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
-use crate::iter::Consolidator;
+use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
 pub use crate::internal::encoding::LazyPartStats;
@@ -1070,11 +1070,13 @@ where
         let batches = self.machine.snapshot(&as_of).await?;
 
         let mut consolidator = Consolidator::new(
+            format!("{}[as_of={:?}]", self.shard_id(), as_of.elements()),
             Arc::clone(&self.metrics),
             FetchBatchFilter::Snapshot {
                 as_of: as_of.clone(),
             },
             self.cfg.dynamic.compaction_memory_bound_bytes(),
+            SPLIT_OLD_RUNS.get(&self.cfg.configs),
         );
 
         let filter = FetchBatchFilter::Snapshot { as_of };
