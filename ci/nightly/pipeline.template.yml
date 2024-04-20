@@ -1459,6 +1459,30 @@ steps:
     agents:
       queue: linux-aarch64
 
+  - group: "Copy To S3"
+    key: copy-to-s3
+    steps:
+    - id: copy-to-s3-1-replica
+      label: "Copy To S3 (1 replica)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 60
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: copy-to-s3
+      agents:
+        queue: linux-aarch64-large
+
+    - id: copy-to-s3-2-replicas
+      label: "Copy To S3 (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 60
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: copy-to-s3
+            args: [--default-size=2]
+      agents:
+        queue: linux-aarch64-large
+
   - group: "Language tests"
     key: language-tests
     steps:
