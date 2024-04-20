@@ -30,15 +30,15 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.aws-config]]
-version = "1.1.1"
-when = "2023-12-14"
+version = "1.2.0"
+when = "2024-04-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-credential-types]]
-version = "1.1.1"
-when = "2023-12-14"
+version = "1.2.0"
+when = "2024-04-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
@@ -51,15 +51,15 @@ user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-runtime]]
-version = "1.1.1"
-when = "2023-12-14"
+version = "1.2.0"
+when = "2024-04-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-sdk-s3]]
-version = "1.8.0"
-when = "2023-12-14"
+version = "1.23.0"
+when = "2024-04-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
@@ -72,106 +72,106 @@ user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-sdk-sso]]
-version = "1.7.0"
-when = "2023-12-14"
+version = "1.20.0"
+when = "2024-04-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-sdk-ssooidc]]
-version = "1.9.0"
-when = "2023-12-21"
+version = "1.20.0"
+when = "2024-04-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-sdk-sts]]
-version = "1.7.0"
-when = "2023-12-14"
+version = "1.20.0"
+when = "2024-04-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-sigv4]]
-version = "1.1.1"
-when = "2023-12-14"
+version = "1.2.0"
+when = "2024-03-13"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-smithy-async]]
-version = "1.1.1"
-when = "2023-12-13"
+version = "1.2.1"
+when = "2024-04-02"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-smithy-checksums]]
-version = "0.60.1"
-when = "2023-12-13"
+version = "0.60.7"
+when = "2024-03-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-smithy-eventstream]]
-version = "0.60.1"
-when = "2023-12-13"
+version = "0.60.4"
+when = "2024-01-24"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-smithy-http]]
-version = "0.60.1"
-when = "2023-12-13"
+version = "0.60.8"
+when = "2024-04-19"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-smithy-json]]
-version = "0.60.1"
-when = "2023-12-13"
+version = "0.60.7"
+when = "2024-03-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-smithy-query]]
-version = "0.60.1"
-when = "2023-12-13"
+version = "0.60.7"
+when = "2024-03-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-smithy-runtime]]
-version = "1.1.1"
-when = "2023-12-13"
+version = "1.3.1"
+when = "2024-04-19"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-smithy-runtime-api]]
-version = "1.1.1"
-when = "2023-12-13"
+version = "1.4.0"
+when = "2024-04-11"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-smithy-types]]
-version = "1.1.1"
-when = "2023-12-13"
+version = "1.1.8"
+when = "2024-03-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-smithy-xml]]
-version = "0.60.1"
-when = "2023-12-13"
+version = "0.60.8"
+when = "2024-04-19"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-types]]
-version = "1.1.1"
-when = "2023-12-14"
+version = "1.2.0"
+when = "2024-04-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
@@ -358,6 +358,13 @@ user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
 
+[[publisher.http]]
+version = "1.1.0"
+when = "2024-03-04"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
 [[publisher.httparse]]
 version = "1.8.0"
 when = "2022-08-30"
@@ -455,75 +462,12 @@ user-id = 4747
 user-login = "jeromefroe"
 user-name = "Jerome Froelich"
 
-[[publisher.memchr]]
-version = "2.5.0"
-when = "2022-04-30"
-user-id = 189
-user-login = "BurntSushi"
-user-name = "Andrew Gallant"
-
-[[publisher.memchr]]
-version = "2.7.2"
-when = "2024-03-27"
-user-id = 189
-user-login = "BurntSushi"
-user-name = "Andrew Gallant"
-
 [[publisher.mime]]
 version = "0.3.17"
 when = "2023-03-20"
 user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
-
-[[publisher.num-complex]]
-version = "0.4.0"
-when = "2021-03-06"
-user-id = 539
-user-login = "cuviper"
-user-name = "Josh Stone"
-
-[[publisher.num-complex]]
-version = "0.4.5"
-when = "2024-02-06"
-user-id = 539
-user-login = "cuviper"
-user-name = "Josh Stone"
-
-[[publisher.num-integer]]
-version = "0.1.44"
-when = "2020-10-29"
-user-id = 539
-user-login = "cuviper"
-user-name = "Josh Stone"
-
-[[publisher.num-integer]]
-version = "0.1.46"
-when = "2024-02-08"
-user-id = 539
-user-login = "cuviper"
-user-name = "Josh Stone"
-
-[[publisher.num-iter]]
-version = "0.1.42"
-when = "2020-10-29"
-user-id = 539
-user-login = "cuviper"
-user-name = "Josh Stone"
-
-[[publisher.num-iter]]
-version = "0.1.44"
-when = "2024-02-08"
-user-id = 539
-user-login = "cuviper"
-user-name = "Josh Stone"
-
-[[publisher.num-rational]]
-version = "0.4.0"
-when = "2021-03-06"
-user-id = 539
-user-login = "cuviper"
-user-name = "Josh Stone"
 
 [[publisher.num_cpus]]
 version = "1.15.0"
@@ -563,13 +507,6 @@ user-name = "David Tolnay"
 [[publisher.prettyplease]]
 version = "0.2.4"
 when = "2023-03-25"
-user-id = 3618
-user-login = "dtolnay"
-user-name = "David Tolnay"
-
-[[publisher.proc-macro-hack]]
-version = "0.5.19"
-when = "2020-10-28"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -630,13 +567,6 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
-[[publisher.regex-syntax]]
-version = "0.8.3"
-when = "2024-03-26"
-user-id = 189
-user-login = "BurntSushi"
-user-name = "Andrew Gallant"
-
 [[publisher.reqwest]]
 version = "0.11.24"
 when = "2024-01-31"
@@ -671,20 +601,6 @@ when = "2023-10-26"
 user-id = 6825
 user-login = "sunfishcode"
 user-name = "Dan Gohman"
-
-[[publisher.ryu]]
-version = "1.0.12"
-when = "2022-12-17"
-user-id = 3618
-user-login = "dtolnay"
-user-name = "David Tolnay"
-
-[[publisher.ryu]]
-version = "1.0.17"
-when = "2024-02-19"
-user-id = 3618
-user-login = "dtolnay"
-user-name = "David Tolnay"
 
 [[publisher.scoped-tls]]
 version = "1.0.1"
@@ -1096,39 +1012,28 @@ who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.1.1"
 
-[[audits.bytecode-alliance.audits.futures-channel]]
-who = "Pat Hickey <phickey@fastly.com>"
-criteria = "safe-to-deploy"
-version = "0.3.27"
-notes = "build.rs is just detecting the target and setting cfg. unsafety is for implementing a concurrency primitives using atomics and unsafecell, and is not obviously incorrect (this is the sort of thing I wouldn't certify as correct without formal methods)"
-
-[[audits.bytecode-alliance.audits.futures-core]]
-who = "Pat Hickey <phickey@fastly.com>"
-criteria = "safe-to-deploy"
-version = "0.3.27"
-notes = "Unsafe used to implement a concurrency primitive AtomicWaker. Well-commented and not obviously incorrect. Like my other audits of these concurrency primitives inside the futures family, I couldn't certify that it is correct without formal methods, but that is out of scope for this vetting."
-
 [[audits.bytecode-alliance.audits.futures-executor]]
 who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.3.27"
 notes = "Unsafe used to implement the unpark mutex, which is well commented and not obviously incorrect. Like with futures-channel I wouldn't be able to certify it as correct without formal methods."
 
-[[audits.bytecode-alliance.audits.futures-io]]
-who = "Pat Hickey <phickey@fastly.com>"
-criteria = "safe-to-deploy"
-version = "0.3.27"
-
-[[audits.bytecode-alliance.audits.futures-sink]]
-who = "Pat Hickey <phickey@fastly.com>"
-criteria = "safe-to-deploy"
-version = "0.3.27"
-
 [[audits.bytecode-alliance.audits.heck]]
 who = "Alex Crichton <alex@alexcrichton.com>"
 criteria = "safe-to-deploy"
 version = "0.4.0"
 notes = "Contains `forbid_unsafe` and only uses `std::fmt` from the standard library. Otherwise only contains string manipulation."
+
+[[audits.bytecode-alliance.audits.http-body]]
+who = "Pat Hickey <phickey@fastly.com>"
+criteria = "safe-to-deploy"
+version = "1.0.0-rc.2"
+
+[[audits.bytecode-alliance.audits.http-body]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.0-rc.2 -> 1.0.0"
+notes = "Only minor changes made for a stable release."
 
 [[audits.bytecode-alliance.audits.httpdate]]
 who = "Pat Hickey <phickey@fastly.com>"
@@ -1473,6 +1378,12 @@ criteria = "safe-to-deploy"
 version = "1.0.4"
 aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
+[[audits.google.audits.shell-words]]
+who = "George Burgess IV <gbiv@google.com>"
+criteria = "safe-to-deploy"
+version = "1.1.0"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
 [[audits.google.audits.strsim]]
 who = "danakj@chromium.org"
 criteria = "safe-to-deploy"
@@ -1502,6 +1413,12 @@ aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/th
 who = "George Burgess IV <gbiv@google.com>"
 criteria = "safe-to-deploy"
 version = "0.9.4"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
+[[audits.google.audits.wait-timeout]]
+who = "George Burgess IV <gbiv@google.com>"
+criteria = "safe-to-run"
+version = "0.2.0"
 aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
 [[audits.mozilla.wildcard-audits.cexpr]]
@@ -1732,18 +1649,6 @@ criteria = "safe-to-deploy"
 delta = "1.2.0 -> 1.2.1"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.futures-channel]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "0.3.27 -> 0.3.28"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.futures-core]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "0.3.27 -> 0.3.28"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
 [[audits.mozilla.audits.futures-executor]]
 who = "Mike Hommey <mh+mozilla@glandium.org>"
 criteria = "safe-to-deploy"
@@ -1754,18 +1659,6 @@ aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-ch
 who = "Bobby Holley <bobbyholley@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.27 -> 0.3.23"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.futures-io]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "0.3.27 -> 0.3.28"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.futures-sink]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "0.3.27 -> 0.3.28"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.hashbrown]]
@@ -1801,6 +1694,20 @@ version = "1.4.0"
 notes = "I have read over the macros, and audited the unsafe code."
 aggregated-from = "https://raw.githubusercontent.com/mozilla/cargo-vet/main/supply-chain/audits.toml"
 
+[[audits.mozilla.audits.linked-hash-map]]
+who = "Aria Beingessner <a.beingessner@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.5.4"
+notes = "I own this crate (I am contain-rs) and 0.5.4 passes miri. This code is very old and used by lots of people, so I'm pretty confident in it, even though it's in maintenance-mode and missing some nice-to-have APIs."
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.linked-hash-map]]
+who = "Alex Franchuk <afranchuk@mozilla.com>"
+criteria = "safe-to-deploy"
+delta = "0.5.4 -> 0.5.6"
+notes = "New unsafe code has debug assertions and meets invariants. All other changes are formatting-related."
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
 [[audits.mozilla.audits.log]]
 who = "Mike Hommey <mh+mozilla@glandium.org>"
 criteria = "safe-to-deploy"
@@ -1819,24 +1726,10 @@ criteria = "safe-to-deploy"
 version = "0.10.5"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.num]]
-who = "Josh Stone <jistone@redhat.com>"
-criteria = "safe-to-deploy"
-version = "0.4.0"
-notes = "All code written or reviewed by Josh Stone."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
 [[audits.mozilla.audits.num-bigint]]
 who = "Josh Stone <jistone@redhat.com>"
 criteria = "safe-to-deploy"
 version = "0.4.3"
-notes = "All code written or reviewed by Josh Stone."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.num-rational]]
-who = "Josh Stone <jistone@redhat.com>"
-criteria = "safe-to-deploy"
-version = "0.4.1"
 notes = "All code written or reviewed by Josh Stone."
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
@@ -1942,6 +1835,24 @@ aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-ch
 who = "Mike Hommey <mh+mozilla@glandium.org>"
 criteria = "safe-to-deploy"
 delta = "3.6.0 -> 3.8.0"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.textwrap]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+version = "0.15.0"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.textwrap]]
+who = "Mike Hommey <mh+mozilla@glandium.org>"
+criteria = "safe-to-deploy"
+delta = "0.15.0 -> 0.15.2"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.textwrap]]
+who = "Mike Hommey <mh+mozilla@glandium.org>"
+criteria = "safe-to-deploy"
+delta = "0.15.2 -> 0.16.0"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.time-core]]

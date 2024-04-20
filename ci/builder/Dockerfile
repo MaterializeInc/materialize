@@ -199,7 +199,7 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.8.0" --locked cargo-vet \
     && cargo install --root /usr/local --version "=0.6.1" --locked cargo-about \
     && cargo install --root /usr/local --version "=2.0.2" --locked cargo-deb \
-    && cargo install --root /usr/local --version "=0.14.20" --locked cargo-deny \
+    && cargo install --root /usr/local --version "=0.14.21" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version ="0.9.28" --locked cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.68" --locked cargo-nextest \
