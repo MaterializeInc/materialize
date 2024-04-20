@@ -17,7 +17,7 @@ publish = false
 ahash = { version = "0.8.11" }
 anyhow = { version = "1.0.66", features = ["backtrace"] }
 async-compression = { version = "0.4.5", default-features = false, features = ["gzip", "tokio", "zstd"] }
-aws-config = { version = "1.1.1", default-features = false, features = ["sso"] }
+aws-config = { version = "1.2.0", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.1.1", default-features = false, features = ["hardcoded-credentials", "test-util"] }
 aws-runtime = { version = "1.1.1", default-features = false, features = ["event-stream"] }
 aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
@@ -139,7 +139,7 @@ zstd-sys = { version = "2.0.9", features = ["std"] }
 ahash = { version = "0.8.11" }
 anyhow = { version = "1.0.66", features = ["backtrace"] }
 async-compression = { version = "0.4.5", default-features = false, features = ["gzip", "tokio", "zstd"] }
-aws-config = { version = "1.1.1", default-features = false, features = ["sso"] }
+aws-config = { version = "1.2.0", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.1.1", default-features = false, features = ["hardcoded-credentials", "test-util"] }
 aws-runtime = { version = "1.1.1", default-features = false, features = ["event-stream"] }
 aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
