@@ -2,35 +2,41 @@
 /* ----- Basic Setup ----- */
 /* ------------------------------------------------- */
 
-:root {
-    --nav-height: 6.5rem;
+$rem-scale: 0.625;
 
-    --h1: 4.8rem;
-    --h2: 2.8rem;
-    --h3: 2.4rem;
-    --h4: 1.8rem;
-    --h5: 1.6rem;
-    --base: 1.6rem;
-    --sm: 1.4rem;
-    --xsm: 1.2rem;
+@function rem($rem) {
+    @return $rem-scale * $rem * 1rem;
+}
+
+:root {
+    --nav-height: #{rem(6.5)};
+
+    --h1: #{rem(4.8)};
+    --h2: #{rem(2.8)};
+    --h3: #{rem(2.4)};
+    --h4: #{rem(1.8)};
+    --h5: #{rem(1.6)};
+    --base: #{rem(1.6)};
+    --sm: #{rem(1.4)};
+    --xsm: #{rem(1.2)};
 
     @media(max-width: 850px) {
-        --h1: 3.4rem;
-        --h2: 2.6rem;
-        --h3: 2.2rem;
-        --h4: 1.8rem;
-        --h5: 1.6rem;
+        --h1: #{rem(3.4)};
+        --h2: #{rem(2.6)};
+        --h3: #{rem(2.2)};
+        --h4: #{rem(1.8)};
+        --h5: #{rem(1.6)};
     }
 
-    --pico: 0.5rem;
-    --nano: 1rem;
-    --micro: 1.5rem;
-    --milli: 2rem;
-    --xx-small: 2.5rem;
-    --x-small: 3rem;
-    --small: 4rem;
-    --medium: 5rem;
-    --large: 6rem;
+    --pico: #{rem(0.5)};
+    --nano: #{rem(1)};
+    --micro: #{rem(1.5)};
+    --milli: #{rem(2)};
+    --xx-small: #{rem(2.5)};
+    --x-small: #{rem(3)};
+    --small: #{rem(4)};
+    --medium: #{rem(5)};
+    --large: #{rem(6)};
 
     --orchid: #e537c0;
     --orange: #ee8660;
@@ -58,7 +64,7 @@
     --gray-lighter: #dddd;
     --gray-lightest: #eeeeee;
 
-    --shadow-default: 0 0.625rem 1.5rem 0rem rgba(0, 0, 0, 0.08);
+    --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} #{rem(0)} rgba(0, 0, 0, 0.08);
 }
 
 body.dark {
@@ -86,7 +92,7 @@ body.dark {
     --body: var(--gray);
     --highlight: #e0a5fb;
 
-    --shadow-default: 0 0.625rem 1.5rem 0 rgba(0, 0, 0, 0.4);
+    --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} 0 rgba(0, 0, 0, 0.4);
     --note: #fffad411;
     --note-border: #b9a61545;
     --note-after: #fbe2d9;
@@ -158,10 +164,6 @@ body.light {
     box-sizing: border-box;
 }
 
-html {
-    font-size: 62.5%;
-}
-
 body {
     font-family: "Inter", sans-serif;
     color: var(--important);
@@ -174,7 +176,7 @@ body {
     overflow-x: hidden;
 
     @media(max-width: 500px) {
-        font-size: 1.5rem;
+        font-size: rem(1.5);
     }
 }
 
@@ -267,11 +269,11 @@ a {
     letter-spacing: 0.1em;
     background: var(--brand);
     color: var(--white);
-    padding: 0.6rem 1.2rem;
+    padding: rem(0.6) rem(1.2);
     border-radius: 8px;
 
     svg {
-        margin-right: .6rem;
+        margin-right: rem(.6);
         width: 18px;
         height: 18px;
     }

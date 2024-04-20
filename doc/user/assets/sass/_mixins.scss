@@ -1,7 +1,7 @@
 @mixin card {
     background: var(--card-light);
     border: 1px solid var(--divider-light);
-    border-radius: 1.2rem;
+    border-radius: rem(1.2);
 
     box-shadow: var(--shadow-default);
 }

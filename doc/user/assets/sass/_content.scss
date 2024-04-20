@@ -103,7 +103,7 @@ p+p {
         }
 
         .highlight:only-child {
-            margin: 1rem 0;
+            margin: rem(1) 0;
 
             pre {
                 margin: 0;
@@ -111,8 +111,8 @@ p+p {
         }
 
         pre {
-            margin-left: 1.8rem;
-            margin: 1rem 0;
+            margin-left: rem(1.8);
+            margin: rem(1) 0;
             display: block;
         }
     }
@@ -133,18 +133,18 @@ p+p {
     pre+p,
     table+p,
     *+p {
-        margin-top: 1.6rem;
+        margin-top: rem(1.6);
     }
 
     p+table {
-        margin-top: 0.5rem;
+        margin-top: rem(0.5);
     }
 
     pre,
     .warning,
     .note,
-	.tip {
-        font-size: 1.5rem;
+    .tip {
+        font-size: rem(1.5);
         font-weight: 300;
     }
 
@@ -244,7 +244,7 @@ p+p {
             width: 48px;
             height: 48px;
             position: absolute;
-            top: 2rem;
+            top: rem(2);
             background-size: contain;
         }
 
@@ -252,7 +252,7 @@ p+p {
         &.bulb,
         &.doc,
         &.touch {
-            padding-top: 8rem;
+            padding-top: rem(8);
         }
 
         &.book::before {
@@ -295,7 +295,7 @@ p+p {
         border-collapse: collapse;
         font-size: var(--sm);
         font-weight: 300;
-        line-height: 2.1rem;
+        line-height: rem(2.1);
 
         @media(max-width: 500px) {
             code {
@@ -313,7 +313,7 @@ p+p {
         border-bottom: 1px var(--highlight) solid;
         text-align: left;
         padding: 8px;
-        font-size: 1.3rem;
+        font-size: rem(1.3);
         vertical-align: bottom;
     }
 
@@ -340,10 +340,10 @@ p+p {
         border: 1px solid var(--divider-light);
         color: $black-v2;
         font-family: Courier, monospace;
-        font-size: 1.5rem;
-        margin: 1rem 0 0.5rem;
+        font-size: rem(1.5);
+        margin: rem(1) 0 rem(0.5);
         overflow: auto;
-        padding: 1.6rem;
+        padding: rem(1.6);
 
         code {
             color: $black-v2;
@@ -356,13 +356,13 @@ p+p {
     code {
         font-family: "Fira Code", Courier, monospace;
         font-variant-ligatures: none;
-        font-size: 1.3rem;
+        font-size: rem(1.3);
         font-weight: 500;
         background: var(--code-block);
         border: 1px solid var(--divider-light);
         box-sizing: border-box;
         border-radius: 2px;
-        padding: 0.1rem 0.25rem 0rem;
+        padding: rem(0.1) rem(0.25) rem(0);
         color: var(--code-simple);
         background: var(--code-simple-bg);
     }
@@ -381,7 +381,7 @@ p+p {
         margin: 0;
 
         li {
-            margin-bottom: 0.5rem;
+            margin-bottom: rem(0.5);
         }
     }
 
@@ -399,9 +399,9 @@ p+p {
 
          >li {
             counter-increment: list-counter;
-            min-height: 5rem;
+            min-height: rem(5);
             position: relative;
-            padding: 1.6rem 0 1.6rem 6rem;
+            padding: rem(1.6) 0 rem(1.6) rem(6);
             border-top: 1px solid var(--divider-light);
 
             ul,
@@ -416,29 +416,29 @@ p+p {
             }
 
             @media(max-width: 850px) {
-                padding-left: 4.5rem;
+                padding-left: rem(4.5);
             }
 
             @media(max-width: 480px) {
-                padding-left: 3rem;
+                padding-left: rem(3);
             }
 
             &:before {
                 content: counter(list-counter);
                 color: var(--orchid);
-                font-size: 3rem;
+                font-size: rem(3);
                 font-weight: 100;
                 position: absolute;
                 top: 100;
-                left: 1rem;
+                left: rem(1);
 
                 @media(max-width: 850px) {
-                    font-size: 4rem;
-                    left: .5rem;
+                    font-size: rem(4);
+                    left: rem(.5);
                 }
 
                 @media(max-width: 480px) {
-                    font-size: 3.5rem;
+                    font-size: rem(3.5);
                     left: 0;
                 }
             }
@@ -456,7 +456,7 @@ p+p {
     hr {
         border: none;
         border-top: 1px solid $medium-grey-v2;
-        margin: 3.6rem auto;
+        margin: rem(3.6) auto;
         width: 80%;
     }
 
@@ -555,13 +555,13 @@ p+p {
     .private-preview,
     .public-preview {
         box-sizing: border-box;
-        margin: 1.6rem 0;
-        padding: 1.6rem 1.6rem 1.6rem 10.4rem;
+        margin: rem(1.6) 0;
+        padding: rem(1.6) rem(1.6) rem(1.6) rem(10.4);
         position: relative;
-        border-radius: 1.2rem;
+        border-radius: rem(1.2);
 
         @media(max-width: 510px) {
-            padding: 1rem 1rem 1rem 6rem;
+            padding: rem(1) rem(1) rem(1) rem(6);
         }
 
         p:first-of-type {
@@ -573,28 +573,28 @@ p+p {
             position: absolute;
             top: -1px;
             right: -1px;
-            border-width: 0 1.6rem 1.6rem 0;
+            border-width: 0 rem(1.6) rem(1.6) 0;
             border-style: solid;
         }
 
         .gutter {
             position: absolute;
-            left: 1.6rem;
-            top: 1.8rem;
+            left: rem(1.6);
+            top: rem(1.8);
             line-height: 23px;
-            font-size: 1.2rem;
+            font-size: rem(1.2);
             font-weight: bold;
             text-transform: uppercase;
 
             @media(max-width: 510px) {
-                top: 1.2rem;
+                top: rem(1.2);
             }
         }
     }
 
     .warning {
         @media(max-width: 510px) {
-            padding-left: 9rem;
+            padding-left: rem(9);
         }
     }
 
@@ -604,8 +604,8 @@ p+p {
         color: #fff;
         display: inline-block;
         font-weight: 500;
-        margin: 3.2rem 0;
-        padding: 2rem 6.4rem;
+        margin: rem(3.2) 0;
+        padding: rem(2) rem(6.4);
         opacity: 1;
         transition: opacity 350ms ease;
 
@@ -637,8 +637,8 @@ p+p {
 
     .release-date+ul,
     .release-date+ol {
-        margin-top: 1.6rem;
-        padding-left: 3.2rem;
+        margin-top: rem(1.6);
+        padding-left: rem(3.2);
     }
 
     .symbol {
@@ -646,7 +646,7 @@ p+p {
     }
 
     .breadcrumb {
-        font-size: 1.4rem;
+        font-size: rem(1.4);
         letter-spacing: 0.03em;
         text-transform: uppercase;
         color: var(--sub);
@@ -654,7 +654,7 @@ p+p {
 
         a {
             color: var(--sub) !important;
-            margin: 0 0.8rem;
+            margin: 0 rem(0.8);
 
             &:hover {
                 color: $black-v2;
@@ -670,9 +670,9 @@ p+p {
 
 #helpful {
     border-top: 1px solid $grey;
-    margin-top: 4.8rem;
+    margin-top: rem(4.8);
     max-width: 40%;
-    padding-top: 0.8rem;
+    padding-top: rem(0.8);
     text-align: center;
 
     table {
@@ -689,7 +689,7 @@ p+p {
         color: $purple;
         display: inline-block;
         font-weight: bold;
-        padding: 1.1rem 0;
+        padding: rem(1.1) 0;
         width: 100%;
     }
 
@@ -700,7 +700,7 @@ p+p {
 
 // Navigation tabs (tab+tabs.html)
 .code-tabs {
-    margin: 1rem 0;
+    margin: rem(1) 0;
 
     .nav-tabs {
         list-style: none;
@@ -715,7 +715,7 @@ p+p {
 
         li {
             display: inline-block;
-            margin: 0 0.1rem;
+            margin: 0 rem(0.1);
             padding: 0;
             position: relative;
             bottom: -1px;
@@ -724,17 +724,17 @@ p+p {
             a {
                 color: var(--body);
                 display: block;
-                padding: 0.8rem 3.2rem;
-                font-size: 1.6rem;
+                padding: rem(0.8) rem(3.2);
+                font-size: rem(1.6);
                 text-decoration: none;
                 font-weight: 500;
 
                 @media(max-width: 850px) {
-                    padding: 0.8rem 2.5rem;
+                    padding: rem(0.8) rem(2.5);
                 }
 
                 @media(max-width: 380px) {
-                    padding: 0.8rem 1.5rem;
+                    padding: rem(0.8) rem(1.5);
                 }
 
                 &:hover {
@@ -758,7 +758,7 @@ p+p {
 
     .tab-pane {
         display: none;
-        padding: 1.6rem 0;
+        padding: rem(1.6) 0;
 
         &.active {
             display: block;
@@ -781,7 +781,7 @@ p+p {
             display: flex;
 
             input[type="email"] {
-                font-size: 0.8rem;
+                font-size: rem(0.8);
                 padding: 7px 5px 6px 5px;
                 border-radius: $border-radius;
                 border: none;
@@ -843,7 +843,7 @@ p+p {
 
 .table-scrollable {
     box-shadow: inset 0 -4px 3px -3px $medium-grey-v2;
-    margin: 1rem 0 3rem;
+    margin: rem(1) 0 rem(3);
     overflow: auto;
 
     .table-container {
@@ -870,7 +870,7 @@ p+p {
     }
 
     &+* {
-        margin-top: 3rem !important;
+        margin-top: rem(3) !important;
     }
 }
 
@@ -904,7 +904,7 @@ p+p {
 .copy_button {
     display: none;
     position: absolute;
-    font-size: 1.2rem;
+    font-size: rem(1.2);
     font-weight: 300;
     border: none;
     background-color: $grey-light;
@@ -938,11 +938,11 @@ p+p {
         display: flex;
 
         input[type="email"] {
-            font-size: 1.4rem;
-            padding: .5rem;
+            font-size: rem(1.4);
+            padding: rem(.5);
             border-radius: $border-radius;
             border: none;
-            margin-right: .8rem;
+            margin-right: rem(.8);
             background: var(--bg);
             color: var(--important);
             border: 1px solid var(--divider-light);
@@ -958,7 +958,7 @@ p+p {
         width: 100%;
         color: var(--important);
         margin-top: var(--nano);
-        padding: .4rem .8rem;
+        padding: rem(.4) rem(.8);
         font-size: var(--xsm);
         border-bottom-left-radius: $border-radius;
         border-bottom-right-radius: $border-radius;
@@ -1122,11 +1122,11 @@ div.json_widget {
 }
 
 .notify_button {
-    font-size: 1rem;
-    padding: 0.4rem 0.8rem;
+    font-size: rem(1);
+    padding: rem(0.4) rem(0.8);
 
     &.success {
-        width: 8rem;
+        width: rem(8);
     }
 }
 
