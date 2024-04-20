@@ -20,54 +20,52 @@ SET search_path = 'star';
 -- Fact table and data
 -- -------------------
 
-CREATE TABLE ft (k INT, v INT NOT NULL);
+CREATE TABLE ft (k INT, v INT NOT NULL, fk1 INT, fk2 INT);
 CREATE INDEX ft_i1 ON ft(k);
-CREATE INDEX ft_i2 ON ft(v, k);
-
 
 INSERT INTO ft VALUES
   -- one NULL row in ft
-  (NULL, 0),
-  -- 1 and 2 have 2 rows each in ft
-  (1, 1), (1, 1),
-  (2, 2), (2, 2),
-  (3, 3),
-  (4, 4),
-  -- mixed row for 5
-  (5, 5), (NULL, 5)
+  (NULL, 100, 1, 2),
+  -- 1-5 have one row each
+  (1, 101, 1, 2),
+  (2, 102, 2, 3),
+  (3, 103, 3, 4),
+  (4, 104, 4, 5),
+  (5, 105, 5, 6)
   -- 7 is not present in either table
   ;
 
 -- Dimension table and data (d1)
 -- -----------------------------
 
-CREATE TABLE d1 (k INT, v INT NOT NULL);
-CREATE INDEX d1_i1 ON d1(k);
-CREATE INDEX d1_i2 ON d1(v, k);
+CREATE TABLE d1 (pk1 INT, pk2 INT NOT NULL, v INT NOT NULL);
+CREATE INDEX d1_i1 ON d1(pk1, pk2);
 
 INSERT INTO d1 VALUES
-  (NULL, 0), (NULL, 0), -- two NULL rows in d1
+  (NULL, 0, 0),
+  (0, 0, 1),
   -- 1 not present in d1
-  (2, 2), (2, 2),
-  (3, 3),
+  (2, 3, 0), (3, 2, 1),
+  (3, 4, 0),
   -- 4 has no rows in d1
-  (5, 5),
-  (6, 6)
+  (5, 6, 0),
+  (6, 7, 0)
   -- 7 is not present in either table
   ;
 
 -- Dimension table and data (d2)
 -- -----------------------------
 
-CREATE TABLE d2 (k INT, v INT NOT NULL);
+CREATE TABLE d2 (pk1 INT, pk2 INT NOT NULL, v INT NOT NULL);
+CREATE INDEX d2_i1 ON d2(pk1, pk2);
 
 INSERT INTO d2 VALUES
-  (NULL, 0),
+  (NULL, 0, 0),
   -- 1 not present in d2
-  (2, 2),
-  (3, 3), (3, 3),
-  (4, 4),
-  (NULL, 5)
+  (2, 3, 0),
+  (3, 4, 0), (4, 3, 1),
+  (4, 5, 0),
+  (NULL, 5, 0)
   -- 6 has no rows in d2
   -- 7 is not present in either table
   ;
@@ -75,17 +73,17 @@ INSERT INTO d2 VALUES
 -- Dimension table and data (d3)
 -- -----------------------------
 
-CREATE TABLE d3 (k INT, v INT NOT NULL);
-CREATE INDEX d3_i1 ON d3(k);
+CREATE TABLE d3 (pk1 INT, pk2 INT NOT NULL, v INT NOT NULL);
+CREATE INDEX d3_i1 ON d3(pk1, pk2);
 
 INSERT INTO d3 VALUES
-  (NULL, 0),
+  (0, 0, 1),
   -- 1 not present in d3
-  (NULL, 2),
-  (3, 3), (3, 3),
+  (NULL, 2, 0),
+  (3, 4, 0), (4, 3, 1),
   -- 4 has no rows in d3
-  (5, 5),
-  (6, 6), (6, 6)
+  (5, 6, 0),
+  (6, 7, 0), (7, 6, 1)
   -- 7 is not present in either table
   ;
 
@@ -93,13 +91,13 @@ INSERT INTO d3 VALUES
 -- ---------------------
 
 CREATE MATERIALIZED VIEW ft_pk AS
-SELECT DISTINCT ON (k) k, v FROM ft WHERE k IS NOT NULL;
+SELECT DISTINCT ON (k) k, v FROM ft;
 
 CREATE MATERIALIZED VIEW d1_pk AS
-SELECT DISTINCT ON (k) k, v FROM d1 WHERE k IS NOT NULL;
+SELECT DISTINCT ON (pk1, pk2) pk1, pk2, v FROM d1;
 
 CREATE MATERIALIZED VIEW d2_pk AS
-SELECT DISTINCT ON (k) k, v FROM d2 WHERE k IS NOT NULL;
+SELECT DISTINCT ON (pk1, pk2) pk1, pk2, v FROM d2;
 
 CREATE MATERIALIZED VIEW d3_pk AS
-SELECT DISTINCT ON (k) k, v FROM d3 WHERE k IS NOT NULL;
+SELECT DISTINCT ON (pk1, pk2) pk1, pk2, v FROM d3;
