@@ -335,6 +335,22 @@ types_table           subsource <null>  <null>
 utf8_table            subsource <null>  <null>
 таблица               subsource <null>  <null>
 
+# Ensure all ingestion export subsources have an ID greater than the primary source ID
+> SELECT bool_and(primary_source_id < subsource_id)
+  FROM
+      (SELECT id AS primary_source_id FROM mz_sources WHERE type = 'postgres')
+          CROSS JOIN (SELECT id AS subsource_id FROM mz_sources WHERE type = 'subsource');
+true
+
+# Ensure progress subsources have an ID less than the primary source ID
+> SELECT progress_source_id < primary_source_id
+    FROM (
+        SELECT
+            (SELECT id FROM mz_sources WHERE type = 'postgres') AS primary_source_id,
+            (SELECT id FROM mz_sources WHERE type = 'progress') AS progress_source_id
+    );
+true
+
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
 
