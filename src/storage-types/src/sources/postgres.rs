@@ -314,7 +314,15 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
 
         let compatibility_checks = [
             (slot == &other.slot, "slot"),
-            (timeline_id == &other.timeline_id, "timeline_id"),
+            (
+                match (timeline_id, &other.timeline_id) {
+                    (Some(curr_id), Some(new_id)) => curr_id == new_id,
+                    (None, Some(_)) => true,
+                    // New values must always have timeline ID
+                    (_, None) => false,
+                },
+                "timeline_id",
+            ),
         ];
 
         for (compatible, field) in compatibility_checks {
