@@ -43,13 +43,6 @@ user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
-[[publisher.aws-http]]
-version = "0.60.1"
-when = "2023-12-14"
-user-id = 160111
-user-login = "aws-sdk-rust-ci"
-user-name = "AWS SDK Rust Bot"
-
 [[publisher.aws-runtime]]
 version = "1.2.0"
 when = "2024-04-12"
