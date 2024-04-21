@@ -111,7 +111,7 @@ version = "0.17.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ahash]]
-version = "0.8.0"
+version = "0.8.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.allocator-api2]]
@@ -303,11 +303,11 @@ version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.const-random]]
-version = "0.1.15"
+version = "0.1.18"
 criteria = "safe-to-deploy"
 
 [[exemptions.const-random-macro]]
-version = "0.1.15"
+version = "0.1.16"
 criteria = "safe-to-deploy"
 
 [[exemptions.cpp_demangle]]
@@ -319,7 +319,7 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.crc32c]]
-version = "0.6.3"
+version = "0.6.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.crc32fast]]
@@ -384,10 +384,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.data-encoding]]
 version = "2.3.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.datadriven]]
-version = "0.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.deadpool]]
@@ -570,16 +566,32 @@ criteria = "safe-to-deploy"
 version = "0.3.25"
 criteria = "safe-to-deploy"
 
+[[exemptions.futures-channel]]
+version = "0.3.30"
+criteria = "safe-to-deploy"
+
+[[exemptions.futures-core]]
+version = "0.3.30"
+criteria = "safe-to-deploy"
+
+[[exemptions.futures-io]]
+version = "0.3.30"
+criteria = "safe-to-deploy"
+
 [[exemptions.futures-macro]]
-version = "0.3.28"
+version = "0.3.30"
+criteria = "safe-to-deploy"
+
+[[exemptions.futures-sink]]
+version = "0.3.30"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-task]]
-version = "0.3.28"
+version = "0.3.30"
 criteria = "safe-to-deploy"
 
 [[exemptions.futures-util]]
-version = "0.3.28"
+version = "0.3.30"
 criteria = "safe-to-deploy"
 
 [[exemptions.generator]]
@@ -644,6 +656,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.http-body]]
 version = "0.4.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.http-body-util]]
+version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.http-range-header]]
@@ -756,10 +772,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.libz-sys]]
 version = "1.1.8"
-criteria = "safe-to-deploy"
-
-[[exemptions.linked-hash-map]]
-version = "0.5.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.linked_hash_set]]
@@ -1007,7 +1019,11 @@ version = "0.3.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.portable-atomic]]
-version = "0.3.15"
+version = "0.3.20"
+criteria = "safe-to-deploy"
+
+[[exemptions.portable-atomic]]
+version = "1.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.postgres_array]]
@@ -1310,10 +1326,6 @@ criteria = "safe-to-deploy"
 version = "0.1.5"
 criteria = "safe-to-deploy"
 
-[[exemptions.shell-words]]
-version = "1.1.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.shlex]]
 version = "1.3.0"
 criteria = "safe-to-deploy"
@@ -1436,10 +1448,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.terminal_size]]
 version = "0.2.6"
-criteria = "safe-to-deploy"
-
-[[exemptions.textwrap]]
-version = "0.16.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tiberius]]
@@ -1622,10 +1630,6 @@ criteria = "safe-to-deploy"
 version = "0.1.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.wait-timeout]]
-version = "0.2.0"
-criteria = "safe-to-run"
-
 [[exemptions.which]]
 version = "4.2.2"
 criteria = "safe-to-deploy"
@@ -1726,12 +1730,16 @@ criteria = "safe-to-deploy"
 version = "0.5.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.zeroize]]
-version = "1.5.7"
+[[exemptions.zerocopy]]
+version = "0.7.32"
 criteria = "safe-to-deploy"
 
-[[exemptions.zstd]]
-version = "0.12.4"
+[[exemptions.zerocopy-derive]]
+version = "0.7.32"
+criteria = "safe-to-deploy"
+
+[[exemptions.zeroize]]
+version = "1.5.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.zstd-safe]]
