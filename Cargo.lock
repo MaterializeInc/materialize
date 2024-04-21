@@ -85,6 +85,54 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
 
 [[package]]
+name = "anstream"
+version = "0.6.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d96bd03f33fe50a863e394ee9718a706f988b9079b20c3784fb726e7678b62fb"
+dependencies = [
+ "anstyle",
+ "anstyle-parse",
+ "anstyle-query",
+ "anstyle-wincon",
+ "colorchoice",
+ "utf8parse",
+]
+
+[[package]]
+name = "anstyle"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8901269c6307e8d93993578286ac0edf7f195079ffff5ebdeea6a59ffb7e36bc"
+
+[[package]]
+name = "anstyle-parse"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c75ac65da39e5fe5ab759307499ddad880d724eed2f6ce5b5e8a26f4f387928c"
+dependencies = [
+ "utf8parse",
+]
+
+[[package]]
+name = "anstyle-query"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e28923312444cdd728e4738b3f9c9cac739500909bb3d3c94b43551b16517648"
+dependencies = [
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "anstyle-wincon"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1cd54b81ec8d6180e24654d0b371ad22fc3dd083b6ff8ba325b72e00c87660a7"
+dependencies = [
+ "anstyle",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1381,33 +1429,49 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.2.24"
+version = "3.2.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eef2b3ded6a26dfaec672a742c93c8cf6b689220324da509ec5caa20de55dc83"
+checksum = "4ea181bf566f71cb9a5d17a59e1871af638180a18fb0035c92ae62b705207123"
 dependencies = [
- "atty",
  "bitflags 1.3.2",
- "clap_derive",
- "clap_lex",
+ "clap_lex 0.2.2",
  "indexmap 1.9.1",
- "once_cell",
- "strsim",
- "termcolor",
- "terminal_size",
  "textwrap",
 ]
 
 [[package]]
-name = "clap_derive"
-version = "3.2.24"
+name = "clap"
+version = "4.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d756c5824fc5c0c1ee8e36000f576968dbcb2081def956c83fad6f40acd46f96"
+checksum = "90bc066a67923782aa8515dbaea16946c5bcc5addbd668bb80af688e53e548a0"
 dependencies = [
- "heck",
- "proc-macro-error",
+ "clap_builder",
+ "clap_derive",
+]
+
+[[package]]
+name = "clap_builder"
+version = "4.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae129e2e766ae0ec03484e609954119f123cc1fe650337e155d03b022f24f7b4"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "clap_lex 0.7.0",
+ "strsim 0.11.1",
+ "terminal_size 0.3.0",
+]
+
+[[package]]
+name = "clap_derive"
+version = "4.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528131438037fd55894f62d6e9f068b8f45ac57ffa77517819645d10aed04f64"
+dependencies = [
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 2.0.39",
 ]
 
 [[package]]
@@ -1418,6 +1482,12 @@ checksum = "5538cd660450ebeb4234cfecf8f2284b844ffc4c50531e66d584ad5b91293613"
 dependencies = [
  "os_str_bytes",
 ]
+
+[[package]]
+name = "clap_lex"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98cc8fbded0c607b7ba9dd60cd98df59af97e84d24e49c8557331cfc26d301ce"
 
 [[package]]
 name = "cmake"
@@ -1437,6 +1507,12 @@ dependencies = [
  "termcolor",
  "unicode-width",
 ]
+
+[[package]]
+name = "colorchoice"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
 name = "columnation"
@@ -1621,7 +1697,7 @@ dependencies = [
  "atty",
  "cast",
  "ciborium",
- "clap",
+ "clap 3.2.25",
  "criterion-plot",
  "futures",
  "itertools",
@@ -1842,7 +1918,7 @@ dependencies = [
  "ident_case",
  "proc-macro2",
  "quote",
- "strsim",
+ "strsim 0.10.0",
  "syn 2.0.39",
 ]
 
@@ -2186,7 +2262,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c9720bba047d567ffc8a3cba48bf19126600e249ab7f128e9233e6376976a116"
 dependencies = [
- "heck",
+ "heck 0.4.0",
  "proc-macro2",
  "quote",
  "syn 1.0.107",
@@ -2779,6 +2855,12 @@ name = "heck"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2540771e65fc8cb83cd6e8a237f70c319bd5c29f78ed1084ba5d50eeac86f7f9"
+
+[[package]]
+name = "heck"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermit-abi"
@@ -3887,7 +3969,7 @@ version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "axum",
- "clap",
+ "clap 4.5.4",
  "csv",
  "dirs",
  "hyper",
@@ -4139,7 +4221,7 @@ dependencies = [
  "axum",
  "bytes",
  "bytesize",
- "clap",
+ "clap 4.5.4",
  "domain",
  "futures",
  "hyper",
@@ -4260,7 +4342,7 @@ name = "mz-catalog-debug"
 version = "0.98.0-dev"
 dependencies = [
  "anyhow",
- "clap",
+ "clap 4.5.4",
  "mz-adapter",
  "mz-build-info",
  "mz-catalog",
@@ -4348,7 +4430,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytesize",
- "clap",
+ "clap 4.5.4",
  "crossbeam-channel",
  "dec",
  "differential-dataflow",
@@ -4414,7 +4496,7 @@ version = "0.98.0-dev"
 dependencies = [
  "anyhow",
  "axum",
- "clap",
+ "clap 4.5.4",
  "fail",
  "futures",
  "mz-alloc",
@@ -4451,7 +4533,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytesize",
- "clap",
+ "clap 4.5.4",
  "core_affinity",
  "crossbeam-channel",
  "dec",
@@ -4658,7 +4740,7 @@ dependencies = [
  "bytesize",
  "cc",
  "chrono",
- "clap",
+ "clap 4.5.4",
  "datadriven",
  "derivative",
  "fail",
@@ -4859,7 +4941,7 @@ version = "0.0.0"
 dependencies = [
  "async-compression",
  "bytes",
- "clap",
+ "clap 4.5.4",
  "csv-async",
  "futures",
  "insta",
@@ -4899,7 +4981,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.13.1",
- "clap",
+ "clap 4.5.4",
  "derivative",
  "futures",
  "jsonwebtoken",
@@ -4943,7 +5025,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
- "clap",
+ "clap 4.5.4",
  "hyper",
  "jsonwebtoken",
  "mz-frontegg-auth",
@@ -4985,7 +5067,7 @@ dependencies = [
  "anyhow",
  "byteorder",
  "chrono",
- "clap",
+ "clap 4.5.4",
  "criterion",
  "differential-dataflow",
  "itertools",
@@ -5014,7 +5096,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
- "clap",
+ "clap 4.5.4",
  "crossbeam",
  "fancy-regex",
  "futures",
@@ -5189,7 +5271,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "clap",
+ "clap 4.5.4",
  "fail",
  "futures",
  "k8s-openapi",
@@ -5241,7 +5323,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "clap",
+ "clap 4.5.4",
  "derivative",
  "futures-core",
  "http 0.2.9",
@@ -5270,7 +5352,7 @@ dependencies = [
  "atty",
  "bytes",
  "chrono",
- "clap",
+ "clap 4.5.4",
  "compact_bytes",
  "console-subscriber",
  "criterion",
@@ -5385,7 +5467,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "bytes",
- "clap",
+ "clap 4.5.4",
  "criterion",
  "datadriven",
  "differential-dataflow",
@@ -5538,7 +5620,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
- "clap",
+ "clap 4.5.4",
  "datadriven",
  "fallible-iterator",
  "mz-ore",
@@ -5813,7 +5895,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "static_assertions",
- "strsim",
+ "strsim 0.10.0",
  "thiserror",
  "timely",
  "tokio-postgres",
@@ -5896,7 +5978,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "bytefmt",
- "clap",
+ "clap 4.5.4",
  "futures",
  "indicatif",
  "mz-aws-util",
@@ -5938,7 +6020,7 @@ name = "mz-server-core"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "clap",
+ "clap 4.5.4",
  "futures",
  "mz-ore",
  "openssl",
@@ -5956,7 +6038,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "clap",
+ "clap 4.5.4",
  "crossbeam-channel",
  "futures",
  "http 0.2.9",
@@ -5999,7 +6081,7 @@ dependencies = [
  "aws-sdk-sts",
  "bitflags 1.3.2",
  "chrono",
- "clap",
+ "clap 4.5.4",
  "datadriven",
  "derivative",
  "dynfmt",
@@ -6121,7 +6203,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "chrono",
- "clap",
+ "clap 4.5.4",
  "dec",
  "fallible-iterator",
  "futures",
@@ -6203,7 +6285,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
- "clap",
+ "clap 4.5.4",
  "crossbeam-channel",
  "csv-core",
  "datadriven",
@@ -6494,7 +6576,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "clap",
+ "clap 4.5.4",
  "flate2",
  "futures",
  "globset",
@@ -7285,7 +7367,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
- "clap",
+ "clap 4.5.4",
  "differential-dataflow",
  "futures",
  "humantime",
@@ -7721,7 +7803,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "119533552c9a7ffacc21e099c24a0ac8bb19c2a2a3f363de84cd9b844feab270"
 dependencies = [
  "bytes",
- "heck",
+ "heck 0.4.0",
  "itertools",
  "lazy_static",
  "log",
@@ -9004,6 +9086,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
+name = "strsim"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
 name = "subprocess"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9149,7 +9237,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "beca1b4eaceb4f2755df858b88d9b9315b7ccfd1ffd0d7a48a52602301f01a57"
 dependencies = [
- "heck",
+ "heck 0.4.0",
  "proc-macro-error",
  "proc-macro2",
  "quote",
@@ -9221,12 +9309,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal_size"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21bebf2b7c9e0a515f6e0f8c51dc0f8e4696391e6f1ff30379559f8365fb0df7"
+dependencies = [
+ "rustix 0.38.21",
+ "windows-sys 0.48.0",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "222a222a5bfe1bba4a77b45ec488a741b3cb8872e5e499451fd7d0129c9c7c3d"
 dependencies = [
- "terminal_size",
+ "terminal_size 0.2.6",
 ]
 
 [[package]]
@@ -10344,6 +10442,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-sys"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
+dependencies = [
+ "windows-targets 0.52.4",
+]
+
+[[package]]
 name = "windows-targets"
 version = "0.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10541,7 +10648,7 @@ dependencies = [
  "bytes",
  "cc",
  "chrono",
- "clap",
+ "clap 4.5.4",
  "console",
  "criterion",
  "crossbeam-deque",

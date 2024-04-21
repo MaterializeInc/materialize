@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.66"
 async-stream = "0.3.3"
 async-trait = "0.1.68"
-clap = { version = "3.2.24", features = ["env", "derive"] }
+clap = { version = "4.5.4", features = ["env", "derive"] }
 crossbeam-channel = "0.5.8"
 futures = "0.3.25"
 http = "0.2.8"
