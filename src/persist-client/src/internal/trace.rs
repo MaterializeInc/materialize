@@ -215,8 +215,8 @@ impl<T: Timestamp + Lattice> Trace<T> {
             for batch in &state.batches {
                 push_spine_batch(level, batch);
             }
-            if let Some((id, merge)) = state.id().zip(state.merge.as_ref()) {
-                fueling_merges.insert(id, merge.clone());
+            if let Some(IdFuelingMerge { id, merge }) = state.merge.as_ref() {
+                fueling_merges.insert(*id, merge.clone());
             }
         }
 
@@ -376,8 +376,10 @@ impl<T: Timestamp + Lattice> Trace<T> {
             let state = &mut merging[level];
 
             state.push_batch(batch);
-            if let Some(merge_id) = state.id() {
-                state.merge = fueling_merges.remove(&merge_id);
+            if let Some(id) = state.id() {
+                state.merge = fueling_merges
+                    .remove(&id)
+                    .map(|merge| IdFuelingMerge { id, merge });
             }
         }
 
@@ -723,8 +725,12 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     pub fn begin_merge(
         bs: &[Self],
         compaction_frontier: Option<AntichainRef<T>>,
-    ) -> FuelingMerge<T> {
-        let mut since = Antichain::from_elem(T::minimum());
+    ) -> Option<IdFuelingMerge<T>> {
+        let from = bs.first()?.id().0;
+        let until = bs.last()?.id().1;
+        let id = SpineId(from, until);
+        let mut sinces = bs.iter().map(|b| b.desc().since());
+        let mut since = sinces.next()?.clone();
         for b in bs {
             since.join_assign(b.desc().since())
         }
@@ -732,10 +738,13 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             since.join_assign(&compaction_frontier.to_owned());
         }
         let remaining_work = bs.iter().map(|x| x.len()).sum();
-        FuelingMerge {
-            since,
-            remaining_work,
-        }
+        Some(IdFuelingMerge {
+            id,
+            merge: FuelingMerge {
+                since,
+                remaining_work,
+            },
+        })
     }
 
     // TODO: Roundtrip the SpineId through FueledMergeReq/FueledMergeRes?
@@ -904,6 +913,12 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
 pub struct FuelingMerge<T> {
     pub(crate) since: Antichain<T>,
     pub(crate) remaining_work: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IdFuelingMerge<T> {
+    id: SpineId,
+    merge: FuelingMerge<T>,
 }
 
 impl<T: Timestamp + Lattice> FuelingMerge<T> {
@@ -1334,8 +1349,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         merging.push_batch(batch);
         if merging.batches.is_full() {
             let compaction_frontier = Some(self.since.borrow());
-            let fueling_merge = SpineBatch::begin_merge(&merging.batches[..], compaction_frontier);
-            merging.merge = Some(fueling_merge)
+            merging.merge = SpineBatch::begin_merge(&merging.batches[..], compaction_frontier)
         }
     }
 
@@ -1468,7 +1482,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
 #[derive(Debug, Clone)]
 struct MergeState<T> {
     batches: ArrayVec<SpineBatch<T>, BATCHES_PER_LEVEL>,
-    merge: Option<FuelingMerge<T>>,
+    merge: Option<IdFuelingMerge<T>>,
 }
 
 impl<T> Default for MergeState<T> {
@@ -1550,17 +1564,17 @@ impl<T: Timestamp + Lattice> MergeState<T> {
             this.batches.pop()
         } else {
             // Merge the remaining batches, regardless of whether we have a fully fueled merge.
-            let merge = this
+            let id_merge = this
                 .merge
-                .unwrap_or_else(|| SpineBatch::begin_merge(&self.batches[..], None));
-            merge.done(this.batches, log)
+                .or_else(|| SpineBatch::begin_merge(&self.batches[..], None))?;
+            id_merge.merge.done(this.batches, log)
         }
     }
 
     /// True iff the layer is a complete merge, ready for extraction.
     fn is_complete(&self) -> bool {
         match &self.merge {
-            Some(m) => m.remaining_work == 0,
+            Some(IdFuelingMerge { merge, .. }) => merge.remaining_work == 0,
             None => false,
         }
     }
@@ -1568,7 +1582,7 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     /// Performs a bounded amount of work towards a merge.
     fn work(&mut self, fuel: &mut isize) {
         // We only perform work for merges in progress.
-        if let Some(merge) = &mut self.merge {
+        if let Some(IdFuelingMerge { merge, .. }) = &mut self.merge {
             merge.work(&self.batches[..], fuel)
         }
     }
