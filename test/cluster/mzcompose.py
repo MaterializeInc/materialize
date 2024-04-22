@@ -3398,18 +3398,25 @@ def workflow_test_refresh_mv_restart(
     1b. Same as above, but turn off the replica before the restart, and then turn it back on after the restart.
     1c. Same as 1a, but with the MV reading from an index.
     1i. Same as 1a, but on an auto-scheduled cluster.
+    1j. Same as 1a, but there is an index on the MV, and the refresh interval is large, so we are still before the next
+        refresh after the restart.
 
-    2a. Kill envd, sleep through a refresh time, then bring up envd and check that we recover.
+    2a. Sleep through a refresh time after killing envd, then bring up envd and check that we recover.
     2b. Same as 2a, but manipulate replicas as in 1b.
-    2c. Same as 2a but with the MV reading from an index.
+    2c. Same as 2a, but with the MV reading from an index.
     2i. Same as 2a, but on an auto-scheduled cluster.
+    2j. Same as 1j, but with the long sleep of 2a.
 
     3d. No replica while creating the MV, restart envd, and then create a replica
-    3e. Same as 3d but with the MV reading from an index.
+    3e. Same as 3d, but with an MV reading from an index.
     3f. Same as 3d, but with an MV that has a last refresh.
     3g. Same as 3e, but with an MV that has a last refresh.
     3h. Same as 3d, but with an MV that has a short refresh interval, so we miss several refreshes by the time we get a
         replica.
+
+    When querying MVs after the restarts, perform the same queries with all combinations of
+     - SERIALIZABLE / STRICT SERIALIZABLE,
+     - with / without indexes on MVs.
 
     After each of 1., 2., and 3., check that the input table's read frontier keeps advancing.
     """
@@ -3443,12 +3450,12 @@ def workflow_test_refresh_mv_restart(
             > CREATE TABLE t (x int);
             > INSERT INTO t VALUES (100);
 
-            > CREATE CLUSTER cluster_ac SIZE '1';
+            > CREATE CLUSTER cluster_acj SIZE '1';
             > CREATE CLUSTER cluster_b SIZE '1';
             > CREATE CLUSTER cluster_auto_scheduled (SIZE '1', SCHEDULE = ON REFRESH);
 
             > CREATE MATERIALIZED VIEW mv_a
-              IN CLUSTER cluster_ac
+              IN CLUSTER cluster_acj
               WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
               SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
@@ -3458,10 +3465,10 @@ def workflow_test_refresh_mv_restart(
               SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
             > CREATE DEFAULT INDEX
-              IN CLUSTER cluster_ac
+              IN CLUSTER cluster_acj
               ON t;
             > CREATE MATERIALIZED VIEW mv_c
-              IN CLUSTER cluster_ac
+              IN CLUSTER cluster_acj
               WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
               SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
@@ -3470,7 +3477,23 @@ def workflow_test_refresh_mv_restart(
               WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
               SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
+            > CREATE MATERIALIZED VIEW mv_j
+              IN CLUSTER cluster_acj
+              WITH (REFRESH EVERY '1000000 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
+              SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+            > CREATE CLUSTER serving SIZE '1';
+            > CREATE CLUSTER serving_indexed SIZE '1';
+
+            > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_a;
+            > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_b;
+            > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_c;
+            > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_i;
+            > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_j;
+
             # Let's wait for the MVs' initial refresh to complete.
+
+            > SET cluster = 'serving';
             > SELECT * FROM mv_a;
             100
             > SELECT * FROM mv_b;
@@ -3479,6 +3502,30 @@ def workflow_test_refresh_mv_restart(
             100
             > SELECT * FROM mv_i;
             100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
+
+            > SET cluster = 'serving_indexed';
+            > SELECT * FROM mv_a;
+            100
+            > SELECT * FROM mv_b;
+            100
+            > SELECT * FROM mv_c;
+            100
+            > SELECT * FROM mv_i;
+            100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
 
             > INSERT INTO t VALUES (1000);
 
@@ -3490,6 +3537,10 @@ def workflow_test_refresh_mv_restart(
             """
             > ALTER CLUSTER cluster_b SET (REPLICATION FACTOR 1);
 
+            > SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
+
+            > SET cluster = 'serving';
+
             > SELECT * FROM mv_a;
             1100
             > SELECT * FROM mv_b;
@@ -3498,6 +3549,73 @@ def workflow_test_refresh_mv_restart(
             1100
             > SELECT * FROM mv_i;
             1100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
+            1001
+
+            > SET cluster = 'serving_indexed';
+
+            > SELECT * FROM mv_a;
+            1100
+            > SELECT * FROM mv_b;
+            1100
+            > SELECT * FROM mv_c;
+            1100
+            > SELECT * FROM mv_i;
+            1100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
+            1001
+
+            > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+
+            > SET cluster = 'serving';
+
+            > SELECT * FROM mv_a;
+            1100
+            > SELECT * FROM mv_b;
+            1100
+            > SELECT * FROM mv_c;
+            1100
+            > SELECT * FROM mv_i;
+            1100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
+            1001
+
+            > SET cluster = 'serving_indexed';
+
+            > SELECT * FROM mv_a;
+            1100
+            > SELECT * FROM mv_b;
+            1100
+            > SELECT * FROM mv_c;
+            1100
+            > SELECT * FROM mv_i;
+            1100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
+            1001
             """
         )
 
@@ -3537,38 +3655,44 @@ def workflow_test_refresh_mv_restart(
                 > CREATE TABLE t (x int);
                 > INSERT INTO t VALUES (100);
 
-                > CREATE CLUSTER cluster_defg (SIZE '1', REPLICATION FACTOR 0);
+                > CREATE CLUSTER cluster_defgh (SIZE '1', REPLICATION FACTOR 0);
 
                 > CREATE MATERIALIZED VIEW mv_3h
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   WITH (REFRESH EVERY '1600 ms') AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
                 > CREATE MATERIALIZED VIEW mv_3d
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   WITH (REFRESH EVERY '100000 sec') AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
                 > CREATE MATERIALIZED VIEW mv_3f
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   WITH (REFRESH AT CREATION) AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
                 > CREATE DEFAULT INDEX
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   ON t;
 
                 > CREATE MATERIALIZED VIEW mv_3e
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   WITH (REFRESH EVERY '100000 sec') AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
                 > CREATE MATERIALIZED VIEW mv_3g
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   WITH (REFRESH AT CREATION) AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
-                # This won't be visible, because the refresh interval is very long.
+                > CREATE CLUSTER serving_indexed SIZE '1';
+                > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3d;
+                > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3e;
+                > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3f;
+                > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3g;
+                > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3h;
+
                 > INSERT INTO t VALUES (1000);
                 """
             )
@@ -3579,7 +3703,13 @@ def workflow_test_refresh_mv_restart(
         c.testdrive(
             input=dedent(
                 """
-                > ALTER CLUSTER cluster_defg SET (REPLICATION FACTOR 1);
+                > ALTER CLUSTER cluster_defgh SET (REPLICATION FACTOR 1);
+
+                > CREATE CLUSTER serving SIZE '1';
+
+                > SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
+
+                > SET cluster = 'serving';
 
                 > SELECT * FROM mv_3d
                 100
@@ -3597,6 +3727,65 @@ def workflow_test_refresh_mv_restart(
 
                 > SELECT * FROM mv_3h;
                 11100
+
+                > SET cluster = 'serving_indexed';
+
+                > SELECT * FROM mv_3d
+                100
+                > SELECT * FROM mv_3e
+                100
+                > SELECT * FROM mv_3f
+                100
+                > SELECT * FROM mv_3g
+                100
+
+                > SELECT * FROM mv_3h;
+                11100
+
+                > INSERT INTO t VALUES (10000);
+
+                > SELECT * FROM mv_3h;
+                21100
+
+                > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+
+                > SET cluster = 'serving';
+
+                > SELECT * FROM mv_3d
+                100
+                > SELECT * FROM mv_3e
+                100
+                > SELECT * FROM mv_3f
+                100
+                > SELECT * FROM mv_3g
+                100
+
+                > SELECT * FROM mv_3h;
+                21100
+
+                > INSERT INTO t VALUES (10000);
+
+                > SELECT * FROM mv_3h;
+                31100
+
+                > SET cluster = 'serving_indexed';
+
+                > SELECT * FROM mv_3d
+                100
+                > SELECT * FROM mv_3e
+                100
+                > SELECT * FROM mv_3f
+                100
+                > SELECT * FROM mv_3g
+                100
+
+                > SELECT * FROM mv_3h;
+                31100
+
+                > INSERT INTO t VALUES (10000);
+
+                > SELECT * FROM mv_3h;
+                41100
                 """
             )
         )
