@@ -122,16 +122,17 @@ with several additional columns that describe the nature of the update:
 
 ### `AS OF`
 
-The `AS OF` clause allows specifying a timestamp at which the `SUBSCRIBE` should begin returning results, in order to inspect the historical state of a relation. If `AS OF` is specified, no rows whose timestamp is less than the specified timestamp will be returned. If the timestamp specified is earlier than the earliest historical state retained by the source relations, an error will be signaled.
+When a [history rentention period](/transform-data/patterns/time-travel-queries/#history-retention-period)
+is configured for the object(s) powering the subscription, the `AS OF` clause
+allows specifying a timestamp at which the `SUBSCRIBE` command should begin
+returning results. If `AS OF` is specified, no rows whose timestamp is earlier
+than the specified timestamp will be returned. If the timestamp specified is
+earlier than the earliest historical state retained by the underlying objects,
+an error is thrown.
 
-If `AS OF` is unspecified, the system automatically chooses an `AS OF`
-timestamp.
-
-By default, all user-defined sources and tables have a historical retention
-period of one second, so `AS OF` is of limited usefulness except when
-subscribing to queries over specific system catalog objects. To configure the
-historical retention period for objects used in a subscription, see the
-[history retention](/manage/history-retention-period) reference documentation.
+To configure the history retention period for objects used in a subscription,
+see [Time travel queries](/transform-data/patterns/time-travel-queries)). If
+`AS OF` is unspecified, the system automatically chooses an `AS OF` timestamp.
 
 ### `UP TO`
 
@@ -513,23 +514,30 @@ to sort the rows within each distinct timestamp.
 
 * If [`PROGRESS`](#progress) is set, progress messages are unaffected.
 
-### Durable subscriptions to changing data
+### Dropping the `counter` load generator source
+
+When you're done, you can drop the `counter` load generator source:
+
+```sql
+DROP SOURCE counter;
+```
+
+### Durable subscriptions
 
 Because `SUBSCRIBE` requests happen over the network, these connections might
 get disrupted for both expected and unexpected reasons. You can adjust the
-[history retention period](/manage/historical-retention-period) for the objects
-a subscription depends on, and then use [`AS OF`](#as-of) to pick up where you
-left off on connection drops — this ensures that no data is lost in the
-subscription process, and avoids the need for re-snapshotting the data.
+[history retention period](/transform-data/patterns/time-travel-queries/#history-retention-period) for
+the objects a subscription depends on, and then use [`AS OF`](#as-of) to pick
+up where you left off on connection drops — this ensures that no data is lost
+in the subscription process, and avoids the need for re-snapshotting the data.
 
 To set up a durable subscription in your application:
 
 1. In Materialize, configure the history retention period for the object
 (s) queried in the `SUBSCRIBE`. Choose a duration you expect will allow you to
 recover in case of connection drops. One hour (`1h`) is a good place to start,
-though you should be mindful of the [implications]
-(/manage/history-retention-period/#considerations) of increasing an object's
-history retention period.
+though you should be mindful of the [resource utilization impact](/transform-data/patterns/time-travel-queries/#resource-utilization)
+of increasing an object's history retention period.
 
 1. In order to restart your application without losing or re-snapshotting data
 after a connection drop, you need to store the latest timestamp processed for
@@ -537,7 +545,7 @@ the subscription (either in Materialize, or elsewhere in your application
 state). This will allow you to resume using the retained history upstream.
 
 1. The first time you start the subscription, run the following
-continuous query against Materialize in your application code: 
+continuous query against Materialize in your application code:
 
    ```sql
    SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT true);
@@ -550,8 +558,8 @@ continuous query against Materialize in your application code:
 a [progress](#progress) message. At that point, the data up until the progress message
 is complete, so you can:
 
-    a. Process all the buffered data in your application.
-    b. Persist the `mz_timestamp` of the progress message.
+   1. Process all the buffered data in your application.
+   1. Persist the `mz_timestamp` of the progress message.
 
 1. To resume the subscription in subsequent restarts,
 use the following continuous query against Materialize in your application code:
@@ -560,22 +568,15 @@ use the following continuous query against Materialize in your application code:
    SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT false) AS OF <last_progress_mz_timestamp>;
    ```
 
- In a similar way, as results come in continuously, buffer the latest results in memory until you receive
-a [progress](#progress) message. At that point, the data up until the progress message
-is complete, so you can:
+   In a similar way, as results come in continuously, buffer the latest results
+   in memory until you receive a [progress](#progress) message. At that point,
+   the data up until the progress message is complete, so you can:
 
-    a. Process all the buffered data in your application.
-    b. Persist the `mz_timestamp` of the progress message.
+   1. Process all the buffered data in your application.
+   1. Persist the `mz_timestamp` of the progress message.
 
- You can choose flush interval at which you want to durably record the 
- `last_progress_mz_timestamp`, if every progress message is too frequent.
-### Dropping the `counter` load generator source
-
-When you're done, you can drop the `counter` load generator source:
-
-```sql
-DROP SOURCE counter;
-```
+   You can tweak the flush interval at which you durably record the latest
+   progress timestamp, if every progress message is too frequent.
 
 ## Privileges
 
