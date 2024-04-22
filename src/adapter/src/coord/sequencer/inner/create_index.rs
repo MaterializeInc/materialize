@@ -20,7 +20,6 @@ use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
-use timely::progress::Timestamp as _;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -462,9 +461,7 @@ impl Coordinator {
                 //
                 // TODO: Maybe in the future, pass those holds on to compute, to
                 // hold on to them and downgrade when possible?
-                let read_holds = coord
-                    .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
-                    .expect("can acquire read holds");
+                let read_holds = coord.acquire_read_holds(&id_bundle);
                 let since = coord.least_valid_read(&read_holds);
                 df_desc.set_as_of(since);
 

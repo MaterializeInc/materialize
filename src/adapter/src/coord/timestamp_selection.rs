@@ -187,11 +187,7 @@ impl TimestampProvider for Coordinator {
     }
 
     fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
-        let read_holds = self
-            .acquire_read_holds(mz_repr::Timestamp::minimum(), id_bundle, false)
-            .expect("can acquire read holds");
-
-        read_holds
+        self.acquire_read_holds(id_bundle)
     }
 
     fn catalog_state(&self) -> &CatalogState {

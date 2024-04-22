@@ -769,18 +769,17 @@ impl crate::coord::Coordinator {
         self.compute_read_capabilities.remove(id).is_some()
     }
 
-    /// Attempt to acquire read holds on the indicated collections at the indicated `time`.
+    /// Attempt to acquire read holds on the indicated collections at the
+    /// earliest available time.
     ///
-    /// If we are unable to acquire a read hold at the provided `time` for a specific id, then
-    /// depending on the `precise` argument, we either fall back to acquiring a read hold at
-    /// the lowest possible time for that id, or return an error. The returned error contains
-    /// those collection sinces that were later than the specified time.
+    /// # Panics
+    ///
+    /// Will panic if any of the referenced collections in `id_bundle` don't
+    /// exist.
     pub(crate) fn acquire_read_holds(
         &mut self,
-        time: Timestamp,
         id_bundle: &CollectionIdBundle,
-        precise: bool,
-    ) -> Result<ReadHolds<Timestamp>, Vec<(Antichain<Timestamp>, CollectionIdBundle)>> {
+    ) -> ReadHolds<Timestamp> {
         // Create a `ReadHoldsInner` that contains a read hold for each id in
         // `id_bundle`. The time of each read holds is at `time`, if possible
         // otherwise it is at the lowest possible time.
@@ -788,7 +787,7 @@ impl crate::coord::Coordinator {
         // This does not apply the read holds in STORAGE or COMPUTE. The code
         // below applies those in the correct read capability.
         let mut read_holds = ReadHoldsInner::new();
-        let time_antichain = Antichain::from_elem(time);
+        let time_antichain = Antichain::from_elem(Timestamp::MIN);
 
         for id in id_bundle.storage_ids.iter() {
             // TODO(aljoscha): This is a bit iffy, because we're using the since
@@ -823,36 +822,6 @@ impl crate::coord::Coordinator {
             }
         }
 
-        if precise {
-            let mut too_late: HashMap<_, CollectionIdBundle> = HashMap::new();
-            for (id, hold) in read_holds.storage_holds.iter() {
-                if !hold.frontier().iter().all(|hold_time| *hold_time == time) {
-                    let owned_frontier = hold.frontier().to_owned();
-                    too_late
-                        .entry(owned_frontier)
-                        .or_default()
-                        .storage_ids
-                        .insert(*id);
-                }
-            }
-            for ((instance_id, id), hold) in read_holds.compute_holds.iter() {
-                if !hold.frontier().iter().all(|hold_time| *hold_time == time) {
-                    let owned_frontier = hold.frontier().to_owned();
-                    too_late
-                        .entry(owned_frontier)
-                        .or_default()
-                        .compute_ids
-                        .entry(*instance_id)
-                        .or_default()
-                        .insert(*id);
-                }
-            }
-            // If we are not able to acquire read holds precisely at the specified time (only later), then error out.
-            if !too_late.is_empty() {
-                return Err(too_late.into_iter().collect_vec());
-            }
-        }
-
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
         for (id, hold) in read_holds.storage_holds.iter_mut() {
@@ -881,7 +850,7 @@ impl crate::coord::Coordinator {
         }
 
         let read_holds = ReadHolds::new(read_holds, self.dropped_read_holds_tx.clone());
-        Ok(read_holds)
+        read_holds
     }
 
     /// Stash transaction read holds. They will be released when the transaction
