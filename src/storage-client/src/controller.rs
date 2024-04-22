@@ -120,9 +120,6 @@ pub enum DataSourceOther {
     TableWrites,
     /// Compute maintains, i.e. it is a `MATERIALIZED VIEW`.
     Compute,
-    /// Some other sources writes this data, i.e. a subsource.
-    // TODO: remove this after the subsource dependency inversion migration.
-    Source,
 }
 
 /// Describes a request to create a source.

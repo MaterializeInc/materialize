@@ -477,8 +477,7 @@ where
                     | DataSource::Introspection(_)
                     | DataSource::Progress
                     | DataSource::Webhook
-                    | DataSource::Other(DataSourceOther::Compute)
-                    | DataSource::Other(DataSourceOther::Source) => None,
+                    | DataSource::Other(DataSourceOther::Compute) => None,
                 };
 
                 let metadata = CollectionMetadata {
@@ -540,8 +539,7 @@ where
                     | DataSource::Webhook
                     | DataSource::Ingestion(_)
                     | DataSource::Progress
-                    | DataSource::Other(DataSourceOther::Compute)
-                    | DataSource::Other(DataSourceOther::Source) => {},
+                    | DataSource::Other(DataSourceOther::Compute) => {},
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
                         if since_handle.since().elements() == &[T::minimum()] {
@@ -739,7 +737,7 @@ where
                     debug!(desc = ?collection_state.description, meta = ?metadata, "not registering {} with a controller persist worker", id);
                     self.collections.insert(id, collection_state);
                 }
-                DataSource::Ingestion(_) | DataSource::Other(DataSourceOther::Source) => {
+                DataSource::Ingestion(_) => {
                     debug!(desc = ?collection_state.description, meta = ?metadata, "not registering {} with a controller persist worker", id);
                     self.collections.insert(id, collection_state);
                     new_source_statistic_entries.insert(id);
@@ -3351,8 +3349,7 @@ where
             | DataSource::Webhook
             | DataSource::Other(DataSourceOther::TableWrites)
             | DataSource::Progress
-            | DataSource::Other(DataSourceOther::Compute)
-            | DataSource::Other(DataSourceOther::Source) => None,
+            | DataSource::Other(DataSourceOther::Compute) => None,
             DataSource::IngestionExport { ingestion_id, .. } => {
                 // Ingestion exports depend on their primary source's remap
                 // collection.

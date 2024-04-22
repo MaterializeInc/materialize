@@ -296,13 +296,9 @@ impl Coordinator {
                                 set_read_policies,
                             )
                         }
-                        // Subsources use source statuses.
-                        DataSourceDesc::Source => (
-                            DataSource::Other(DataSourceOther::Source),
-                            source_status_collection_id,
-                            // Subsources will inherit their parent source's read_policy.
-                            vec![],
-                        ),
+                        DataSourceDesc::Source => {
+                            unreachable!("cannot render legacy-style sources")
+                        }
                         DataSourceDesc::Progress => (DataSource::Progress, None, vec![source_id]),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
@@ -3393,6 +3389,8 @@ impl Coordinator {
             } => {
                 const ALTER_SOURCE: &str = "ALTER SOURCE...ADD SUBSOURCES";
 
+                let id = cur_entry.id();
+
                 // Resolve items in statement
                 let (mut create_source_stmt, resolved_ids) =
                     create_sql_to_stmt_deps(self, ALTER_SOURCE, cur_entry.create_sql())?;
@@ -3588,7 +3586,10 @@ impl Coordinator {
                     let (data_source, status_collection_id) = match source.data_source {
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (
-                            DataSource::Other(DataSourceOther::Source),
+                            DataSource::IngestionExport {
+                                ingestion_id: id,
+                                external_reference: mz_sql::ast::UnresolvedItemName(vec![]),
+                            },
                             source_status_collection_id,
                         ),
                         o => {
