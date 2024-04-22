@@ -42,15 +42,19 @@ CREATE TABLE d1 (pk1 INT, pk2 INT NOT NULL, v INT NOT NULL);
 CREATE INDEX d1_i1 ON d1(pk1, pk2);
 
 INSERT INTO d1 VALUES
+  -- pk1 != pk2 rows
   (NULL, 0, 0),
   (0, 0, 1),
   -- 1 not present in d1
   (2, 3, 0), (3, 2, 1),
   (3, 4, 0),
   -- 4 has no rows in d1
-  (5, 6, 0),
-  (6, 7, 0)
-  -- 7 is not present in either table
+  (5, 6, 0), (6, 5, 1),
+  (6, 7, 0),
+
+  -- pk1 = pk2 rows
+  (3, 3, 0),
+  (5, 5, 0), (5, 5, 1)
   ;
 
 -- Dimension table and data (d2)
@@ -60,31 +64,41 @@ CREATE TABLE d2 (pk1 INT, pk2 INT NOT NULL, v INT NOT NULL);
 CREATE INDEX d2_i1 ON d2(pk1, pk2);
 
 INSERT INTO d2 VALUES
+  -- pk1 != pk2 rows
   (NULL, 0, 0),
-  -- 1 not present in d2
+  (1, 2, 0), (2, 1, 0),
   (2, 3, 0),
   (3, 4, 0), (4, 3, 1),
   (4, 5, 0),
-  (NULL, 5, 0)
+  (NULL, 5, 0),
   -- 6 has no rows in d2
-  -- 7 is not present in either table
+
+  -- pk1 = pk2 rows
+  (3, 3, 0), (3, 3, 1),
+  (4, 4, 0)
   ;
 
 -- Dimension table and data (d3)
 -- -----------------------------
 
-CREATE TABLE d3 (pk1 INT, pk2 INT NOT NULL, v INT NOT NULL);
+CREATE TABLE d3 (pk1 INT, pk2 INT, v INT NOT NULL);
 CREATE INDEX d3_i1 ON d3(pk1, pk2);
 
 INSERT INTO d3 VALUES
+  -- pk1 != pk2 rows
   (0, 0, 1),
   -- 1 not present in d3
   (NULL, 2, 0),
   (3, 4, 0), (4, 3, 1),
   -- 4 has no rows in d3
   (5, 6, 0),
-  (6, 7, 0), (7, 6, 1)
-  -- 7 is not present in either table
+  (6, 7, 0), (7, 6, 1),
+
+  -- pk1 = pk2 rows
+  (NULL, NULL, 0),
+  (3, 3, 0),
+  (4, 4, 1),
+  (5, 5, 0), (5, 5, 1)
   ;
 
 -- PK materialized views
