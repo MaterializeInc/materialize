@@ -1401,7 +1401,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
     def before(self) -> Action:
         return TdAction(
             """
-> DROP SOURCE IF EXISTS mz_source_pgcdc;
+> DROP SOURCE IF EXISTS mz_source_pgcdc CASCADE;
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
             """
         )
@@ -1454,7 +1454,7 @@ CREATE PUBLICATION p1 FOR ALL TABLES;
     def before(self) -> Action:
         return TdAction(
             f"""
-> DROP SOURCE IF EXISTS s1;
+> DROP SOURCE IF EXISTS s1 CASCADE;
 > DROP CLUSTER IF EXISTS source_cluster CASCADE;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -1533,7 +1533,7 @@ INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_
     def before(self) -> Action:
         return TdAction(
             """
-> DROP SOURCE IF EXISTS mz_source_mysqlcdc;
+> DROP SOURCE IF EXISTS mz_source_mysqlcdc CASCADE;
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
             """
         )
@@ -1587,7 +1587,7 @@ USE public;
     def before(self) -> Action:
         return TdAction(
             f"""
-> DROP SOURCE IF EXISTS s1;
+> DROP SOURCE IF EXISTS s1 CASCADE;
 > DROP CLUSTER IF EXISTS source_cluster CASCADE;
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}

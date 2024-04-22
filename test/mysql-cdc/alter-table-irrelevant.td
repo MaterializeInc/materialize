@@ -64,7 +64,7 @@ INSERT INTO irrelevant_table VALUES ('ab');
 2
 
 # Recreate the source and views to verify the irrelevant_table is part of the publication
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
@@ -103,4 +103,4 @@ INSERT INTO irrelevant_table VALUES ('gh');
 2
 
 # Drop source since sanity check restart requires it is in a good state
-> DROP SOURCE mz_source
+> DROP SOURCE mz_source CASCADE;

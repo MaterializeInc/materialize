@@ -65,7 +65,7 @@ users                   subsource      <null>                       <null>
 
 # Show that AST of subsource contains REFERENCES option
 > SHOW CREATE SOURCE accounts
-materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) WITH (REFERENCES = true)"
+materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) OF SOURCE \"materialize\".\"public\".\"auction_house\" WITH (EXTERNAL REFERENCE = \"mz_load_generators\".\"auction\".\"accounts\")"
 
 # Check that non-append-only `COUNTER` sources reach the proper size
 

@@ -107,13 +107,13 @@ def workflow_github_17578(c: Composition) -> None:
             """
             > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
-            > SELECT
+            > SELECT DISTINCT
               top_level_s.name as source,
               s.name AS subsource
               FROM mz_internal.mz_object_dependencies AS d
-              JOIN mz_sources AS s ON s.id = d.referenced_object_id
-              JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id
-              WHERE top_level_s.name = 'with_subsources';
+              JOIN mz_sources AS s ON s.id = d.referenced_object_id OR s.id = d.object_id
+              JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id OR top_level_s.id = d.referenced_object_id
+              WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
             with_subsources accounts
@@ -138,9 +138,9 @@ def workflow_github_17578(c: Composition) -> None:
               top_level_s.name as source,
               s.name AS subsource
               FROM mz_internal.mz_object_dependencies AS d
-              JOIN mz_sources AS s ON s.id = d.referenced_object_id
-              JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id
-              WHERE top_level_s.name = 'with_subsources';
+              JOIN mz_sources AS s ON s.id = d.referenced_object_id OR s.id = d.object_id
+              JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id OR top_level_s.id = d.referenced_object_id
+              WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
             with_subsources accounts
@@ -395,12 +395,13 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     )
 
     # Fill mz_source_status_history and mz_sink_status_history up with enough events
-    for i in range(10):
+    for i in range(5):
         c.testdrive(
             service="testdrive_no_reset",
             input=dedent(
                 """
-                > ALTER CONNECTION kafka_conn SET (SECURITY PROTOCOL PLAINTEXT)
+                > ALTER CONNECTION kafka_conn SET (BROKER 'dne') WITH (VALIDATE = false);
+                > ALTER CONNECTION kafka_conn SET (BROKER '${testdrive.kafka-addr}') WITH (VALIDATE = true);
                 """
             ),
         )

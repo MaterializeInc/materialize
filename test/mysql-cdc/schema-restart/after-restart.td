@@ -40,4 +40,4 @@ INSERT INTO other VALUES (4), (5);
 # Drop the source + subsources because some tests expect
 # all remaining sources at the end of the test to be
 # healthy.
-> DROP SOURCE schema_test;
+> DROP SOURCE schema_test CASCADE;

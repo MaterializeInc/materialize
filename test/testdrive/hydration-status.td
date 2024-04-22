@@ -340,7 +340,7 @@ users         hydrated_test_4 true
 # Test dropping dataflows.
 
 > DROP SINK snk
-> DROP SOURCE src
+> DROP SOURCE src CASCADE
 > DROP MATERIALIZED VIEW mv
 
 > SELECT o.name, r.name, h.hydrated

@@ -353,7 +353,7 @@ CREATE PUBLICATION mz_source2 FOR TABLE t4;
 contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 3)
 
 # Show that dropping source does proper accounting
-> DROP SOURCE mz_source
+> DROP SOURCE mz_source CASCADE
 
 > CREATE SOURCE mz_source2
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
@@ -376,12 +376,12 @@ contains:creating source would violate max_sources limit (desired: 4, limit: 3, 
 # Can add them in smaller quantities
 > ALTER SOURCE mz_source2 ADD SUBSOURCE t1, t2;
 
-> ALTER SOURCE mz_source2 DROP SUBSOURCE t1;
+> DROP SOURCE t1;
 
 ! ALTER SOURCE mz_source2 ADD SUBSOURCE t1, t3;
 contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 2)
 
-> DROP SOURCE mz_source2
+> DROP SOURCE mz_source2 CASCADE
 
 > SHOW max_aws_privatelink_connections
 0

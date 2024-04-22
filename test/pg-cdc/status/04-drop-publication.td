@@ -30,4 +30,4 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 contains:publication "mz_source" does not exist
 
 # Tests must exit with healthy sources
-> DROP SOURCE pg_source;
+> DROP SOURCE pg_source CASCADE;
