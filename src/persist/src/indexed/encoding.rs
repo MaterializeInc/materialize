@@ -159,12 +159,12 @@ pub struct BlobTraceBatchPart<T> {
 pub enum BlobTraceUpdates {
     /// Legacy format. Keys and Values are encoded into bytes via [`Codec`], then stored in our own
     /// columnar-esque struct.
-    /// 
+    ///
     /// [`Codec`]: mz_persist_types::Codec
     Row(Vec<ColumnarRecords>),
     /// Migration format. Keys and Values are encoded into bytes via [`Codec`] and structured into
     /// an Apache Arrow columnar format.
-    /// 
+    ///
     /// [`Codec`]: mz_persist_types::Codec
     Both((ColumnarRecords, ColumnarRecordsStructuredExt)),
     // TODO(parkmycar): Write only columnar/Arrow data.
