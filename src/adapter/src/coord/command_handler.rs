@@ -870,9 +870,7 @@ impl Coordinator {
             // It's important that we acquire read holds _before_ we determine the least valid read.
             // Otherwise, we're not guaranteed that the since frontier doesn't
             // advance forward from underneath us.
-            let read_holds = self
-                .acquire_read_holds(Timestamp::MIN, &ids, false)
-                .expect("precise==false, so acquiring read holds always succeeds");
+            let read_holds = self.acquire_read_holds(&ids);
 
             // Does `mz_now()` occur?
             let mz_now_ts = if cmvs

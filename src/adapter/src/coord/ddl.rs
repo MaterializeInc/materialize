@@ -1040,9 +1040,7 @@ impl Coordinator {
         //
         // TODO: Maybe in the future, pass those holds on to storage, to hold on
         // to them and downgrade when possible?
-        let read_holds = self
-            .acquire_read_holds(mz_repr::Timestamp::MIN, &id_bundle, false)
-            .expect("can acquire read holds");
+        let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = self.least_valid_read(&read_holds);
 
         let storage_sink_from_entry = self.catalog().get_entry(&sink.from);

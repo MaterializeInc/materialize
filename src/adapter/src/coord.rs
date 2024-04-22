@@ -2263,9 +2263,7 @@ impl Coordinator {
         // We're putting in place read holds, to prevent the since of
         // dependencies moving along concurrently, pulling the rug from under
         // us!
-        let read_holds = self
-            .acquire_read_holds(mz_repr::Timestamp::minimum(), &direct_dependencies, false)
-            .expect("can acquire un-precise read holds");
+        let read_holds = self.acquire_read_holds(&direct_dependencies);
 
         let min_as_of = self.least_valid_read(&read_holds);
 

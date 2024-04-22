@@ -566,9 +566,7 @@ impl Coordinator {
         } else {
             // No one has acquired holds, make sure we can determine an as_of
             // and render our dataflow below.
-            read_holds_owned = self
-                .acquire_read_holds(mz_repr::Timestamp::MIN, &id_bundle, false)
-                .expect("can always acquire non-precise read holds");
+            read_holds_owned = self.acquire_read_holds(&id_bundle);
             &read_holds_owned
         };
 
