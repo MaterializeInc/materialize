@@ -13,15 +13,16 @@ use std::collections::BTreeMap;
 use std::convert;
 use std::sync::Arc;
 
-use arrow2::array::{Array, BinaryArray, PrimitiveArray};
+use arrow2::array::{Array, BinaryArray, PrimitiveArray, StructArray};
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::{DataType, Field, Schema};
+use arrow2::io::parquet::write::Encoding;
 use mz_dyncfg::Config;
 use mz_ore::bytes::MaybeLgBytes;
 use mz_ore::lgbytes::{LgBytes, MetricsRegion};
 use once_cell::sync::Lazy;
 
-use crate::indexed::columnar::ColumnarRecords;
+use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::metrics::ColumnarMetrics;
 
 /// The Arrow schema we use to encode ((K, V), T, D) tuples.
@@ -68,7 +69,20 @@ pub static SCHEMA_ARROW_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
     ]))
 });
 
-/// Converts a ColumnarRecords into an arrow [(K, V, T, D)] Chunk.
+/// Parquet encodings used for the `[(K, V, T, D)]` format.
+pub static ENCODINGS_ARROW_KVTD: Lazy<Vec<Vec<Encoding>>> = Lazy::new(|| {
+    vec![
+        vec![Encoding::Plain],
+        vec![Encoding::Plain],
+        vec![Encoding::Plain],
+        vec![Encoding::Plain],
+    ]
+});
+
+/// Converts a [`ColumnarRecords`] (aka [`BlobTraceUpdates::Row`]) into an [`arrow2::chunk::Chunk`]
+/// with columns [(K, V, T, D)].
+///
+/// [`BlobTraceUpdates::Row`]: crate::indexed::encoding::BlobTraceUpdates::Row
 pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Box<dyn Array>> {
     Chunk::try_new(vec![
         convert::identity::<Box<dyn Array>>(Box::new(BinaryArray::new(
@@ -105,6 +119,62 @@ pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Box<dyn Array>> {
     .expect("schema matches fields")
 }
 
+/// Converts a [`ColumnarRecords`] and [`ColumnarRecordsStructuredExt`] pair
+/// (aka [`BlobTraceUpdates::Both`]) into an [`arrow2::chunk::Chunk`] with columns
+/// [(K, V, T, D, K_S, V_S)].
+///
+/// [`BlobTraceUpdates::Both`]: crate::indexed::encoding::BlobTraceUpdates::Both
+pub fn encode_arrow_batch_kvtd_ks_vs(
+    records: &ColumnarRecords,
+    structured: &ColumnarRecordsStructuredExt,
+) -> (Vec<Field>, Vec<Vec<Encoding>>, Chunk<Box<dyn Array>>) {
+    let codec_chunk = encode_arrow_batch_kvtd(records);
+    let mut arrays = codec_chunk.into_arrays();
+
+    let mut fields = SCHEMA_ARROW_KVTD.fields.clone();
+    let mut encodings = ENCODINGS_ARROW_KVTD.clone();
+
+    /// Generate a list of encodings for all of the "leaf" arrays.
+    ///
+    /// TODO(parkmycar): It's probably worth it to use encodings other than "Plan".
+    fn generate_encodings(field: &Field, encodings: &mut Vec<Encoding>) {
+        match field.data_type() {
+            // TODO(parkmycar): We don't use them today, but should also handle Union
+            // types here.
+            DataType::Struct(fields) => {
+                for field in fields {
+                    generate_encodings(field, encodings);
+                }
+            }
+            _ => encodings.push(Encoding::Plain),
+        }
+    }
+
+    if let Some(key_array) = &structured.key {
+        let key_field = Field::new("k_s", key_array.data_type().clone(), false);
+        let mut key_encodings = Vec::new();
+        generate_encodings(&key_field, &mut key_encodings);
+
+        fields.push(key_field);
+        encodings.push(key_encodings);
+        arrays.push(Box::new(key_array.clone()));
+    }
+
+    if let Some(val_array) = &structured.val {
+        let val_field = Field::new("v_s", val_array.data_type().clone(), false);
+        let mut val_encodings = Vec::new();
+        generate_encodings(&val_field, &mut val_encodings);
+
+        fields.push(val_field);
+        encodings.push(val_encodings);
+        arrays.push(Box::new(val_array.clone()));
+    }
+
+    let chunk = Chunk::try_new(arrays).expect("all arrays are the same length");
+
+    (fields, encodings, chunk)
+}
+
 pub(crate) const ENABLE_ARROW_LGALLOC_CC_SIZES: Config<bool> = Config::new(
     "persist_enable_arrow_lgalloc_cc_sizes",
     true,
@@ -121,6 +191,7 @@ pub(crate) const ENABLE_ARROW_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
 pub fn decode_arrow_batch_kvtd(
     x: &Chunk<Box<dyn Array>>,
     metrics: &ColumnarMetrics,
+    expected_cols: usize,
 ) -> Result<ColumnarRecords, String> {
     fn to_region<T: Copy>(buf: &[T], metrics: &ColumnarMetrics) -> Arc<MetricsRegion<T>> {
         let use_lgbytes_mmap = if metrics.is_cc_active {
@@ -135,9 +206,13 @@ pub fn decode_arrow_batch_kvtd(
         }
     }
     let columns = x.columns();
-    if columns.len() != 4 {
-        return Err(format!("expected 4 fields got {}", columns.len()));
+    if columns.len() != expected_cols {
+        return Err(format!(
+            "expected {expected_cols} fields got {}",
+            columns.len()
+        ));
     }
+
     let key_col = &x.columns()[0];
     let val_col = &x.columns()[1];
     let ts_col = &x.columns()[2];
@@ -182,4 +257,48 @@ pub fn decode_arrow_batch_kvtd(
     };
     ret.borrow().validate()?;
     Ok(ret)
+}
+
+/// Converts an arrow [(K, V, T, D)] Chunk into a ColumnarRecords.
+pub fn decode_arrow_batch_kvtd_ks_vs(
+    x: &Chunk<Box<dyn Array>>,
+    metrics: &ColumnarMetrics,
+    key_idx: Option<usize>,
+    val_idx: Option<usize>,
+) -> Result<(ColumnarRecords, ColumnarRecordsStructuredExt), String> {
+    // We always expect to have (K, V, T, D), optionally we'll also have K_S and/or V_S.
+    let expected_columns = 4 + key_idx.map_or(0, |_| 1) + val_idx.map_or(0, |_| 1);
+    let records = decode_arrow_batch_kvtd(x, metrics, expected_columns)?;
+
+    let columns = x.columns();
+    if columns.len() != expected_columns {
+        return Err(format!(
+            "expected {expected_columns} columns, got {}",
+            columns.len()
+        ));
+    }
+
+    let key = if let Some(key_idx) = key_idx {
+        let array = columns[key_idx]
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| format!("column {key_idx} doesn't match schema"))?
+            .clone();
+        Some(array)
+    } else {
+        None
+    };
+
+    let val = if let Some(val_idx) = val_idx {
+        let array = columns[val_idx]
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| format!("column {val_idx} doesn't match schema"))?
+            .clone();
+        Some(array)
+    } else {
+        None
+    };
+
+    Ok((records, ColumnarRecordsStructuredExt { key, val }))
 }

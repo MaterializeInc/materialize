@@ -151,7 +151,61 @@ pub struct BlobTraceBatchPart<T> {
     /// Index of this part in the list of parts that form the batch.
     pub index: u64,
     /// The updates themselves.
-    pub updates: Vec<ColumnarRecords>,
+    pub updates: BlobTraceUpdates,
+}
+
+/// The set of updates that are part of a [`BlobTraceBatchPart`].
+#[derive(Clone, Debug)]
+pub enum BlobTraceUpdates {
+    /// Legacy format. Keys and Values are encoded into bytes via [`Codec`], then stored in our own
+    /// columnar-esque struct.
+    /// 
+    /// [`Codec`]: mz_persist_types::Codec
+    Row(Vec<ColumnarRecords>),
+    /// Migration format. Keys and Values are encoded into bytes via [`Codec`] and structured into
+    /// an Apache Arrow columnar format.
+    /// 
+    /// [`Codec`]: mz_persist_types::Codec
+    Both((ColumnarRecords, ColumnarRecordsStructuredExt)),
+    // TODO(parkmycar): Write only columnar/Arrow data.
+}
+
+impl BlobTraceUpdates {
+    /// Return the [`ColumnarRecords`], if one exists for the provided `idx`.
+    pub fn get(&self, idx: usize) -> Option<&ColumnarRecords> {
+        match self {
+            BlobTraceUpdates::Row(updates) => updates.get(idx),
+            BlobTraceUpdates::Both((codec, _structured)) => match idx {
+                0 => Some(codec),
+                _ => None,
+            },
+        }
+    }
+
+    /// Returns the number of updates.
+    pub fn len(&self) -> usize {
+        match self {
+            BlobTraceUpdates::Row(updates) => updates.len(),
+            BlobTraceUpdates::Both(_) => 1,
+        }
+    }
+
+    /// Returns an iterator over the [`ColumnarRecords`] in this update.
+    pub fn iter(&self) -> impl Iterator<Item = &'_ ColumnarRecords> {
+        let updates: Box<dyn Iterator<Item = _>> = match self {
+            BlobTraceUpdates::Row(updates) => Box::new(updates.iter()),
+            BlobTraceUpdates::Both((codec, _s)) => Box::new(std::iter::once(codec)),
+        };
+        updates
+    }
+
+    /// Returns the total number of logical bytes in the represented data.
+    pub fn goodbytes(&self) -> usize {
+        match self {
+            BlobTraceUpdates::Row(updates) => updates.iter().map(|u| u.goodbytes()).sum(),
+            BlobTraceUpdates::Both((codec, _s)) => codec.goodbytes(),
+        }
+    }
 }
 
 impl TraceBatchMeta {
@@ -382,14 +436,22 @@ impl<T: Timestamp + Codec64> From<&Description<T>> for ProtoU64Description {
 }
 
 /// Encodes the inline metadata for a trace batch into a base64 string.
-pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(
-    batch: &BlobTraceBatchPart<T>,
-    format: ProtoBatchFormat,
-) -> String {
+pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(batch: &BlobTraceBatchPart<T>) -> String {
+    let (format, format_metadata) = match &batch.updates {
+        // For the legacy Row format, we only write it as `ParquetKvtd`.
+        BlobTraceUpdates::Row(_) => (ProtoBatchFormat::ParquetKvtd, None),
+        // For the newer structured format we track some metadata about the version of the format.
+        BlobTraceUpdates::Both { .. } => {
+            let metadata = ProtoFormatMetadata::StructuredMigration(1);
+            (ProtoBatchFormat::ParquetStructured, Some(metadata))
+        }
+    };
+
     let inline = ProtoBatchPartInline {
         format: format.into(),
         desc: Some((&batch.desc).into()),
         index: batch.index,
+        format_metadata,
     };
     let inline_encoded = inline.encode_to_vec();
     base64::encode(inline_encoded)
@@ -451,12 +513,13 @@ mod tests {
         )
     }
 
-    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> Vec<ColumnarRecords> {
+    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> BlobTraceUpdates {
         let mut builder = ColumnarRecordsBuilder::default();
         for ((k, v), t, d) in updates {
             assert!(builder.push(((&k, &v), Codec64::encode(&t), Codec64::encode(&d))));
         }
-        vec![builder.finish(&ColumnarMetrics::disconnected())]
+        let updates = vec![builder.finish(&ColumnarMetrics::disconnected())];
+        BlobTraceUpdates::Row(updates)
     }
 
     #[mz_ore::test]
@@ -676,6 +739,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // too slow
     fn encoded_batch_sizes() {
         fn sizes(data: DataGenerator) -> usize {
+            let updates = data.batches().collect();
+            let updates = BlobTraceUpdates::Row(updates);
             let trace = BlobTraceBatchPart {
                 desc: Description::new(
                     Antichain::from_elem(0u64),
@@ -683,7 +748,7 @@ mod tests {
                     Antichain::from_elem(0u64),
                 ),
                 index: 0,
-                updates: data.batches().collect(),
+                updates,
             };
             let mut trace_buf = Vec::new();
             trace.encode(&mut trace_buf);
