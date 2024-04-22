@@ -190,13 +190,12 @@ $ s3-verify-keys bucket=copytos3 prefix-path=test/5 key-pattern=INCOMPLETE
 #     FORMAT = 'parquet'
 #   );
 
-> COPY (SELECT false::bool, 'Inf'::double, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/parquet_test/3'
+> COPY (SELECT false::bool, 'Inf'::double, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 1234567890123456789012.4567890123456789::numeric(38,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/parquet_test/3'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'parquet'
   );
-
 
 $ s3-verify-data bucket=copytos3 key=parquet_test/1/${key-1}
 1
@@ -207,7 +206,7 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/2
 2
 
 $ s3-verify-data bucket=copytos3 key=parquet_test/3
-false inf 1970-01-01T00:00:00.001 32767 2147483647 9223372036854775807 2010-10-10 10:10:10 2010-10-10T10:10:10 aaaa 5c7841414141 това е d182d0b5d0bad181d182
+false inf 1970-01-01T00:00:00.001 32767 2147483647 9223372036854775807 1234567890123456789012.4567890123456789 2010-10-10 10:10:10 2010-10-10T10:10:10 aaaa 5c7841414141 това е d182d0b5d0bad181d182
 
 # Confirm that unimplemented types will early exit before writing to s3
 ! COPY (SELECT '0 day'::interval)  TO 's3://copytos3/parquet_test/5'
@@ -228,3 +227,43 @@ contains:Cannot encode the following columns/types: ["interval: Interval"]
 
 $ s3-verify-data bucket=copytos3 key=parquet_test/5
 1
+
+# Tests for decimal / numeric type
+
+! COPY (SELECT .123456789012345678901234567890123456789::numeric(39,39)) TO 's3://copytos3/parquet_test/4'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
+contains:Numeric max scale 39 out of range
+
+! COPY (SELECT 12345678901234567890123.4567890123456789::numeric(38,16)) TO 's3://copytos3/parquet_test/5'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
+contains:out of range for column with precision
+
+! COPY (SELECT 'NaN'::numeric(10,5)) TO 's3://copytos3/parquet_test/5'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
+contains:Cannot represent special numeric value
+
+# the default column scale will be set to 10 so if we see a value with more than 10 digits after the
+# decimal it cannot be represented in this column
+! COPY (SELECT 5.4567890123456789::numeric) TO 's3://copytos3/parquet_test/6'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
+contains:cannot represent decimal value
+
+> CREATE TABLE t2 (a NUMERIC, b NUMERIC(38, 15), c NUMERIC(38, 0), d NUMERIC(38, 5));
+> INSERT INTO t2 VALUES (1234, -1234, 1234, 1234);
+> INSERT INTO t2 VALUES (123456789.123456789, -123456789.12345678912345, 1234567890000, 123456789.12345);
+> INSERT INTO t2 VALUES (10000000000000000001, 100000000000000.0000001, -100000000, 100000000000000000000000000000000.00001)
+
+> SELECT a, b, c, d FROM t2
+1234 -1234 1234 1234
+123456789.123456789 -123456789.12345678912345 1234567890000 123456789.12345
+10000000000000000001 100000000000000.0000001 -100000000 100000000000000000000000000000000.00001
+
+> COPY t2 TO 's3://copytos3/parquet_test/7'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
+
+# each column will use scale 10 or the defined max-scale of the input column, so many values will
+# be padded with 0s after the decimal point to fit the column scale but are still the same number
+$ s3-verify-data bucket=copytos3 key=parquet_test/7 sort-rows=true
+1234.0000000000 -1234.000000000000000 1234 1234.00000
+123456789.1234567890 -123456789.123456789123450 1234567890000 123456789.12345
+10000000000000000001.0000000000 100000000000000.000000100000000 -100000000 100000000000000000000000000000000.00001

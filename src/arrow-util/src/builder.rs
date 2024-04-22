@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow::array::{builder::*, ArrayRef};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use chrono::Timelike;
@@ -118,7 +118,7 @@ impl ArrowBuilder {
     /// Errors if the row contains an unimplemented or out-of-range value.
     pub fn add_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
         for (col, datum) in self.columns.iter_mut().zip(row.iter()) {
-            col.inner.append_datum(datum)?;
+            col.append_datum(datum)?;
         }
         self.row_size_bytes += row.byte_len();
         Ok(())
@@ -174,6 +174,32 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<DataType, anyhow
         ScalarType::MzTimestamp => {
             // MZ timestamps are in milliseconds
             DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None)
+        }
+        ScalarType::Numeric { max_scale } => {
+            // Materialize allows 39 digits of precision for numeric values, but allows
+            // arbitrary scales among those values. e.g. 1e38 and 1e-39 are both valid in
+            // the same column. However, Arrow/Parquet only allows static declaration of both
+            // the precision and the scale. To represent the full range of values of a numeric
+            // column, we would need 78-digits to store all possible values. Arrow's Decimal256
+            // type can only support 76 digits, so we are be unable to represent the entire range.
+
+            // Instead of representing the full possible range, we instead try to represent most
+            // values in the most-compatible way. We use a Decimal128 type which can handle 38
+            // digits of precision and has more compatibility with other parquet readers than
+            // Decimal256. We use Arrow's default scale of 10 if max-scale is not set. We will
+            // error if we encounter a value that is too large to represent, and if that happens
+            // a user can choose to cast the column to a string to represent the value.
+            match max_scale {
+                Some(scale) => {
+                    let scale = i8::try_from(scale.into_u8()).expect("known <= 39");
+                    if scale <= 38 {
+                        DataType::Decimal128(DECIMAL128_MAX_PRECISION, scale)
+                    } else {
+                        anyhow::bail!("Numeric max scale {} out of range", scale)
+                    }
+                }
+                None => DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
+            }
         }
         // arrow::datatypes::IntervalUnit::MonthDayNano is not yet implemented in the arrow parquet writer
         // https://github.com/apache/arrow-rs/blob/0d031cc8aa81296cb1bdfedea7a7cb4ec6aa54ea/parquet/src/arrow/arrow_writer/mod.rs#L859
@@ -249,6 +275,10 @@ impl ArrowColumn {
             DataType::LargeUtf8 => ColBuilder::LargeStringBuilder(
                 LargeStringBuilder::with_capacity(item_capacity, data_capacity),
             ),
+            DataType::Decimal128(precision, scale) => ColBuilder::Decimal128Builder(
+                Decimal128Builder::with_capacity(item_capacity)
+                    .with_precision_and_scale(*precision, *scale)?,
+            ),
             _ => anyhow::bail!("{:?} unimplemented", data_type),
         };
         Ok(Self {
@@ -308,12 +338,13 @@ make_col_builder!(
     TimestampMillisecondBuilder,
     LargeBinaryBuilder,
     StringBuilder,
-    LargeStringBuilder
+    LargeStringBuilder,
+    Decimal128Builder
 );
 
-impl ColBuilder {
+impl ArrowColumn {
     fn append_datum(&mut self, datum: Datum) -> Result<(), anyhow::Error> {
-        match (self, datum) {
+        match (&mut self.inner, datum) {
             (s, Datum::Null) => s.append_null(),
             (ColBuilder::BooleanBuilder(builder), Datum::False) => builder.append_value(false),
             (ColBuilder::BooleanBuilder(builder), Datum::True) => builder.append_value(true),
@@ -346,6 +377,49 @@ impl ColBuilder {
             (ColBuilder::LargeStringBuilder(builder), Datum::String(s)) => builder.append_value(s),
             (ColBuilder::TimestampMillisecondBuilder(builder), Datum::MzTimestamp(ts)) => {
                 builder.append_value(ts.try_into().expect("checked"))
+            }
+            (ColBuilder::Decimal128Builder(builder), Datum::Numeric(mut dec)) => {
+                if dec.0.is_special() {
+                    anyhow::bail!("Cannot represent special numeric value {} in parquet", dec)
+                }
+                if let DataType::Decimal128(precision, scale) = self.data_type {
+                    if dec.0.digits() > precision.into() {
+                        anyhow::bail!(
+                            "Decimal value {} out of range for column with precision {}",
+                            dec,
+                            precision
+                        )
+                    }
+
+                    // Get the signed-coefficient represented as an i128, and the exponent such that
+                    // the number should equal coefficient*10^exponent.
+                    let coefficient: i128 = dec.0.coefficient()?;
+                    let exponent = dec.0.exponent();
+
+                    // Convert the value to use the scale of the column (add 0's to align the decimal
+                    // point correctly). This is done by multiplying the coefficient by
+                    // 10^(scale + exponent).
+                    let scale_diff = i32::from(scale) + exponent;
+                    // If the scale_diff is negative, we know there aren't enough digits in our
+                    // column's scale to represent this value.
+                    let scale_diff = u32::try_from(scale_diff).map_err(|_| {
+                        anyhow::anyhow!(
+                            "cannot represent decimal value {} in column with scale {}",
+                            dec,
+                            scale
+                        )
+                    })?;
+
+                    let value = coefficient
+                        .checked_mul(10_i128.pow(scale_diff))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("Decimal value {} out of range for parquet", dec)
+                        })?;
+
+                    builder.append_value(value)
+                } else {
+                    anyhow::bail!("Expected Decimal128 data type")
+                }
             }
             (_builder, datum) => {
                 anyhow::bail!("Datum {:?} does not match builder", datum)
