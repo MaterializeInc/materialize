@@ -95,7 +95,7 @@ impl ColumnRef<DynStructCfg> for DynStructCol {
         (Encoding::Plain, array)
     }
     fn from_arrow(cfg: &DynStructCfg, array: &Box<dyn Array>) -> Result<Self, String> {
-        Self::from_arrow(cfg.clone(), array)
+        Self::from_arrow(cfg.clone(), array.as_ref())
     }
 }
 
@@ -227,8 +227,8 @@ impl DynStructCol {
         Some((array, encodings))
     }
 
-    #[allow(clippy::borrowed_box)]
-    pub(crate) fn from_arrow(cfg: DynStructCfg, array: &Box<dyn Array>) -> Result<Self, String> {
+    /// Create a [`DynStructCol`] from an [`arrow2::array::Array`].
+    pub fn from_arrow(cfg: DynStructCfg, array: &dyn Array) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<StructArray>()

@@ -9,7 +9,7 @@
 
 //! A columnar representation of one blob's worth of data
 
-use arrow2::array::{Array, PrimitiveArray};
+use arrow2::array::{Array, PrimitiveArray, StructArray};
 use arrow2::buffer::Buffer;
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::{DataType as ArrowLogicalType, Field};
@@ -55,7 +55,24 @@ impl Part {
         Ok(stats.some)
     }
 
-    pub(crate) fn to_arrow(&self) -> (Vec<Field>, Vec<Vec<Encoding>>, Chunk<Box<dyn Array>>) {
+    /// Returns an [`arrow2`] array representing the `key` column.
+    pub fn to_key_arrow(&self) -> Option<(Field, Vec<Encoding>, StructArray)> {
+        self.key.to_arrow_struct().map(|(array, encoding)| {
+            let field = Field::new("k_s", array.data_type().clone(), false);
+            (field, encoding, array)
+        })
+    }
+
+    /// Returns an [`arrow2`] array representing the `val` column.
+    pub fn to_val_arrow(&self) -> Option<(Field, Vec<Encoding>, StructArray)> {
+        self.val.to_arrow_struct().map(|(array, encoding)| {
+            let field = Field::new("v_s", array.data_type().clone(), false);
+            (field, encoding, array)
+        })
+    }
+
+    /// Returns [`arrow2`] types representing this [`Part`].
+    pub fn to_arrow(&self) -> (Vec<Field>, Vec<Vec<Encoding>>, Chunk<Box<dyn Array>>) {
         let (mut fields, mut encodings, mut arrays) =
             (Vec::new(), Vec::new(), Vec::<Box<dyn Array>>::new());
 
@@ -65,10 +82,10 @@ impl Part {
             // model this as a missing column (rather than something like
             // NullArray). This also matches how we'd do the same for nested
             // structs.
-            if let Some((key_array, key_encodings)) = self.key.to_arrow_struct() {
-                fields.push(Field::new("k", key_array.data_type().clone(), false));
-                encodings.push(key_encodings);
-                arrays.push(Box::new(key_array));
+            if let Some((field, encoding, array)) = self.to_key_arrow() {
+                fields.push(field);
+                encodings.push(encoding);
+                arrays.push(Box::new(array));
             }
         }
 
@@ -78,10 +95,10 @@ impl Part {
             // model this as a missing column (rather than something like
             // NullArray). This also matches how we'd do the same for nested
             // structs.
-            if let Some((val_array, val_encodings)) = self.val.to_arrow_struct() {
-                fields.push(Field::new("v", val_array.data_type().clone(), false));
-                encodings.push(val_encodings);
-                arrays.push(Box::new(val_array));
+            if let Some((field, encoding, array)) = self.to_val_arrow() {
+                fields.push(field);
+                encodings.push(encoding);
+                arrays.push(Box::new(array));
             }
         }
 
@@ -140,12 +157,12 @@ impl Part {
 
         let key = match key {
             None => DynStructCol::empty(key_schema),
-            Some(key) => DynStructCol::from_arrow(key_schema, key)?,
+            Some(key) => DynStructCol::from_arrow(key_schema, key.as_ref())?,
         };
 
         let val = match val {
             None => DynStructCol::empty(val_schema),
-            Some(val) => DynStructCol::from_arrow(val_schema, val)?,
+            Some(val) => DynStructCol::from_arrow(val_schema, val.as_ref())?,
         };
 
         let diff = diff

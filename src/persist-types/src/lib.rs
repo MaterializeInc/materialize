@@ -36,7 +36,7 @@ pub mod txn;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.
-pub trait Codec: Sized + 'static {
+pub trait Codec: Sized + PartialEq + 'static {
     /// The type of the associated schema for [Self].
     ///
     /// This is a separate type because Row is not self-describing. For Row, you

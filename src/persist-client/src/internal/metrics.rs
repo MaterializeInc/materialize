@@ -74,6 +74,8 @@ pub struct Metrics {
     pub lease: LeaseMetrics,
     /// Metrics for various encodings and decodings.
     pub codecs: CodecsMetrics,
+    /// Metrics for our structured columnar format.
+    pub structured_columnar: StructuredColumnarMetrics,
     /// Metrics for (incremental) state updates and fetches.
     pub state: StateMetrics,
     /// Metrics for various per-shard measurements.
@@ -139,6 +141,7 @@ impl Metrics {
             cmds: vecs.cmds_metrics(registry),
             retries: vecs.retries_metrics(),
             codecs: vecs.codecs_metrics(),
+            structured_columnar: vecs.structured_columnar_metrics(),
             user: BatchWriteMetrics::new(registry, "user"),
             read: vecs.batch_part_read_metrics(),
             compaction: CompactionMetrics::new(registry),
@@ -208,6 +211,8 @@ struct MetricsVecs {
     encode_seconds: CounterVec,
     decode_count: IntCounterVec,
     decode_seconds: CounterVec,
+
+    structured_columnar_validation_count: IntCounterVec,
 
     read_part_bytes: IntCounterVec,
     read_part_goodbytes: IntCounterVec,
@@ -346,6 +351,12 @@ impl MetricsVecs {
                 var_labels: ["op"],
             )),
 
+            structured_columnar_validation_count: registry.register(metric!(
+                name: "mz_persist_columnar_validation_count",
+                help: "number of rows we've validated in our structured columnar format",
+                var_labels: ["column", "result"],
+            )),
+
             read_part_bytes: registry.register(metric!(
                 name: "mz_persist_read_batch_part_bytes",
                 help: "total encoded size of batch parts read",
@@ -479,6 +490,24 @@ impl MetricsVecs {
             encode_seconds: self.encode_seconds.with_label_values(&[op]),
             decode_count: self.decode_count.with_label_values(&[op]),
             decode_seconds: self.decode_seconds.with_label_values(&[op]),
+        }
+    }
+
+    fn structured_columnar_metrics(&self) -> StructuredColumnarMetrics {
+        StructuredColumnarMetrics {
+            key: self.structured_column_metrics("key"),
+            val: self.structured_column_metrics("val"),
+        }
+    }
+
+    fn structured_column_metrics(&self, op: &'static str) -> StructuredColumnMetrics {
+        StructuredColumnMetrics {
+            correct_count: self
+                .structured_columnar_validation_count
+                .with_label_values(&[op, "correct"]),
+            invalid_count: self
+                .structured_columnar_validation_count
+                .with_label_values(&[op, "invalid"]),
         }
     }
 
@@ -1070,6 +1099,30 @@ impl CodecMetrics {
         self.decode_count.inc();
         self.decode_seconds.inc_by(now.elapsed().as_secs_f64());
         r
+    }
+}
+
+#[derive(Debug)]
+pub struct StructuredColumnarMetrics {
+    pub(crate) key: StructuredColumnMetrics,
+    pub(crate) val: StructuredColumnMetrics,
+}
+
+#[derive(Debug)]
+pub struct StructuredColumnMetrics {
+    pub(crate) correct_count: IntCounter,
+    pub(crate) invalid_count: IntCounter,
+}
+
+impl StructuredColumnMetrics {
+    /// Increment by 1 the number of correct structured columnar rows we've seen.
+    pub(crate) fn inc_correct(&self) {
+        self.correct_count.inc();
+    }
+
+    /// Increment by 1 the number of invalid structured columnar rows we've seen.
+    pub(crate) fn inc_invalid(&self) {
+        self.invalid_count.inc();
     }
 }
 

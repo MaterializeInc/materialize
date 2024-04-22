@@ -27,6 +27,9 @@ use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
+use mz_persist::indexed::columnar::{
+    ColumnarRecords, ColumnarRecordsBuilder, ColumnarRecordsStructuredExt,
+};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
@@ -37,7 +40,7 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug_span, error, trace_span, warn, Instrument};
+use tracing::{debug_span, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::MiB;
@@ -48,7 +51,7 @@ use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMe
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart};
 use crate::stats::{
-    part_stats_for_legacy_part, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
+    encode_updates, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
 };
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
@@ -946,7 +949,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         } else {
             let part = BlobTraceBatchPart {
                 desc,
-                updates: vec![updates],
+                updates: BlobTraceUpdates::Row(vec![updates]),
                 index,
             };
             let write_span =
@@ -991,7 +994,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         shard_metrics: Arc<ShardMetrics>,
         batch_metrics: BatchWriteMetrics,
         isolated_runtime: Arc<IsolatedRuntime>,
-        updates: BlobTraceBatchPart<T>,
+        mut updates: BlobTraceBatchPart<T>,
         key_lower: Vec<u8>,
         ts_rewrite: Option<Antichain<T>>,
         schemas: Schemas<K, V>,
@@ -1002,22 +1005,54 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
         let (stats, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
-                let stats = if cfg.stats_collection_enabled {
-                    let stats_start = Instant::now();
-                    match part_stats_for_legacy_part(&schemas, &updates.updates) {
-                        Ok(x) => {
-                            let mut trimmed_bytes = 0;
-                            let x = LazyPartStats::encode(&x, |s| {
-                                trimmed_bytes = trim_to_budget(s, cfg.stats_budget, |s| {
-                                    cfg.stats_untrimmable_columns.should_retain(s)
-                                });
-                            });
-                            Some((x, stats_start.elapsed(), trimmed_bytes))
-                        }
+                // Only encode our updates in a structured format if required, it's expensive.
+                let s = if cfg.stats_collection_enabled || cfg.batch_columnar_format.is_structured()
+                {
+                    let columnar_start = Instant::now();
+                    let columnar_result = encode_updates(&schemas, &updates.updates);
+                    let _columnar_duration = columnar_start.elapsed();
+
+                    match columnar_result {
                         Err(err) => {
-                            error!("failed to construct part stats: {}", err);
+                            tracing::error!(?err, "failed to encode in columnar format!");
                             None
                         }
+                        Ok(s) => Some(s),
+                    }
+                } else {
+                    None
+                };
+
+                let stats = if let Some((part, stats)) = s {
+                    // Only change the updates to use the structured format, if our updates had a
+                    // single batch.
+                    match updates.updates {
+                        BlobTraceUpdates::Row(mut records)
+                            if records.len() == 1 && cfg.batch_columnar_format.is_structured() =>
+                        {
+                            let record = records.pop().expect("checked length above");
+                            let record_ext = ColumnarRecordsStructuredExt {
+                                key: part.to_key_arrow().map(|(_, _, array)| array),
+                                val: part.to_val_arrow().map(|(_, _, array)| array),
+                            };
+                            updates.updates = BlobTraceUpdates::Both((record, record_ext))
+                        }
+                        _ => (),
+                    }
+
+                    if cfg.stats_collection_enabled {
+                        let trimmed_start = Instant::now();
+                        let mut trimmed_bytes = 0;
+                        let trimmed_stats = LazyPartStats::encode(&stats, |s| {
+                            trimmed_bytes = trim_to_budget(s, cfg.stats_budget, |s| {
+                                cfg.stats_untrimmable_columns.should_retain(s)
+                            })
+                        });
+                        let trimmed_duration = trimmed_start.elapsed();
+
+                        Some((trimmed_stats, trimmed_duration, trimmed_bytes))
+                    } else {
+                        None
                     }
                 } else {
                     None

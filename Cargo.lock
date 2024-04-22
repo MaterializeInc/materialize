@@ -5394,6 +5394,7 @@ dependencies = [
  "futures-util",
  "h2",
  "hex",
+ "itertools",
  "mz-build-info",
  "mz-build-tools",
  "mz-dyncfg",
