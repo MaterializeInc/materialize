@@ -195,7 +195,7 @@ impl S3MultiPartUploader {
     /// Returns an `UploadExceedsMaxFileLimit` error if the upload will exceed the configured `file_size_limit`,
     /// unless no data has been added yet. In which case, it will try to do an upload if the data size
     /// is under `part_size_limit` * 10000.
-    pub async fn buffer_chunk(&mut self, data: &[u8]) -> Result<(), S3MultiPartUploadError> {
+    pub fn buffer_chunk(&mut self, data: &[u8]) -> Result<(), S3MultiPartUploadError> {
         let data_len = u64::cast_from(data.len());
 
         let aws_max_part_count: u64 = AWS_S3_MAX_PART_COUNT.try_into().expect("i32 to u64");
@@ -406,9 +406,9 @@ mod tests {
             S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), key.clone(), config).await?;
 
         let expected_data = "onetwothree";
-        uploader.buffer_chunk(b"one").await?;
-        uploader.buffer_chunk(b"two").await?;
-        uploader.buffer_chunk(b"three").await?;
+        uploader.buffer_chunk(b"one")?;
+        uploader.buffer_chunk(b"two")?;
+        uploader.buffer_chunk(b"three")?;
 
         // This should trigger one single part upload.
         let CompletedUpload {
@@ -462,12 +462,12 @@ mod tests {
         // Adding a chunk of 6MiB, should trigger an upload part since part_size_limit is 5MiB
         let expected_data = vec![97; 6291456]; // 6MiB
         let expected_bytes: u64 = u64::cast_from(expected_data.len());
-        uploader.buffer_chunk(&expected_data).await?;
+        uploader.buffer_chunk(&expected_data)?;
 
         assert_eq!(uploader.remaining_bytes_limit(), ByteSize::mib(4).as_u64());
 
         // Adding another 6MiB should return an error since file_size_limit is 10MiB
-        let error = uploader.buffer_chunk(&expected_data).await.unwrap_err();
+        let error = uploader.buffer_chunk(&expected_data).unwrap_err();
         assert!(matches!(
             error,
             S3MultiPartUploadError::UploadExceedsMaxFileLimit(_)
