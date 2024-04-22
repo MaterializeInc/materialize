@@ -55,6 +55,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=Materialized.Size.DEFAULT_SIZE,
         help="Use SIZE 'N-N' for replicas and SIZE 'N' for sources",
     )
+    parser.add_argument(
+        "--dyncfg",
+        type=str,
+        action="append",
+        nargs="*",
+        help="Dyncfgs to enable in Materialize",
+    )
 
     parser.add_argument("--replicas", type=int, default=1, help="use multiple replicas")
 
@@ -90,9 +97,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         fivetran_destination_files_path="/share/tmp",
     )
 
+    dyncfgs = args.dyncfg
+    if not args.dyncfg:
+        dyncfgs = []
+
+    additional_system_parameter_defaults = {}    
+    for cfg in dyncfgs:
+        x = cfg[0].split("=")
+        assert len(x) == 2, f"dyncfg '{cfg}' should be the format <key>=<val>"
+        key = x[0]
+        val = x[1]
+
+        additional_system_parameter_defaults[key] = val
+
     materialized = Materialized(
         default_size=args.default_size,
         external_minio=True,
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
     )
 
     with c.override(testdrive, materialized):

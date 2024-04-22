@@ -249,6 +249,21 @@ steps:
               composition: testdrive
               args: [--default-size=8]
 
+      - id: testdrive-structured-persist
+        label: ":racing_car: testdrive with Structured Persist"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [
+                --dyncfg=persist_part_decode_format=row_with_validate,
+                --dyncfg=persist_batch_columnar_format=both,
+              ]
+
       - id: testdrive-in-cloudtest
         label: Full Testdrive in Cloudtest (K8s)
         depends_on: build-aarch64
