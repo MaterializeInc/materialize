@@ -12,10 +12,6 @@ explain:
 ;
 
 query:
-  select
-;
-
-select:
   SELECT
     ft.ft_col AS c01,
     ft.ft_col AS c02,
@@ -35,8 +31,22 @@ select:
     left_join4
     left_join5
     left_join6
+  WHERE
+    where_clause
   ORDER BY
     c01, c02, c03, c04, c05, c06, c07, c08, c09, c10
+;
+
+where_clause:
+    true | true | true | true | true
+  | ft.ft_col IS NOT NULL bool_op where_clause
+  | ft.ft_col > 1 bool_op where_clause
+  | dim_alias.dx_col < 7 bool_op where_clause
+;
+
+bool_op:
+    AND | AND | AND | AND | AND
+  | OR
 ;
 
 dim_alias:
