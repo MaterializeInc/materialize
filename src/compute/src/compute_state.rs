@@ -28,7 +28,6 @@ use mz_compute_client::protocol::response::{
     SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::ENABLE_CONTROLLER_DATAFLOW_SCHEDULING;
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
@@ -404,14 +403,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
 
         let (start_signal, suspension_token) = StartSignal::new();
-        if !ENABLE_CONTROLLER_DATAFLOW_SCHEDULING.get(&self.compute_state.worker_config) {
-            drop(suspension_token);
-        } else {
-            for id in dataflow.export_ids() {
-                self.compute_state
-                    .suspended_collections
-                    .insert(id, Rc::clone(&suspension_token));
-            }
+        for id in dataflow.export_ids() {
+            self.compute_state
+                .suspended_collections
+                .insert(id, Rc::clone(&suspension_token));
         }
 
         crate::render::build_compute_dataflow(
