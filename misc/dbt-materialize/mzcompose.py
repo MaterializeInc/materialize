@@ -49,6 +49,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "-k", nargs="?", default=None, help="limit tests by keyword expressions"
     )
+    parser.add_argument("-s", action="store_true", help="don't suppress output")
     args = parser.parse_args()
 
     for test_case in test_cases:
@@ -62,6 +63,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             test_args = ["dbt-materialize/tests"]
             if args.k:
                 test_args.append(f"-k {args.k}")
+            if args.s:
+                test_args.append("-s")
 
             with c.test_case(test_case.name):
                 with c.override(materialized):
