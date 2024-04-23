@@ -244,7 +244,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 }
 
 #[async_trait(?Send)]
-impl<T> StorageController for Controller<T>
+impl<'a, T> StorageController for Controller<T>
 where
     T: Timestamp
         + Lattice
@@ -252,7 +252,7 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>
+        + Into<Datum<'a>>
         + Display,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
@@ -1997,12 +1997,8 @@ where
             |object_id: GlobalId,
              (since, upper): (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
              diff: Diff| {
-                let read_frontier = since
-                    .into_option()
-                    .map_or(Datum::Null, |ts| Datum::MzTimestamp(ts.into()));
-                let write_frontier = upper
-                    .into_option()
-                    .map_or(Datum::Null, |ts| Datum::MzTimestamp(ts.into()));
+                let read_frontier = since.into_option().map_or(Datum::Null, |ts| ts.into());
+                let write_frontier = upper.into_option().map_or(Datum::Null, |ts| ts.into());
                 let row = Row::pack_slice(&[
                     Datum::String(&object_id.to_string()),
                     read_frontier,
@@ -2060,9 +2056,7 @@ where
         let mut push_update = |(object_id, replica_id): (GlobalId, ReplicaId),
                                upper: Antichain<Self::Timestamp>,
                                diff: Diff| {
-            let write_frontier = upper
-                .into_option()
-                .map_or(Datum::Null, |ts| Datum::MzTimestamp(ts.into()));
+            let write_frontier = upper.into_option().map_or(Datum::Null, |ts| ts.into());
             let row = Row::pack_slice(&[
                 Datum::String(&object_id.to_string()),
                 Datum::String(&replica_id.to_string()),
