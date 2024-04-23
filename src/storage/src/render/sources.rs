@@ -328,18 +328,19 @@ where
                         } else {
                             (Collection::new(empty(scope)), None, None, None)
                         };
-                    let (upsert, health_update, upsert_token) = crate::render::upsert::upsert(
-                        &upsert_input.enter(scope),
-                        upsert_envelope.clone(),
-                        refine_antichain(&resume_upper),
-                        previous,
-                        previous_token,
-                        base_source_config.clone(),
-                        &storage_state.instance_context,
-                        &storage_state.storage_configuration,
-                        &storage_state.dataflow_parameters,
-                        backpressure_metrics,
-                    );
+                    let (upsert, health_update, upsert_token) =
+                        crate::render::upsert::upsert::<_, _, mz_repr::Timestamp>(
+                            &upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous,
+                            previous_token,
+                            base_source_config.clone(),
+                            &storage_state.instance_context,
+                            &storage_state.storage_configuration,
+                            &storage_state.dataflow_parameters,
+                            backpressure_metrics,
+                        );
 
                     // Even though we register the `persist_sink` token at a top-level,
                     // which will stop any data from being committed, we also register
@@ -362,7 +363,7 @@ where
                     if dyncfgs::DELAY_SOURCES_PAST_REHYDRATION
                         .get(storage_state.storage_configuration.config_set())
                     {
-                        crate::render::upsert::rehydration_finished(
+                        crate::render::upsert::rehydration_finished::<_, _, mz_repr::Timestamp>(
                             scope.clone(),
                             &base_source_config,
                             rehydrated_token,
