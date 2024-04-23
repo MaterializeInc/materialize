@@ -198,12 +198,12 @@ SELECT
   'ALTER DEFAULT PRIVILEGES ' ||
   CASE
     WHEN object_owner = 'PUBLIC' THEN 'FOR ALL ROLES '
-    ELSE 'FOR ROLE ' || object_owner
+    ELSE 'FOR ROLE ' || quote_ident(object_owner) || ' '
   END ||
   'IN SCHEMA {{ to }} '         ||
   'GRANT '  || privilege_type   || ' ' ||
   'ON '     || object_type      || 's ' ||
-  'TO '     || grantee
+  'TO '     || quote_ident(grantee)
 FROM mz_internal.mz_show_default_privileges
 WHERE database = current_database() AND schema = {{ dbt.string_literal(from) }}
     AND object_owner <> 'none' AND grantee <> 'none'
@@ -212,7 +212,7 @@ WHERE database = current_database() AND schema = {{ dbt.string_literal(from) }}
 {% set alter_defaults = run_query(find_default_privs) %}
 {% if execute %}
     {% for alter in alter_defaults.rows %}
-        {{ run_query(alter) }}
+        {{ run_query(alter[0]) }}
     {% endfor %}
 {% endif %}
 {% endmacro %}
@@ -273,7 +273,7 @@ WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support', current_role)
 WITH cluster_privilege AS (
     SELECT mz_internal.mz_aclexplode(privileges).*
     FROM mz_clusters
-    WHERE name = {{ dbt.string_literal(from) }}
+    WHERE name = {{ dbt.string_literal(to) }}
 )
 
 SELECT 'REVOKE '     || c.privilege_type || ' ' ||
