@@ -7951,6 +7951,7 @@ impl VariadicFunc {
         match self {
             VariadicFunc::And | VariadicFunc::Or => false,
             VariadicFunc::Coalesce => false,
+            VariadicFunc::Greatest | VariadicFunc::Least => false,
             VariadicFunc::Concat | VariadicFunc::ConcatWs => false,
             VariadicFunc::Replace => false,
             VariadicFunc::Translate => false,
