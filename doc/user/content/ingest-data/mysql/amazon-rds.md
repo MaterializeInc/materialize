@@ -20,11 +20,8 @@ to Materialize using the [MySQL source](/sql/create-source/mysql).
 ## Step 1. Enable GTID-based binlog replication
 
 Before creating a source in Materialize, you **must** configure Amazon RDS for
-GTID-based binlog replication. This requires the following configuration
-changes:
-
-For guidance on enabling GTID-based binlog replication in RDS, see the
-[Amazon RDS for MySQL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-replication-gtid.html).
+GTID-based binlog replication. For guidance on enabling GTID-based
+binlog replication in RDS, see the [Amazon RDS for MySQL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-replication-gtid.html).
 
 1. [Enable automated backups in your RDS instance](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html#USER_WorkingWithAutomatedBackups.Enabling)
 by setting the backup retention period to a value greater than `0` to enable
@@ -35,21 +32,21 @@ binary logging.
     - Set **Parameter group family** to your MySQL version.
     - Set **Type** to **DB Parameter Group**.
 
-1. Edit the new parameter group to set the parameters to the values specified in
-   the below table.
+1. Edit the new parameter group to set the configuration parameters to the
+   following values:
 
 
-   | Configuration parameter          | AWS Console                                 | Value | Details |
-   |----------------------------------|---------------------------------------------|-------|---------|
-   | `log_bin`                        | `log_bin_use_v1_row_events`                 | `ON`  | |
-   | `binlog_format`                  |                                             | `ROW` | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging. |
-   | `binlog_row_image`               |                                             | `FULL`| |
-   | `gtid_mode`                      | `gtid-mode`                                 | `ON`  | |
-   | `enforce_gtid_consistency`       |                                             | `ON`  | |
-   | `replica_preserve_commit_order`  |                                             | `ON`  | Only required when connecting Materialize to a read-replica for replication, rather than the primary server. |
+   | Configuration parameter          | Value | Details |
+   |----------------------------------|-------|---------|
+   | `log_bin_use_v1_row_events`      | `ON`  | AWS Management Console equivalent to MySQL's `log_bin` configuration parameter. |
+   | `binlog_format`                  | `ROW` | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging. |
+   | `binlog_row_image`               | `FULL`|         |
+   | `gtid-mode`                      | `ON`  | AWS Management Console equivalent to MySQL's `gtid_mode` configuration parameter. |
+   | `enforce_gtid_consistency`       | `ON`  |         |
+   | `replica_preserve_commit_order`  | `ON`  | Only required when connecting Materialize to a read-replica for replication, rather than the primary server. |
 
 
-4. [Associate the RDS parameter group to your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Associating).
+1. [Associate the RDS parameter group to your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Associating).
 
     Use the **Apply Immediately** option. The database must be rebooted in order
     for the parameter group association to take effect. Keep in mind that
@@ -57,25 +54,46 @@ binary logging.
 
     Do not move on to the next step until the database **Status**
     is **Available** in the RDS Console.
-1. In your MySQL database, run the [stored procedure rds_set_configuration](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-stored-proc-configuring.html#mysql_rds_show_configuration) to get the current value of `binlog retention hours` value.
-```sql
-CALL mysql.rds_show_configuration;
-```
-If it is `NULL` or less than 168 (7 days) then run the following stored procedure:
-```sql
-call mysql.rds_set_configuration('binlog retention hours', 168);
-```
-1. Validate the parameters in your MySQL Database
-```sql
-SHOW VARIABLES WHERE variable_name IN (
-	'log_bin',
-	'binlog_format',
-	'binlog_row_image',
-	'gtid_mode',
-	'enforce_gtid_consistency',
-	'replica_preserve_commit_order'
-	);
-```
+
+1. In addition to the step above, you **must** also ensure that
+   [binlog retention](/sql/create-source/mysql/#binlog-retention) is set to a
+   reasonable value. To check the current value of the [`binlog retention hours`](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-stored-proc-configuring.html#mysql_rds_set_configuration-usage-notes.binlog-retention-hours)
+   configuration parameter, connect to your RDS instance and run:
+
+   ```sql
+   CALL mysql.rds_show_configuration;
+   ```
+
+   If the value returned is `NULL`, or less than `168` (i.e. 7 days), run:
+
+   ```sql
+   CALL mysql.rds_set_configuration('binlog retention hours', 168);
+   ```
+
+   Although 7 days is a reasonable retention period, we recommend using the
+   default MySQL retention period (30 days) in order to not compromise
+   Materialize’s ability to resume replication in case of failures or
+   restarts.
+
+1. To validate that all configuration parameters are set to the expected values
+   after the above configuration changes, run:
+
+    ```sql
+    -- Validate "binlog retention hours" configuration parameter
+    CALL mysql.rds_show_configuration;
+    ```
+
+    ```sql
+    -- Validate parameter group configuration parameters
+    SHOW VARIABLES WHERE variable_name IN (
+    	'log_bin',
+    	'binlog_format',
+    	'binlog_row_image',
+    	'gtid_mode',
+    	'enforce_gtid_consistency',
+    	'replica_preserve_commit_order'
+    	);
+    ```
 
 ## Step 2. Create a user for replication
 
