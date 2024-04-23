@@ -7950,6 +7950,12 @@ impl VariadicFunc {
     pub fn could_error(&self) -> bool {
         match self {
             VariadicFunc::And | VariadicFunc::Or => false,
+            VariadicFunc::Coalesce => false,
+            VariadicFunc::Concat | VariadicFunc::ConcatWs => false,
+            VariadicFunc::Replace => false,
+            VariadicFunc::Translate => false,
+            VariadicFunc::ArrayIndex { .. } => false,
+            VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => false,
             // All other cases are unknown
             _ => true,
         }
