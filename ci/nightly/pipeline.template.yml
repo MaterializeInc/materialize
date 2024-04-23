@@ -1480,6 +1480,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: copy-to-s3
+            run: nightly
       agents:
         queue: linux-aarch64-large
 
@@ -1490,6 +1491,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: copy-to-s3
+            run: nightly
             args: [--default-size=2]
       agents:
         queue: linux-aarch64-large

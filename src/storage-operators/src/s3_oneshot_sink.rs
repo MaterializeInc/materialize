@@ -232,7 +232,9 @@ where
                 };
 
                 // Confirm we have DeleteObject permissions before proceeding by trying to
-                // delete a known non-existent file and checking if an error is returned
+                // delete a known non-existent file since S3 will return an AccessDenied error
+                // whether or not the object exists, and no error if we have permissions and
+                // it doesn't.
                 client
                     .delete_object()
                     .bucket(&bucket)
