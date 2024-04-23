@@ -48,7 +48,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::{GlobalId, TimestampManipulation};
+use mz_repr::{Datum, GlobalId, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
@@ -549,7 +549,7 @@ where
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    T: Into<mz_repr::Timestamp>,
+    for<'a> T: Into<Datum<'a>>,
 {
     /// Creates a new controller.
     ///
