@@ -13,14 +13,16 @@
 //! `SHOW CREATE TABLE` and `SHOW VIEWS`. Note that `SHOW <var>` is considered
 //! an SCL statement.
 
+use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ObjectType, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
-    SystemObjectType,
+    CreateSourceSubsource, DeferredItemName, Ident, ObjectType, ReferencedSubsources,
+    ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
+    SystemObjectType, WithOptionValue,
 };
 use query::QueryContext;
 
@@ -117,7 +119,7 @@ fn plan_show_create(
     if item.item_type() != expect_type {
         sql_bail!("{name} is not a {expect_type}");
     }
-    let create_sql = humanize_sql_for_show_create(scx.catalog, item.create_sql())?;
+    let create_sql = humanize_sql_for_show_create(scx.catalog, item.id(), item.create_sql())?;
     Ok(ShowCreatePlan {
         id: item.id(),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -895,6 +897,7 @@ impl<'a> ShowColumnsSelect<'a> {
 /// is more amenable to human consumption.
 fn humanize_sql_for_show_create(
     catalog: &dyn SessionCatalog,
+    id: GlobalId,
     sql: &str,
 ) -> Result<String, PlanError> {
     use mz_sql_parser::ast::{CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName};
@@ -909,20 +912,144 @@ fn humanize_sql_for_show_create(
     match &mut resolved {
         // Strip internal `AS OF` syntax.
         Statement::CreateMaterializedView(stmt) => stmt.as_of = None,
-        // Strip the internal `DETAILS` values, which serve no purpose being
-        // shown to users and cannot be roundtripped (i.e. they are derived
-        // during purification and cannot be re-input into `CREATE SOURCE`
-        // statements).
-        Statement::CreateSource(stmt) => match &mut stmt.connection {
-            CreateSourceConnection::Postgres { options, .. } => {
-                options.retain(|o| o.name != PgConfigOptionName::Details)
+        // `CREATE SOURCE` statements should roundtrip. However, sources and
+        // their subsources have a complex relationship, so we need to do a lot
+        // of work to reconstruct the statement for multi-output sources.
+        //
+        // For instance, `DROP SOURCE` statements can leave dangling references
+        // to subsources that must be filtered out here, that, due to catalog
+        // transaction limitations, can only be be cleaned up when a top-level
+        // source is altered.
+        Statement::CreateSource(stmt) => {
+            // Collect all current subsource references.
+            //
+            // TODO(#24843): this structure will need to change because we will
+            // have multiple references to the same upstream table.
+            let mut curr_references: BTreeMap<_, _> = catalog
+                .get_item(&id)
+                .used_by()
+                .into_iter()
+                .filter_map(|subsource| {
+                    let item = catalog.get_item(subsource);
+                    item.subsource_details().map(|(_id, reference)| {
+                        let name = item.name();
+                        (
+                            reference.clone(),
+                            ResolvedItemName::Item {
+                                id: item.id(),
+                                qualifiers: name.qualifiers.clone(),
+                                full_name: catalog.resolve_full_name(name),
+                                print_id: false,
+                            },
+                        )
+                    })
+                })
+                .collect();
+
+            match &mut stmt.connection {
+                CreateSourceConnection::Postgres { options, .. } => {
+                    options.retain_mut(|o| {
+                        match o.name {
+                            // Dropping a subsource does not remove any `TEXT
+                            // COLUMNS` values that refer to the table it
+                            // ingests, which we'll handle below.
+                            //
+                            // TODO(#26774): is this better if this is an option
+                            // on the subsources?
+                            PgConfigOptionName::TextColumns => {}
+                            // Drop details, which does not rountrip.
+                            PgConfigOptionName::Details => return false,
+                            _ => return true,
+                        };
+                        match &mut o.value {
+                            Some(WithOptionValue::Sequence(text_cols)) => {
+                                text_cols.retain(|v| match v {
+                                    WithOptionValue::UnresolvedItemName(n) => {
+                                        let mut name = n.clone();
+                                        // Remove the column reference.
+                                        name.0.truncate(3);
+                                        curr_references.contains_key(&name)
+                                    }
+                                    _ => unreachable!(
+                                        "TEXT COLUMNS must be sequence of unresolved item names"
+                                    ),
+                                });
+                                !text_cols.is_empty()
+                            }
+                            _ => unreachable!(
+                                "TEXT COLUMNS must be sequence of unresolved item names"
+                            ),
+                        }
+                    });
+                }
+                CreateSourceConnection::MySql { options, .. } => {
+                    // We have to reformat MySQL references to not contain the
+                    // unncessary database name.
+                    curr_references = curr_references
+                        .into_iter()
+                        .map(|(mut reference, name)| {
+                            // TODO(#26772): this shouldn't be necessary.
+                            let mysql_database = reference.0.remove(0);
+                            mz_ore::soft_assert_eq_or_log!(
+                                mysql_database,
+                                Ident::new_unchecked("mysql")
+                            );
+                            (reference, name)
+                        })
+                        .collect();
+
+                    options.retain_mut(|o| {
+                        match o.name {
+                            // Dropping a subsource does not remove any `TEXT
+                            // COLUMNS` values that refer to the table it
+                            // ingests, which we'll handle below.
+                            //
+                            // TODO(#26774): is this better if this is an option
+                            // on the subsources?
+                            MySqlConfigOptionName::TextColumns
+                            | MySqlConfigOptionName::IgnoreColumns => {}
+                            // Drop details, which does not rountrip.
+                            MySqlConfigOptionName::Details => return false,
+                        };
+
+                        match &mut o.value {
+                            Some(WithOptionValue::Sequence(seq_unresolved_item_names)) => {
+                                seq_unresolved_item_names.retain(|v| match v {
+                                    WithOptionValue::UnresolvedItemName(n) => {
+                                        let mut name = n.clone();
+                                        // Remove column reference.
+                                        name.0.truncate(2);
+                                        curr_references.contains_key(&name)
+                                    }
+                                    _ => unreachable!(
+                                        "TEXT COLUMNS + IGNORE COLUMNS must be sequence of unresolved item names"
+                                    ),
+                                });
+                                !seq_unresolved_item_names.is_empty()
+                            }
+                            _ => unreachable!(
+                                "TEXT COLUMNS + IGNORE COLUMNS must be sequence of unresolved item names"
+                            ),
+                        }
+                    });
+                }
+                CreateSourceConnection::Kafka { .. }
+                | CreateSourceConnection::LoadGenerator { .. } => {}
             }
-            CreateSourceConnection::MySql { options, .. } => {
-                options.retain(|o| o.name != MySqlConfigOptionName::Details)
+
+            // If this source has any references, reconstruct them.
+            if !curr_references.is_empty() {
+                let mut subsources: Vec<_> = curr_references
+                    .into_iter()
+                    .map(|(reference, name)| CreateSourceSubsource {
+                        reference,
+                        subsource: Some(DeferredItemName::Named(name)),
+                    })
+                    .collect();
+                subsources.sort();
+                stmt.referenced_subsources = Some(ReferencedSubsources::SubsetTables(subsources));
             }
-            CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. } => {
-            }
-        },
+        }
         _ => (),
     }
 
