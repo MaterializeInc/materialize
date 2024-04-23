@@ -151,6 +151,15 @@ impl<'a> ResultSpec<'a> {
         }
     }
 
+    /// Every result matches this spec.
+    pub fn any_infallible() -> Self {
+        ResultSpec {
+            nullable: true,
+            fallible: false,
+            values: Values::All,
+        }
+    }
+
     /// A spec that only matches null.
     pub fn null() -> Self {
         ResultSpec {
@@ -576,7 +585,7 @@ impl SpecialUnary {
                             }
                             // Otherwise, assume the worst: this function may return either a valid
                             // value or null.
-                            _ => ResultSpec::value_all().union(ResultSpec::null()),
+                            _ => ResultSpec::any_infallible(),
                         }
                     })
                 },
@@ -650,8 +659,11 @@ impl SpecialBinary {
                         field_spec
                     }
                 } else {
-                    // TODO: it should be possible to narrow this further...
-                    ResultSpec::anything()
+                    // The implementation of `jsonb_get_string` always returns
+                    // `Ok(...)`. Morally, everything has a string
+                    // representation, and the worst you can get is a NULL,
+                    // which maps to a NULL.
+                    ResultSpec::any_infallible()
                 }
             })
         }
