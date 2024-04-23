@@ -332,4 +332,35 @@ mod test {
         let v: Vec<Gus1> = vec![Default::default()];
         let _: Vec<Gus2> = repurpose_allocation(v);
     }
+
+    #[crate::test]
+    fn test_is_sorted_by() {
+        assert!(vec![0, 1, 2].is_sorted_by(|a, b| a < b));
+        assert!(vec![0, 1, 2].is_sorted_by(|a, b| a <= b));
+        assert!(!vec![0, 1, 2].is_sorted_by(|a, b| a > b));
+        assert!(!vec![0, 1, 2].is_sorted_by(|a, b| a >= b));
+        assert!(vec![0, 1, 2].is_sorted_by(|_a, _b| true));
+        assert!(!vec![0, 1, 2].is_sorted_by(|_a, _b| false));
+
+        assert!(!vec![0, 1, 1, 2].is_sorted_by(|a, b| a < b));
+        assert!(vec![0, 1, 1, 2].is_sorted_by(|a, b| a <= b));
+        assert!(!vec![0, 1, 1, 2].is_sorted_by(|a, b| a > b));
+        assert!(!vec![0, 1, 1, 2].is_sorted_by(|a, b| a >= b));
+        assert!(vec![0, 1, 1, 2].is_sorted_by(|_a, _b| true));
+        assert!(!vec![0, 1, 1, 2].is_sorted_by(|_a, _b| false));
+
+        assert!(!vec![2, 1, 0].is_sorted_by(|a, b| a < b));
+        assert!(!vec![2, 1, 0].is_sorted_by(|a, b| a <= b));
+        assert!(vec![2, 1, 0].is_sorted_by(|a, b| a > b));
+        assert!(vec![2, 1, 0].is_sorted_by(|a, b| a >= b));
+        assert!(vec![2, 1, 0].is_sorted_by(|_a, _b| true));
+        assert!(!vec![2, 1, 0].is_sorted_by(|_a, _b| false));
+
+        assert!(!vec![5, 1, 9, 42].is_sorted_by(|a, b| a < b));
+        assert!(!vec![5, 1, 9, 42].is_sorted_by(|a, b| a <= b));
+        assert!(!vec![5, 1, 9, 42].is_sorted_by(|a, b| a > b));
+        assert!(!vec![5, 1, 9, 42].is_sorted_by(|a, b| a >= b));
+        assert!(vec![5, 1, 9, 42].is_sorted_by(|_a, _b| true));
+        assert!(!vec![5, 1, 9, 42].is_sorted_by(|_a, _b| false));
+    }
 }
