@@ -3221,6 +3221,49 @@ impl BinaryFunc {
             | BinaryFunc::Gte
             | BinaryFunc::Gt
             | BinaryFunc::Lte => false,
+            BinaryFunc::BitAndInt16
+            | BinaryFunc::BitAndInt32
+            | BinaryFunc::BitAndInt64
+            | BinaryFunc::BitAndUInt16
+            | BinaryFunc::BitAndUInt32
+            | BinaryFunc::BitAndUInt64
+            | BinaryFunc::BitOrInt16
+            | BinaryFunc::BitOrInt32
+            | BinaryFunc::BitOrInt64
+            | BinaryFunc::BitOrUInt16
+            | BinaryFunc::BitOrUInt32
+            | BinaryFunc::BitOrUInt64
+            | BinaryFunc::BitXorInt16
+            | BinaryFunc::BitXorInt32
+            | BinaryFunc::BitXorInt64
+            | BinaryFunc::BitXorUInt16
+            | BinaryFunc::BitXorUInt32
+            | BinaryFunc::BitXorUInt64
+            | BinaryFunc::BitShiftLeftInt16
+            | BinaryFunc::BitShiftLeftInt32
+            | BinaryFunc::BitShiftLeftInt64
+            | BinaryFunc::BitShiftLeftUInt16
+            | BinaryFunc::BitShiftLeftUInt32
+            | BinaryFunc::BitShiftLeftUInt64
+            | BinaryFunc::BitShiftRightInt16
+            | BinaryFunc::BitShiftRightInt32
+            | BinaryFunc::BitShiftRightInt64
+            | BinaryFunc::BitShiftRightUInt16
+            | BinaryFunc::BitShiftRightUInt32
+            | BinaryFunc::BitShiftRightUInt64 => false,
+            BinaryFunc::JsonbGetInt64 { .. }
+            | BinaryFunc::JsonbGetString { .. }
+            | BinaryFunc::JsonbGetPath { .. }
+            | BinaryFunc::JsonbContainsString
+            | BinaryFunc::JsonbConcat
+            | BinaryFunc::JsonbContainsJsonb
+            | BinaryFunc::JsonbDeleteInt64
+            | BinaryFunc::JsonbDeleteString => false,
+            BinaryFunc::MapContainsKey
+            | BinaryFunc::MapGetValue
+            | BinaryFunc::MapContainsAllKeys
+            | BinaryFunc::MapContainsAnyKeys
+            | BinaryFunc::MapContainsMap => false,
             _ => true,
         }
     }
