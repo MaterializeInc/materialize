@@ -45,5 +45,5 @@ created [earlier](#step-2-create-a-publication):
     ALL TABLES`.
 
 1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
-   for specific replicated tables using the [`ALTER SOURCE...{ADD | DROP SUBSOURCE`](/sql/alter-source/#context)
-   syntax.
+   for specific replicated tables by [dropping the table as a source](/sql/drop-source/)
+   and then using [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/#context).

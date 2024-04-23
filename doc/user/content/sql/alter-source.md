@@ -8,6 +8,10 @@ menu:
 
 `ALTER SOURCE` changes certain characteristics of a source.
 
+_Note:_ `ALTER SOURCE` previously supported a `DROP SUBSOURCE` subcommand.
+However, users can now use [`DROP SOURCE`](/sql/drop-source/) to drop
+subsources.
+
 ## Syntax
 
 {{< diagram "alter-source.svg" >}}
@@ -28,7 +32,6 @@ Field   | Use
 --------|-----
 _name_  | The identifier of the source you want to alter.
 **ADD SUBSOURCE** ... | PostgreSQL sources only: Add the identified tables from the upstream database (`table_name`) to the named source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options).
-**DROP SUBSOURCE** ... | PostgreSQL sources only: Drop the identified subsources from the source. Specifying **CASCADE** also drops all objects that depend on the subsource. **RESTRICT** (default) will not drop the subsource if it has any dependencies.
 
 ### **ADD SUBSOURCE** `with_options`
 
@@ -66,12 +69,6 @@ You cannot drop the "progress subsource".
 
 ```sql
 ALTER SOURCE pg_src ADD SUBSOURCE tbl_a, tbl_b AS b WITH (TEXT COLUMNS [tbl_a.col]);
-```
-
-### Dropping subsources
-
-```sql
-ALTER SOURCE pg_src DROP SUBSOURCE tbl_a, b CASCADE;
 ```
 
 ## Privileges
