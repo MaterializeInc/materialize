@@ -22,7 +22,7 @@ historical versions of its underlying data are available for querying.
 The common use cases for time traveling in Materialize are:
 
 * Lossless, **durable subscriptions** to your changing results. See the
-  [`SUBSCRIBE` documentation](/sql/subscribe#durable-subscriptions)
+  [`SUBSCRIBE` documentation](/sql/subscribe/#durable-subscriptions)
   for examples of how to create this type of subscription.
 
 * Accessing a past version of results at a specific point in time.
