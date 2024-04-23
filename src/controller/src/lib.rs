@@ -28,7 +28,6 @@ use std::num::NonZeroI64;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::{Peekable, StreamExt};
 use mz_build_info::BuildInfo;
@@ -59,7 +58,6 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use serde::Serialize;
-use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::time::{self, Duration, Interval, MissedTickBehavior};
@@ -536,21 +534,16 @@ where
 
 impl<T> Controller<T>
 where
+    // Bounds needed by `StorageController` and/or `Controller`:
     T: Timestamp
-        + Lattice
-        + TotalOrder
-        + TryInto<i64>
-        + TryFrom<i64>
         + Codec64
-        + Unpin
         + From<EpochMillis>
         + TimestampManipulation
-        + std::fmt::Display,
-    <T as TryInto<i64>>::Error: std::fmt::Debug,
-    <T as TryFrom<i64>>::Error: std::fmt::Debug,
+        + std::fmt::Display
+        + for<'a> Into<Datum<'a>>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    for<'a> T: Into<Datum<'a>>,
+    // Bounds needed by `ComputeController`:
     T: ComputeControllerTimestamp,
 {
     /// Creates a new controller.
