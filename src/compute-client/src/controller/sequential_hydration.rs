@@ -49,10 +49,11 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_eq_or_log;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::debug;
 
+use crate::controller::ComputeControllerTimestamp;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
@@ -88,7 +89,7 @@ pub(super) struct SequentialHydration<C, T> {
 impl<C, T> SequentialHydration<C, T>
 where
     C: ComputeClient<T>,
-    T: Timestamp,
+    T: ComputeControllerTimestamp,
 {
     /// Create a new `SequentialHydration` client.
     pub fn new(client: C, dyncfg: Arc<ConfigSet>, metrics: ReplicaMetrics) -> Self {
@@ -230,7 +231,7 @@ where
 impl<C, T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for SequentialHydration<C, T>
 where
     C: ComputeClient<T>,
-    T: Timestamp,
+    T: ComputeControllerTimestamp,
 {
     async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         self.absorb_command(cmd).await

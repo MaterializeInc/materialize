@@ -35,6 +35,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::{
     ActiveComputeController, ComputeController, ComputeControllerResponse,
+    ComputeControllerTimestamp,
 };
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -192,7 +193,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     immediate_watch_sets: Vec<Box<dyn Any>>,
 }
 
-impl<T: Timestamp> Controller<T> {
+impl<T: ComputeControllerTimestamp> Controller<T> {
     pub fn active_compute(&mut self) -> ActiveComputeController<T> {
         self.compute.activate(&mut *self.storage)
     }
@@ -275,7 +276,7 @@ impl<T: Timestamp> Controller<T> {
 
 impl<T> Controller<T>
 where
-    T: TimestampManipulation,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn update_orchestrator_scheduling_config(
@@ -550,6 +551,7 @@ where
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
     for<'a> T: Into<Datum<'a>>,
+    T: ComputeControllerTimestamp,
 {
     /// Creates a new controller.
     ///

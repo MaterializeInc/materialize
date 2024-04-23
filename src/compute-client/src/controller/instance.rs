@@ -30,19 +30,20 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use timely::progress::{Antichain, ChangeBatch};
 use timely::{Container, PartialOrder};
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
-    CollectionState, ComputeControllerResponse, IntrospectionUpdates, ReplicaId,
+    CollectionState, ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates,
+    ReplicaId,
 };
 use crate::logging::LogVariant;
 use crate::metrics::{InstanceMetrics, ReplicaMetrics};
@@ -191,7 +192,7 @@ pub(super) struct Instance<T> {
     dyncfg: Arc<ConfigSet>,
 }
 
-impl<T: Timestamp> Instance<T> {
+impl<T: ComputeControllerTimestamp> Instance<T> {
     /// Acquire a handle to the collection state associated with `id`.
     pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
@@ -612,7 +613,7 @@ impl<T: Timestamp> Instance<T> {
 
 impl<T> Instance<T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn new(
@@ -829,7 +830,7 @@ pub(super) struct ActiveInstance<'a, T> {
 
 impl<'a, T> ActiveInstance<'a, T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Add a new instance replica, by ID.
@@ -1964,13 +1965,7 @@ where
                 .update_operator_hydration_status(replica_id, status),
         }
     }
-}
 
-impl<'a, T> ActiveInstance<'a, T>
-where
-    T: TimestampManipulation,
-    ComputeGrpcClient: ComputeClient<T>,
-{
     /// Downgrade the warmup capabilities of collections as much as possible.
     ///
     /// The only requirement we have for a collection's warmup capability is that it is for a time
@@ -2086,10 +2081,10 @@ struct ActiveSubscribe<T> {
     target_replica: Option<ReplicaId>,
 }
 
-impl<T: Timestamp> ActiveSubscribe<T> {
+impl<T: ComputeControllerTimestamp> ActiveSubscribe<T> {
     fn new() -> Self {
         Self {
-            frontier: Antichain::from_elem(Timestamp::minimum()),
+            frontier: Antichain::from_elem(timely::progress::Timestamp::minimum()),
             target_replica: None,
         }
     }

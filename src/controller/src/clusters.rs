@@ -15,10 +15,11 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_compute_client::controller::{ComputeReplicaConfig, ComputeReplicaLogging};
+use mz_compute_client::controller::{
+    ComputeControllerTimestamp, ComputeReplicaConfig, ComputeReplicaLogging,
+};
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_compute_types::ComputeInstanceId;
@@ -35,7 +36,6 @@ use mz_repr::GlobalId;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
 use tracing::{error, warn};
 
 use crate::Controller;
@@ -319,7 +319,7 @@ pub struct CreateReplicaConfig {
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Creates a cluster with the specified identifier and configuration.
