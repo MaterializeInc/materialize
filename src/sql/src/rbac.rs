@@ -468,7 +468,7 @@ fn generate_rbac_requirements(
             privileges: plans
                 .iter()
                 .flat_map(
-                    |plan::CreateSourcePlans {
+                    |plan::CreateSourcePlanBundle {
                          source_id: _,
                          plan:
                              plan::CreateSourcePlan {

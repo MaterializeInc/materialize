@@ -116,7 +116,7 @@ pub enum Plan {
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
     CreateSource(CreateSourcePlan),
-    CreateSources(Vec<CreateSourcePlans>),
+    CreateSources(Vec<CreateSourcePlanBundle>),
     CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
@@ -573,8 +573,9 @@ pub struct CreateSourcePlan {
     pub in_cluster: Option<ClusterId>,
 }
 
+/// A [`CreateSourcePlan`] and the metadata necessary to sequence it.
 #[derive(Debug)]
-pub struct CreateSourcePlans {
+pub struct CreateSourcePlanBundle {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
     pub resolved_ids: ResolvedIds,
@@ -1013,7 +1014,7 @@ pub struct AlterConnectionPlan {
 #[derive(Debug)]
 pub enum AlterSourceAction {
     AddSubsourceExports {
-        subsources: Vec<CreateSourcePlans>,
+        subsources: Vec<CreateSourcePlanBundle>,
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,
     },
 }

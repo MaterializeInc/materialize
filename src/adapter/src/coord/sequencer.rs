@@ -23,7 +23,7 @@ use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
+    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
     FetchPlan, MutationKind, Params, Plan, PlanKind, QueryWhen, RaisePlan,
 };
 use mz_sql::rbac;
@@ -148,7 +148,7 @@ impl Coordinator {
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),
-                            vec![CreateSourcePlans {
+                            vec![CreateSourcePlanBundle {
                                 source_id,
                                 plan,
                                 resolved_ids,

@@ -56,7 +56,7 @@ use mz_catalog::memory::objects::{
 use mz_ore::instrument;
 use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, CreateSourcePlans, ExplainSinkSchemaPlan,
+    AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
     Explainee, ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption,
     PlannedRoleVariable, QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
 };
@@ -181,7 +181,7 @@ impl Coordinator {
     async fn create_source_inner(
         &mut self,
         session: &Session,
-        plans: Vec<plan::CreateSourcePlans>,
+        plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<CreateSourceInner, AdapterError> {
         let mut ops = vec![];
         let mut sources = vec![];
@@ -189,7 +189,7 @@ impl Coordinator {
         let if_not_exists_ids = plans
             .iter()
             .filter_map(
-                |plan::CreateSourcePlans {
+                |plan::CreateSourcePlanBundle {
                      source_id,
                      plan,
                      resolved_ids: _,
@@ -203,7 +203,7 @@ impl Coordinator {
             )
             .collect::<BTreeMap<_, _>>();
 
-        for plan::CreateSourcePlans {
+        for plan::CreateSourcePlanBundle {
             source_id,
             mut plan,
             resolved_ids,
@@ -271,7 +271,7 @@ impl Coordinator {
         session: &Session,
         params: &mz_sql::plan::Params,
         subsource_stmt: CreateSubsourceStatement<mz_sql::names::Aug>,
-    ) -> Result<CreateSourcePlans, AdapterError> {
+    ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
         let source_id = self.catalog_mut().allocate_user_id().await?;
         let plan = self.plan_statement(
@@ -284,7 +284,7 @@ impl Coordinator {
             Plan::CreateSource(plan) => plan,
             _ => unreachable!(),
         };
-        Ok(CreateSourcePlans {
+        Ok(CreateSourcePlanBundle {
             source_id,
             plan,
             resolved_ids,
@@ -382,7 +382,7 @@ impl Coordinator {
             print_id: true,
         };
 
-        create_source_plans.push(CreateSourcePlans {
+        create_source_plans.push(CreateSourcePlanBundle {
             source_id,
             plan: source_plan,
             resolved_ids: resolved_ids.clone(),
@@ -405,7 +405,7 @@ impl Coordinator {
     pub(super) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
-        plans: Vec<plan::CreateSourcePlans>,
+        plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateSourceInner {
             ops,
