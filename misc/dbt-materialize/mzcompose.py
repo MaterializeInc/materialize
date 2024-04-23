@@ -58,12 +58,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 options=test_case.materialized_options,
                 image=test_case.materialized_image,
                 volumes_extra=["secrets:/secrets"],
-                # Disable RBAC checks because of error on "DROP CLUSTER quickstart CASCADE":
-                # InsufficientPrivilege: must be owner of CLUSTER quickstart
-                # TODO: Can dbt connect using mz_system user instead of materialize?
-                additional_system_parameter_defaults={
-                    "enable_rbac_checks": "false",
-                },
             )
             test_args = ["dbt-materialize/tests"]
             if args.k:
@@ -84,6 +78,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                                 """
                         )
                     )
+
+                    # Give the test harness permission to modify the built-in
+                    # objects as necessary.
+                    for what in [
+                        "DATABASE materialize",
+                        "SCHEMA materialize.public",
+                        "CLUSTER quickstart",
+                    ]:
+                        c.sql(
+                            service="materialized",
+                            user="mz_system",
+                            port=6877,
+                            sql=f"ALTER {what} OWNER TO materialize",
+                        )
 
                     c.run(
                         "dbt",
