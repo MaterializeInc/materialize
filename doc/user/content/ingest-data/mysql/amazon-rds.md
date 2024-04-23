@@ -86,13 +86,13 @@ binary logging.
     ```sql
     -- Validate parameter group configuration parameters
     SHOW VARIABLES WHERE variable_name IN (
-    	'log_bin',
-    	'binlog_format',
-    	'binlog_row_image',
-    	'gtid_mode',
-    	'enforce_gtid_consistency',
-    	'replica_preserve_commit_order'
-    	);
+      'log_bin',
+      'binlog_format',
+      'binlog_row_image',
+      'gtid_mode',
+      'enforce_gtid_consistency',
+      'replica_preserve_commit_order'
+    );
     ```
 
 ## Step 2. Create a user for replication
