@@ -223,6 +223,8 @@ impl Optimize<LocalMirPlan> for Optimizer {
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 
+        df_desc.refresh_schedule = self.refresh_schedule.clone();
+
         df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 

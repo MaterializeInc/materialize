@@ -3074,6 +3074,22 @@ WHERE write_frontier IS NOT NULL",
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_MATERIALIZED_VIEW_REFRESHES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_materialized_view_refreshes",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_MATERIALIZED_VIEW_REFRESHES_OID,
+    data_source: IntrospectionType::ComputeMaterializedViewRefreshes,
+    desc: RelationDesc::empty()
+        .with_column("materialized_view_id", ScalarType::String.nullable(false))
+        .with_column(
+            "last_completed_refresh",
+            ScalarType::MzTimestamp.nullable(true),
+        )
+        .with_column("next_refresh", ScalarType::MzTimestamp.nullable(true)),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_subscriptions",
     schema: MZ_INTERNAL_SCHEMA,
@@ -7156,6 +7172,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Source(&MZ_FRONTIERS),
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
+        Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),

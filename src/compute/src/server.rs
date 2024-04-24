@@ -317,6 +317,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         as_of: dataflow.as_of.clone(),
                         until: dataflow.until.clone(),
                         debug_name: dataflow.debug_name.clone(),
+                        initial_storage_as_of: dataflow.initial_storage_as_of.clone(),
+                        refresh_schedule: dataflow.refresh_schedule.clone(),
                     })
                     .map(ComputeCommand::CreateDataflow)
                     .collect()

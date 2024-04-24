@@ -242,6 +242,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  at  timestamp␠with␠time␠zone
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refreshes' ORDER BY position
+----
+1  materialized_view_id  text
+2  last_completed_refresh  mz_timestamp
+3  next_refresh  mz_timestamp
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
 ----
 1  object_id  text
@@ -823,6 +830,7 @@ mz_internal_cluster_replicas
 mz_kafka_sources
 mz_materialization_lag
 mz_materialized_view_refresh_strategies
+mz_materialized_view_refreshes
 mz_message_batch_counts_received_raw
 mz_message_batch_counts_sent_raw
 mz_message_counts

@@ -406,9 +406,20 @@ The `mz_materialized_view_refresh_strategies` table shows each `REFRESH` option 
 |------------------------|------------|-----------------------------------------------------------------------------------------------|
 | `materialized_view_id` | [`text`]   | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views)  |
 | `type`                 | [`text`]   | `at`, `every`, or `on-commit` (the default)                                                   |
-| `interval`             | [`interval`] | The refresh interval of a `REFRESH EVERY` option, or null if the `type` is not `every`.            |
-| `aligned_to`           | [`timestamp with time zone`] | The `ALIGNED TO` option of a `REFRESH EVERY` option, or null if the `type` is not `every`.|
-| `at`                   | [`timestamp with time zone`] | The time of a `REFRESH AT`, or null if the `type` is not `at`.              |
+| `interval`             | [`interval`] | The refresh interval of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.   |
+| `aligned_to`           | [`timestamp with time zone`] | The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`. |
+| `at`                   | [`timestamp with time zone`] | The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`.            |
+
+### `mz_materialized_view_refreshes`
+
+The `mz_materialized_view_refreshes` table shows for each materialized view that has a `REFRESH` option other than `ON COMMIT` the time of the last successfully completed refresh and the time of the next scheduled refresh.
+
+<!-- RELATION_SPEC mz_internal.mz_materialized_view_refreshes -->
+| Field                    | Type                         | Meaning                                                                                                                      |
+|--------------------------|------------------------------|------------------------------------------------------------------------------------------------------------------------------|
+| `materialized_view_id`   | [`text`]                     | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views) |
+| `last_completed_refresh` | [`mz_timestamp`]             | The time of the last successfully completed refresh, or `NULL` if the materialized view hasn't completed any refreshes yet.  |
+| `next_refresh`           | [`mz_timestamp`]             | The time of the next scheduled refresh, or `NULL` if the materialized view won't have any more refreshes.                      |
 
 ### `mz_object_dependencies`
 

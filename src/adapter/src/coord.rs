@@ -1649,6 +1649,9 @@ impl Coordinator {
                         local_read_ts_for_index_bootstrapping,
                     );
                     df_desc.set_as_of(as_of);
+                    if let Some(initial_as_of) = mview.initial_as_of.clone() {
+                        df_desc.set_initial_as_of(initial_as_of);
+                    }
 
                     // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
                     let until = mview

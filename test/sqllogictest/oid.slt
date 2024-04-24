@@ -1061,3 +1061,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16950  mz_kafka_sources_ind
 16951  mz_webhook_sources_ind
 16952  mz_history_retention_strategies
+16953  mz_materialized_view_refreshes

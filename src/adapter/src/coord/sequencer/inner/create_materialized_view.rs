@@ -581,6 +581,8 @@ impl Coordinator {
             "materialized view timestamp selection",
         );
 
+        let initial_as_of = storage_as_of.clone();
+
         // Update the `create_sql` with the selected `as_of`. This is how we make sure the `as_of`
         // is persisted to the catalog and can be relied on during bootstrapping.
         // This has to be the `storage_as_of`, because bootstrapping uses this in
@@ -614,7 +616,7 @@ impl Coordinator {
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
                     refresh_schedule,
-                    initial_as_of: Some(storage_as_of.clone()),
+                    initial_as_of: Some(initial_as_of.clone()),
                 }),
                 owner_id: *session.current_role_id(),
             }),
@@ -640,6 +642,7 @@ impl Coordinator {
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 df_desc.set_as_of(dataflow_as_of.clone());
+                df_desc.set_initial_as_of(initial_as_of);
                 df_desc.until = until;
 
                 // Emit notices.
