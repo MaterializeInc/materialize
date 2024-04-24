@@ -355,6 +355,55 @@ impl Transform for Fixpoint {
     }
 }
 
+/// Convenience macro for guarding transforms behind a feature flag.
+///
+/// If you have a code block like
+///
+/// ```ignore
+/// vec![
+///     Box::new(Foo::default()),
+///     Box::new(Bar::default()),
+///     Box::new(Baz::default()),
+/// ]
+/// ```
+///
+/// and you want to guard `Bar` behind a feature flag `enable_bar`, you can
+/// write
+///
+/// ```ignore
+/// transforms![
+///     Box::new(Foo::default()),
+///     Box::new(Bar::default()); if ctx.features.enable_bar,
+///     Box::new(Baz::default()),
+/// ]
+/// ```
+///
+/// as a shorthand and in order to minimize your code diff.
+#[allow(unused_macros)]
+macro_rules! transforms {
+    // Internal rule. Matches lines with a guard: `$transform; if $cond`.
+    (@op fill $buf:ident with $transform:expr; if $cond:expr, $($transforms:tt)*) => {
+        if $cond {
+            $buf.push($transform);
+        }
+        transforms!(@op fill $buf with $($transforms)*);
+    };
+    // Internal rule. Matchesl lines without a guard: `$transform`.
+    (@op fill $buf:ident with $transform:expr, $($transforms:tt)*) => {
+        $buf.push($transform);
+        transforms!(@op fill $buf with $($transforms)*);
+    };
+    // Internal rule: matches the empty $transforms TokenTree (terminal case).
+    (@op fill $buf:ident with) => {
+        // do nothing
+    };
+    ($($transforms:tt)*) => {{
+        let mut __buf = Vec::<Box<dyn Transform>>::new();
+        transforms!(@op fill __buf with $($transforms)*);
+        __buf
+    }};
+}
+
 /// A sequence of transformations that simplify the `MirRelationExpr`
 #[derive(Debug)]
 pub struct FuseAndCollapse {
