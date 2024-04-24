@@ -32,6 +32,7 @@ fn main() {
                 "repr/src/adt/mz_acl_item.proto",
                 "repr/src/adt/numeric.proto",
                 "repr/src/adt/range.proto",
+                "repr/src/refresh_schedule.proto",
                 "repr/src/adt/regex.proto",
                 "repr/src/adt/timestamp.proto",
                 "repr/src/adt/varchar.proto",

@@ -13,10 +13,11 @@ use std::time::Duration;
 
 use mz_proto::IntoRustIfSome;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::Timestamp;
 use serde::{Deserialize, Serialize};
 
-include!(concat!(env!("OUT_DIR"), "/mz_expr.refresh_schedule.rs"));
+use crate::Timestamp;
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.refresh_schedule.rs"));
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RefreshSchedule {

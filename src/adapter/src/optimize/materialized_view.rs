@@ -30,9 +30,9 @@ use std::time::{Duration, Instant};
 
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;

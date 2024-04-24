@@ -40,7 +40,6 @@ use mz_controller::clusters::{
     ReplicaAllocation, ReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::refresh_schedule::RefreshEvery;
 use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
@@ -49,6 +48,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};

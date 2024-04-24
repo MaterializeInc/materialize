@@ -15,7 +15,7 @@ import "google/protobuf/empty.proto";
 
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
-import "expr/src/refresh_schedule.proto";
+import "repr/src/refresh_schedule.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage-types/src/controller.proto";
 import "storage-types/src/sinks.proto";
@@ -30,7 +30,7 @@ message ProtoComputeSinkDesc {
     bool with_snapshot = 4;
     mz_repr.antichain.ProtoU64Antichain up_to = 5;
     repeated uint64 non_null_assertions = 6;
-    mz_expr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 7;
+    mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 7;
 }
 
 message ProtoComputeSinkConnection {
