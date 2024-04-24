@@ -3735,7 +3735,7 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         arb_utc_date_time()
             .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap()))
             .boxed(),
-        arb_interval().prop_map(PropDatum::Interval).boxed(),
+        any::<Interval>().prop_map(PropDatum::Interval).boxed(),
         arb_numeric().prop_map(PropDatum::Numeric).boxed(),
         prop::collection::vec(any::<u8>(), 1024)
             .prop_map(PropDatum::Bytes)
@@ -3967,21 +3967,6 @@ fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDic
 fn arb_date() -> BoxedStrategy<Date> {
     (Date::LOW_DAYS..Date::HIGH_DAYS)
         .prop_map(move |days| Date::from_pg_epoch(days).unwrap())
-        .boxed()
-}
-
-fn arb_interval() -> BoxedStrategy<Interval> {
-    (
-        any::<i32>(),
-        any::<i32>(),
-        ((((i64::from(i32::MIN) * 60) - 59) * 60) * 1_000_000 - 59_999_999
-            ..(((i64::from(i32::MAX) * 60) + 59) * 60) * 1_000_000 + 59_999_999),
-    )
-        .prop_map(|(months, days, micros)| Interval {
-            months,
-            days,
-            micros,
-        })
         .boxed()
 }
 
