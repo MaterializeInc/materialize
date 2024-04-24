@@ -97,8 +97,6 @@ optimizer_feature_flags!({
     enable_consolidate_after_union_negate: bool,
     // Bound from `SystemVars::enable_eager_delta_joins`.
     enable_eager_delta_joins: bool,
-    // Enable the `EquivalencePropagation` transform in the optimizer.
-    enable_equivalence_propagation: bool,
     // Enable Lattice-based fixpoint iteration on LetRec nodes in the
     // Analysis framework.
     enable_letrec_fixpoint_analysis: bool,
