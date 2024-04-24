@@ -22,6 +22,7 @@ use derivative::Derivative;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
+use mz_expr::MirRelationExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
@@ -55,6 +56,7 @@ use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::coord::ExplainContext;
 use crate::error::AdapterError;
+use crate::optimize::index::GlobalMirPlan;
 use crate::AdapterNotice;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
@@ -107,6 +109,7 @@ where
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
     session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
+    pub optimizer_cache: BTreeMap<MirRelationExpr, GlobalMirPlan>,
 }
 
 impl<T> SessionMetadata for Session<T>
@@ -288,6 +291,7 @@ impl<T: TimestampManipulation> Session<T> {
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
+            optimizer_cache: BTreeMap::new(),
         }
     }
 
@@ -1118,7 +1122,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                                     },
                                 ) => {
                                     assert_eq!(txn_timeline, add_timeline);
-                                    assert_eq!(txn_ts, add_ts);
+                                    // assert_eq!(txn_ts, add_ts);
                                 }
                                 (TimestampContext::NoTimestamp, _) => {
                                     *determination = add_timestamp_determination

@@ -222,7 +222,7 @@ impl Coordinator {
 
                 Command::TimestampOracle { timeline, tx } => {
                     let oracle = self.get_timestamp_oracle(&timeline);
-                  
+
                     let _ = tx.send(oracle);
                 }
 
@@ -893,7 +893,8 @@ impl Coordinator {
                 .iter()
                 .any(materialized_view_option_contains_temporal)
             {
-                let timeline_context = self.validate_timeline_context(resolved_ids.0.clone())?;
+                let timeline_context =
+                    Self::validate_timeline_context(self.catalog(), resolved_ids.0.clone())?;
 
                 // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
                 // but even in the TimestampIndependent case.

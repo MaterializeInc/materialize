@@ -2122,7 +2122,8 @@ impl Coordinator {
             }
         };
         let source_ids = source.depends_on();
-        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        let mut timeline_context =
+            Self::validate_timeline_context(self.catalog(), source_ids.clone())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && source.contains_temporal()
         {

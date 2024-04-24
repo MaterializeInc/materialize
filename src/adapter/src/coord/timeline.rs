@@ -37,10 +37,13 @@ use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{debug, error, info, Instrument};
 
+use crate::catalog::Catalog;
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::peek::PeekComputeInstances;
 use crate::coord::read_policy::TimelineReadHolds;
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
+use crate::optimize::dataflows::DataflowBuilder;
 use crate::AdapterError;
 
 /// An enum describing whether or not a query belongs to a timeline and whether the query can be
@@ -361,13 +364,15 @@ impl Coordinator {
     /// meanings like two separate debezium topics) or will never complete (joining
     /// cdcv2 and realtime data).
     pub(crate) fn validate_timeline_context<I>(
-        &self,
+        catalog: &Catalog,
         ids: I,
     ) -> Result<TimelineContext, AdapterError>
     where
         I: IntoIterator<Item = GlobalId>,
     {
-        let mut timeline_contexts: Vec<_> = self.get_timeline_contexts(ids).into_iter().collect();
+        let mut timeline_contexts: Vec<_> = Self::get_timeline_contexts(catalog, ids)
+            .into_iter()
+            .collect();
         // If there's more than one timeline, we will not produce meaningful
         // data to a user. Take, for example, some realtime source and a debezium
         // consistency topic source. The realtime source uses something close to now
@@ -408,12 +413,12 @@ impl Coordinator {
 
     /// Return the [`TimelineContext`] belonging to a GlobalId, if one exists.
     pub(crate) fn get_timeline_context(&self, id: GlobalId) -> TimelineContext {
-        self.validate_timeline_context(vec![id])
+        Self::validate_timeline_context(self.catalog(), vec![id])
             .expect("impossible for a single object to belong to incompatible timeline contexts")
     }
 
-    /// Return the [`TimelineContext`]s belonging to a list of GlobalIds, if any exist.
-    fn get_timeline_contexts<I>(&self, ids: I) -> BTreeSet<TimelineContext>
+    /// Return the timeline contexts belonging to a list of GlobalIds, if any exist.
+    fn get_timeline_contexts<I>(catalog: &Catalog, ids: I) -> BTreeSet<TimelineContext>
     where
         I: IntoIterator<Item = GlobalId>,
     {
@@ -429,7 +434,7 @@ impl Coordinator {
             if !seen.insert(id) {
                 continue;
             }
-            if let Some(entry) = self.catalog().try_get_entry(&id) {
+            if let Some(entry) = catalog.try_get_entry(&id) {
                 match entry.item() {
                     CatalogItem::Source(source) => {
                         timelines
@@ -515,7 +520,8 @@ impl Coordinator {
     /// they might read from. We use a heuristic of "anything in the same database
     /// schemas with the same timeline as whatever the first query is".
     pub(crate) fn timedomain_for<'a, I>(
-        &self,
+        mut client: impl PeekComputeInstances,
+        catalog: &Catalog,
         uses_ids: I,
         timeline_context: &TimelineContext,
         conn_id: &ConnectionId,
@@ -527,32 +533,32 @@ impl Coordinator {
         // Gather all the used schemas.
         let mut schemas = BTreeSet::new();
         for id in uses_ids {
-            let entry = self.catalog().get_entry(id);
+            let entry = catalog.get_entry(id);
             let name = entry.name();
             schemas.insert((&name.qualifiers.database_spec, &name.qualifiers.schema_spec));
         }
 
         let pg_catalog_schema = (
             &ResolvedDatabaseSpecifier::Ambient,
-            &SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id().clone()),
+            &SchemaSpecifier::Id(catalog.get_pg_catalog_schema_id().clone()),
         );
         let system_schemas = [
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_catalog_schema_id().clone()),
+                &SchemaSpecifier::Id(catalog.get_mz_catalog_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
+                &SchemaSpecifier::Id(catalog.get_mz_internal_schema_id().clone()),
             ),
             pg_catalog_schema.clone(),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
+                &SchemaSpecifier::Id(catalog.get_information_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_unsafe_schema_id().clone()),
+                &SchemaSpecifier::Id(catalog.get_mz_unsafe_schema_id().clone()),
             ),
         ];
 
@@ -569,14 +575,16 @@ impl Coordinator {
         // Gather the IDs of all items in all used schemas.
         let mut item_ids: BTreeSet<GlobalId> = BTreeSet::new();
         for (db, schema) in schemas {
-            let schema = self.catalog().get_schema(db, schema, conn_id);
+            let schema = catalog.get_schema(db, schema, conn_id);
             item_ids.extend(schema.items.values());
         }
 
         // Gather the dependencies of those items.
-        let mut id_bundle: CollectionIdBundle = self
-            .index_oracle(compute_instance)
-            .sufficient_collections(item_ids.iter());
+        let compute = client
+            .instance_snapshot(compute_instance)
+            .expect("compute instance does not exist");
+        let dataflow_builder = DataflowBuilder::new(catalog.state(), compute);
+        let mut id_bundle = dataflow_builder.sufficient_collections(item_ids.iter());
 
         // Filter out ids from different timelines.
         for ids in [
@@ -584,8 +592,7 @@ impl Coordinator {
             &mut id_bundle.compute_ids.entry(compute_instance).or_default(),
         ] {
             ids.retain(|&id| {
-                let id_timeline_context = self
-                    .validate_timeline_context(vec![id])
+                let id_timeline_context = Self::validate_timeline_context(catalog, vec![id])
                     .expect("single id should never fail");
                 match (&id_timeline_context, &timeline_context) {
                     // If this id doesn't have a timeline, we can keep it.

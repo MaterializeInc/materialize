@@ -376,7 +376,8 @@ impl Coordinator {
             .transpose()?;
 
         let source_ids = plan.source.depends_on();
-        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        let mut timeline_context =
+            Self::validate_timeline_context(self.catalog(), source_ids.clone())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && plan.source.contains_temporal()?
         {
@@ -1109,7 +1110,9 @@ impl Coordinator {
                 let determine_bundle = if in_immediate_multi_stmt_txn {
                     // In a transaction, determine a timestamp that will be valid for anything in
                     // any schema referenced by the first query.
-                    timedomain_bundle = self.timedomain_for(
+                    timedomain_bundle = Self::timedomain_for(
+                        &*self,
+                        self.catalog(),
                         source_ids,
                         &timeline_context,
                         session.conn_id(),

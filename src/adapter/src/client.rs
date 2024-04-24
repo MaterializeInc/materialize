@@ -12,16 +12,19 @@ use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use differential_dataflow::lattice::Lattice;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_compute_client::controller::PeekClient;
+use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
@@ -35,26 +38,38 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row, ScalarType, Timestamp};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
+use mz_sql::plan::QueryWhen;
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
+use mz_sql::session::vars::IsolationLevel;
 use mz_sql::session::vars::{OwnedVarInput, Var, CLUSTER};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
+use opentelemetry::trace::TraceContextExt;
 use prometheus::Histogram;
 use serde_json::json;
-use tokio::sync::{mpsc, oneshot};
-use tracing::error;
+use timely::progress::frontier::MutableAntichain;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use tokio::sync::{mpsc, oneshot, watch};
+use tracing::{error, event, Level};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogState};
 use crate::command::{
     CatalogDump, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, Response,
 };
-use crate::coord::{Coordinator, ExecuteContextExtra};
+use crate::coord::peek;
+use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::coord::{
+    introspection, Coordinator, ExecuteContextExtra, ExplainContext, PeekStageFinish,
+    PeekStageValidate,
+};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
+use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, TransactionId,
@@ -62,7 +77,10 @@ use crate::session::{
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse};
+use crate::{
+    AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse, TimestampProvider,
+};
+use crate::{CollectionIdBundle, TimelineContext, TimestampContext};
 
 /// A handle to a running coordinator.
 ///
@@ -205,8 +223,10 @@ impl Client {
             timeouts: Timeout::new(),
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
+            catalog_snapshot: None,
             timestamp_oracles: BTreeMap::new(),
             peek_clients: BTreeMap::new(),
+            frontiers: FrontiersClient::new(self.clone()).await,
         };
 
         let StartupResponse {
@@ -419,6 +439,7 @@ Issue a SQL query to get started. Need help?
 
     #[instrument(level = "debug")]
     fn send(&self, cmd: Command) {
+        // println!("sending: {:?}", cmd);
         self.inner_cmd_tx
             .send((OpenTelemetryContext::obtain(), cmd))
             .expect("coordinator unexpectedly gone");
@@ -439,8 +460,72 @@ pub struct SessionClient {
     timeouts: Timeout,
     segment_client: Option<mz_segment::Client>,
     environment_id: EnvironmentId,
+    catalog_snapshot: Option<Arc<Catalog>>,
     timestamp_oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
     peek_clients: BTreeMap<ComputeInstanceId, PeekClient<Timestamp>>,
+    frontiers: FrontiersClient<Timestamp>,
+}
+
+pub struct FrontiersClient<T> {
+    session_client: Client,
+    frontiers: Arc<Mutex<Frontiers<T>>>,
+}
+
+struct Frontiers<T> {
+    storage: BTreeMap<GlobalId, CollectionState<T>>,
+    compute: BTreeMap<GlobalId, CollectionState<T>>,
+}
+
+impl<T> Frontiers<T> {
+    fn new() -> Self {
+        Self {
+            storage: BTreeMap::new(),
+            compute: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CollectionState<T> {
+    pub read_capabilities: MutableAntichain<T>,
+    pub implied_capability: Antichain<T>,
+    pub write_frontier: Antichain<T>,
+}
+
+impl<T> FrontiersClient<T>
+where
+    T: TimelyTimestamp,
+{
+    async fn new(session_client: Client) -> Self {
+        Self {
+            session_client,
+            frontiers: Arc::new(Mutex::new(Frontiers::new())),
+        }
+    }
+
+    pub async fn storage_read_capability(&mut self, _id: GlobalId) -> Antichain<T> {
+        Antichain::from_elem(T::minimum())
+    }
+
+    pub async fn storage_write_frontier(&mut self, _id: GlobalId) -> Antichain<T> {
+        Antichain::from_elem(T::minimum())
+    }
+
+    pub async fn compute_read_capability(
+        &mut self,
+        _instance: ComputeInstanceId,
+        _id: GlobalId,
+    ) -> Antichain<T> {
+        Antichain::from_elem(T::minimum())
+    }
+
+    pub async fn compute_write_frontier(
+        &mut self,
+        _instance: ComputeInstanceId,
+        _id: GlobalId,
+    ) -> Antichain<T> {
+        Antichain::from_elem(T::minimum())
+    }
 }
 
 impl SessionClient {
@@ -584,18 +669,150 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextExtra>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
-        let response = self
-            .send_with_cancel(
-                |tx, session| Command::Execute {
-                    portal_name,
-                    session,
-                    tx,
-                    outer_ctx_extra,
-                },
-                cancel_future,
-            )
-            .await?;
-        Ok((response, execute_started))
+
+        let session = self.session.as_ref().expect("session invariant violated");
+        let stmt = session
+            .get_portal_unverified(&portal_name)
+            .expect("known to exist")
+            .stmt
+            .as_ref();
+
+        match stmt {
+            Some(stmt) if matches!(stmt.as_ref(), Statement::Select(_)) => {
+                let mut session = self.session.take().expect("session invariant violated");
+                if session.vars().emit_trace_id_notice() {
+                    let span_context = tracing::Span::current()
+                        .context()
+                        .span()
+                        .span_context()
+                        .clone();
+                    if span_context.is_valid() {
+                        session.add_notice(AdapterNotice::QueryTrace {
+                            trace_id: span_context.trace_id(),
+                        });
+                    }
+                }
+                let catalog = self.catalog_snapshot().await;
+                let response = self
+                    .handle_select(&catalog, portal_name, &mut session, outer_ctx_extra)
+                    .await?;
+                self.session.replace(session);
+                Ok((response, execute_started))
+            }
+            _ => {
+                let response = self
+                    .send_with_cancel(
+                        |tx, session| Command::Execute {
+                            portal_name,
+                            session,
+                            tx,
+                            outer_ctx_extra,
+                        },
+                        cancel_future,
+                    )
+                    .await?;
+                Ok((response, execute_started))
+            }
+        }
+    }
+
+    /// Executes a SELECT statement
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn handle_select(
+        &mut self,
+        catalog: &Arc<Catalog>,
+        portal_name: String,
+        session: &mut Session,
+        // If this command was part of another execute command
+        // (for example, executing a `FETCH` statement causes an execute to be
+        //  issued for the cursor it references),
+        // then `outer_context` should be `Some`.
+        // This instructs the coordinator that the
+        // outer execute should be considered finished once the inner one is.
+        _outer_context: Option<ExecuteContextExtra>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // // println!("handling select locally");
+        // let session_catalog = catalog.for_session(&session);
+        // let portal = session
+        //     .get_portal_unverified(&portal_name)
+        //     .expect("known to exist");
+        //
+        // let original_stmt = match &portal.stmt {
+        //     Some(Statement::Select(select)) => Statement::Select(select.clone()),
+        //     _ => {
+        //         unreachable!();
+        //     }
+        // };
+        // let (stmt, resolved_ids) = match mz_sql::names::resolve(&session_catalog, original_stmt) {
+        //     Ok(resolved) => resolved,
+        //     Err(e) => panic!("error: {:?}", e),
+        // };
+        //
+        // let params = portal.parameters.clone();
+        //
+        // // let planned_stmt = self.plan_statement(&session, stmt, &params, &resolved_ids);
+        // let pcx = session.pcx();
+        // let planned_stmt =
+        //     mz_sql::plan::plan(Some(pcx), &session_catalog, stmt, &params, &resolved_ids)?;
+        //
+        // // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+        // // session var is set, then we automatically run the query on the mz_introspection cluster.
+        // let target_cluster =
+        //     introspection::auto_run_on_introspection(&session_catalog, &session, &planned_stmt);
+        //
+        // let select_plan = match planned_stmt {
+        //     mz_sql::plan::Plan::Select(select_plan) => select_plan,
+        //     _ => unreachable!(),
+        // };
+        //
+        // let peek_stage_validate = PeekStageValidate {
+        //     plan: select_plan,
+        //     target_cluster,
+        //     copy_to_ctx: None,
+        //     explain_ctx: ExplainContext::None,
+        // };
+        //
+        // let peek_stage_optimize =
+        //     peek::peek_stage_validate(&catalog, &mut *self, &session, peek_stage_validate)?;
+        //
+        // let peek_stage_timestamp =
+        //     peek::peek_stage_optimize(&catalog, &mut *self, session, peek_stage_optimize)?;
+        //
+        // // Skipping this stage, because RTR isn't really a thing...
+        // let PeekStageTimestamp {
+        //     validity,
+        //     copy_to,
+        //     source_ids,
+        //     id_bundle,
+        //     when,
+        //     target_replica,
+        //     timeline_context,
+        //     in_immediate_multi_stmt_txn: _,
+        //     optimizer,
+        //     global_mir_plan,
+        // } = peek_stage_timestamp;
+        //
+        // let mut peek_stage_finish = PeekStageFinish {
+        //     validity,
+        //     copy_to,
+        //     id_bundle: Some(id_bundle),
+        //     when,
+        //     target_replica,
+        //     timeline_context,
+        //     source_ids,
+        //     real_time_recency_ts: None,
+        //     optimizer,
+        //     global_mir_plan,
+        // };
+        //
+        // if let Err(err) = peek_stage_finish.validity.check(&catalog) {
+        //     panic!("peek validation error: {}", err);
+        // }
+        //
+        // let response = peek::peek_stage_finish(&catalog, self, session, peek_stage_finish).await?;
+        //
+        // Ok(response)
+        todo!()
     }
 
     fn now(&self) -> EpochMillis {
@@ -630,12 +847,34 @@ impl SessionClient {
         &mut self,
         action: EndTransactionAction,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.send(|tx, session| Command::Commit {
-            action,
-            session,
-            tx,
-        })
-        .await
+        let should_send = match self.session().transaction().inner() {
+            Some(txn) => match &txn.ops {
+                crate::session::TransactionOps::None => {
+                    // nothing to do,
+                    false
+                }
+                crate::session::TransactionOps::Peeks { .. } => {
+                    // Also not doing anything for now.
+                    false
+                }
+                crate::session::TransactionOps::Subscribe => true,
+                crate::session::TransactionOps::Writes(_) => true,
+                crate::session::TransactionOps::SingleStatement { .. } => true,
+                crate::session::TransactionOps::DDL { .. } => true,
+            },
+            None => false,
+        };
+
+        if should_send {
+            self.send(|tx, session| Command::Commit {
+                action,
+                session,
+                tx,
+            })
+            .await
+        } else {
+            Ok(ExecuteResponse::EmptyQuery)
+        }
     }
 
     /// Fails a transaction.
@@ -648,9 +887,15 @@ impl SessionClient {
     /// Fetches the catalog.
     #[instrument(level = "debug")]
     pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
+        // if let Some(catalog) = &self.catalog_snapshot {
+        //     return Arc::clone(catalog);
+        // }
         let CatalogSnapshot { catalog } = self
             .send_without_session(|tx| Command::CatalogSnapshot { tx })
             .await;
+
+        // self.catalog_snapshot.replace(Arc::clone(&catalog));
+
         catalog
     }
 
@@ -703,6 +948,57 @@ impl SessionClient {
             .expect("known to exist")
             .clone()
     }
+
+    /// The smallest common valid read frontier among the specified collections.
+    async fn least_valid_read(
+        &mut self,
+        id_bundle: &CollectionIdBundle,
+    ) -> Antichain<mz_repr::Timestamp> {
+        let mut since = Antichain::from_elem(Timestamp::minimum());
+        {
+            for id in id_bundle.storage_ids.iter() {
+                since.join_assign(&self.frontiers.storage_read_capability(*id).await)
+            }
+        }
+        {
+            for (instance, compute_ids) in &id_bundle.compute_ids {
+                for id in compute_ids.iter() {
+                    since.join_assign(&self.frontiers.compute_read_capability(*instance, *id).await)
+                }
+            }
+        }
+        since
+    }
+
+    /// The smallest common valid write frontier among the specified collections.
+    ///
+    /// Times that are not greater or equal to this frontier are complete for all collections
+    /// identified as arguments.
+    async fn least_valid_write(
+        &mut self,
+        id_bundle: &CollectionIdBundle,
+    ) -> Antichain<mz_repr::Timestamp> {
+        let mut since = Antichain::new();
+        {
+            for id in id_bundle.storage_ids.iter() {
+                since.extend(self.frontiers.storage_write_frontier(*id).await.into_iter());
+            }
+        }
+        {
+            for (instance, compute_ids) in &id_bundle.compute_ids {
+                for id in compute_ids.iter() {
+                    since.extend(
+                        self.frontiers
+                            .compute_write_frontier(*instance, *id)
+                            .await
+                            .into_iter(),
+                    );
+                }
+            }
+        }
+        since
+    }
+
     /// Dumps the catalog to a JSON string.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
@@ -1138,5 +1434,230 @@ impl RecordFirstRowStream {
                 .observe(self.execute_started.elapsed().as_secs_f64());
         }
         msg
+    }
+}
+
+impl peek::PeekIds for &mut SessionClient {
+    fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
+        Ok(GlobalId::User(0))
+    }
+}
+
+impl peek::PeekComputeInstances for &mut SessionClient {
+    fn instance_snapshot(
+        &mut self,
+        id: mz_compute_types::ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, mz_compute_client::controller::error::InstanceMissing>
+    {
+        ComputeInstanceSnapshot::new_without_collections(id)
+    }
+}
+
+#[async_trait::async_trait]
+impl peek::PeekSubmitPeek<Timestamp> for &mut SessionClient {
+    async fn peek(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: Timestamp,
+        finishing: mz_expr::RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        target_replica: Option<mz_cluster_client::ReplicaId>,
+        peek_target: PeekTarget,
+        result_tx: oneshot::Sender<mz_compute_client::protocol::response::PeekResponse>,
+    ) -> Result<(), mz_compute_client::controller::error::PeekError> {
+        let mut peek_client = self.get_peek_client(instance_id).await;
+        let res = peek_client.peek(
+            collection_id,
+            literal_constraints,
+            uuid,
+            timestamp,
+            finishing,
+            map_filter_project,
+            target_replica,
+            peek_target,
+            result_tx,
+        );
+
+        res
+    }
+}
+
+#[async_trait::async_trait]
+impl peek::PeekTimestamps for &mut SessionClient {
+    async fn determine_timestamp(
+        &mut self,
+        catalog: &CatalogState,
+        session: &Session,
+        id_bundle: &CollectionIdBundle,
+        when: &QueryWhen,
+        compute_instance: ComputeInstanceId,
+        timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
+        real_time_recency_ts: Option<mz_repr::Timestamp>,
+        isolation_level: &IsolationLevel,
+    ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
+        // Each involved trace has a validity interval `[since, upper)`.
+        // The contents of a trace are only guaranteed to be correct when
+        // accumulated at a time greater or equal to `since`, and they
+        // are only guaranteed to be currently present for times not
+        // greater or equal to `upper`.
+        //
+        // The plan is to first determine a timestamp, based on the requested
+        // timestamp policy, and then determine if it can be satisfied using
+        // the compacted arrangements we have at hand. It remains unresolved
+        // what to do if it cannot be satisfied (perhaps the query should use
+        // a larger timestamp and block, perhaps the user should intervene).
+
+        let since = self.least_valid_read(id_bundle).await;
+        let upper = self.least_valid_write(id_bundle).await;
+
+        let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
+
+        let timeline = Coordinator::get_timeline(timeline_context);
+
+        {
+            // TODO: We currently split out getting the oracle timestamp because
+            // it's a potentially expensive call, but a call that can be done in an
+            // async task. TimestampProvider is not Send (nor Sync), so we cannot do
+            // the call to `determine_timestamp_for` (including the oracle call) on
+            // an async task. If/when TimestampProvider can become Send, we can fold
+            // the call to the TimestampOracle back into this function.
+            //
+            // We assert here that the logic that determines the oracle timestamp
+            // matches our expectations.
+
+            if timeline.is_some()
+                && <Coordinator as TimestampProvider>::needs_linearized_read_ts(
+                    isolation_level,
+                    when,
+                )
+            {
+                assert!(
+                    oracle_read_ts.is_some(),
+                    "should get a timestamp from the oracle for linearized timeline {:?} but didn't",
+                    timeline);
+            }
+        }
+
+        // Initialize candidate to the minimum correct time.
+        let mut candidate = Timestamp::minimum();
+
+        if let Some(timestamp) = when.advance_to_timestamp() {
+            let ts = Coordinator::evaluate_when(catalog, timestamp, session)?;
+            candidate.join_assign(&ts);
+        }
+
+        if when.advance_to_since() {
+            candidate.advance_by(since.borrow());
+        }
+
+        // If we've acquired a read timestamp from the timestamp oracle, use it
+        // as the new lower bound for the candidate.
+        // In Strong Session Serializable, we ignore the oracle timestamp for now, unless we need
+        // to use it.
+        if let Some(timestamp) = &oracle_read_ts {
+            if isolation_level != &IsolationLevel::StrongSessionSerializable
+                || when.must_advance_to_timeline_ts()
+            {
+                candidate.join_assign(timestamp);
+            }
+        }
+
+        // We advance to the upper in the following scenarios:
+        // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
+        //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
+        //   reading source data that is being written to in the future.
+        // - The isolation level is Strict Serializable but there is no timelines and the `when`
+        //   allows us to advance to upper.
+        // - The `when` requires us to advance to the upper (ex: read-then-write queries).
+        if when.can_advance_to_upper()
+            || (when.can_advance_to_upper()
+                && (isolation_level == &IsolationLevel::Serializable || timeline.is_none()))
+        {
+            candidate.join_assign(&largest_not_in_advance_of_upper);
+        }
+
+        if let Some(real_time_recency_ts) = real_time_recency_ts {
+            assert!(
+                session.vars().real_time_recency()
+                    && isolation_level == &IsolationLevel::StrictSerializable,
+                "real time recency timestamp should only be supplied when real time recency \
+                            is enabled and the isolation level is strict serializable"
+            );
+            candidate.join_assign(&real_time_recency_ts);
+        }
+
+        let mut session_oracle_read_ts = None;
+        if isolation_level == &IsolationLevel::StrongSessionSerializable {
+            if let Some(timeline) = &timeline {
+                if let Some(oracle) = session.get_timestamp_oracle(timeline) {
+                    let session_ts = oracle.read_ts();
+                    candidate.join_assign(&session_ts);
+                    session_oracle_read_ts = Some(session_ts);
+                }
+            }
+
+            // When advancing the read timestamp under Strong Session Serializable, there is a
+            // trade-off to make between freshness and latency. We can choose a timestamp close the
+            // `upper`, but then later queries might block if the `upper` is too far into the
+            // future. We can chose a timestamp close to the current time, but then we may not be
+            // getting results that are as fresh as possible. As a heuristic, we choose the minimum
+            // of now and the upper, where we use the global timestamp oracle read timestamp as a
+            // proxy for now. If upper > now, then we choose now and prevent blocking future
+            // queries. If upper < now, then we choose the upper and prevent blocking the current
+            // query.
+            if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
+                let mut advance_to = largest_not_in_advance_of_upper;
+                if let Some(oracle_read_ts) = oracle_read_ts {
+                    advance_to = std::cmp::min(advance_to, oracle_read_ts);
+                }
+                candidate.join_assign(&advance_to);
+            }
+        }
+
+        // If the timestamp is greater or equal to some element in `since` we are
+        // assured that the answer will be correct.
+        //
+        // It's ok for this timestamp to be larger than the current timestamp of
+        // the timestamp oracle. For Strict Serializable queries, the Coord will
+        // linearize the query by holding back the result until the timestamp
+        // oracle catches up.
+        let timestamp = if since.less_equal(&candidate) {
+            event!(
+                Level::DEBUG,
+                conn_id = format!("{}", session.conn_id()),
+                since = format!("{since:?}"),
+                largest_not_in_advance_of_upper = format!("{largest_not_in_advance_of_upper}"),
+                timestamp = format!("{candidate}")
+            );
+            candidate
+        } else {
+            // TODO
+            coord_bail!("timestamp not valid");
+            // coord_bail!(self.generate_timestamp_not_valid_error_msg(
+            //     id_bundle,
+            //     compute_instance,
+            //     candidate
+            // ));
+        };
+
+        let timestamp_context = TimestampContext::from_timeline_context(
+            timestamp,
+            oracle_read_ts,
+            timeline,
+            timeline_context,
+        );
+
+        Ok(TimestampDetermination {
+            timestamp_context,
+            since,
+            upper,
+            largest_not_in_advance_of_upper,
+            oracle_read_ts,
+            session_oracle_read_ts: None,
+        })
     }
 }

@@ -15,6 +15,8 @@
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use inner::return_if_err;
+use mz_catalog::memory::objects::Cluster;
+use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
@@ -28,8 +30,10 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::inline::IntoInlineConnection;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::{event, Instrument, Level, Span};
@@ -37,9 +41,11 @@ use tracing::{event, Instrument, Level, Span};
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::peek::{PeekComputeInstances, PeekIds};
 use crate::coord::{introspection, Coordinator, Message, TargetCluster};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
+use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::util::ClientTransmitter;
 use crate::ExecuteContext;
@@ -838,5 +844,89 @@ impl Coordinator {
             MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
             MutationKind::Update => ExecuteResponse::Updated(affected_rows / 2),
         })
+    }
+}
+
+/// Checks whether we should emit diagnostic
+/// information associated with reading per-replica sources.
+///
+/// If an unrecoverable error is found (today: an untargeted read on a
+/// cluster with a non-1 number of replicas), return that.  Otherwise,
+/// return a list of associated notices (today: we always emit exactly
+/// one notice if there are any per-replica log dependencies and if
+/// `emit_introspection_query_notice` is set, and none otherwise.)
+pub(crate) fn check_log_reads(
+    catalog: &Catalog,
+    cluster: &Cluster,
+    source_ids: &BTreeSet<GlobalId>,
+    target_replica: &mut Option<ReplicaId>,
+    vars: &SessionVars,
+) -> Result<impl IntoIterator<Item = AdapterNotice>, AdapterError>
+where
+{
+    let log_names = source_ids
+        .iter()
+        .flat_map(|id| catalog.introspection_dependencies(*id))
+        .map(|id| catalog.get_entry(&id).name().item.clone())
+        .collect::<Vec<_>>();
+
+    if log_names.is_empty() {
+        return Ok(None);
+    }
+
+    // Reading from log sources on replicated clusters is only allowed if a
+    // target replica is selected. Otherwise, we have no way of knowing which
+    // replica we read the introspection data from.
+    let num_replicas = cluster.replicas().count();
+    if target_replica.is_none() {
+        if num_replicas == 1 {
+            *target_replica = cluster.replicas().map(|r| r.replica_id).next();
+        } else {
+            return Err(AdapterError::UntargetedLogRead { log_names });
+        }
+    }
+
+    // Ensure that logging is initialized for the target replica, lest
+    // we try to read from a non-existing arrangement.
+    let replica_id = target_replica.expect("set to `Some` above");
+    let replica = &cluster.replica(replica_id).expect("Replica must exist");
+    if !replica.config.compute.logging.enabled() {
+        return Err(AdapterError::IntrospectionDisabled { log_names });
+    }
+
+    Ok(vars
+        .emit_introspection_query_notice()
+        .then_some(AdapterNotice::PerReplicaLogRead { log_names }))
+}
+
+impl PeekIds for &mut Coordinator {
+    fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
+        Coordinator::allocate_transient_id(self)
+    }
+}
+
+impl PeekIds for Coordinator {
+    fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
+        Coordinator::allocate_transient_id(self)
+    }
+}
+
+impl PeekComputeInstances for &Coordinator {
+    fn instance_snapshot(
+        &mut self,
+        id: mz_compute_types::ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, mz_compute_client::controller::error::InstanceMissing>
+    {
+        Coordinator::instance_snapshot(&self, id)
+    }
+}
+
+impl PeekComputeInstances for Coordinator {
+    fn instance_snapshot(
+        &mut self,
+        id: mz_compute_types::ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, mz_compute_client::controller::error::InstanceMissing>
+    {
+        Coordinator::instance_snapshot(&self, id)
     }
 }

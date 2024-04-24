@@ -121,6 +121,7 @@ impl Debug for Optimizer {
 
 /// Marker type for [`LocalMirPlan`] representing an optimization result without
 /// context.
+#[derive(Clone)]
 pub struct Unresolved;
 
 /// The (sealed intermediate) result after HIR ⇒ MIR lowering and decorrelation

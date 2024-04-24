@@ -12,10 +12,14 @@
 //! This module determines if a dataflow can be short-cut, by returning constant values
 //! or by reading out of existing arrangements, and implements the appropriate plan.
 
+use mz_compute_client::controller::error::{InstanceMissing, PeekError};
 use mz_compute_client::controller::PeekNotification;
+use mz_sql::plan::QueryWhen;
+use mz_sql::session::vars::IsolationLevel;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
+use tokio::sync::oneshot;
 
 use differential_dataflow::consolidation::consolidate;
 use futures::TryFutureExt;
@@ -44,11 +48,16 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use uuid::Uuid;
 
+use crate::catalog::CatalogState;
 use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::optimize::OptimizerError;
+use crate::session::Session;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
-use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
+use crate::{
+    AdapterError, CollectionIdBundle, ExecuteContextExtra, ExecuteResponse, TimelineContext,
+};
 
 #[derive(Debug)]
 pub(crate) struct PendingPeek {
@@ -750,6 +759,52 @@ impl crate::coord::Coordinator {
     }
 }
 
+pub(crate) trait PeekIds {
+    fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError>;
+}
+
+pub(crate) trait PeekComputeInstances {
+    /// Return a reference-less snapshot to the indicated compute instance.
+    fn instance_snapshot(
+        &mut self,
+        id: ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, InstanceMissing>;
+}
+
+#[async_trait::async_trait]
+pub(crate) trait PeekTimestamps {
+    /// Determines the timestamp for a query.
+    async fn determine_timestamp(
+        &mut self,
+        catalog: &CatalogState,
+        session: &Session,
+        id_bundle: &CollectionIdBundle,
+        when: &QueryWhen,
+        compute_instance: ComputeInstanceId,
+        timeline_context: &TimelineContext,
+        oracle_read_ts: Option<mz_repr::Timestamp>,
+        real_time_recency_ts: Option<mz_repr::Timestamp>,
+        isolation_level: &IsolationLevel,
+    ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError>;
+}
+
+#[async_trait::async_trait]
+pub(crate) trait PeekSubmitPeek<T> {
+    /// Determines the timestamp for a query.
+    async fn peek(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: T,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        target_replica: Option<ReplicaId>,
+        peek_target: PeekTarget,
+        result_tx: oneshot::Sender<PeekResponse>,
+    ) -> Result<(), PeekError>;
+}
 #[cfg(test)]
 mod tests {
     use mz_expr::func::IsNull;

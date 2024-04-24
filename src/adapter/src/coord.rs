@@ -188,7 +188,7 @@ mod command_handler;
 pub mod consistency;
 mod ddl;
 mod indexes;
-mod introspection;
+pub mod introspection;
 mod message_handler;
 mod privatelink_status;
 pub mod read_policy;
@@ -458,17 +458,17 @@ pub struct CopyToContext {
 
 #[derive(Debug)]
 pub struct PeekStageValidate {
-    plan: mz_sql::plan::SelectPlan,
-    target_cluster: TargetCluster,
+    pub plan: mz_sql::plan::SelectPlan,
+    pub target_cluster: TargetCluster,
     /// An optional context set iff the state machine is initiated from
     /// sequencing a COPY TO statement.
     ///
     /// Will result in creating and using [`optimize::copy_to::Optimizer`] in
     /// the `optimizer` field of all subsequent stages.
-    copy_to_ctx: Option<CopyToContext>,
+    pub copy_to_ctx: Option<CopyToContext>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
+    pub explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -529,17 +529,17 @@ pub struct PeekStageOptimize {
 
 #[derive(Debug)]
 pub struct PeekStageFinish {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    source_ids: BTreeSet<GlobalId>,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
-    optimizer: optimize::peek::Optimizer,
+    pub validity: PlanValidity,
+    pub plan: mz_sql::plan::SelectPlan,
+    pub id_bundle: CollectionIdBundle,
+    pub target_replica: Option<ReplicaId>,
+    pub source_ids: BTreeSet<GlobalId>,
+    pub determination: TimestampDetermination<mz_repr::Timestamp>,
+    pub optimizer: optimize::peek::Optimizer,
     /// When present, an optimizer trace to be used for emitting a plan insights
     /// notice.
-    plan_insights_optimizer_trace: Option<OptimizerTrace>,
-    global_lir_plan: optimize::peek::GlobalLirPlan,
+    pub plan_insights_optimizer_trace: Option<OptimizerTrace>,
+    pub global_lir_plan: optimize::peek::GlobalLirPlan,
 }
 
 #[derive(Debug)]
@@ -769,7 +769,7 @@ pub struct PlanValidity {
 
 impl PlanValidity {
     /// Returns an error if the current catalog no longer has all dependencies.
-    fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
+    pub fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
         if self.transient_revision == catalog.transient_revision() {
             return Ok(());
         }
