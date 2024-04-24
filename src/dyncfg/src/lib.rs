@@ -148,7 +148,7 @@ impl<D: ConfigDefault> Config<D> {
     fn shared<'a>(&self, set: &'a ConfigSet) -> &'a ConfigValAtomic {
         &set.configs
             .get(self.name)
-            .expect("config should be registered to set")
+            .unwrap_or_else(|| panic!("config {} should be registered to set", self.name))
             .val
     }
 }
