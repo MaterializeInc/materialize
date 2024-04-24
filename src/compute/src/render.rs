@@ -101,6 +101,7 @@
 //! if/when the errors are retracted.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::future::Future;
@@ -137,6 +138,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::order::Product;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
+use timely::scheduling::ActivateOnDrop;
 use timely::worker::Worker as TimelyWorker;
 use timely::PartialOrder;
 
@@ -285,6 +287,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         input_probe,
                         *idx_id,
                         &idx.desc,
+                        start_signal.clone(),
                     );
                 }
 
@@ -344,6 +347,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         input_probe,
                         *idx_id,
                         &idx.desc,
+                        start_signal.clone(),
                     );
                 }
 
@@ -391,6 +395,7 @@ where
         input_probe: probe::Handle<mz_repr::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        start_signal: StartSignal,
     ) {
         if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
             assert!(
@@ -418,6 +423,9 @@ where
                 self.until.clone(),
             );
             let err_arranged = err_arranged.enter(&self.scope);
+
+            let ok_arranged = ok_arranged.with_start_signal(start_signal.clone());
+            let err_arranged = err_arranged.with_start_signal(start_signal);
 
             self.update_id(
                 Id::Global(idx.on_id),
@@ -1133,27 +1141,47 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
 
 /// A signal that can be awaited by operators to suspend them prior to startup.
 ///
-/// Used to enforce a given configured hydration concurrency by only allowing that number of
-/// dataflows to perform hydration at the same time.
+/// Creating a signal also yields a token, dropping of which causes the signal to fire.
 ///
-/// Note that currently only `persist_source` operators support suspension. Data can still enter a
-/// suspended dataflow through arrangement imports and ideally we would be able to suspend those as
-/// well.
+/// `StartSignal` is designed to be usable by both async and sync Timely operators.
+///
+///  * Async operators can simply `await` it.
+///  * Sync operators should register an [`ActivateOnDrop`] value via [`StartSignal::drop_on_fire`]
+///    and then check `StartSignal::has_fired()` on each activation.
 #[derive(Clone)]
-pub(super) struct StartSignal(
-    // The inner type is `Infallible` because no data is ever expected on this channel. Instead the
-    // signal is activated by dropping the corresponding `Sender`.
-    futures::future::Shared<oneshot::Receiver<Infallible>>,
-);
+pub(crate) struct StartSignal {
+    /// A future that completes when the signal fires.
+    ///
+    /// The inner type is `Infallible` because no data is ever expected on this channel. Instead the
+    /// signal is activated by dropping the corresponding `Sender`.
+    fut: futures::future::Shared<oneshot::Receiver<Infallible>>,
+    /// A weak reference to the token, to register drop-on-fire values.
+    token_ref: Weak<RefCell<Box<dyn Any>>>,
+}
 
 impl StartSignal {
     /// Create a new `StartSignal` and a corresponding token that activates the signal when
     /// dropped.
     pub fn new() -> (Self, Rc<dyn Any>) {
         let (tx, rx) = oneshot::channel::<Infallible>();
-        let token = Rc::new(tx);
-        let signal = Self(rx.shared());
+        let token: Rc<RefCell<Box<dyn Any>>> = Rc::new(RefCell::new(Box::new(tx)));
+        let signal = Self {
+            fut: rx.shared(),
+            token_ref: Rc::downgrade(&token),
+        };
         (signal, token)
+    }
+
+    pub fn has_fired(&mut self) -> bool {
+        self.token_ref.strong_count() == 0
+    }
+
+    pub fn drop_on_fire(&mut self, to_drop: Box<dyn Any>) {
+        if let Some(token) = self.token_ref.upgrade() {
+            let mut token = token.borrow_mut();
+            let inner = std::mem::replace(&mut *token, Box::new(()));
+            *token = Box::new((inner, to_drop));
+        }
     }
 }
 
@@ -1161,7 +1189,83 @@ impl Future for StartSignal {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.0).poll(cx).map(|_| ())
+        self.fut.poll_unpin(cx).map(|_| ())
+    }
+}
+
+/// Extension trait to attach a `StartSignal` to operator outputs.
+pub(crate) trait WithStartSignal {
+    /// Delays data and progress updates until the start signal has fired.
+    ///
+    /// Note that this operator needs to buffer all incoming data, so it has some memory footprint,
+    /// depending on the amount and shape of its inputs.
+    fn with_start_signal(self, signal: StartSignal) -> Self;
+}
+
+impl<S> WithStartSignal for MzArrangementImport<S>
+where
+    S: Scope,
+    S::Timestamp: RenderTimestamp,
+{
+    fn with_start_signal(self, signal: StartSignal) -> Self {
+        match self {
+            MzArrangementImport::RowRow(arr) => {
+                MzArrangementImport::RowRow(arr.with_start_signal(signal))
+            }
+        }
+    }
+}
+
+impl<S, Tr> WithStartSignal for Arranged<S, Tr>
+where
+    S: Scope,
+    S::Timestamp: RenderTimestamp,
+    Tr: TraceReader + Clone,
+{
+    fn with_start_signal(self, signal: StartSignal) -> Self {
+        Arranged {
+            stream: self.stream.with_start_signal(signal),
+            trace: self.trace,
+        }
+    }
+}
+
+impl<S, D> WithStartSignal for Stream<S, D>
+where
+    S: Scope,
+    D: timely::Data,
+{
+    fn with_start_signal(self, mut signal: StartSignal) -> Self {
+        self.unary(Pipeline, "StartSignal", |_cap, info| {
+            let token = Box::new(ActivateOnDrop::new(
+                (),
+                Rc::new(info.address.clone()),
+                self.scope().activations(),
+            ));
+            signal.drop_on_fire(token);
+
+            let mut stash = Vec::new();
+            let mut buffer = Vec::new();
+
+            move |input, output| {
+                // Stash incoming updates as long as the start signal has not fired.
+                if !signal.has_fired() {
+                    input.for_each(|cap, data| stash.push((cap, data.take())));
+                    return;
+                }
+
+                // Release any data we might still have stashed.
+                for (cap, mut data) in std::mem::take(&mut stash) {
+                    output.session(&cap).give_container(&mut data);
+                }
+
+                // Pass through all remaining input data.
+                input.for_each(|cap, data| {
+                    data.swap(&mut buffer);
+                    output.session(&cap).give_container(&mut buffer);
+                });
+            }
+        })
     }
 }
 
