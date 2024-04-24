@@ -2121,6 +2121,7 @@ impl Catalog {
                     state.entry_by_id.insert(id, new_entry);
                 }
             };
+            tx.commit_op();
         }
 
         if dry_run_ops.is_empty() {
