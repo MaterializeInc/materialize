@@ -267,6 +267,7 @@ impl Transactor {
                     Arc::new(MaelstromKeySchema),
                     Arc::new(MaelstromValSchema),
                     Diagnostics::from_purpose("maelstrom short-lived"),
+                    false,
                 )
                 .await
                 .expect("codecs should match");

@@ -663,17 +663,23 @@ where
         seqno: SeqNo,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
+        use_critical_since: bool,
     ) -> ControlFlow<
         NoOpStateTransition<(LeasedReaderState<T>, SeqNo)>,
         (LeasedReaderState<T>, SeqNo),
     > {
+        let since = if use_critical_since {
+            self.critical_since().unwrap_or(self.trace.since().clone())
+        } else {
+            self.trace.since().clone()
+        };
         let reader_state = LeasedReaderState {
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
                 purpose: purpose.to_owned(),
             },
             seqno,
-            since: self.trace.since().clone(),
+            since,
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
@@ -1107,6 +1113,15 @@ where
                     id
                 )
             })
+    }
+
+    fn critical_since(&self) -> Option<Antichain<T>> {
+        let mut critical_sinces = self.critical_readers.values().map(|r| &r.since);
+        let mut since = critical_sinces.next().cloned()?;
+        for s in critical_sinces {
+            since.meet_assign(s);
+        }
+        Some(since)
     }
 
     fn update_since(&mut self) {
@@ -2002,6 +2017,7 @@ pub(crate) mod tests {
             seqno,
             Duration::from_secs(10),
             now(),
+            false,
         );
 
         // The shard global since == 0 initially.
@@ -2053,6 +2069,7 @@ pub(crate) mod tests {
             seqno,
             Duration::from_secs(10),
             now(),
+            false,
         );
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
@@ -2096,6 +2113,7 @@ pub(crate) mod tests {
             seqno,
             Duration::from_secs(10),
             now(),
+            false,
         );
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
@@ -2314,6 +2332,7 @@ pub(crate) mod tests {
             SeqNo::minimum(),
             Duration::from_secs(10),
             now(),
+            false,
         );
         assert_eq!(
             state.collections.downgrade_since(

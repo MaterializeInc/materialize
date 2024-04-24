@@ -404,6 +404,7 @@ impl SinkHandle {
                         shard_name: sink_id.to_string(),
                         handle_purpose: format!("sink::since {}", sink_id),
                     },
+                    false,
                 )
                 .await
                 .expect("opening reader for shard");

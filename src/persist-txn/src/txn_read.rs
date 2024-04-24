@@ -679,6 +679,7 @@ where
                     shard_name: "txns".to_owned(),
                     handle_purpose: "read txns".to_owned(),
                 },
+                false,
             )
             .await
             .expect("txns schema shouldn't change");

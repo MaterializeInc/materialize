@@ -240,6 +240,7 @@ async fn bench_snapshot_one_iter(
             Arc::new(VecU8Schema),
             Arc::new(VecU8Schema),
             Diagnostics::from_purpose("bench"),
+            false,
         )
         .await?;
 

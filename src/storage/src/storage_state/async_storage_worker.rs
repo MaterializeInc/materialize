@@ -138,6 +138,7 @@ where
                                 shard_name: ingestion_description.remap_collection_id.to_string(),
                                 handle_purpose: format!("reclock for {}", id),
                             },
+                            false,
                         )
                         .await
                         .expect("shard unavailable");
@@ -298,6 +299,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                                         id
                                                     ),
                                                 },
+                                                false,
                                             )
                                             .await
                                             .unwrap();

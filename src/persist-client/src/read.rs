@@ -864,11 +864,13 @@ where
                 purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
                 heartbeat_ts,
+                false,
             )
             .await;
         maintenance.start_performing(&machine, &gc);
         // The point of clone is that you're guaranteed to have the same (or
         // greater) since capability, verify that.
+        // TODO: better if it's the same since capability exactly.
         assert!(PartialOrder::less_equal(&reader_state.since, &self.since));
         let new_reader = ReadHandle::new(
             self.cfg.clone(),

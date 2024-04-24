@@ -311,7 +311,7 @@ impl PersistClient {
                 diagnostics.clone(),
             )
             .await?,
-            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics)
+            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics, false)
                 .await?,
         ))
     }
@@ -331,6 +331,7 @@ impl PersistClient {
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
         diagnostics: Diagnostics,
+        use_critical_since: bool,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -349,6 +350,7 @@ impl PersistClient {
                 &diagnostics.handle_purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
                 heartbeat_ts,
+                use_critical_since,
             )
             .await;
         maintenance.start_performing(&machine, &gc);
@@ -897,6 +899,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
+                false,
             )
             .await
             .expect("codec mismatch");
@@ -906,6 +909,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
+                false,
             )
             .await
             .expect("codec mismatch");
@@ -1031,6 +1035,7 @@ mod tests {
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
+                        false,
                     )
                     .await
                     .unwrap_err(),

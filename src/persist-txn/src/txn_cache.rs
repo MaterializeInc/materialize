@@ -720,6 +720,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                     shard_name: "txns".to_owned(),
                     handle_purpose: "read txns".to_owned(),
                 },
+                false,
             )
             .await
             .expect("txns schema shouldn't change");
@@ -1280,6 +1281,7 @@ mod tests {
                 Arc::new(ShardIdSchema),
                 Arc::new(VecU8Schema),
                 Diagnostics::for_tests(),
+                true,
             )
             .await
             .expect("txns schema shouldn't change");

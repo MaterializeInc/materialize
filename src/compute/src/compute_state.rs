@@ -945,6 +945,7 @@ impl PersistPeek {
                 Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
                 Diagnostics::from_purpose("persist::peek"),
+                false,
             )
             .await
             .map_err(|e| e.to_string())?;

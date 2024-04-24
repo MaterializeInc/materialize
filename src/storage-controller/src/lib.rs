@@ -3393,6 +3393,7 @@ where
                     shard_name: id.to_string(),
                     handle_purpose: format!("snapshot {}", id),
                 },
+                false,
             )
             .await
             .expect("invalid persist usage");

@@ -171,6 +171,7 @@ where
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
+        use_critical_since: bool,
     ) -> (LeasedReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, (reader_state, seqno_since), maintenance) = self
@@ -182,6 +183,7 @@ where
                     seqno,
                     lease_duration,
                     heartbeat_timestamp_ms,
+                    use_critical_since,
                 )
             })
             .await;
@@ -2002,6 +2004,7 @@ pub mod datadriven {
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
+                false,
             )
             .await
             .expect("invalid shard types");
@@ -2070,6 +2073,7 @@ pub mod datadriven {
                 "tests",
                 READER_LEASE_DURATION.get(&datadriven.client.cfg),
                 (datadriven.client.cfg.now)(),
+                false,
             )
             .await;
         datadriven.routine.push(maintenance);
