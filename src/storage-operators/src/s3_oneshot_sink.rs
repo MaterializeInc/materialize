@@ -123,7 +123,8 @@ pub fn copy_to<G, F>(
 /// returned `start_stream`, to avoid any unnecessary work across all workers.
 ///
 /// The leader worker then checks the S3 path for the sink to ensure it's empty
-/// (aside from files written by other instances of this sink), and writes an INCOMPLETE
+/// (aside from files written by other instances of this sink), validates that we
+/// have appropriate permissions, and writes an INCOMPLETE
 /// sentinel file to indicate to the user that the upload is in-progress.
 ///
 /// The INCOMPLETE sentinel is used to provide a single atomic operation that a user
@@ -206,6 +207,7 @@ where
             let incomplete_sentinel_key = s3_key_manager.incomplete_sentinel_key();
 
             // Check that the S3 bucket path is empty before beginning the upload,
+            // verify we have DeleteObject permissions,
             // and upload the INCOMPLETE sentinel file to the S3 path.
             // Since we race against other replicas running the same sink we allow
             // for objects to exist in the path if they were created by this sink
@@ -229,6 +231,27 @@ where
                     }
                 };
 
+                // Confirm we have DeleteObject permissions before proceeding by trying to
+                // delete a known non-existent file since S3 will return an AccessDenied error
+                // whether or not the object exists, and no error if we have permissions and
+                // it doesn't.
+                client
+                    .delete_object()
+                    .bucket(&bucket)
+                    .key(s3_key_manager.data_key(0, 0, "delete_object_test"))
+                    .send()
+                    .await
+                    .map_err(|err| {
+                        if err
+                            .raw_response()
+                            .map_or(false, |r| r.status().as_u16() == 403)
+                        {
+                            anyhow!("AccessDenied error when using DeleteObject")
+                        } else {
+                            err.into()
+                        }
+                    })?;
+
                 debug!(%sink_id, %worker_id, "uploading INCOMPLETE sentinel file");
                 client
                     .put_object()
@@ -250,8 +273,7 @@ where
 
     // Broadcast the result to all workers so that they will all see any error that occurs
     // and exit before doing any unnecessary work
-    start_stream.broadcast();
-    start_stream
+    start_stream.broadcast()
 }
 
 /// Renders the 'completion' operator, which expects a `completion_stream`

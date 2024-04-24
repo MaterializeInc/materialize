@@ -346,7 +346,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
-              args: [ "--mysql-version=8.3.0" ]
+              args: ["--mysql-version=8.3.0"]
         agents:
           queue: linux-aarch64-small
 
@@ -413,6 +413,21 @@ steps:
         agents:
           queue: linux-aarch64-small
 
+  - group: "Copy to S3 tests"
+    key: copy-to-s3-tests
+    steps:
+      - id: copy-to-s3
+        label: Copy to S3
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/copy-to-s3]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: copy-to-s3
+              run: ci
+        agents:
+          queue: linux-aarch64-small
+
   - group: "Kafka tests"
     key: kafka-tests
     steps:
@@ -473,7 +488,11 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEnvironmentdClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
+              args:
+                [
+                  --scenario=RestartEnvironmentdClusterdStorage,
+                  "--seed=$BUILDKITE_JOB_ID",
+                ]
 
       - id: checks-no-restart-no-upgrade
         label: "Checks without restart or upgrade %N"
@@ -502,7 +521,14 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [--exitfirst, -m, "not long and not node_recovery", --aws-region=us-east-1, test/cloudtest/]
+          args:
+            [
+              --exitfirst,
+              -m,
+              "not long and not node_recovery",
+              --aws-region=us-east-1,
+              test/cloudtest/,
+            ]
     agents:
       queue: linux-aarch64
     sanitizer: skip
