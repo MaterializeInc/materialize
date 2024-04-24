@@ -56,7 +56,7 @@ use tracing::debug;
 use crate::controller::ComputeControllerTimestamp;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
-use crate::protocol::response::ComputeResponse;
+use crate::protocol::response::{ComputeResponse, FrontiersResponse};
 use crate::service::ComputeClient;
 
 /// A shareable token.
@@ -74,7 +74,7 @@ pub(super) struct SequentialHydration<C, T> {
     /// Tracked collections.
     ///
     /// Entries are inserted in response to observed `CreateDataflow` commands.
-    /// Entries are removed in response to `FrontierUpper` commands that report collection
+    /// Entries are removed in response to `Frontiers` commands that report collection
     /// hydration, or in response to `AllowCompaction` commands that specify the empty frontier.
     collections: BTreeMap<GlobalId, Collection<T>>,
     /// A queue of scheduled collections that are awaiting hydration.
@@ -153,7 +153,14 @@ where
 
     /// Observe a response and send resulting commands to the wrapped client.
     async fn observe_response(&mut self, resp: &ComputeResponse<T>) -> Result<(), anyhow::Error> {
-        if let ComputeResponse::FrontierUpper { id, upper } = resp {
+        if let ComputeResponse::Frontiers(
+            id,
+            FrontiersResponse {
+                write_frontier: Some(upper),
+                ..
+            },
+        ) = resp
+        {
             if let Some(collection) = self.collections.remove(id) {
                 let hydrated = PartialOrder::less_than(&collection.as_of, upper);
                 if hydrated || upper.is_empty() {

@@ -100,11 +100,14 @@ pub enum ComputeControllerResponse<T> {
     /// produced. (The sink may produce no responses if its dataflow is dropped
     /// before completion.)
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
-    /// See [`ComputeResponse::FrontierUpper`]
+    /// A response reporting advancement of a collection's upper frontier.
+    ///
+    /// Once a collection's upper (aka "write frontier") has advanced to beyond a given time, the
+    /// contents of the collection as of that time have been sealed and cannot change anymore.
     FrontierUpper {
-        /// TODO(#25239): Add documentation.
+        /// The ID of a compute collection.
         id: GlobalId,
-        /// TODO(#25239): Add documentation.
+        /// The new upper frontier of the identified compute collection.
         upper: Antichain<T>,
     },
 }
@@ -828,6 +831,8 @@ pub struct CollectionState<T> {
     write_frontier: Antichain<T>,
     /// The write frontiers reported by individual replicas.
     replica_write_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
+    /// The input frontiers reported by individual replicas.
+    replica_input_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
 }
 
 impl<T> CollectionState<T> {
@@ -886,6 +891,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             compute_dependencies,
             write_frontier: upper,
             replica_write_frontiers: BTreeMap::new(),
+            replica_input_frontiers: BTreeMap::new(),
         }
     }
 
