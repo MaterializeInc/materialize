@@ -35,7 +35,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate;
-use differential_dataflow::lattice::Lattice;
 use futures::{future, Future, FutureExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
@@ -46,12 +45,12 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
+use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
 use uuid::Uuid;
@@ -76,6 +75,12 @@ mod sequential_hydration;
 pub mod error;
 
 type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
+
+/// A composite trait for types that serve as timestamps in the Compute Controller.
+/// `Into<Datum<'a>>` is needed for writing timestamps to introspection collections.
+pub trait ComputeControllerTimestamp: TimestampManipulation + for<'a> Into<Datum<'a>> {}
+
+impl ComputeControllerTimestamp for mz_repr::Timestamp {}
 
 /// Responses from the compute controller.
 #[derive(Debug)]
@@ -168,7 +173,7 @@ pub struct ComputeController<T> {
     maintenance_scheduled: bool,
 }
 
-impl<T: Timestamp> ComputeController<T> {
+impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// Construct a new [`ComputeController`].
     pub fn new(
         build_info: &'static BuildInfo,
@@ -360,7 +365,7 @@ impl<T: Timestamp> ComputeController<T> {
 
 impl<T> ComputeController<T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Create a compute instance.
@@ -508,7 +513,7 @@ pub struct ActiveComputeController<'a, T> {
     storage: &'a mut dyn StorageController<Timestamp = T>,
 }
 
-impl<T: Timestamp> ActiveComputeController<'_, T> {
+impl<T: ComputeControllerTimestamp> ActiveComputeController<'_, T> {
     /// TODO(#25239): Add documentation.
     pub fn instance_exists(&self, id: ComputeInstanceId) -> bool {
         self.compute.instance_exists(id)
@@ -533,7 +538,7 @@ impl<T: Timestamp> ActiveComputeController<'_, T> {
 
 impl<T> ActiveComputeController<'_, T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Adds replicas of an instance.
@@ -692,13 +697,7 @@ where
             }
         }
     }
-}
 
-impl<T> ActiveComputeController<'_, T>
-where
-    T: TimestampManipulation,
-    ComputeGrpcClient: ComputeClient<T>,
-{
     /// Processes the work queued by [`ComputeController::ready`].
     #[mz_ore::instrument(level = "debug")]
     pub async fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
@@ -761,7 +760,7 @@ pub struct ComputeInstanceRef<'a, T> {
     instance: &'a Instance<T>,
 }
 
-impl<T: Timestamp> ComputeInstanceRef<'_, T> {
+impl<T: ComputeControllerTimestamp> ComputeInstanceRef<'_, T> {
     /// Return the ID of this compute instance.
     pub fn instance_id(&self) -> ComputeInstanceId {
         self.instance_id
@@ -855,7 +854,7 @@ impl<T> CollectionState<T> {
     }
 }
 
-impl<T: Timestamp> CollectionState<T> {
+impl<T: ComputeControllerTimestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
     pub fn new(
         as_of: Antichain<T>,
@@ -892,7 +891,7 @@ impl<T: Timestamp> CollectionState<T> {
 
     /// Creates a new collection state for a log collection.
     pub fn new_log_collection() -> Self {
-        let since = Antichain::from_elem(Timestamp::minimum());
+        let since = Antichain::from_elem(timely::progress::Timestamp::minimum());
         let mut state = Self::new(since, Vec::new(), Vec::new());
         state.log_collection = true;
         // Log collections are created and scheduled implicitly as part of replica initialization.

@@ -30,6 +30,7 @@ use timely::PartialOrder;
 use tonic::{Request, Status, Streaming};
 use uuid::Uuid;
 
+use crate::controller::ComputeControllerTimestamp;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{
@@ -181,7 +182,7 @@ pub struct PartitionedComputeState<T> {
 impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
     for (ComputeCommand<T>, ComputeResponse<T>)
 where
-    T: timely::progress::Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
 {
     type PartitionedState = PartitionedComputeState<T>;
 
@@ -199,7 +200,7 @@ where
 
 impl<T> PartitionedComputeState<T>
 where
-    T: timely::progress::Timestamp,
+    T: ComputeControllerTimestamp,
 {
     fn reset(&mut self) {
         let PartitionedComputeState {
@@ -256,7 +257,7 @@ where
 
 impl<T> PartitionedState<ComputeCommand<T>, ComputeResponse<T>> for PartitionedComputeState<T>
 where
-    T: timely::progress::Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
 {
     fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<Option<ComputeCommand<T>>> {
         self.observe_command(&command);
@@ -520,7 +521,7 @@ struct PendingSubscribe<T> {
     dropped: bool,
 }
 
-impl<T: timely::progress::Timestamp> PendingSubscribe<T> {
+impl<T: ComputeControllerTimestamp> PendingSubscribe<T> {
     fn new(parts: usize) -> Self {
         let mut frontiers = MutableAntichain::new();
         // TODO(benesch): fix this dangerous use of `as`.

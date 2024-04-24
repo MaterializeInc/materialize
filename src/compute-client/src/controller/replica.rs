@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
-use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_dyncfg::ConfigSet;
@@ -21,14 +20,13 @@ use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
-use timely::progress::Timestamp;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, info, trace, warn};
 
 use crate::controller::sequential_hydration::SequentialHydration;
-use crate::controller::ReplicaId;
+use crate::controller::{ComputeControllerTimestamp, ReplicaId};
 use crate::logging::LoggingConfig;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, InstanceConfig};
@@ -68,7 +66,7 @@ pub(super) struct ReplicaClient<T> {
 
 impl<T> ReplicaClient<T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub(super) fn spawn(
@@ -153,7 +151,7 @@ struct ReplicaTask<T> {
 
 impl<T> ReplicaTask<T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Asynchronously forwards commands to and responses from a single replica.
@@ -223,7 +221,7 @@ where
     /// the command channel, or the task is dropped.
     async fn run_message_loop(mut self, mut client: Client<T>) -> Result<(), anyhow::Error>
     where
-        T: Timestamp + Lattice,
+        T: ComputeControllerTimestamp,
         ComputeGrpcClient: ComputeClient<T>,
     {
         loop {

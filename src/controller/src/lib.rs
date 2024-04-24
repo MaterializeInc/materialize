@@ -28,13 +28,13 @@ use std::num::NonZeroI64;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::{Peekable, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::{
     ActiveComputeController, ComputeController, ComputeControllerResponse,
+    ComputeControllerTimestamp,
 };
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -58,7 +58,6 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use serde::Serialize;
-use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::time::{self, Duration, Interval, MissedTickBehavior};
@@ -192,7 +191,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     immediate_watch_sets: Vec<Box<dyn Any>>,
 }
 
-impl<T: Timestamp> Controller<T> {
+impl<T: ComputeControllerTimestamp> Controller<T> {
     pub fn active_compute(&mut self) -> ActiveComputeController<T> {
         self.compute.activate(&mut *self.storage)
     }
@@ -275,7 +274,7 @@ impl<T: Timestamp> Controller<T> {
 
 impl<T> Controller<T>
 where
-    T: TimestampManipulation,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn update_orchestrator_scheduling_config(
@@ -535,21 +534,17 @@ where
 
 impl<T> Controller<T>
 where
+    // Bounds needed by `StorageController` and/or `Controller`:
     T: Timestamp
-        + Lattice
-        + TotalOrder
-        + TryInto<i64>
-        + TryFrom<i64>
         + Codec64
-        + Unpin
         + From<EpochMillis>
         + TimestampManipulation
-        + std::fmt::Display,
-    <T as TryInto<i64>>::Error: std::fmt::Debug,
-    <T as TryFrom<i64>>::Error: std::fmt::Debug,
+        + std::fmt::Display
+        + for<'a> Into<Datum<'a>>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    for<'a> T: Into<Datum<'a>>,
+    // Bounds needed by `ComputeController`:
+    T: ComputeControllerTimestamp,
 {
     /// Creates a new controller.
     ///
