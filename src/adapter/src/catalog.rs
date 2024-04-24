@@ -388,7 +388,7 @@ pub struct ConnCatalog<'a> {
     /// This feature is necessary to allow re-planning of statements, which is
     /// either incredibly useful or required when altering item definitions.
     ///
-    /// Note that uses of this should field should be used by short-lived
+    /// Note that uses of this field should be used by short-lived
     /// catalogs.
     unresolvable_ids: BTreeSet<GlobalId>,
     conn_id: ConnectionId,
@@ -1855,6 +1855,7 @@ mod tests {
     use std::{env, iter};
 
     use itertools::Itertools;
+    use mz_catalog::memory::objects::CatalogItem;
     use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
     use uuid::Uuid;
@@ -1863,7 +1864,6 @@ mod tests {
         Builtin, BuiltinType, BUILTINS,
         REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE,
     };
-    use mz_catalog::memory::objects::CatalogItem;
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;

@@ -630,39 +630,9 @@ impl CatalogState {
                     PrivilegeMap::default(),
                 );
             }
-            Builtin::View(view) => {
-                let item = self
-                    .parse_item(
-                        id,
-                        &view.create_sql(),
-                        None,
-                        false,
-                        None,
-                    )
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "internal error: failed to load bootstrap view:\n\
-                                {}\n\
-                                error:\n\
-                                {:?}\n\n\
-                                make sure that the schema name is specified in the builtin view's create sql statement.",
-                            view.name, e
-                        )
-                    });
-                let mut acl_items = vec![rbac::owner_privilege(
-                    mz_sql::catalog::ObjectType::View,
-                    MZ_SYSTEM_ROLE_ID,
-                )];
-                acl_items.extend_from_slice(&view.access);
-
-                self.insert_item(
-                    id,
-                    view.oid,
-                    name,
-                    item,
-                    MZ_SYSTEM_ROLE_ID,
-                    PrivilegeMap::from_mz_acl_items(acl_items),
-                );
+            Builtin::View(_) => {
+                // parse_views is responsible for inserting all builtin views.
+                unreachable!("views added elsewhere");
             }
 
             // Note: Element types must be loaded before array types.
