@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
+use mz_persist_client::cfg::TXN_USE_CRITICAL_SINCE;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{Cursor, LazyPartStats, ListenEvent, ReadHandle, Since, Subscribe};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -679,7 +680,7 @@ where
                     shard_name: "txns".to_owned(),
                     handle_purpose: "read txns".to_owned(),
                 },
-                false,
+                TXN_USE_CRITICAL_SINCE.get(client.dyncfgs()),
             )
             .await
             .expect("txns schema shouldn't change");
