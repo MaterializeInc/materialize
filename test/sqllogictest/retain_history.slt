@@ -1,0 +1,94 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_index_options = on;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE tab_a (a INT)
+
+statement ok
+CREATE VIEW view_a AS SELECT a FROM tab_a
+
+statement ok
+CREATE INDEX idx_a ON view_a (a) WITH (RETAIN HISTORY FOR '1m')
+
+statement ok
+CREATE VIEW view_b AS SELECT a AS b FROM view_a
+
+statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 60s, but must be at least 120s
+CREATE INDEX idx_b ON view_b (b) WITH (RETAIN HISTORY FOR '2m')
+
+statement ok
+CREATE INDEX idx_b ON view_b (b)
+
+statement ok
+DROP INDEX idx_b
+
+statement ok
+DROP INDEX idx_a
+
+# Default retain history.
+statement ok
+CREATE INDEX idx_a ON view_a (a)
+
+statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 1s, but must be at least 120s
+CREATE INDEX idx_b ON view_b (b) WITH (RETAIN HISTORY FOR '2m')
+
+statement ok
+CREATE INDEX idx_b ON view_b (b) WITH (RETAIN HISTORY FOR '1ms')
+
+# Unitless intervals are seconds.
+statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 1s, but must be at least 5s
+CREATE INDEX idx_c ON view_b (b) WITH (RETAIN HISTORY FOR 5)
+
+statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 1s, but must be at least 300s
+ALTER INDEX idx_b SET (RETAIN HISTORY FOR '5m')
+
+statement ok
+ALTER INDEX idx_a SET (RETAIN HISTORY FOR '5m')
+
+statement ok
+ALTER INDEX idx_b SET (RETAIN HISTORY FOR '3m')
+
+statement ok
+CREATE VIEW view_c AS SELECT * FROM view_b
+
+statement ok
+CREATE INDEX idx_c ON view_c (b)
+
+statement ok
+ALTER INDEX idx_c SET (RETAIN HISTORY FOR '1m')
+
+# a 5m, b 3m, c 1m
+
+statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 300s, but must be at least 360s
+ALTER INDEX idx_b SET (RETAIN HISTORY FOR '6m')
+
+statement error db error: ERROR: dependent index materialize\.public\.idx_b has a RETAIN HISTORY of 180s, but must be at least 240s
+ALTER INDEX idx_c SET (RETAIN HISTORY FOR '4m')
+
+# a 6m, b 3m, c 1m
+
+statement ok
+ALTER INDEX idx_a SET (RETAIN HISTORY FOR '7m')
+
+# a 7m, b 3m, c 1m
+
+statement ok
+ALTER INDEX idx_b SET (RETAIN HISTORY FOR '6m')
+
+# a 7m, b 6m, c 1m
+
+statement ok
+ALTER INDEX idx_b SET (RETAIN HISTORY FOR '4m')
