@@ -6688,6 +6688,15 @@ ON mz_internal.mz_recent_activity_log_thinned (sql_hash)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_KAFKA_SOURCES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_kafka_sources",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_KAFKA_SOURCES_IND_OID,
+    sql: "IN CLUSTER mz_introspection
+ON mz_internal.mz_kafka_sources (id)",
+    is_retained_metrics_object: true,
+};
+
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
