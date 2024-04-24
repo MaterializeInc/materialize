@@ -12,7 +12,6 @@ use std::fmt::Debug;
 
 use anyhow::anyhow;
 use derivative::Derivative;
-use differential_dataflow::trace::cursor::MyTrait;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -24,7 +23,7 @@ use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
@@ -56,6 +55,8 @@ use crate::durable::{
     USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateUpdate, StateUpdateKind};
+
+type Timestamp = u64;
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
 /// An operation also logically groups multiple catalog updates together.
@@ -90,7 +91,7 @@ pub struct Transaction<'a> {
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
     storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
     /// The ID of the current operation of this transaction.
-    op_id: u64,
+    op_id: Timestamp,
 }
 
 impl<'a> Transaction<'a> {
@@ -1682,7 +1683,7 @@ impl<'a> Transaction<'a> {
 use crate::durable::async_trait;
 
 #[async_trait]
-impl StorageTxn<Timestamp> for Transaction<'_> {
+impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, String> {
         self.storage_collection_metadata
             .items()
@@ -1699,7 +1700,7 @@ impl StorageTxn<Timestamp> for Transaction<'_> {
     fn insert_collection_metadata(
         &mut self,
         metadata: BTreeMap<GlobalId, String>,
-    ) -> Result<(), StorageError<Timestamp>> {
+    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         for (id, shard) in metadata {
             self.storage_collection_metadata
                 .insert(
@@ -1749,7 +1750,7 @@ impl StorageTxn<Timestamp> for Transaction<'_> {
     fn insert_unfinalized_shards(
         &mut self,
         s: BTreeSet<String>,
-    ) -> Result<(), StorageError<Timestamp>> {
+    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         for shard in s {
             match self
                 .unfinalized_shards
@@ -1778,7 +1779,10 @@ impl StorageTxn<Timestamp> for Transaction<'_> {
             .map(|PersistTxnShardValue { shard }| shard)
     }
 
-    fn write_persist_txn_shard(&mut self, shard: String) -> Result<(), StorageError<Timestamp>> {
+    fn write_persist_txn_shard(
+        &mut self,
+        shard: String,
+    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         self.persist_txn_shard
             .insert((), PersistTxnShardValue { shard }, self.op_id)
             .map_err(|err| match err {
@@ -1839,6 +1843,13 @@ impl TransactionBatch {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TransactionUpdate<V> {
+    value: V,
+    ts: Timestamp,
+    diff: Diff,
+}
+
 /// TableTransaction emulates some features of a typical SQL transaction over
 /// table for a Collection.
 ///
@@ -1852,8 +1863,8 @@ impl TransactionBatch {
 struct TableTransaction<K, V> {
     initial: BTreeMap<K, V>,
     // The desired updates to keys after commit.
-    // Invariant: Value is sorted by `.1`.
-    pending: BTreeMap<K, Vec<(V, u64, i64)>>,
+    // Invariant: Value is sorted by `ts`.
+    pending: BTreeMap<K, Vec<TransactionUpdate<V>>>,
     uniqueness_violation: fn(a: &V, b: &V) -> bool,
 }
 
@@ -1901,12 +1912,14 @@ where
         // retracted if they already exist and were deleted or are being updated.
         self.pending
             .into_iter()
-            .map(|(k, v)| {
-                let mut v: Vec<_> = v.into_iter().map(|(v, _, diff)| (v, diff)).collect();
+            .flat_map(|(k, v)| {
+                let mut v: Vec<_> = v
+                    .into_iter()
+                    .map(|TransactionUpdate { value, ts: _, diff }| (value, diff))
+                    .collect();
                 differential_dataflow::consolidation::consolidate(&mut v);
                 v.into_iter().map(move |(v, diff)| (k.clone(), v, diff))
             })
-            .flatten()
             .map(|(key, val, diff)| (key.into_proto(), val.into_proto(), diff))
             .collect()
     }
@@ -1922,9 +1935,9 @@ where
             }
         }
         soft_assert_no_log!(
-            self.pending.values().all(|pending| {
-                pending.is_sorted_by(|(_, at, _), (_, bt, _)| at.compare(bt).is_le())
-            }),
+            self.pending
+                .values()
+                .all(|pending| { pending.is_sorted_by(|a, b| a.ts <= b.ts) }),
             "pending should be sorted by timestamp: {:?}",
             self.pending
         );
@@ -1935,7 +1948,7 @@ where
     /// order and applies `f` on all key, value pairs.
     fn for_values<F: FnMut(&K, &V)>(&self, mut f: F) {
         let mut seen = BTreeSet::new();
-        for (k, _v) in self.pending.iter() {
+        for k in self.pending.keys() {
             seen.insert(k);
             let v = self.get(k);
             // Deleted items don't exist so shouldn't be visited, but still suppress
@@ -1962,7 +1975,7 @@ where
             updates.extend(
                 pending
                     .into_iter()
-                    .map(|(v, _, diff)| (v.clone(), diff.clone())),
+                    .map(|TransactionUpdate { value, ts: _, diff }| (value.clone(), diff.clone())),
             );
         }
         differential_dataflow::consolidation::consolidate(&mut updates);
@@ -1982,7 +1995,10 @@ where
     /// Iterates over the items viewable in the current transaction, and provides a
     /// map where additional pending items can be inserted, which will be appended
     /// to current pending items. Does not verify uniqueness.
-    fn for_values_mut<F: FnMut(&mut BTreeMap<K, Vec<(V, u64, i64)>>, &K, &V)>(&mut self, mut f: F) {
+    fn for_values_mut<F: FnMut(&mut BTreeMap<K, Vec<TransactionUpdate<V>>>, &K, &V)>(
+        &mut self,
+        mut f: F,
+    ) {
         let mut pending = BTreeMap::new();
         self.for_values(|k, v| f(&mut pending, k, v));
         for (k, updates) in pending {
@@ -1993,7 +2009,7 @@ where
     /// Inserts a new k,v pair.
     ///
     /// Returns an error if the uniqueness check failed or the key already exists.
-    fn insert(&mut self, k: K, v: V, t: u64) -> Result<(), DurableCatalogError> {
+    fn insert(&mut self, k: K, v: V, ts: Timestamp) -> Result<(), DurableCatalogError> {
         let mut violation = None;
         self.for_values(|for_k, for_v| {
             if &k == for_k {
@@ -2006,7 +2022,11 @@ where
         if let Some(violation) = violation {
             return Err(violation.into());
         }
-        self.pending.entry(k).or_default().push((v, t, 1));
+        self.pending.entry(k).or_default().push(TransactionUpdate {
+            value: v,
+            ts,
+            diff: 1,
+        });
         soft_assert_no_log!(self.verify().is_ok());
         Ok(())
     }
@@ -2019,7 +2039,7 @@ where
     fn update<F: Fn(&K, &V) -> Option<V>>(
         &mut self,
         f: F,
-        t: u64,
+        ts: Timestamp,
     ) -> Result<Diff, DurableCatalogError> {
         let mut changed = 0;
         // Keep a copy of pending in case of uniqueness violation.
@@ -2028,8 +2048,16 @@ where
             if let Some(next) = f(k, v) {
                 changed += 1;
                 let updates = p.entry(k.clone()).or_default();
-                updates.push((v.clone(), t, -1));
-                updates.push((next, t, 1));
+                updates.push(TransactionUpdate {
+                    value: v.clone(),
+                    ts,
+                    diff: -1,
+                });
+                updates.push(TransactionUpdate {
+                    value: next,
+                    ts,
+                    diff: 1,
+                });
             }
         });
         // Check for uniqueness violation.
@@ -2047,21 +2075,37 @@ where
     /// Returns an error if the uniqueness check failed.
     ///
     /// DO NOT call this function in a loop, use [`Self::set_many`] instead.
-    fn set(&mut self, k: K, v: Option<V>, t: u64) -> Result<Option<V>, DurableCatalogError> {
+    fn set(&mut self, k: K, v: Option<V>, ts: Timestamp) -> Result<Option<V>, DurableCatalogError> {
         let prev = self.get(&k);
         let entry = self.pending.entry(k.clone()).or_default();
         let restore_len = entry.len();
 
         match (v, prev.clone()) {
             (Some(v), Some(prev)) => {
-                entry.push((prev, t, -1));
-                entry.push((v, t, 1));
+                entry.push(TransactionUpdate {
+                    value: prev,
+                    ts,
+                    diff: -1,
+                });
+                entry.push(TransactionUpdate {
+                    value: v,
+                    ts,
+                    diff: 1,
+                });
             }
             (Some(v), None) => {
-                entry.push((v, t, 1));
+                entry.push(TransactionUpdate {
+                    value: v,
+                    ts,
+                    diff: 1,
+                });
             }
             (None, Some(prev)) => {
-                entry.push((prev, t, -1));
+                entry.push(TransactionUpdate {
+                    value: prev,
+                    ts,
+                    diff: -1,
+                });
             }
             (None, None) => {}
         }
@@ -2085,7 +2129,7 @@ where
     fn set_many(
         &mut self,
         kvs: BTreeMap<K, Option<V>>,
-        t: u64,
+        ts: Timestamp,
     ) -> Result<BTreeMap<K, Option<V>>, DurableCatalogError> {
         let mut prevs = BTreeMap::new();
         let mut restores = BTreeMap::new();
@@ -2097,14 +2141,30 @@ where
 
             match (v, prev.clone()) {
                 (Some(v), Some(prev)) => {
-                    entry.push((prev, t, -1));
-                    entry.push((v, t, 1));
+                    entry.push(TransactionUpdate {
+                        value: prev,
+                        ts,
+                        diff: -1,
+                    });
+                    entry.push(TransactionUpdate {
+                        value: v,
+                        ts,
+                        diff: 1,
+                    });
                 }
                 (Some(v), None) => {
-                    entry.push((v, t, 1));
+                    entry.push(TransactionUpdate {
+                        value: v,
+                        ts,
+                        diff: 1,
+                    });
                 }
                 (None, Some(prev)) => {
-                    entry.push((prev, t, -1));
+                    entry.push(TransactionUpdate {
+                        value: prev,
+                        ts,
+                        diff: -1,
+                    });
                 }
                 (None, None) => {}
             }
@@ -2128,12 +2188,16 @@ where
 
     /// Deletes items for which `f` returns true. Returns the keys and values of
     /// the deleted entries.
-    fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F, t: u64) -> Vec<(K, V)> {
+    fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F, ts: Timestamp) -> Vec<(K, V)> {
         let mut deleted = Vec::new();
         self.for_values_mut(|p, k, v| {
             if f(k, v) {
                 deleted.push((k.clone(), v.clone()));
-                p.entry(k.clone()).or_default().push((v.clone(), t, -1));
+                p.entry(k.clone()).or_default().push(TransactionUpdate {
+                    value: v.clone(),
+                    ts,
+                    diff: -1,
+                });
             }
         });
         soft_assert_no_log!(self.verify().is_ok());
