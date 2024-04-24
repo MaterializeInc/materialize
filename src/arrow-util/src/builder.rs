@@ -16,6 +16,7 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use chrono::Timelike;
 use mz_ore::cast::CastFrom;
+use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 
 pub struct ArrowBuilder {
@@ -74,6 +75,7 @@ impl ArrowBuilder {
                         col_name,
                         col_type.nullable,
                         data_type,
+                        col_type.scalar_type.clone(),
                         item_capacity,
                         data_capacity,
                     )?);
@@ -171,6 +173,12 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<DataType, anyhow
             }
         }
         ScalarType::String => DataType::LargeUtf8,
+        // Parquet does have a UUID 'Logical Type' in parquet format 2.4+, but there is no arrow
+        // UUID type, so we match the format (a 16-byte fixed-length binary array) ourselves.
+        ScalarType::Uuid => DataType::FixedSizeBinary(16),
+        // Parquet does have a JSON 'Logical Type' in parquet format 2.4+, but there is no arrow
+        // JSON type, so for now we represent JSON as 'large' utf8-encoded strings.
+        ScalarType::Jsonb => DataType::LargeUtf8,
         ScalarType::MzTimestamp => {
             // MZ timestamps are in milliseconds
             DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None)
@@ -213,6 +221,7 @@ struct ArrowColumn {
     field_name: String,
     nullable: bool,
     data_type: DataType,
+    original_type: ScalarType,
     inner: ColBuilder,
 }
 
@@ -221,6 +230,7 @@ impl ArrowColumn {
         field_name: String,
         nullable: bool,
         data_type: DataType,
+        original_type: ScalarType,
         item_capacity: usize,
         data_capacity: usize,
     ) -> Result<Self, anyhow::Error> {
@@ -268,6 +278,9 @@ impl ArrowColumn {
             DataType::LargeBinary => ColBuilder::LargeBinaryBuilder(
                 LargeBinaryBuilder::with_capacity(item_capacity, data_capacity),
             ),
+            DataType::FixedSizeBinary(byte_width) => ColBuilder::FixedSizeBinaryBuilder(
+                FixedSizeBinaryBuilder::with_capacity(item_capacity, *byte_width),
+            ),
             DataType::Utf8 => ColBuilder::StringBuilder(StringBuilder::with_capacity(
                 item_capacity,
                 data_capacity,
@@ -285,6 +298,7 @@ impl ArrowColumn {
             field_name,
             nullable,
             data_type,
+            original_type,
             inner,
         })
     }
@@ -337,6 +351,7 @@ make_col_builder!(
     TimestampMicrosecondBuilder,
     TimestampMillisecondBuilder,
     LargeBinaryBuilder,
+    FixedSizeBinaryBuilder,
     StringBuilder,
     LargeStringBuilder,
     Decimal128Builder
@@ -373,7 +388,15 @@ impl ArrowColumn {
                 builder.append_value(ts.timestamp_micros())
             }
             (ColBuilder::LargeBinaryBuilder(builder), Datum::Bytes(b)) => builder.append_value(b),
+            (ColBuilder::FixedSizeBinaryBuilder(builder), Datum::Uuid(val)) => {
+                builder.append_value(val.as_bytes())?
+            }
             (ColBuilder::StringBuilder(builder), Datum::String(s)) => builder.append_value(s),
+            (ColBuilder::LargeStringBuilder(builder), _)
+                if self.original_type == ScalarType::Jsonb =>
+            {
+                builder.append_value(JsonbRef::from_datum(datum).to_serde_json().to_string())
+            }
             (ColBuilder::LargeStringBuilder(builder), Datum::String(s)) => builder.append_value(s),
             (ColBuilder::TimestampMillisecondBuilder(builder), Datum::MzTimestamp(ts)) => {
                 builder.append_value(ts.try_into().expect("checked"))

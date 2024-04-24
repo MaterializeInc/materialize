@@ -4032,6 +4032,8 @@ dependencies = [
  "chrono",
  "mz-ore",
  "mz-repr",
+ "serde",
+ "serde_json",
  "workspace-hack",
 ]
 
