@@ -849,8 +849,6 @@ impl CatalogState {
         id: GlobalId,
         create_sql: &str,
     ) -> Result<CatalogItem, AdapterError> {
-        // TODO - The custom_logical_compaction_window `None` needs to be changed if we ever allow
-        // custom logical compaction windows in user-defined objects.
         self.parse_item(id, create_sql, None, false, None)
     }
 
