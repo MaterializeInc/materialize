@@ -107,11 +107,11 @@ We'll want to write these passes and have them typecheck and pass tests... but w
 
 ## Alternatives
 
+- Do nothing; invest energy elsewhere.
+
 - Follow this plan, but don't split hybrid/logical physical passes---instead, expose an interface that works for both `MirRelationExpr` and `MirLogicalRelationExpr`.
 
 - We could plumb through changes earlier, at the price of (a) only working on passes in the order the optimizer runs them, or (b) having very large PRs.
-
-- Do nothing; invest energy elsewhere.
 
 - Try to consider more than one plan without changing the AST.
 
@@ -126,6 +126,18 @@ We'll want to write these passes and have them typecheck and pass tests... but w
   + blackbox MIR node
   
   + n-ary outer join MIR node (logical only?)
+
+- Reduce the surface of the optimizer in other ways.
+
+  + Fold passes into `EquivalencePropagation`
+
+  + Combine `Attribute` and `Analysis` into a single
+
+  + Try to reduce the size of fixpoints such that, e.g., `SemijoinIdempotence` and `RedundantJoin` don't run regularly, but at single prescribed times (possibly in their, local fixpoint)
+
+  + Focus efforts on normalization
+
+- Characterize the meaningful pre-image of `SemijoinIdempotence`, `RedundantJoin`, and other fragile transforms; write transforms that prepare terms especially for them
 
 ## Open questions
 
