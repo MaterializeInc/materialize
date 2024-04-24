@@ -1788,7 +1788,6 @@ pub enum ClusterFeatureName {
     ReoptimizeImportedViews,
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
-    EnableEquivalencePropagation,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
 }
@@ -1804,7 +1803,6 @@ impl WithOptionName for ClusterFeatureName {
             Self::ReoptimizeImportedViews
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
-            | Self::EnableEquivalencePropagation
             | Self::EnableVariadicLeftJoinLowering
             | Self::EnableLetrecFixpointAnalysis => false,
         }
@@ -3225,7 +3223,6 @@ pub enum ExplainPlanOptionName {
     ReoptimizeImportedViews,
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
-    EnableEquivalencePropagation,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
 }
@@ -3260,7 +3257,6 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::ReoptimizeImportedViews
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
-            | Self::EnableEquivalencePropagation
             | Self::EnableVariadicLeftJoinLowering
             | Self::EnableLetrecFixpointAnalysis => false,
         }
