@@ -1426,6 +1426,24 @@ impl<T: Timestamp + Lattice> Spine<T> {
         let mut id = SpineId(0, 0);
         let mut frontier = Antichain::from_elem(T::minimum());
         for x in self.merging.iter().rev() {
+            if x.is_full() != x.merge.is_some() {
+                return Err(format!(
+                    "all (and only) full batches should have fueling merges (full={}, merge={:?})",
+                    x.is_full(),
+                    x.merge,
+                ));
+            }
+
+            if let Some(m) = &x.merge {
+                if x.id() != Some(m.id) {
+                    return Err(format!(
+                        "merge id should match the range of the batch ids (batch={:?}, merge={:?})",
+                        x.id(),
+                        m.id,
+                    ));
+                }
+            }
+
             // TODO: Anything we can validate about x.merge? It'd
             // be nice to assert that it's bigger than the len of the
             // two batches, but apply_merge_res might swap those lengths
