@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::iter;
 use std::time::Duration;
@@ -5554,26 +5554,6 @@ pub fn plan_alter_connection(
             id: entry.id(),
             action: crate::plan::AlterConnectionAction::RotateKeys,
         }));
-    }
-
-    // Check that the `ALTER CONNECTION` does not occur on an UPSERT source.
-    // This is a stopgap while we implement #25417.
-    let mut deps = VecDeque::from_iter(entry.used_by().iter().cloned());
-    while let Some(dep) = deps.pop_front() {
-        let dep = scx.catalog.get_item(&dep);
-        match dep.item_type() {
-            CatalogItemType::Connection => deps.extend(dep.used_by().iter().cloned()),
-            CatalogItemType::Source => {
-                if let Some(desc) = dep.source_desc()? {
-                    if matches!(desc.envelope(), SourceEnvelope::Upsert(_)) {
-                        sql_bail!(
-                            "cannot currently alter connections depended on by upsert sources"
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
     }
 
     let options = AlterConnectionOptionExtracted::try_from(with_options)?;
