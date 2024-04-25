@@ -161,7 +161,7 @@ $ s3-verify-data bucket=copytos3 key=test/3
 # sentinel object is written during the copy
 
 $ postgres-execute background=true connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
-COPY (SELECT * FROM generate_series(1, 5000000)) TO 's3://copytos3/test/5' WITH (AWS CONNECTION = aws_conn, MAX FILE SIZE = "100MB", FORMAT = 'csv');
+COPY (SELECT * FROM generate_series(1, 50000000)) TO 's3://copytos3/test/5' WITH (AWS CONNECTION = aws_conn, MAX FILE SIZE = "100MB", FORMAT = 'csv');
 
 $ s3-verify-keys bucket=copytos3 prefix-path=test/5 key-pattern=INCOMPLETE
 
