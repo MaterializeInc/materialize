@@ -62,7 +62,8 @@ pub struct PersistClientCache {
     pubsub_sender: Arc<dyn PubSubSender>,
     _pubsub_receiver_task: JoinHandle<()>,
 
-    // WIP hack plumb this around instead
+    // WIP hack plumb this around instead (What does this mean? Why not have this be `std::sync::OnceLock<Arc<TxnRead>>`?)
+    // This is the `TxnRead` for the `clusterd` process.
     txn_ctx: std::sync::OnceLock<Arc<dyn Any + Send + Sync>>,
 }
 

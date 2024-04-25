@@ -44,7 +44,7 @@ use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::txn_cache::TxnsCache;
-use crate::txn_read::{DataListenNext, DataRemapEntry};
+use crate::txn_read::{DataRemapEntry, TxnsRead};
 use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
@@ -102,8 +102,8 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     data_val_schema: Arc<V::Schema>,
 ) -> (Stream<G, P>, Vec<PressOnDropButton>)
 where
-    K: Debug + Codec,
-    V: Debug + Codec,
+    K: Debug + Codec + Send + Sync,
+    V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
@@ -164,8 +164,8 @@ fn txns_progress_source<K, V, T, D, P, C, G>(
     unique_id: u64,
 ) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
 where
-    K: Debug + Codec,
-    V: Debug + Codec,
+    K: Debug + Codec + Send + Sync,
+    V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
@@ -189,7 +189,6 @@ where
         let txns_read = ctx.get_or_init::<C>(&client, txns_id).await;
 
         let _ = txns_read.update_gt(as_of.clone()).await;
-        let (snap, txns_read_cap) = txns_read.data_subscribe(data_id, as_of.clone()).await;
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
@@ -199,63 +198,30 @@ where
             )
             .await
             .expect("schema shouldn't change");
-        let Some(mut subscribe) = subscribe.unblock_subscribe(data_write).await else {
-            return;
-        };
+        let mut rx = txns_read
+            .data_subscribe(data_id, as_of.clone(), Box::new(data_write))
+            .await;
+        debug!("{} starting as_of={:?}", name, as_of);
 
-        debug!("{} emitting {:?}", name, subscribe.remap);
-        remap_output.give(&cap, subscribe.remap.clone()).await;
+        let mut physical_upper = T::minimum();
 
-        let mut txns_read_cap = Some(txns_read_cap);
-        loop {
-            txns_read.update_ge(remap.logical_upper.clone()).await;
-            cap.downgrade(&remap.logical_upper);
-            let data_listen_next = {
-                let trc = txns_read_cap.take().expect("valid cap");
-                let (dln, trc) = trc
-                    .data_listen_next(data_id, remap.logical_upper.clone())
-                    .await;
-                txns_read_cap = Some(trc);
-                dln
-            };
-            debug!(
-                "{} data_listen_next at {:?}: {:?}",
-                name, subscribe.remap.logical_upper, data_listen_next,
-            );
-            match data_listen_next {
-                // We've caught up to the txns upper and we have to wait for it
-                // to advance before asking again.
-                //
-                // Note that we're asking again with the same input, but once
-                // the cache is past remap.logical_upper (as it will be after
-                // this update_gt call), we're guaranteed to get an answer.
-                DataListenNext::WaitForTxnsProgress => {
-                    let _ = txns_cache.update_gt(&subscribe.remap.logical_upper).await;
-                }
-                // The data shard got a write!
-                DataListenNext::ReadDataTo(new_upper) => {
-                    // A write means both the physical and logical upper advance.
-                    subscribe.remap = DataRemapEntry {
-                        physical_upper: new_upper.clone(),
-                        logical_upper: new_upper,
-                    };
-                    debug!("{} emitting {:?}", name, subscribe.remap);
-                    remap_output.give(&cap, subscribe.remap.clone()).await;
-                }
-                // We know there are no writes in `[logical_upper,
-                // new_progress)`, so advance our output frontier.
-                DataListenNext::EmitLogicalProgress(new_progress) => {
-                    assert!(subscribe.remap.physical_upper < new_progress);
-                    assert!(subscribe.remap.logical_upper < new_progress);
+        while let Some(remap) = rx.recv().await {
+            assert!(physical_upper <= remap.physical_upper);
+            assert!(physical_upper < remap.logical_upper);
 
-                    subscribe.remap.logical_upper = new_progress;
-                    // As mentioned in the docs on `DataRemapEntry`, we only
-                    // emit updates when the physical upper changes (which
-                    // happens to makes the protocol a tiny bit more
-                    // remap-like).
-                    debug!("{} not emitting {:?}", name, subscribe.remap);
-                }
+            let logical_upper = remap.logical_upper.clone();
+            // As mentioned in the docs on this function, we only
+            // emit updates when the physical upper changes (which
+            // happens to makes the protocol a tiny bit more
+            // remap-like).
+            if remap.physical_upper != physical_upper {
+                physical_upper = remap.physical_upper.clone();
+                debug!("{} emitting {:?}", name, remap);
+                remap_output.give(&cap, remap).await;
+            } else {
+                debug!("{} not emitting {:?}", name, remap);
             }
+            cap.downgrade(&logical_upper);
         }
     });
     (remap_stream, shutdown_button.press_on_drop())

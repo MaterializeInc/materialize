@@ -96,7 +96,7 @@ mod rehydration;
 mod statistics;
 
 #[derive(Debug)]
-enum PersistTxns<T: Clone> {
+enum PersistTxns<T> {
     EnabledEager {
         txns_id: ShardId,
         txns_client: PersistClient,

@@ -365,11 +365,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     ///
     /// Callers must first wait for [`TxnsCache::update_gt`] with the same or
     /// later timestamp to return. Panics otherwise.
-    pub(crate) fn data_subscribe<K, V, D>(
-        &self,
-        data_id: ShardId,
-        as_of: T,
-    ) -> DataSubscribeBlocked<T> {
+    pub(crate) fn data_subscribe(&self, data_id: ShardId, as_of: T) -> DataSubscribeBlocked<T> {
         self.assert_only_data_id(&data_id);
         assert!(self.progress_exclusive > as_of);
         let snapshot = self.data_snapshot(data_id, as_of);
