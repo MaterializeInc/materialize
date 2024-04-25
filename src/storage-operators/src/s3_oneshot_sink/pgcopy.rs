@@ -43,10 +43,6 @@ pub(super) struct PgCopyUploader {
     /// Multi-part uploader for the current file.
     /// Keeping the uploader in an `Option` to later take owned value.
     current_file_uploader: Option<S3MultiPartUploader>,
-    /// Temporary buffer to store the encoded bytes.
-    /// Currently at a time this will only store one single encoded row
-    /// before getting added to the `current_file_uploader`'s buffer.
-    buf: Vec<u8>,
     /// Upload parameters.
     params: CopyToParameters,
 }
@@ -69,7 +65,6 @@ impl CopyToS3Uploader for PgCopyUploader {
                 max_file_size: connection_details.max_file_size,
                 file_index: 0,
                 current_file_uploader: None,
-                buf: Vec::new(),
                 params,
             }),
             _ => anyhow::bail!("Expected PgCopy format"),
@@ -101,28 +96,27 @@ impl CopyToS3Uploader for PgCopyUploader {
     /// exceed the max file size of the ongoing upload, then a new `S3MultiPartUploader` for a new file will
     /// be created and the row data will be appended there.
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
-        self.buf.clear();
+        let mut buf: Vec<u8> = vec![];
         // encode the row and write to temp buffer.
-        encode_copy_format(&self.format, row, self.desc.typ(), &mut self.buf)
+        encode_copy_format(&self.format, row, self.desc.typ(), &mut buf)
             .map_err(|_| anyhow!("error encoding row"))?;
 
         if self.current_file_uploader.is_none() {
             self.start_new_file_upload().await?;
         }
+        let mut uploader = self.current_file_uploader.as_mut().expect("known exists");
 
-        match self.upload_buffer().await {
+        match uploader.buffer_chunk(&buf) {
             Ok(_) => Ok(()),
             Err(S3MultiPartUploadError::UploadExceedsMaxFileLimit(_)) => {
                 // Start a multi part upload of next file.
                 self.start_new_file_upload().await?;
-                // Upload data for the new part.
-                self.upload_buffer().await?;
+                uploader = self.current_file_uploader.as_mut().expect("known exists");
+                uploader.buffer_chunk(&buf)?;
                 Ok(())
             }
-            Err(e) => Err(e),
-        }?;
-
-        Ok(())
+            Err(e) => Err(e.into()),
+        }
     }
 }
 
@@ -161,26 +155,6 @@ impl PgCopyUploader {
         let (uploader, sdk_config) = handle.wait_and_assert_finished().await;
         self.sdk_config = Some(sdk_config);
         self.current_file_uploader = Some(uploader?);
-        Ok(())
-    }
-
-    async fn upload_buffer(&mut self) -> Result<(), S3MultiPartUploadError> {
-        assert!(!self.buf.is_empty());
-        assert!(self.current_file_uploader.is_some());
-
-        let mut uploader = self.current_file_uploader.take().unwrap();
-        // TODO: Make buf a Bytes so it can be cheaply cloned.
-        let buf = std::mem::take(&mut self.buf);
-        // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
-        let handle = mz_ore::task::spawn(|| "s3_uploader::buffer_chunk", async move {
-            let result = uploader.buffer_chunk(&buf).await;
-            (uploader, buf, result)
-        });
-        let (uploader, buf, result) = handle.wait_and_assert_finished().await;
-        self.current_file_uploader = Some(uploader);
-        self.buf = buf;
-
-        let _ = result?;
         Ok(())
     }
 }

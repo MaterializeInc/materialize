@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
-
 use anyhow::anyhow;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::complete_multipart_upload::CompleteMultipartUploadError;
@@ -22,6 +20,7 @@ use bytes::{Bytes, BytesMut};
 use bytesize::ByteSize;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
+use mz_ore::task::{spawn, JoinHandle, JoinHandleExt};
 
 /// A multi part uploader which can upload a single object across multiple parts
 /// and keeps track of state to eventually finish the upload process.
@@ -41,8 +40,6 @@ pub struct S3MultiPartUploader {
     key: String,
     // The upload ID for the ongoing multi part upload.
     upload_id: String,
-    // State to keep track of the part number and the etags returned from AWS.
-    etags: BTreeMap<i32, String>,
     // The current part count.
     part_count: i32,
     // Number of bytes uploaded till now.
@@ -50,6 +47,8 @@ pub struct S3MultiPartUploader {
     // A buffer to accumulate data till it reaches `part_size_limit` in size, when it
     // will be uploaded as a part for the multi-part upload.
     buffer: BytesMut,
+    // The task handles for each part upload.
+    upload_handles: Vec<JoinHandle<Result<(Option<String>, i32), S3MultiPartUploadError>>>,
 }
 
 /// The smallest allowable part number (inclusive).
@@ -184,10 +183,10 @@ impl S3MultiPartUploader {
             key,
             upload_id,
             part_count: 0,
-            etags: Default::default(),
             total_bytes_uploaded: 0,
             buffer: Default::default(),
             config,
+            upload_handles: Default::default(),
         })
     }
 
@@ -196,7 +195,7 @@ impl S3MultiPartUploader {
     /// Returns an `UploadExceedsMaxFileLimit` error if the upload will exceed the configured `file_size_limit`,
     /// unless no data has been added yet. In which case, it will try to do an upload if the data size
     /// is under `part_size_limit` * 10000.
-    pub async fn buffer_chunk(&mut self, data: &[u8]) -> Result<(), S3MultiPartUploadError> {
+    pub fn buffer_chunk(&mut self, data: &[u8]) -> Result<(), S3MultiPartUploadError> {
         let data_len = u64::cast_from(data.len());
 
         let aws_max_part_count: u64 = AWS_S3_MAX_PART_COUNT.try_into().expect("i32 to u64");
@@ -210,7 +209,7 @@ impl S3MultiPartUploader {
 
         if data_len <= self.remaining_bytes_limit() || can_force_first_upload {
             self.buffer.extend_from_slice(data);
-            self.flush_chunks().await?;
+            self.flush_chunks()?;
             Ok(())
         } else {
             Err(S3MultiPartUploadError::UploadExceedsMaxFileLimit(
@@ -225,23 +224,29 @@ impl S3MultiPartUploader {
     pub async fn finish(mut self) -> Result<CompletedUpload, S3MultiPartUploadError> {
         if self.buffer.len() > 0 {
             let remaining = self.buffer.split();
-            self.upload_part_internal(remaining.freeze()).await?;
+            self.upload_part_internal(remaining.freeze())?;
         }
 
         if self.part_count < AWS_S3_MIN_PART_COUNT {
             return Err(S3MultiPartUploadError::AtLeastMinPartNumber);
         }
 
-        let parts: Vec<CompletedPart> = self
-            .etags
-            .iter()
-            .map(|(part_num, etag)| {
-                CompletedPart::builder()
-                    .e_tag(etag)
-                    .part_number(*part_num)
-                    .build()
-            })
-            .collect();
+        let mut parts: Vec<CompletedPart> = Vec::with_capacity(self.upload_handles.len());
+        for handle in self.upload_handles {
+            let (etag, part_num) = handle.wait_and_assert_finished().await?;
+            match etag {
+                Some(etag) => {
+                    parts.push(
+                        CompletedPart::builder()
+                            .e_tag(etag)
+                            .part_number(part_num)
+                            .build(),
+                    );
+                }
+                None => Err(anyhow!("etag for part {part_num} is None"))?,
+            }
+        }
+
         self.client
             .complete_multipart_upload()
             .bucket(&self.bucket)
@@ -281,42 +286,43 @@ impl S3MultiPartUploader {
 
     /// Internal method to continuously flush and upload part from the buffer till it is
     /// under the configured `part_size_limit`.
-    async fn flush_chunks(&mut self) -> Result<(), S3MultiPartUploadError> {
+    fn flush_chunks(&mut self) -> Result<(), S3MultiPartUploadError> {
         let part_size_limit = self.config.part_size_limit;
         // TODO (mouli): can probably parallelize the calls here.
         while self.buffer_size() > part_size_limit {
             let data = self.buffer.split_to(usize::cast_from(part_size_limit));
-            self.upload_part_internal(data.freeze()).await?;
+            self.upload_part_internal(data.freeze())?;
         }
         Ok(())
     }
 
     /// Internal method which actually uploads a single part and updates state.
-    async fn upload_part_internal(&mut self, data: Bytes) -> Result<(), S3MultiPartUploadError> {
+    fn upload_part_internal(&mut self, data: Bytes) -> Result<(), S3MultiPartUploadError> {
         let num_of_bytes: u64 = u64::cast_from(data.len());
 
         let next_part_number = self.part_count + 1;
         if next_part_number > AWS_S3_MAX_PART_COUNT {
             return Err(S3MultiPartUploadError::ExceedsMaxPartNumber);
         }
+        let client = self.client.clone();
+        let bucket = self.bucket.clone();
+        let key = self.key.clone();
+        let upload_id = self.upload_id.clone();
 
-        // TODO: Spawn this on a new task to make it parallel.
-        let res = self
-            .client
-            .upload_part()
-            .bucket(&self.bucket)
-            .key(&self.key)
-            .upload_id(self.upload_id.clone())
-            .part_number(next_part_number)
-            .body(ByteStream::from(data))
-            .send()
-            .await?;
+        let handle = spawn(|| "s3::upload_part", async move {
+            let res = client
+                .upload_part()
+                .bucket(&bucket)
+                .key(&key)
+                .upload_id(upload_id)
+                .part_number(next_part_number)
+                .body(ByteStream::from(data))
+                .send()
+                .await?;
+            Ok((res.e_tag, next_part_number))
+        });
+        self.upload_handles.push(handle);
 
-        self.etags.insert(
-            next_part_number,
-            res.e_tag
-                .ok_or(anyhow!("upload_part response missing etag"))?,
-        );
         self.part_count = next_part_number;
         self.total_bytes_uploaded += num_of_bytes;
         Ok(())
@@ -400,9 +406,9 @@ mod tests {
             S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), key.clone(), config).await?;
 
         let expected_data = "onetwothree";
-        uploader.buffer_chunk(b"one").await?;
-        uploader.buffer_chunk(b"two").await?;
-        uploader.buffer_chunk(b"three").await?;
+        uploader.buffer_chunk(b"one")?;
+        uploader.buffer_chunk(b"two")?;
+        uploader.buffer_chunk(b"three")?;
 
         // This should trigger one single part upload.
         let CompletedUpload {
@@ -456,12 +462,12 @@ mod tests {
         // Adding a chunk of 6MiB, should trigger an upload part since part_size_limit is 5MiB
         let expected_data = vec![97; 6291456]; // 6MiB
         let expected_bytes: u64 = u64::cast_from(expected_data.len());
-        uploader.buffer_chunk(&expected_data).await?;
+        uploader.buffer_chunk(&expected_data)?;
 
         assert_eq!(uploader.remaining_bytes_limit(), ByteSize::mib(4).as_u64());
 
         // Adding another 6MiB should return an error since file_size_limit is 10MiB
-        let error = uploader.buffer_chunk(&expected_data).await.unwrap_err();
+        let error = uploader.buffer_chunk(&expected_data).unwrap_err();
         assert!(matches!(
             error,
             S3MultiPartUploadError::UploadExceedsMaxFileLimit(_)

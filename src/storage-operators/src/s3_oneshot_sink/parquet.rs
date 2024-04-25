@@ -269,13 +269,7 @@ impl ParquetUploader {
         }
 
         if let Some(mut active_file) = self.active_file.take() {
-            let active_file = async move {
-                active_file.write_arrow_batch(&arrow_batch).await?;
-                Ok::<ParquetFile, anyhow::Error>(active_file)
-            }
-            .run_in_task(|| "ParquetFile::write_arrow_batch")
-            .await?;
-
+            active_file.write_arrow_batch(&arrow_batch)?;
             // If this file has gone over the max size, start a new one
             if active_file.size_estimate() >= self.max_file_size {
                 self.start_new_file().await?;
@@ -342,13 +336,13 @@ impl ParquetFile {
 
     async fn finish(mut self) -> Result<CompletedUpload, anyhow::Error> {
         let buffer = self.writer.into_inner()?;
-        self.uploader.buffer_chunk(buffer.as_slice()).await?;
+        self.uploader.buffer_chunk(buffer.as_slice())?;
         Ok(self.uploader.finish().await?)
     }
 
     /// Writes an arrow Record Batch to the parquet writer, then flushes the writer's buffer to
     /// the uploader which may trigger an upload.
-    async fn write_arrow_batch(&mut self, record_batch: &RecordBatch) -> Result<(), anyhow::Error> {
+    fn write_arrow_batch(&mut self, record_batch: &RecordBatch) -> Result<(), anyhow::Error> {
         let before_groups = self.writer.flushed_row_groups().len();
         self.writer.write(record_batch)?;
 
@@ -362,7 +356,7 @@ impl ParquetFile {
         // If the writer has flushed a new row group we can steal its buffer and upload it.
         if self.writer.flushed_row_groups().len() > before_groups {
             let buffer = self.writer.inner_mut();
-            self.uploader.buffer_chunk(buffer.as_slice()).await?;
+            self.uploader.buffer_chunk(buffer.as_slice())?;
             // reuse the buffer in the writer
             buffer.clear();
         }
