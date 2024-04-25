@@ -7,11 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+// We need to allow the std::collections::HashMap type since it is directly used as a type
+// parameter to the arrow Field::with_metadata method.
+#![allow(clippy::disallowed_types)]
+
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use arrow::array::{builder::*, ArrayRef};
-use arrow::datatypes::{DataType, Field, Schema, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
+use arrow::datatypes::{
+    DataType, Field, Schema, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use chrono::Timelike;
@@ -70,12 +76,12 @@ impl ArrowBuilder {
                 })
                 .or_insert(1);
             match scalar_to_arrow_datatype(&col_type.scalar_type) {
-                Ok(data_type) => {
+                Ok((data_type, extension_type_name)) => {
                     columns.push(ArrowColumn::new(
                         col_name,
                         col_type.nullable,
                         data_type,
-                        col_type.scalar_type.clone(),
+                        extension_type_name,
                         item_capacity,
                         data_capacity,
                     )?);
@@ -94,24 +100,21 @@ impl ArrowBuilder {
 
     /// Returns a copy of the schema of the ArrowBuilder.
     pub fn schema(&self) -> Schema {
-        let mut fields = vec![];
-        for col in self.columns.iter() {
-            fields.push(Field::new(
-                col.field_name.clone(),
-                col.data_type.clone(),
-                col.nullable,
-            ));
-        }
-        Schema::new(fields)
+        Schema::new(
+            self.columns
+                .iter()
+                .map(Into::<Field>::into)
+                .collect::<Vec<_>>(),
+        )
     }
 
     /// Converts the ArrowBuilder into an arrow RecordBatch.
     pub fn to_record_batch(self) -> Result<RecordBatch, ArrowError> {
         let mut arrays = vec![];
-        let mut fields = vec![];
+        let mut fields: Vec<Field> = vec![];
         for mut col in self.columns.into_iter() {
             arrays.push(col.inner.finish());
-            fields.push(Field::new(col.field_name, col.data_type, col.nullable));
+            fields.push((&col).into());
         }
         RecordBatch::try_new(Schema::new(fields).into(), arrays)
     }
@@ -131,58 +134,65 @@ impl ArrowBuilder {
     }
 }
 
-fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<DataType, anyhow::Error> {
-    let data_type = match scalar_type {
-        ScalarType::Bool => DataType::Boolean,
-        ScalarType::Int16 => DataType::Int16,
-        ScalarType::Int32 => DataType::Int32,
-        ScalarType::Int64 => DataType::Int64,
-        ScalarType::UInt16 => DataType::UInt16,
-        ScalarType::UInt32 => DataType::UInt32,
-        ScalarType::UInt64 => DataType::UInt64,
-        ScalarType::Float32 => DataType::Float32,
-        ScalarType::Float64 => DataType::Float64,
-        ScalarType::Date => DataType::Date32,
+/// Return the appropriate Arrow DataType for the given ScalarType, plus a string
+/// that should be used as part of the Arrow 'Extension Type' name for fields using
+/// this type: https://arrow.apache.org/docs/format/Columnar.html#extension-types
+fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, String), anyhow::Error> {
+    let (data_type, extension_name) = match scalar_type {
+        ScalarType::Bool => (DataType::Boolean, "bool"),
+        ScalarType::Int16 => (DataType::Int16, "int16"),
+        ScalarType::Int32 => (DataType::Int32, "int32"),
+        ScalarType::Int64 => (DataType::Int64, "int64"),
+        ScalarType::UInt16 => (DataType::UInt16, "uint16"),
+        ScalarType::UInt32 => (DataType::UInt32, "uint32"),
+        ScalarType::UInt64 => (DataType::UInt64, "uint64"),
+        ScalarType::Float32 => (DataType::Float32, "float32"),
+        ScalarType::Float64 => (DataType::Float64, "float64"),
+        ScalarType::Date => (DataType::Date32, "date"),
         // The resolution of our time and timestamp types is microseconds, which is lucky
         // since the original parquet 'ConvertedType's support microsecond resolution but not
         // nanosecond resolution. The newer parquet 'LogicalType's support nanosecond resolution,
         // but many readers don't support them yet.
-        ScalarType::Time => DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
-        ScalarType::Timestamp { .. } => {
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
-        }
-        ScalarType::TimestampTz { .. } => DataType::Timestamp(
-            arrow::datatypes::TimeUnit::Microsecond,
-            // When appending values we always use UTC timestamps, and setting this to a non-empty
-            // value allows readers to know that tz-aware timestamps can be compared directly.
-            Some("+00:00".into()),
+        ScalarType::Time => (
+            DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+            "time",
         ),
-        ScalarType::Bytes => DataType::LargeBinary,
+        ScalarType::Timestamp { .. } => (
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
+            "timestamp",
+        ),
+        ScalarType::TimestampTz { .. } => (
+            DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                // When appending values we always use UTC timestamps, and setting this to a non-empty
+                // value allows readers to know that tz-aware timestamps can be compared directly.
+                Some("+00:00".into()),
+            ),
+            "timestamptz",
+        ),
+        ScalarType::Bytes => (DataType::LargeBinary, "bytes"),
         ScalarType::Char { length } => {
             if length.map_or(false, |l| l.into_u32() < i32::MAX.unsigned_abs()) {
-                DataType::Utf8
+                (DataType::Utf8, "char")
             } else {
-                DataType::LargeUtf8
+                (DataType::LargeUtf8, "char")
             }
         }
         ScalarType::VarChar { max_length } => {
             if max_length.map_or(false, |l| l.into_u32() < i32::MAX.unsigned_abs()) {
-                DataType::Utf8
+                (DataType::Utf8, "varchar")
             } else {
-                DataType::LargeUtf8
+                (DataType::LargeUtf8, "varchar")
             }
         }
-        ScalarType::String => DataType::LargeUtf8,
+        ScalarType::String => (DataType::LargeUtf8, "string"),
         // Parquet does have a UUID 'Logical Type' in parquet format 2.4+, but there is no arrow
         // UUID type, so we match the format (a 16-byte fixed-length binary array) ourselves.
-        ScalarType::Uuid => DataType::FixedSizeBinary(16),
+        ScalarType::Uuid => (DataType::FixedSizeBinary(16), "uuid"),
         // Parquet does have a JSON 'Logical Type' in parquet format 2.4+, but there is no arrow
         // JSON type, so for now we represent JSON as 'large' utf8-encoded strings.
-        ScalarType::Jsonb => DataType::LargeUtf8,
-        ScalarType::MzTimestamp => {
-            // MZ timestamps are in milliseconds
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None)
-        }
+        ScalarType::Jsonb => (DataType::LargeUtf8, "jsonb"),
+        ScalarType::MzTimestamp => (DataType::UInt64, "mz_timestamp"),
         ScalarType::Numeric { max_scale } => {
             // Materialize allows 39 digits of precision for numeric values, but allows
             // arbitrary scales among those values. e.g. 1e38 and 1e-39 are both valid in
@@ -200,13 +210,19 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<DataType, anyhow
             match max_scale {
                 Some(scale) => {
                     let scale = i8::try_from(scale.into_u8()).expect("known <= 39");
-                    if scale <= 38 {
-                        DataType::Decimal128(DECIMAL128_MAX_PRECISION, scale)
+                    if scale <= DECIMAL128_MAX_SCALE {
+                        (
+                            DataType::Decimal128(DECIMAL128_MAX_PRECISION, scale),
+                            "numeric",
+                        )
                     } else {
                         anyhow::bail!("Numeric max scale {} out of range", scale)
                     }
                 }
-                None => DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
+                None => (
+                    DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
+                    "numeric",
+                ),
             }
         }
         // arrow::datatypes::IntervalUnit::MonthDayNano is not yet implemented in the arrow parquet writer
@@ -214,15 +230,26 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<DataType, anyhow
         // ScalarType::Interval => DataType::Interval(arrow::datatypes::IntervalUnit::DayTime)
         _ => anyhow::bail!("{:?} unimplemented", scalar_type),
     };
-    Ok(data_type)
+    Ok((data_type, extension_name.to_lowercase()))
 }
 
 struct ArrowColumn {
     field_name: String,
     nullable: bool,
     data_type: DataType,
-    original_type: ScalarType,
+    extension_type_name: String,
     inner: ColBuilder,
+}
+
+impl From<&ArrowColumn> for Field {
+    fn from(col: &ArrowColumn) -> Self {
+        Field::new(col.field_name.clone(), col.data_type.clone(), col.nullable).with_metadata(
+            HashMap::from([(
+                "ARROW:extension:name".to_string(),
+                format!("materialize.v1.{}", col.extension_type_name),
+            )]),
+        )
+    }
 }
 
 impl ArrowColumn {
@@ -230,7 +257,7 @@ impl ArrowColumn {
         field_name: String,
         nullable: bool,
         data_type: DataType,
-        original_type: ScalarType,
+        extension_type_name: String,
         item_capacity: usize,
         data_capacity: usize,
     ) -> Result<Self, anyhow::Error> {
@@ -270,11 +297,6 @@ impl ArrowColumn {
                     item_capacity,
                 ))
             }
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
-                ColBuilder::TimestampMillisecondBuilder(TimestampMillisecondBuilder::with_capacity(
-                    item_capacity,
-                ))
-            }
             DataType::LargeBinary => ColBuilder::LargeBinaryBuilder(
                 LargeBinaryBuilder::with_capacity(item_capacity, data_capacity),
             ),
@@ -298,7 +320,7 @@ impl ArrowColumn {
             field_name,
             nullable,
             data_type,
-            original_type,
+            extension_type_name,
             inner,
         })
     }
@@ -349,7 +371,6 @@ make_col_builder!(
     Date32Builder,
     Time64MicrosecondBuilder,
     TimestampMicrosecondBuilder,
-    TimestampMillisecondBuilder,
     LargeBinaryBuilder,
     FixedSizeBinaryBuilder,
     StringBuilder,
@@ -392,14 +413,12 @@ impl ArrowColumn {
                 builder.append_value(val.as_bytes())?
             }
             (ColBuilder::StringBuilder(builder), Datum::String(s)) => builder.append_value(s),
-            (ColBuilder::LargeStringBuilder(builder), _)
-                if self.original_type == ScalarType::Jsonb =>
-            {
+            (ColBuilder::LargeStringBuilder(builder), _) if self.extension_type_name == "jsonb" => {
                 builder.append_value(JsonbRef::from_datum(datum).to_serde_json().to_string())
             }
             (ColBuilder::LargeStringBuilder(builder), Datum::String(s)) => builder.append_value(s),
-            (ColBuilder::TimestampMillisecondBuilder(builder), Datum::MzTimestamp(ts)) => {
-                builder.append_value(ts.try_into().expect("checked"))
+            (ColBuilder::UInt64Builder(builder), Datum::MzTimestamp(ts)) => {
+                builder.append_value(ts.into())
             }
             (ColBuilder::Decimal128Builder(builder), Datum::Numeric(mut dec)) => {
                 if dec.0.is_special() {
