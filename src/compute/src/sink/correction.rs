@@ -125,12 +125,18 @@ impl<D: Data> Correction<D> {
             None => Bound::Unbounded,
         };
 
+        let mut new_size = self.total_size;
+
         // Consolidate relevant times and compute the total number of updates.
         let range = self.updates.range_mut((start, end));
         let update_count = range.fold(0, |acc, (_, data)| {
+            new_size -= (data.len(), data.capacity());
             data.consolidate();
+            new_size += (data.len(), data.capacity());
             acc + data.len()
         });
+
+        self.update_metrics(new_size);
 
         let range = self.updates.range((start, end));
         range
