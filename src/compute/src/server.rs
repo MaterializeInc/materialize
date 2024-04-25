@@ -459,7 +459,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
-                compute_state.report_compute_frontiers();
+                compute_state.report_frontiers();
                 compute_state.report_dropped_collections();
                 compute_state.report_operator_hydration();
             }

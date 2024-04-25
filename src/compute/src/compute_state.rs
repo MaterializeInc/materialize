@@ -590,7 +590,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     /// Send progress information to the controller.
-    pub fn report_compute_frontiers(&mut self) {
+    pub fn report_frontiers(&mut self) {
         let mut responses = Vec::new();
 
         // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
@@ -624,6 +624,22 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 .allows_reporting(&new_frontier)
                 .then(|| new_frontier.clone());
 
+            // Collect the output frontier and check for progress.
+            //
+            // By default, the output frontier equals the write frontier (which is still stored in
+            // `new_frontier`). If the collection provides a compute frontier, we construct the
+            // output frontier by taking the meet of write and compute frontier, to avoid:
+            //  * reporting progress through times we have not yet written
+            //  * reporting progress through times we have not yet fully processed, for
+            //    collections that jump their write frontiers into the future
+            if let Some(probe) = &collection.compute_probe {
+                probe.with_frontier(|frontier| new_frontier.extend(frontier.iter().copied()));
+            }
+            let new_output_frontier = reported
+                .output_frontier
+                .allows_reporting(&new_frontier)
+                .then(|| new_frontier.clone());
+
             // Collect the input frontier and check for progress.
             new_frontier.clear();
             for probe in collection.input_probes.values() {
@@ -642,10 +658,15 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 collection
                     .set_reported_input_frontier(ReportedFrontier::Reported(frontier.clone()));
             }
+            if let Some(frontier) = &new_output_frontier {
+                collection
+                    .set_reported_output_frontier(ReportedFrontier::Reported(frontier.clone()));
+            }
 
             let response = FrontiersResponse {
                 write_frontier: new_write_frontier,
                 input_frontier: new_input_frontier,
+                output_frontier: new_output_frontier,
             };
             if response.has_updates() {
                 responses.push((id, response));
@@ -674,10 +695,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             let reported = collection.reported_frontiers();
             let write_frontier = (!reported.write_frontier.is_empty()).then(Antichain::new);
             let input_frontier = (!reported.input_frontier.is_empty()).then(Antichain::new);
+            let output_frontier = (!reported.output_frontier.is_empty()).then(Antichain::new);
 
             let frontiers = FrontiersResponse {
                 write_frontier,
                 input_frontier,
+                output_frontier,
             };
             if frontiers.has_updates() {
                 self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
@@ -787,7 +810,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
                 collection
                     .set_reported_write_frontier(ReportedFrontier::Reported(new_frontier.clone()));
-                collection.set_reported_input_frontier(ReportedFrontier::Reported(new_frontier));
+                collection
+                    .set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
+                collection.set_reported_output_frontier(ReportedFrontier::Reported(new_frontier));
             } else {
                 // Presumably tracking state for this subscribe was already dropped by
                 // `drop_collection`. There is nothing left to do for logging.
@@ -1356,6 +1381,8 @@ struct ReportedFrontiers {
     write_frontier: ReportedFrontier,
     /// The reported input frontier.
     input_frontier: ReportedFrontier,
+    /// The reported output frontier.
+    output_frontier: ReportedFrontier,
 }
 
 impl ReportedFrontiers {
@@ -1364,12 +1391,15 @@ impl ReportedFrontiers {
         Self {
             write_frontier: ReportedFrontier::new(),
             input_frontier: ReportedFrontier::new(),
+            output_frontier: ReportedFrontier::new(),
         }
     }
 
     /// Returns whether all reported frontiers are empty.
     fn all_empty(&self) -> bool {
-        self.write_frontier.is_empty() && self.input_frontier.is_empty()
+        self.write_frontier.is_empty()
+            && self.input_frontier.is_empty()
+            && self.output_frontier.is_empty()
     }
 }
 
@@ -1435,6 +1465,11 @@ pub struct CollectionState {
     pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
     /// Frontier probes for every input to the collection.
     pub input_probes: BTreeMap<GlobalId, probe::Handle<Timestamp>>,
+    /// A probe reporting the frontier of times through which all collection outputs have been
+    /// computed (but not necessarily written).
+    ///
+    /// `None` for collections with compute frontiers equal to their write frontiers.
+    pub compute_probe: Option<probe::Handle<Timestamp>>,
     /// Logging state maintained for this collection.
     logging: Option<CollectionLogging>,
 }
@@ -1447,6 +1482,7 @@ impl CollectionState {
             sink_token: None,
             sink_write_frontier: None,
             input_probes: Default::default(),
+            compute_probe: None,
             logging: None,
         }
     }
@@ -1459,7 +1495,8 @@ impl CollectionState {
     /// Reset all reported frontiers to the given value.
     pub fn reset_reported_frontiers(&mut self, frontier: ReportedFrontier) {
         self.reported_frontiers.write_frontier = frontier.clone();
-        self.reported_frontiers.input_frontier = frontier;
+        self.reported_frontiers.input_frontier = frontier.clone();
+        self.reported_frontiers.output_frontier = frontier;
     }
 
     /// Set the write frontier that has been reported to the controller.
@@ -1486,6 +1523,11 @@ impl CollectionState {
         }
 
         self.reported_frontiers.input_frontier = frontier;
+    }
+
+    /// Set the output frontier that has been reported to the controller.
+    fn set_reported_output_frontier(&mut self, frontier: ReportedFrontier) {
+        self.reported_frontiers.output_frontier = frontier;
     }
 }
 

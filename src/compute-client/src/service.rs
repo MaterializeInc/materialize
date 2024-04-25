@@ -280,10 +280,14 @@ where
                 let input_frontier = frontiers
                     .input_frontier
                     .and_then(|f| tracked.update_input_frontier(shard_id, &f));
+                let output_frontier = frontiers
+                    .output_frontier
+                    .and_then(|f| tracked.update_output_frontier(shard_id, &f));
 
                 let frontiers = FrontiersResponse {
                     write_frontier,
                     input_frontier,
+                    output_frontier,
                 };
                 let result = frontiers
                     .has_updates()
@@ -478,6 +482,8 @@ struct TrackedFrontiers<T> {
     write_frontier: (MutableAntichain<T>, Vec<Antichain<T>>),
     /// The tracked input frontier.
     input_frontier: (MutableAntichain<T>, Vec<Antichain<T>>),
+    /// The tracked output frontier.
+    output_frontier: (MutableAntichain<T>, Vec<Antichain<T>>),
 }
 
 impl<T> TrackedFrontiers<T>
@@ -497,13 +503,16 @@ where
 
         Self {
             write_frontier: frontier_entry.clone(),
-            input_frontier: frontier_entry,
+            input_frontier: frontier_entry.clone(),
+            output_frontier: frontier_entry,
         }
     }
 
     /// Returns whether all tracked frontiers have advanced to the empty frontier.
     fn all_empty(&self) -> bool {
-        self.write_frontier.0.frontier().is_empty() && self.input_frontier.0.frontier().is_empty()
+        self.write_frontier.0.frontier().is_empty()
+            && self.input_frontier.0.frontier().is_empty()
+            && self.output_frontier.0.frontier().is_empty()
     }
 
     /// Updates write frontier tracking with a new shard frontier.
@@ -526,6 +535,17 @@ where
         new_shard_frontier: &Antichain<T>,
     ) -> Option<Antichain<T>> {
         Self::update_frontier(&mut self.input_frontier, shard_id, new_shard_frontier)
+    }
+
+    /// Updates output frontier tracking with a new shard frontier.
+    ///
+    /// If this causes the global output frontier to advance, the advanced frontier is returned.
+    fn update_output_frontier(
+        &mut self,
+        shard_id: usize,
+        new_shard_frontier: &Antichain<T>,
+    ) -> Option<Antichain<T>> {
+        Self::update_frontier(&mut self.output_frontier, shard_id, new_shard_frontier)
     }
 
     /// Updates the provided frontier entry with a new shard frontier.

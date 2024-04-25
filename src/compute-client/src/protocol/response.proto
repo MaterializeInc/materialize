@@ -55,6 +55,7 @@ message ProtoComputeResponse {
 message ProtoFrontiersResponse {
     mz_repr.antichain.ProtoU64Antichain write_frontier = 1;
     mz_repr.antichain.ProtoU64Antichain input_frontier = 2;
+    mz_repr.antichain.ProtoU64Antichain output_frontier = 3;
 }
 
 message ProtoPeekResponse {
