@@ -52,23 +52,6 @@ pub const ENABLE_CHUNKED_STACK: Config<bool> = Config::new(
     "Enable the chunked stack implementation in compute.",
 );
 
-/// Enable operator hydration status logging.
-pub const ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING: Config<bool> = Config::new(
-    "enable_compute_operator_hydration_status_logging",
-    true,
-    "Enable logging of the hydration status of compute operators.",
-);
-
-/// Enable controller-controlled dataflow scheduling.
-///
-/// Introduced to derisk the rollout of the `Schedule` compute command.
-/// TODO(teskje): remove after successful validation in prod
-pub const ENABLE_CONTROLLER_DATAFLOW_SCHEDULING: Config<bool> = Config::new(
-    "enable_compute_controller_dataflow_scheduling",
-    true,
-    "Enable compute controller-controlled dataflow scheduling.",
-);
-
 /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
 pub const DATAFLOW_MAX_INFLIGHT_BYTES: Config<Option<usize>> = Config::new(
     "compute_dataflow_max_inflight_bytes",
@@ -105,7 +88,7 @@ pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
 /// The number of dataflows that may hydrate concurrently.
 pub const HYDRATION_CONCURRENCY: Config<usize> = Config::new(
     "compute_hydration_concurrency",
-    usize::MAX,
+    4,
     "Controls how many compute dataflows may hydrate concurrently.",
 );
 
@@ -140,8 +123,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_CHUNKED_STACK)
-        .add(&ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING)
-        .add(&ENABLE_CONTROLLER_DATAFLOW_SCHEDULING)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)

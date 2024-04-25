@@ -118,7 +118,6 @@ use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashab
 use futures::channel::oneshot;
 use futures::FutureExt;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
-use mz_compute_types::dyncfgs::ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING;
 use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
 use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
@@ -767,9 +766,7 @@ where
             let node = nodes.remove(&id).unwrap();
             let mut bundle = self.render_plan_node(node, &collections);
 
-            if ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING.get(&self.worker_config) {
-                self.log_operator_hydration(&mut bundle, id);
-            }
+            self.log_operator_hydration(&mut bundle, id);
 
             collections.insert(id, bundle);
         }
