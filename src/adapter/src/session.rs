@@ -29,7 +29,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::user::ExternalUserMetadata;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
-use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
+use mz_sql::plan::{HirRelationExpr, Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
     RoleMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
@@ -57,6 +57,7 @@ use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination
 use crate::coord::ExplainContext;
 use crate::error::AdapterError;
 use crate::optimize::index::GlobalMirPlan;
+use crate::optimize::peek::GlobalLirPlan;
 use crate::AdapterNotice;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
@@ -109,7 +110,7 @@ where
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
     session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
-    pub optimizer_cache: BTreeMap<MirRelationExpr, GlobalMirPlan>,
+    pub peek_optimizer_cache: BTreeMap<HirRelationExpr, GlobalLirPlan>,
 }
 
 impl<T> SessionMetadata for Session<T>
@@ -291,7 +292,7 @@ impl<T: TimestampManipulation> Session<T> {
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
-            optimizer_cache: BTreeMap::new(),
+            peek_optimizer_cache: BTreeMap::new(),
         }
     }
 

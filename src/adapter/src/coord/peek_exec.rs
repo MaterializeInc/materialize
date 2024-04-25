@@ -529,7 +529,7 @@ pub(super) async fn sequence_peek_timestamp<C: PeekTimestamps + PeekComputeInsta
 #[instrument]
 pub async fn peek_stage_optimize<C>(
     _client: C,
-    session_meta: SessionMeta,
+    session: &mut Session,
     PeekStageOptimize {
         validity,
         plan,
@@ -544,7 +544,7 @@ pub async fn peek_stage_optimize<C>(
     let timestamp_context = determination.timestamp_context.clone();
     let stats = Box::new(EmptyStatisticsOracle);
 
-    let session = session_meta;
+    let session_meta = session.meta();
 
     let pipeline = || -> Result<Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, AdapterError> {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
@@ -554,21 +554,29 @@ pub async fn peek_stage_optimize<C>(
                     match optimizer.as_mut() {
                         // Optimize SELECT statement.
                         Either::Left(optimizer) => {
-                            // HIR ⇒ MIR lowering and MIR optimization (local)
-                            let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                            // Attach resolved context required to continue the pipeline.
-                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, &session, stats);
-                            // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                            let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
-                            Ok(Either::Left(global_lir_plan))
+                            if let Some(global_lir_plan) = session.peek_optimizer_cache.get(&raw_expr) {
+                                Ok(Either::Left(global_lir_plan.clone()))
+                            } else {
+                                // HIR ⇒ MIR lowering and MIR optimization (local)
+                                let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr.clone())?;
+                                // Attach resolved context required to continue the pipeline.
+                                let local_mir_plan = local_mir_plan.resolve(timestamp_context, &session_meta, stats);
+                                // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
+                                let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+
+                                session.peek_optimizer_cache.insert(raw_expr, global_lir_plan.clone());
+
+                                Ok(Either::Left(global_lir_plan))
+                            }
+
                         }
                         // Optimize COPY TO statement.
                         Either::Right(optimizer) => {
                             // HIR ⇒ MIR lowering and MIR optimization (local and global)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                             // Attach resolved context required to continue the pipeline.
-                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, &session, stats);
+                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, &session_meta, stats);
                             // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                             let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 

@@ -806,7 +806,7 @@ impl SessionClient {
         .await?;
 
         let peek_stage_finish =
-            peek_exec::peek_stage_optimize(&*self, session.meta(), peek_stage_optimize).await?;
+            peek_exec::peek_stage_optimize(&*self, session, peek_stage_optimize).await?;
 
         let mut peek_stage_finish = match peek_stage_finish {
             PeekStage::Finish(f) => f,
