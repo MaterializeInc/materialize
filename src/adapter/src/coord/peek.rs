@@ -16,9 +16,12 @@ use mz_compute_client::controller::error::{InstanceMissing, PeekError};
 use mz_compute_client::controller::PeekNotification;
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
+use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::TimestampOracle;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use tokio::sync::oneshot;
 
 use differential_dataflow::consolidation::consolidate;
@@ -84,11 +87,11 @@ pub enum PeekResponseUnary {
 
 #[derive(Clone, Debug)]
 pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
-    pub(crate) desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
-    pub(crate) id: GlobalId,
-    key: Vec<MirScalarExpr>,
-    permutation: BTreeMap<usize, usize>,
-    thinned_arity: usize,
+    pub desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+    pub id: GlobalId,
+    pub key: Vec<MirScalarExpr>,
+    pub permutation: BTreeMap<usize, usize>,
+    pub thinned_arity: usize,
 }
 
 impl<T> PeekDataflowPlan<T> {
@@ -760,13 +763,22 @@ impl crate::coord::Coordinator {
 }
 
 pub(crate) trait PeekIds {
-    fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError>;
+    fn allocate_transient_id(&self) -> Result<GlobalId, AdapterError>;
+}
+
+#[async_trait::async_trait]
+pub(crate) trait PeekTimestampOracle {
+    /// Returns a [TimestampOracle] for the given timeline.
+    async fn get_timestamp_oracle(
+        &mut self,
+        timeline: &Timeline,
+    ) -> Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync>;
 }
 
 pub(crate) trait PeekComputeInstances {
     /// Return a reference-less snapshot to the indicated compute instance.
     fn instance_snapshot(
-        &mut self,
+        &self,
         id: ComputeInstanceId,
     ) -> Result<ComputeInstanceSnapshot, InstanceMissing>;
 }
@@ -775,7 +787,7 @@ pub(crate) trait PeekComputeInstances {
 pub(crate) trait PeekTimestamps {
     /// Determines the timestamp for a query.
     async fn determine_timestamp(
-        &mut self,
+        &self,
         catalog: &CatalogState,
         session: &Session,
         id_bundle: &CollectionIdBundle,

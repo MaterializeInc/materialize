@@ -30,6 +30,7 @@ use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{org_id_conn_bits, IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID};
 use mz_ore::instrument;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
@@ -61,15 +62,16 @@ use crate::catalog::{Catalog, CatalogState};
 use crate::command::{
     CatalogDump, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, Response,
 };
-use crate::coord::peek;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{
-    introspection, Coordinator, ExecuteContextExtra, ExplainContext, PeekStageFinish,
+    introspection, Coordinator, ExecuteContextExtra, ExplainContext, PeekStage, PeekStageFinish,
     PeekStageValidate,
 };
+use crate::coord::{peek, peek_exec};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, TransactionId,
@@ -78,7 +80,8 @@ use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
 use crate::{
-    AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse, TimestampProvider,
+    AdapterNotice, AppendWebhookError, ExecuteContext, PeekResponseUnary, StartupResponse,
+    TimestampProvider,
 };
 use crate::{CollectionIdBundle, TimelineContext, TimestampContext};
 
@@ -503,16 +506,16 @@ where
         }
     }
 
-    pub async fn storage_read_capability(&mut self, _id: GlobalId) -> Antichain<T> {
+    pub async fn storage_read_capability(&self, _id: GlobalId) -> Antichain<T> {
         Antichain::from_elem(T::minimum())
     }
 
-    pub async fn storage_write_frontier(&mut self, _id: GlobalId) -> Antichain<T> {
+    pub async fn storage_write_frontier(&self, _id: GlobalId) -> Antichain<T> {
         Antichain::from_elem(T::minimum())
     }
 
     pub async fn compute_read_capability(
-        &mut self,
+        &self,
         _instance: ComputeInstanceId,
         _id: GlobalId,
     ) -> Antichain<T> {
@@ -520,7 +523,7 @@ where
     }
 
     pub async fn compute_write_frontier(
-        &mut self,
+        &self,
         _instance: ComputeInstanceId,
         _id: GlobalId,
     ) -> Antichain<T> {
@@ -722,7 +725,7 @@ impl SessionClient {
         &mut self,
         catalog: &Arc<Catalog>,
         portal_name: String,
-        session: &mut Session,
+        mut session: &mut Session,
         // If this command was part of another execute command
         // (for example, executing a `FETCH` statement causes an execute to be
         //  issued for the cursor it references),
@@ -731,88 +734,95 @@ impl SessionClient {
         // outer execute should be considered finished once the inner one is.
         _outer_context: Option<ExecuteContextExtra>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        // // println!("handling select locally");
-        // let session_catalog = catalog.for_session(&session);
-        // let portal = session
-        //     .get_portal_unverified(&portal_name)
-        //     .expect("known to exist");
-        //
-        // let original_stmt = match &portal.stmt {
-        //     Some(Statement::Select(select)) => Statement::Select(select.clone()),
-        //     _ => {
-        //         unreachable!();
-        //     }
-        // };
-        // let (stmt, resolved_ids) = match mz_sql::names::resolve(&session_catalog, original_stmt) {
-        //     Ok(resolved) => resolved,
-        //     Err(e) => panic!("error: {:?}", e),
-        // };
-        //
-        // let params = portal.parameters.clone();
-        //
-        // // let planned_stmt = self.plan_statement(&session, stmt, &params, &resolved_ids);
-        // let pcx = session.pcx();
-        // let planned_stmt =
-        //     mz_sql::plan::plan(Some(pcx), &session_catalog, stmt, &params, &resolved_ids)?;
-        //
-        // // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
-        // // session var is set, then we automatically run the query on the mz_introspection cluster.
-        // let target_cluster =
-        //     introspection::auto_run_on_introspection(&session_catalog, &session, &planned_stmt);
-        //
-        // let select_plan = match planned_stmt {
-        //     mz_sql::plan::Plan::Select(select_plan) => select_plan,
-        //     _ => unreachable!(),
-        // };
-        //
-        // let peek_stage_validate = PeekStageValidate {
-        //     plan: select_plan,
-        //     target_cluster,
-        //     copy_to_ctx: None,
-        //     explain_ctx: ExplainContext::None,
-        // };
-        //
-        // let peek_stage_optimize =
-        //     peek::peek_stage_validate(&catalog, &mut *self, &session, peek_stage_validate)?;
-        //
-        // let peek_stage_timestamp =
-        //     peek::peek_stage_optimize(&catalog, &mut *self, session, peek_stage_optimize)?;
-        //
-        // // Skipping this stage, because RTR isn't really a thing...
-        // let PeekStageTimestamp {
-        //     validity,
-        //     copy_to,
-        //     source_ids,
-        //     id_bundle,
-        //     when,
-        //     target_replica,
-        //     timeline_context,
-        //     in_immediate_multi_stmt_txn: _,
-        //     optimizer,
-        //     global_mir_plan,
-        // } = peek_stage_timestamp;
-        //
-        // let mut peek_stage_finish = PeekStageFinish {
-        //     validity,
-        //     copy_to,
-        //     id_bundle: Some(id_bundle),
-        //     when,
-        //     target_replica,
-        //     timeline_context,
-        //     source_ids,
-        //     real_time_recency_ts: None,
-        //     optimizer,
-        //     global_mir_plan,
-        // };
-        //
-        // if let Err(err) = peek_stage_finish.validity.check(&catalog) {
-        //     panic!("peek validation error: {}", err);
-        // }
-        //
-        // let response = peek::peek_stage_finish(&catalog, self, session, peek_stage_finish).await?;
-        //
-        // Ok(response)
-        todo!()
+        // println!("handling select locally");
+        let session_catalog = catalog.for_session(&session);
+        let portal = session
+            .get_portal_unverified(&portal_name)
+            .expect("known to exist");
+
+        let stmt = portal.stmt.as_ref().map(|stmt| stmt.as_ref());
+
+        let original_stmt = match stmt {
+            Some(Statement::Select(select)) => Statement::Select(select.clone()),
+            _ => {
+                unreachable!();
+            }
+        };
+        let (stmt, resolved_ids) = match mz_sql::names::resolve(&session_catalog, original_stmt) {
+            Ok(resolved) => resolved,
+            Err(e) => panic!("error: {:?}", e),
+        };
+
+        let params = portal.parameters.clone();
+
+        // let planned_stmt = self.plan_statement(&session, stmt, &params, &resolved_ids);
+        let pcx = session.pcx();
+        let planned_stmt =
+            mz_sql::plan::plan(Some(pcx), &session_catalog, stmt, &params, &resolved_ids)?;
+
+        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+        // session var is set, then we automatically run the query on the mz_introspection cluster.
+        let target_cluster =
+            introspection::auto_run_on_introspection(&session_catalog, &session, &planned_stmt);
+
+        let select_plan = match planned_stmt {
+            mz_sql::plan::Plan::Select(select_plan) => select_plan,
+            _ => unreachable!(),
+        };
+
+        let peek_stage_validate = PeekStageValidate {
+            plan: select_plan,
+            target_cluster,
+            copy_to_ctx: None,
+            explain_ctx: ExplainContext::None,
+        };
+
+        let optimizer_metrics = OptimizerMetrics::register_into(&MetricsRegistry::new());
+
+        let peek_stage_linearize_timestamp = peek_exec::peek_stage_validate(
+            &*self,
+            &session,
+            catalog,
+            optimizer_metrics,
+            peek_stage_validate,
+        )?;
+
+        let peek_stage_real_time_recency = peek_exec::peek_stage_linearize_timestamp(
+            &mut *self,
+            &session,
+            peek_stage_linearize_timestamp,
+        )
+        .await;
+
+        let peek_stage_timestamps_read_holds =
+            peek_exec::peek_stage_real_time_recency(&mut *self, peek_stage_real_time_recency);
+
+        let peek_stage_optimize = peek_exec::peek_stage_timestamp_read_hold(
+            &*self,
+            &mut session,
+            catalog,
+            peek_stage_timestamps_read_holds,
+        )
+        .await?;
+
+        let peek_stage_finish =
+            peek_exec::peek_stage_optimize(&*self, session.meta(), peek_stage_optimize).await?;
+
+        let mut peek_stage_finish = match peek_stage_finish {
+            PeekStage::Finish(f) => f,
+            stage => {
+                panic!("unexpected state: {:?}", stage);
+            }
+        };
+
+        if let Err(err) = peek_stage_finish.validity.check(&catalog) {
+            panic!("peek validation error: {}", err);
+        }
+
+        let response =
+            peek_exec::peek_stage_finish(self, session, &catalog, peek_stage_finish).await?;
+
+        Ok(response)
     }
 
     fn now(&self) -> EpochMillis {
@@ -886,20 +896,21 @@ impl SessionClient {
 
     /// Fetches the catalog.
     #[instrument(level = "debug")]
-    pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
-        // if let Some(catalog) = &self.catalog_snapshot {
-        //     return Arc::clone(catalog);
-        // }
+    pub async fn catalog_snapshot(&mut self) -> Arc<Catalog> {
+        if let Some(catalog) = &self.catalog_snapshot {
+            return Arc::clone(catalog);
+        }
         let CatalogSnapshot { catalog } = self
             .send_without_session(|tx| Command::CatalogSnapshot { tx })
             .await;
 
-        // self.catalog_snapshot.replace(Arc::clone(&catalog));
+        self.catalog_snapshot.replace(Arc::clone(&catalog));
 
         catalog
     }
 
     /// Fetches the shared `TimestampOracle` for the given timeline.
+    #[mz_ore::instrument(level = "debug")]
     pub async fn get_timestamp_oracle(
         &mut self,
         timeline: &Timeline,
@@ -951,7 +962,7 @@ impl SessionClient {
 
     /// The smallest common valid read frontier among the specified collections.
     async fn least_valid_read(
-        &mut self,
+        &self,
         id_bundle: &CollectionIdBundle,
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::from_elem(Timestamp::minimum());
@@ -975,7 +986,7 @@ impl SessionClient {
     /// Times that are not greater or equal to this frontier are complete for all collections
     /// identified as arguments.
     async fn least_valid_write(
-        &mut self,
+        &self,
         id_bundle: &CollectionIdBundle,
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::new();
@@ -1437,15 +1448,26 @@ impl RecordFirstRowStream {
     }
 }
 
-impl peek::PeekIds for &mut SessionClient {
-    fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
+impl peek::PeekIds for &SessionClient {
+    fn allocate_transient_id(&self) -> Result<GlobalId, AdapterError> {
         Ok(GlobalId::User(0))
     }
 }
 
-impl peek::PeekComputeInstances for &mut SessionClient {
-    fn instance_snapshot(
+#[async_trait::async_trait]
+impl peek::PeekTimestampOracle for &mut SessionClient {
+    #[mz_ore::instrument(level = "debug")]
+    async fn get_timestamp_oracle(
         &mut self,
+        timeline: &Timeline,
+    ) -> Arc<dyn TimestampOracle<Timestamp> + Send + Sync> {
+        SessionClient::get_timestamp_oracle(self, timeline).await
+    }
+}
+
+impl peek::PeekComputeInstances for &SessionClient {
+    fn instance_snapshot(
+        &self,
         id: mz_compute_types::ComputeInstanceId,
     ) -> Result<ComputeInstanceSnapshot, mz_compute_client::controller::error::InstanceMissing>
     {
@@ -1486,9 +1508,9 @@ impl peek::PeekSubmitPeek<Timestamp> for &mut SessionClient {
 }
 
 #[async_trait::async_trait]
-impl peek::PeekTimestamps for &mut SessionClient {
+impl peek::PeekTimestamps for &SessionClient {
     async fn determine_timestamp(
-        &mut self,
+        &self,
         catalog: &CatalogState,
         session: &Session,
         id_bundle: &CollectionIdBundle,

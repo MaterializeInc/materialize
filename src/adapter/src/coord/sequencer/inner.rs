@@ -109,6 +109,7 @@ mod subscribe;
 
 /// Attempts to evaluate an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
+#[macro_export]
 macro_rules! return_if_err {
     ($expr:expr, $ctx:expr) => {
         match $expr {
@@ -118,7 +119,7 @@ macro_rules! return_if_err {
     };
 }
 
-pub(super) use return_if_err;
+pub use return_if_err;
 
 struct DropOps {
     ops: Vec<catalog::Op>,
@@ -4278,7 +4279,7 @@ impl Coordinator {
 /// return a list of associated notices (today: we always emit exactly
 /// one notice if there are any per-replica log dependencies and if
 /// `emit_introspection_query_notice` is set, and none otherwise.)
-pub(super) fn check_log_reads(
+pub fn check_log_reads(
     catalog: &Catalog,
     cluster: &Cluster,
     source_ids: &BTreeSet<GlobalId>,

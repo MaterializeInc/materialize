@@ -67,7 +67,7 @@ use crate::ExecuteContext;
 // `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
 mod alter_set_cluster;
 mod cluster;
-mod inner;
+pub mod inner;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
@@ -899,21 +899,9 @@ where
         .then_some(AdapterNotice::PerReplicaLogRead { log_names }))
 }
 
-impl PeekIds for &mut Coordinator {
-    fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
-        Coordinator::allocate_transient_id(self)
-    }
-}
-
-impl PeekIds for Coordinator {
-    fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
-        Coordinator::allocate_transient_id(self)
-    }
-}
-
 impl PeekComputeInstances for &Coordinator {
     fn instance_snapshot(
-        &mut self,
+        &self,
         id: mz_compute_types::ComputeInstanceId,
     ) -> Result<ComputeInstanceSnapshot, mz_compute_client::controller::error::InstanceMissing>
     {
@@ -923,7 +911,7 @@ impl PeekComputeInstances for &Coordinator {
 
 impl PeekComputeInstances for Coordinator {
     fn instance_snapshot(
-        &mut self,
+        &self,
         id: mz_compute_types::ComputeInstanceId,
     ) -> Result<ComputeInstanceSnapshot, mz_compute_client::controller::error::InstanceMissing>
     {

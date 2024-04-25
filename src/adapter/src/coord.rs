@@ -178,6 +178,7 @@ use self::statement_logging::{StatementLogging, StatementLoggingId};
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
 pub(crate) mod peek;
+pub(crate) mod peek_exec;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
