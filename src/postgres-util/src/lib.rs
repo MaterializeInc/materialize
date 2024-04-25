@@ -46,7 +46,10 @@ pub enum PostgresError {
     Ssh(#[source] anyhow::Error),
     /// Error doing io to setup an ssh connection.
     #[error("error communicating with ssh tunnel: {0}")]
-    SshIo(#[from] std::io::Error),
+    SshIo(std::io::Error),
+    /// Error doing io to setup a connection.
+    #[error("IO error in connection: {0}")]
+    Io(#[from] std::io::Error),
     /// A postgres error.
     #[error(transparent)]
     Postgres(#[from] tokio_postgres::Error),
