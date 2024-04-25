@@ -22,7 +22,7 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode};
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::Client;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::PostgresError;
 
@@ -208,7 +208,7 @@ impl Config {
                 Ok(t)
             }
             Err(e) => {
-                warn!(%task_name, %address, "connection failed: {e:#}");
+                error!(%task_name, %address, %e, "connection failed: {e:#}");
                 Err(e)
             }
         }
