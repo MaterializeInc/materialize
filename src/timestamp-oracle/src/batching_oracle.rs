@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mz_ore::cast::CastFrom;
+use mz_ore::instrument;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -109,6 +110,7 @@ where
         self.inner.peek_write_ts().await
     }
 
+    #[instrument]
     async fn read_ts(&self) -> T {
         let (tx, rx) = oneshot::channel();
 
