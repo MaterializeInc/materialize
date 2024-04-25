@@ -487,6 +487,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "openable durable catalog state temporary reader".to_string(),
                 },
+                false,
             )
             .await
             .expect("invalid usage")

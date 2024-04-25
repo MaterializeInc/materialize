@@ -696,6 +696,7 @@ pub mod tests {
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
+                true,
             )
             .await
             .expect("codecs should not change")

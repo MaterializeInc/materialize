@@ -247,6 +247,7 @@ impl Transactor {
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::from_purpose("txn data"),
+                false,
             )
             .await
             .expect("data schema shouldn't change");

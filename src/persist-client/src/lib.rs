@@ -311,7 +311,7 @@ impl PersistClient {
                 diagnostics.clone(),
             )
             .await?,
-            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics)
+            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics, false)
                 .await?,
         ))
     }
@@ -331,6 +331,7 @@ impl PersistClient {
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
         diagnostics: Diagnostics,
+        use_critical_since: bool,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -349,6 +350,7 @@ impl PersistClient {
                 &diagnostics.handle_purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
                 heartbeat_ts,
+                use_critical_since,
             )
             .await;
         maintenance.start_performing(&machine, &gc);
@@ -451,9 +453,10 @@ impl PersistClient {
     ///
     /// In contrast to the time-leased [ReadHandle] returned by [Self::open] and
     /// [Self::open_leased_reader], this handle and its associated capability
-    /// are not leased. A [SinceHandle] only releases its since capability when
-    /// [SinceHandle::expire] is called. Also unlike `ReadHandle`, expire is not
-    /// called on drop. This is less ergonomic, but useful for "critical" since
+    /// are not leased. A [SinceHandle] does not release its since capability;
+    /// downgrade to the empty antichain to hold back the since.
+    /// Also unlike `ReadHandle`, the handle is not expired on drop.
+    /// This is less ergonomic, but useful for "critical" since
     /// holds which must survive even lease timeouts.
     ///
     /// **IMPORTANT**: The above means that if a SinceHandle is registered and
@@ -896,6 +899,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
+                false,
             )
             .await
             .expect("codec mismatch");
@@ -905,6 +909,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
+                false,
             )
             .await
             .expect("codec mismatch");
@@ -1030,6 +1035,7 @@ mod tests {
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
+                        false,
                     )
                     .await
                     .unwrap_err(),

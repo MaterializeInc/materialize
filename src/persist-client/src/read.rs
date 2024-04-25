@@ -21,9 +21,9 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
 use mz_dyncfg::Config;
-use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
+use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
@@ -752,6 +752,14 @@ where
     ) -> Result<Vec<LeasedBatchPart<T>>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
+        soft_assert_or_log!(
+            PartialOrder::less_equal(self.since(), &as_of),
+            "ReadHandle::snapshot called with as_of {:?} not past the handle's since {:?}, \
+            though the read has succeeded. This implies the since is not being held back correctly.",
+            &as_of,
+            self.since()
+        );
+
         let filter = FetchBatchFilter::Snapshot { as_of };
         let mut leased_parts = Vec::new();
         for batch in batches {
@@ -856,11 +864,13 @@ where
                 purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
                 heartbeat_ts,
+                false,
             )
             .await;
         maintenance.start_performing(&machine, &gc);
         // The point of clone is that you're guaranteed to have the same (or
         // greater) since capability, verify that.
+        // TODO: better if it's the same since capability exactly.
         assert!(PartialOrder::less_equal(&reader_state.since, &self.since));
         let new_reader = ReadHandle::new(
             self.cfg.clone(),

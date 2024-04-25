@@ -21,6 +21,7 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_ore::instrument;
+use mz_persist_client::cfg::TXN_USE_CRITICAL_SINCE;
 use mz_persist_client::fetch::LeasedBatchPart;
 use mz_persist_client::metrics::encode_ts_metric;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
@@ -720,6 +721,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                     shard_name: "txns".to_owned(),
                     handle_purpose: "read txns".to_owned(),
                 },
+                TXN_USE_CRITICAL_SINCE.get(client.dyncfgs()),
             )
             .await
             .expect("txns schema shouldn't change");
@@ -1280,6 +1282,7 @@ mod tests {
                 Arc::new(ShardIdSchema),
                 Arc::new(VecU8Schema),
                 Diagnostics::for_tests(),
+                true,
             )
             .await
             .expect("txns schema shouldn't change");

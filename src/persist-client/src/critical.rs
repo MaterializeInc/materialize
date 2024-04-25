@@ -83,10 +83,10 @@ impl CriticalReaderId {
 /// shard.
 ///
 /// In contrast to [crate::read::ReadHandle], which is time-leased, this handle
-/// and its associated capability are not leased. A SinceHandle only releases
-/// its since capability when [Self::expire] is called. Also unlike
-/// `ReadHandle`, expire is not called on drop. This is less ergonomic, but
-/// useful for "critical" since holds which must survive even lease timeouts.
+/// and its associated capability are not leased.
+/// A SinceHandle does not release its capability when dropped.
+/// This is less ergonomic,
+/// but useful for "critical" since holds which must survive even lease timeouts.
 ///
 /// **IMPORTANT**: The above means that if a SinceHandle is registered and then
 /// lost, the shard's since will be permanently "stuck", forever preventing
@@ -331,12 +331,11 @@ where
         }
     }
 
-    /// Politely expires this reader, releasing its since capability.
-    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
-    pub async fn expire(mut self) {
-        let (_, maintenance) = self.machine.expire_critical_reader(&self.reader_id).await;
-        maintenance.start_performing(&self.machine, &self.gc);
-    }
+    // Expiry temporarily removed.
+    // If you'd like to stop this handle from holding back the since of the shard,
+    // downgrade it to [].
+    // TODO(bkirwi): revert this when since behaviour on expiry has settled,
+    // or all readers are associated with a critical handle.
 }
 
 #[cfg(test)]
