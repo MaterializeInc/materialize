@@ -303,7 +303,9 @@ impl Config {
                 // the singular host in place.
 
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
-                let privatelink_addrs = tokio::net::lookup_host(privatelink_host).await?;
+                // `net::lookup_host` requires a port to be specified, but the port has no effect
+                // on the lookup so use a dummy one
+                let privatelink_addrs = tokio::net::lookup_host((privatelink_host, 11111)).await?;
 
                 // Override the actual IPs to connect to for the TCP connection, leaving the original host in-place
                 // for TLS verification
