@@ -5996,6 +5996,7 @@ dependencies = [
  "maplit",
  "mysql_async",
  "mz-adapter-types",
+ "mz-arrow-util",
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",

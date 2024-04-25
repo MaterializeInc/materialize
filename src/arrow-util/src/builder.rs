@@ -26,6 +26,21 @@ pub struct ArrowBuilder {
 }
 
 impl ArrowBuilder {
+    /// Helper to validate that a RelationDesc can be encoded into Arrow.
+    pub fn validate_desc(desc: &RelationDesc) -> Result<(), anyhow::Error> {
+        let mut errs = vec![];
+        for (col_name, col_type) in desc.iter() {
+            match scalar_to_arrow_datatype(&col_type.scalar_type) {
+                Ok(_) => {}
+                Err(_) => errs.push(format!("{}: {:?}", col_name, col_type.scalar_type)),
+            }
+        }
+        if !errs.is_empty() {
+            anyhow::bail!("Cannot encode the following columns/types: {:?}", errs);
+        }
+        Ok(())
+    }
+
     /// Initializes a new ArrowBuilder with the schema of the provided RelationDesc.
     /// `item_capacity` is used to initialize the capacity of each column's builder which defines
     /// the number of values that can be appended to each column before reallocating.
