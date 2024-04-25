@@ -214,6 +214,13 @@ where
     }
 
     /// Politely expires this subscribe, releasing its lease.
+    ///
+    /// There is a best-effort impl in Drop for [`ReadHandle`] to expire the
+    /// [`ReadHandle`] held by the subscribe that wasn't explicitly expired
+    /// with this method. When possible, explicit expiry is still preferred
+    /// because the Drop one is best effort and is dependant on a tokio
+    /// [Handle] being available in the TLC at the time of drop (which is a bit
+    /// subtle). Also, explicit expiry allows for control over when it happens.
     pub async fn expire(mut self) {
         if let Some(parts) = self.snapshot.take() {
             for part in parts {
@@ -481,6 +488,13 @@ where
     }
 
     /// Politely expires this listen, releasing its lease.
+    ///
+    /// There is a best-effort impl in Drop for [`ReadHandle`] to expire the
+    /// [`ReadHandle`] held by the listen that wasn't explicitly expired with
+    /// this method. When possible, explicit expiry is still preferred because
+    /// the Drop one is best effort and is dependant on a tokio [Handle] being
+    /// available in the TLC at the time of drop (which is a bit subtle). Also,
+    /// explicit expiry allows for control over when it happens.
     pub async fn expire(self) {
         self.handle.expire().await
     }
