@@ -402,8 +402,24 @@ where
         self.replicas.remove(&instance_id);
     }
 
+    /// Create and "execute" the described collection.
+    ///
+    /// "Execute" is in scare quotes because what executing a collection means
+    /// varies widely based on the type of collection you're creating.
+    ///
+    /// The general process creating a collection undergoes is:
+    /// 1. Enrich the description we get from the user with the metadata only
+    ///    the storage controller's metadata. This is mostly a matter of
+    ///    separating concerns.
+    /// 2. Generate write and read persist handles for the collection.
+    /// 3. Store the collection's metadata in the appropriate field.
+    /// 4. "Execte" the collection. What that means is contingent on the type of
+    ///    collection. so consult the code for more details.
+    ///
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
-    // a method/move individual parts to their own methods.
+    // a method/move individual parts to their own methods. @guswynn observes
+    // that a number of these operations could be moved into fns on
+    // `DataSource`.
     #[instrument(name = "storage::create_collections")]
     async fn create_collections(
         &mut self,
