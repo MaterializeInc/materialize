@@ -225,6 +225,7 @@ where
             stream,
             &source_id.to_string(),
             (*persist_txn_ctx).clone(),
+            Arc::clone(&persist_clients).dyncfgs(),
             move || {
                 let (c, l) = (
                     Arc::clone(&persist_clients),

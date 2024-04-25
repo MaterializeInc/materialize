@@ -21,7 +21,7 @@ use differential_dataflow::Hashable;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
-use mz_persist_client::cfg::RetryParameters;
+use mz_persist_client::cfg::{RetryParameters, USE_GLOBAL_TXN_CACHE_SOURCE};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_client::project::ProjectionPushdown;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -44,7 +44,7 @@ use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::txn_cache::TxnsCache;
-use crate::txn_read::{DataListenNext, DataRemapEntry};
+use crate::txn_read::{DataListenNext, DataRemapEntry, TxnsRead};
 use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
@@ -93,6 +93,7 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     passthrough: Stream<G, P>,
     name: &str,
     ctx: TxnsContext<T>,
+    config_set: &ConfigSet,
     client_fn: impl Fn() -> F,
     txns_id: ShardId,
     data_id: ShardId,
@@ -102,8 +103,8 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     data_val_schema: Arc<V::Schema>,
 ) -> (Stream<G, P>, Vec<PressOnDropButton>)
 where
-    K: Debug + Codec,
-    V: Debug + Codec,
+    K: Debug + Codec + Send + Sync,
+    V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
@@ -112,18 +113,32 @@ where
     G: Scope<Timestamp = T>,
 {
     let unique_id = (name, passthrough.scope().addr()).hashed();
-    let (remap, source_button) = txns_progress_source::<K, V, T, D, P, C, G>(
-        passthrough.scope(),
-        name,
-        ctx,
-        client_fn(),
-        txns_id,
-        data_id,
-        as_of,
-        data_key_schema,
-        data_val_schema,
-        unique_id,
-    );
+    let (remap, source_button) = if USE_GLOBAL_TXN_CACHE_SOURCE.get(config_set) {
+        txns_progress_source_global::<K, V, T, D, P, C, G>(
+            passthrough.scope(),
+            name,
+            ctx,
+            client_fn(),
+            txns_id,
+            data_id,
+            as_of,
+            data_key_schema,
+            data_val_schema,
+            unique_id,
+        )
+    } else {
+        txns_progress_source_local::<K, V, T, D, P, C, G>(
+            passthrough.scope(),
+            name,
+            client_fn(),
+            txns_id,
+            data_id,
+            as_of,
+            data_key_schema,
+            data_val_schema,
+            unique_id,
+        )
+    };
     // Each of the `txns_frontiers` workers wants the full copy of the remap
     // information.
     let remap = remap.broadcast();
@@ -138,23 +153,11 @@ where
     (passthrough, vec![source_button, frontiers_button])
 }
 
-/// TODO: I'd much prefer the communication protocol between the two operators
-/// to be exactly remap as defined in the [reclocking design doc]. However, we
-/// can't quite recover exactly the information necessary to construct that at
-/// the moment. Seems worth doing, but in the meantime, intentionally make this
-/// look fairly different (`Stream` of `DataRemapEntry` instead of
-/// `Collection<FromTime>`) to hopefully minimize confusion. As a performance
-/// optimization, we only re-emit this when the _physical_ upper has changed,
-/// which means that the frontier of the `Stream<DataRemapEntry<T>>` indicates
-/// updates to the logical_upper of the most recent `DataRemapEntry` (i.e. the
-/// one with the largest physical_upper).
-///
-/// [reclocking design doc]:
-///     https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md
-fn txns_progress_source<K, V, T, D, P, C, G>(
+/// An alternative implementation of [`txns_progress_source_global`] that opens
+/// a new [`TxnsCache`] local to the operator.
+fn txns_progress_source_local<K, V, T, D, P, C, G>(
     scope: G,
     name: &str,
-    ctx: TxnsContext<T>,
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
@@ -164,8 +167,8 @@ fn txns_progress_source<K, V, T, D, P, C, G>(
     unique_id: u64,
 ) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
 where
-    K: Debug + Codec,
-    V: Debug + Codec,
+    K: Debug + Codec + Send + Sync,
+    V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
@@ -186,10 +189,10 @@ where
 
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let txns_read = ctx.get_or_init::<C>(&client, txns_id).await;
+        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
 
-        let _ = txns_read.update_gt(as_of.clone()).await;
-        let (snap, txns_read_cap) = txns_read.data_subscribe(data_id, as_of.clone()).await;
+        let _ = txns_cache.update_gt(&as_of).await;
+        let subscribe = txns_cache.data_subscribe(data_id, as_of.clone());
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
@@ -199,25 +202,19 @@ where
             )
             .await
             .expect("schema shouldn't change");
-        let Some(mut subscribe) = subscribe.unblock_subscribe(data_write).await else {
+        let (Some(mut subscribe), fut) = subscribe.unblock_subscribe(data_write) else {
             return;
         };
+        fut.await;
 
         debug!("{} emitting {:?}", name, subscribe.remap);
         remap_output.give(&cap, subscribe.remap.clone()).await;
 
-        let mut txns_read_cap = Some(txns_read_cap);
         loop {
-            txns_read.update_ge(remap.logical_upper.clone()).await;
-            cap.downgrade(&remap.logical_upper);
-            let data_listen_next = {
-                let trc = txns_read_cap.take().expect("valid cap");
-                let (dln, trc) = trc
-                    .data_listen_next(data_id, remap.logical_upper.clone())
-                    .await;
-                txns_read_cap = Some(trc);
-                dln
-            };
+            let _ = txns_cache.update_ge(&subscribe.remap.logical_upper).await;
+            cap.downgrade(&subscribe.remap.logical_upper);
+            let data_listen_next =
+                txns_cache.data_listen_next(&subscribe.data_id, &subscribe.remap.logical_upper);
             debug!(
                 "{} data_listen_next at {:?}: {:?}",
                 name, subscribe.remap.logical_upper, data_listen_next,
@@ -256,6 +253,95 @@ where
                     debug!("{} not emitting {:?}", name, subscribe.remap);
                 }
             }
+        }
+    });
+    (remap_stream, shutdown_button.press_on_drop())
+}
+
+/// TODO: I'd much prefer the communication protocol between the two operators
+/// to be exactly remap as defined in the [reclocking design doc]. However, we
+/// can't quite recover exactly the information necessary to construct that at
+/// the moment. Seems worth doing, but in the meantime, intentionally make this
+/// look fairly different (`Stream` of `DataRemapEntry` instead of
+/// `Collection<FromTime>`) to hopefully minimize confusion. As a performance
+/// optimization, we only re-emit this when the _physical_ upper has changed,
+/// which means that the frontier of the `Stream<DataRemapEntry<T>>` indicates
+/// updates to the logical_upper of the most recent `DataRemapEntry` (i.e. the
+/// one with the largest physical_upper).
+///
+/// [reclocking design doc]:
+///     https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md
+fn txns_progress_source_global<K, V, T, D, P, C, G>(
+    scope: G,
+    name: &str,
+    ctx: TxnsContext<T>,
+    client: impl Future<Output = PersistClient> + 'static,
+    txns_id: ShardId,
+    data_id: ShardId,
+    as_of: T,
+    data_key_schema: Arc<K::Schema>,
+    data_val_schema: Arc<V::Schema>,
+    unique_id: u64,
+) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
+where
+    K: Debug + Codec + Send + Sync,
+    V: Debug + Codec + Send + Sync,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    D: Data + Semigroup + Codec64 + Send + Sync,
+    P: Debug + Data,
+    C: TxnsCodec + 'static,
+    G: Scope<Timestamp = T>,
+{
+    let worker_idx = scope.index();
+    let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
+    let name = format!("txns_progress_source({})", name);
+    let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
+    let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
+    let (mut remap_output, remap_stream) = builder.new_output();
+
+    let shutdown_button = builder.build(move |capabilities| async move {
+        if worker_idx != chosen_worker {
+            return;
+        }
+
+        let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+        let client = client.await;
+        let txns_read = ctx.get_or_init::<C>(&client, txns_id).await;
+
+        let _ = txns_read.update_gt(as_of.clone()).await;
+        let data_write = client
+            .open_writer::<K, V, T, D>(
+                data_id,
+                Arc::clone(&data_key_schema),
+                Arc::clone(&data_val_schema),
+                Diagnostics::from_purpose("data read physical upper"),
+            )
+            .await
+            .expect("schema shouldn't change");
+        let mut rx = txns_read
+            .data_subscribe(data_id, as_of.clone(), Box::new(data_write))
+            .await;
+        debug!("{} starting as_of={:?}", name, as_of);
+
+        let mut physical_upper = T::minimum();
+
+        while let Some(remap) = rx.recv().await {
+            assert!(physical_upper <= remap.physical_upper);
+            assert!(physical_upper < remap.logical_upper);
+
+            let logical_upper = remap.logical_upper.clone();
+            // As mentioned in the docs on this function, we only
+            // emit updates when the physical upper changes (which
+            // happens to makes the protocol a tiny bit more
+            // remap-like).
+            if remap.physical_upper != physical_upper {
+                physical_upper = remap.physical_upper.clone();
+                debug!("{} emitting {:?}", name, remap);
+                remap_output.give(&cap, remap).await;
+            } else {
+                debug!("{} not emitting {:?}", name, remap);
+            }
+            cap.downgrade(&logical_upper);
         }
     });
     (remap_stream, shutdown_button.press_on_drop())
@@ -578,6 +664,7 @@ impl DataSubscribe {
                     data_stream,
                     name,
                     TxnsContext::default(),
+                    client.dyncfgs(),
                     || std::future::ready(client.clone()),
                     txns_id,
                     data_id,
