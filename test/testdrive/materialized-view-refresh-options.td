@@ -369,10 +369,9 @@ r2 true
 > CREATE MATERIALIZED VIEW mv9 WITH (REFRESH AT mz_now()::text::int8 + 1000000) AS
   SELECT x*x FROM t3;
 
-# Check that all operators have hydrated. Ideally, we'd want to check `mz_hydration_statuses`, but that is
-# currently wrong for REFRESH MVs, see https://github.com/MaterializeInc/materialize/issues/25518
+# Check that all operators have hydrated.
 > SELECT DISTINCT hydrated
-  FROM mz_internal.mz_compute_operator_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
+  FROM mz_internal.mz_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
   WHERE name = 'mv9';
 true
 
@@ -382,7 +381,7 @@ true
   SELECT DISTINCT x, y FROM t2, t3;
 
 > SELECT DISTINCT hydrated
-  FROM mz_internal.mz_compute_operator_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
+  FROM mz_internal.mz_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
   WHERE name = 'mv10';
 true
 
