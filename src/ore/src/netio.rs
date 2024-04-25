@@ -16,13 +16,11 @@
 //! Network I/O utilities.
 
 mod async_ready;
-mod dns;
 mod framed;
 mod read_exact;
 mod socket;
 
 pub use crate::netio::async_ready::AsyncReady;
-pub use crate::netio::dns::resolve_address;
 pub use crate::netio::framed::{FrameTooBig, MAX_FRAME_SIZE};
 pub use crate::netio::read_exact::{read_exact_or_eof, ReadExactOrEof};
 pub use crate::netio::socket::{Listener, SocketAddr, SocketAddrType, Stream, UnixSocketAddr};

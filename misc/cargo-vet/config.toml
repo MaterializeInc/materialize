@@ -1010,6 +1010,22 @@ criteria = "safe-to-deploy"
 version = "0.3.15"
 criteria = "safe-to-deploy"
 
+[[exemptions.postgres]]
+version = "0.19.5@git:b759caa33610403aa74b1cfdd37f45eb3100c9af"
+criteria = "safe-to-deploy"
+
+[[exemptions.postgres-openssl]]
+version = "0.5.0@git:b759caa33610403aa74b1cfdd37f45eb3100c9af"
+criteria = "safe-to-deploy"
+
+[[exemptions.postgres-protocol]]
+version = "0.6.5@git:b759caa33610403aa74b1cfdd37f45eb3100c9af"
+criteria = "safe-to-deploy"
+
+[[exemptions.postgres-types]]
+version = "0.2.5@git:b759caa33610403aa74b1cfdd37f45eb3100c9af"
+criteria = "safe-to-deploy"
+
 [[exemptions.postgres_array]]
 version = "0.11.0@git:f58d0101e5198e04e8692629018d9b58f8543534"
 criteria = "safe-to-deploy"
@@ -1496,6 +1512,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.tokio-pipe]]
 version = "0.2.12"
+criteria = "safe-to-deploy"
+
+[[exemptions.tokio-postgres]]
+version = "0.7.8@git:b759caa33610403aa74b1cfdd37f45eb3100c9af"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-tungstenite]]

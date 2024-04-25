@@ -14,6 +14,7 @@
 
 > SELECT status FROM mz_internal.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
+  WHERE error LIKE 'ssh:%'
   AND s.name in ('dynamic_text', 'fixed_text', 'fixed_plus_csr', 'dynamic_plus_csr')
 stalled
 stalled

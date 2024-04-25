@@ -109,8 +109,8 @@ impl SshTunnelManager {
                     if let SshTunnelStatus::Errored(e) = handle.check_status() {
                         error!(
                             "not using existing ssh tunnel \
-                            ({}:{} via {}) because it's broken: {e}",
-                            remote_host, remote_port, config
+                            ({}:{} via {}@{}:{}) because it's broken: {e}",
+                            remote_host, remote_port, config.user, config.host, config.port,
                         );
 
                         // This is bit unfortunate, as this method returns an
@@ -123,8 +123,8 @@ impl SshTunnelManager {
                     }
 
                     info!(
-                        "reusing existing ssh tunnel ({}:{} via {})",
-                        remote_host, remote_port, config
+                        "reusing existing ssh tunnel ({}:{} via {}@{}:{})",
+                        remote_host, remote_port, config.user, config.host, config.port,
                     );
                     return Ok(handle);
                 }
@@ -146,8 +146,8 @@ impl SshTunnelManager {
 
                     // Try to connect.
                     info!(
-                        "initiating new ssh tunnel ({}:{} via {})",
-                        remote_host, remote_port, config
+                        "initiating new ssh tunnel ({}:{} via {}@{}:{})",
+                        remote_host, remote_port, config.user, config.host, config.port,
                     );
 
                     let config = config.clone();
@@ -181,11 +181,6 @@ impl SshTunnelManager {
 }
 
 /// Identifies a connection to a remote host via an SSH tunnel.
-/// There are a couple of edge cases where this key format may result
-/// in extra connections being created:
-/// 1. If a host resolves to a different number of ips on different workers
-/// 2. Different workers connect to different upstream resolved ips if they
-/// appear connectable at different times.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 struct SshTunnelKey {
     config: SshTunnelConfig,

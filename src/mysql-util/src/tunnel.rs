@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
-use std::net::IpAddr;
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
@@ -29,11 +27,7 @@ use crate::MySqlError;
 #[derive(Debug, PartialEq, Clone)]
 pub enum TunnelConfig {
     /// Establish a direct TCP connection to the database host.
-    /// If `resolved_ips` is not None, the provided IPs will be used
-    /// rather than resolving the hostname.
-    Direct {
-        resolved_ips: Option<BTreeSet<IpAddr>>,
-    },
+    Direct,
     /// Establish a TCP connection to the database via an SSH tunnel.
     /// This means first establishing an SSH connection to a bastion host,
     /// and then opening a separate connection from that host to the database.
@@ -243,18 +237,12 @@ impl Config {
         ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<MySqlConn, MySqlError> {
         match &self.tunnel {
-            TunnelConfig::Direct { resolved_ips } => {
-                let opts_builder = OptsBuilder::from_opts(self.inner.clone()).resolved_ips(
-                    resolved_ips
-                        .clone()
-                        .map(|ips| ips.into_iter().collect::<Vec<_>>()),
-                );
-
-                Ok(MySqlConn {
-                    conn: Conn::new(opts_builder).await.map_err(MySqlError::from)?,
-                    _ssh_tunnel_handle: None,
-                })
-            }
+            TunnelConfig::Direct => Ok(MySqlConn {
+                conn: Conn::new(self.inner.clone())
+                    .await
+                    .map_err(MySqlError::from)?,
+                _ssh_tunnel_handle: None,
+            }),
             TunnelConfig::Ssh { config } => {
                 let (host, port) = self.address();
                 let tunnel = ssh_tunnel_manager

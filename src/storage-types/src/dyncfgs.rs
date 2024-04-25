@@ -48,15 +48,6 @@ pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<fn() -> serde_json::Value> = 
     "Rules for enriching the `client.id` property of Kafka clients with additional data.",
 );
 
-/// Whether or not to enforce that external connection addresses are global
-/// (not private or local) when resolving them.
-pub const ENFORCE_EXTERNAL_ADDRESSES: Config<bool> = Config::new(
-    "storage_enforce_external_addresses",
-    false,
-    "Whether or not to enforce that external connection addresses are global \
-          (not private or local) when resolving them",
-);
-
 /// Whether or not to prevent buffering the entire _upstream_ snapshot in
 /// memory when processing it in memory. This is generally understood to reduce
 /// memory consumption.
@@ -87,13 +78,12 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     "Limit snapshot buffering in upsert.",
 );
 
-/// Adds the full set of all storage `Config`s.
+/// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
-        .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
 }

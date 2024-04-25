@@ -1003,8 +1003,6 @@ pub enum ContextCreationError {
     KafkaError(#[from] KafkaError),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
 }
 
 /// An extension trait for `Result<T, E>` that makes producing `ContextCreationError`s easier.
@@ -1046,9 +1044,6 @@ where
                 ContextCreationError::KafkaError(e) => {
                     ContextCreationError::Other(anyhow!(anyhow!(e).context(msg)))
                 }
-                ContextCreationError::Io(e) => {
-                    ContextCreationError::Other(anyhow!(anyhow!(e).context(msg)))
-                }
             }
         })
     }
@@ -1076,8 +1071,6 @@ pub enum CsrConnectError {
     NativeTls(#[from] native_tls::Error),
     #[error(transparent)]
     Openssl(#[from] openssl::error::ErrorStack),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
