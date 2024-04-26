@@ -12,12 +12,13 @@
 use std::num::NonZeroUsize;
 
 use mz_compute_types::plan::LirId;
+use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, RowCollection};
 use mz_timely_util::progress::any_antichain;
-use proptest::prelude::{any, Arbitrary, Just};
-use proptest::strategy::{BoxedStrategy, Strategy, Union};
+use proptest::prelude::{any, Arbitrary};
+use proptest::strategy::{BoxedStrategy, Just, Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -301,40 +302,19 @@ impl Arbitrary for FrontiersResponse {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
-    Rows(Vec<(Row, NonZeroUsize)>),
+    Rows(RowCollection),
     /// Error of an unsuccessful peek.
     Error(String),
     /// The peek was canceled.
     Canceled,
 }
 
-impl PeekResponse {
-    /// TODO(#25239): Add documentation.
-    pub fn unwrap_rows(self) -> Vec<(Row, NonZeroUsize)> {
-        match self {
-            PeekResponse::Rows(rows) => rows,
-            PeekResponse::Error(_) | PeekResponse::Canceled => {
-                panic!("PeekResponse::unwrap_rows called on {:?}", self)
-            }
-        }
-    }
-}
-
 impl RustType<ProtoPeekResponse> for PeekResponse {
     fn into_proto(&self) -> ProtoPeekResponse {
         use proto_peek_response::Kind::*;
-        use proto_peek_response::*;
         ProtoPeekResponse {
             kind: Some(match self {
-                PeekResponse::Rows(rows) => Rows(ProtoRows {
-                    rows: rows
-                        .iter()
-                        .map(|(r, d)| ProtoRow {
-                            row: Some(r.into_proto()),
-                            diff: d.into_proto(),
-                        })
-                        .collect(),
-                }),
+                PeekResponse::Rows(rows) => Rows(rows.into_proto()),
                 PeekResponse::Error(err) => proto_peek_response::Kind::Error(err.clone()),
                 PeekResponse::Canceled => Canceled(()),
             }),
@@ -344,17 +324,7 @@ impl RustType<ProtoPeekResponse> for PeekResponse {
     fn from_proto(proto: ProtoPeekResponse) -> Result<Self, TryFromProtoError> {
         use proto_peek_response::Kind::*;
         match proto.kind {
-            Some(Rows(rows)) => Ok(PeekResponse::Rows(
-                rows.rows
-                    .into_iter()
-                    .map(|row| {
-                        Ok((
-                            row.row.into_rust_if_some("ProtoRow::row")?,
-                            NonZeroUsize::from_proto(row.diff)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-            )),
+            Some(Rows(rows)) => Ok(PeekResponse::Rows(rows.into_rust()?)),
             Some(proto_peek_response::Kind::Error(err)) => Ok(PeekResponse::Error(err)),
             Some(Canceled(())) => Ok(PeekResponse::Canceled),
             None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind")),
@@ -375,7 +345,7 @@ impl Arbitrary for PeekResponse {
                 ),
                 1..11,
             )
-            .prop_map(PeekResponse::Rows)
+            .prop_map(|rows| PeekResponse::Rows(RowCollection::new(rows)))
             .boxed(),
             ".*".prop_map(PeekResponse::Error).boxed(),
             Just(PeekResponse::Canceled).boxed(),
@@ -501,7 +471,6 @@ impl<T> SubscribeBatch<T> {
                 .map(|(_time, row, _diff)| row.byte_len())
                 .sum();
             if total_size > max_result_size {
-                use mz_ore::cast::CastFrom;
                 self.updates = Err(format!(
                     "result exceeds max size of {}",
                     ByteSize::b(u64::cast_from(max_result_size))
