@@ -23,7 +23,15 @@ pub async fn run_verify_data(
     mut cmd: BuiltinCommand,
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    let mut expected_body = cmd.input;
+    let mut expected_body = cmd
+        .input
+        .into_iter()
+        // Strip suffix to allow lines with trailing whitespace
+        .map(|line| {
+            line.trim_end_matches("// allow-trailing-whitespace")
+                .to_string()
+        })
+        .collect::<Vec<String>>();
     let bucket: String = cmd.args.parse("bucket")?;
     let key: String = cmd.args.parse("key")?;
     let sort_rows = cmd.args.opt_bool("sort-rows")?.unwrap_or(false);
@@ -153,10 +161,7 @@ fn rows_from_parquet(bytes: bytes::Bytes) -> Vec<String> {
         let converters = batch
             .columns()
             .iter()
-            .map(|a| match a.data_type() {
-                d if d.is_nested() => panic!("cant handle nested types"),
-                _ => ArrayFormatter::try_new(a.as_ref(), &format_options).unwrap(),
-            })
+            .map(|a| ArrayFormatter::try_new(a.as_ref(), &format_options).unwrap())
             .collect::<Vec<_>>();
 
         for row_idx in 0..batch.num_rows() {
