@@ -22,7 +22,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, task};
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{Datum, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, RowArena, Timestamp};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::{CatalogCluster, SessionCatalog};
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -1072,7 +1072,8 @@ impl Coordinator {
             })
             .collect();
 
-        let rows = futures.try_collect().await?;
+        let rows: Vec<Row> = futures.try_collect().await?;
+        let rows = Box::new(rows.into_row_iter());
 
         Ok(ExecuteResponse::SendingRowsImmediate { rows })
     }

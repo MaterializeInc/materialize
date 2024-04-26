@@ -30,7 +30,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{GlobalId, Row, ScalarType};
+use mz_repr::{GlobalId, Row, RowIterator, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
@@ -341,7 +341,10 @@ Issue a SQL query to get started. Need help?
 
     /// Executes a single SQL statement that returns rows as the
     /// `mz_support` user.
-    pub async fn introspection_execute_one(&self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
+    pub async fn introspection_execute_one(
+        &self,
+        sql: &str,
+    ) -> Result<Box<dyn RowIterator>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(SessionConfig {

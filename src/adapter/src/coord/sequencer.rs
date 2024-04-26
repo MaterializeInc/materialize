@@ -19,7 +19,7 @@ use mz_controller_types::ClusterId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;
-use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_repr::{Diff, GlobalId, RowCollection, Timestamp};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
@@ -316,7 +316,7 @@ impl Coordinator {
                     self.sequence_side_effecting_func(ctx, plan).await;
                 }
                 Plan::ShowCreate(plan) => {
-                    ctx.retire(Ok(Self::send_immediate_rows(vec![plan.row])));
+                    ctx.retire(Ok(Self::send_immediate_rows(plan.row)));
                 }
                 Plan::ShowColumns(show_columns_plan) => {
                     self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster)
@@ -820,7 +820,7 @@ impl Coordinator {
                 offset: 0,
                 project: (0..plan.returning[0].0.iter().count()).collect(),
             };
-            return match finishing.finish(plan.returning, plan.max_result_size) {
+            return match finishing.finish(RowCollection::new(plan.returning)) {
                 Ok(rows) => Ok(Self::send_immediate_rows(rows)),
                 Err(e) => Err(AdapterError::ResultSize(e)),
             };

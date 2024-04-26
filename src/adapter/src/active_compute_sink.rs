@@ -22,7 +22,7 @@ use mz_expr::compare_columns;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, Timestamp};
 use mz_sql::plan::SubscribeOutput;
 use mz_sql::session::metadata::SessionMetadata;
 use timely::progress::Antichain;
@@ -149,7 +149,8 @@ impl ActiveSubscribe {
                 }
             }
 
-            self.send(PeekResponseUnary::Rows(vec![row_buf]));
+            let row_iter = Box::new(row_buf.into_row_iter());
+            self.send(PeekResponseUnary::Rows(row_iter));
         }
     }
 
@@ -319,7 +320,7 @@ impl ActiveSubscribe {
             SubscribeOutput::Diffs => rows.sort_by_key(|(time, _, _)| *time),
         }
 
-        let rows = rows
+        let rows: Vec<Row> = rows
             .into_iter()
             .map(|(time, row, diff)| {
                 assert!(self.as_of <= time);
@@ -347,6 +348,8 @@ impl ActiveSubscribe {
                 row_buf.clone()
             })
             .collect();
+        let rows = Box::new(rows.into_row_iter());
+
         self.send(PeekResponseUnary::Rows(rows));
 
         // Emit progress message if requested. Don't emit progress for the first

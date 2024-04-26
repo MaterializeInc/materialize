@@ -13,9 +13,8 @@ use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroU64;
 
-use bytesize::ByteSize;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
@@ -30,7 +29,10 @@ use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{
     DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
 };
-use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
+use mz_repr::{
+    ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row,
+    RowCollection, RowRef, ScalarType, SortedRowCollectionIter,
+};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion};
@@ -3077,129 +3079,36 @@ impl<L> RowSetFinishing<L> {
 }
 
 impl RowSetFinishing {
-    /// Determines the index of the (Row, count) pair, and the
-    /// index into the count within that pair, corresponding to a particular offset.
-    ///
-    /// For example, if `self.offset` is 42, and `rows` is
-    /// `&[(_, 10), (_, 17), (_, 20), (_, 11)]`,
-    /// then this function will return `(2, 15)`, because after applying
-    /// the offset, we will start at the row/diff pair in position 2,
-    /// and skip 15 of the 20 rows that that entry represents.
-    fn find_offset(&self, rows: &[(Row, NonZeroUsize)]) -> (usize, usize) {
-        let mut offset_remaining = self.offset;
-        for (i, (_, count)) in rows.iter().enumerate() {
-            let count = count.get();
-            if count > offset_remaining {
-                return (i, offset_remaining);
-            }
-            offset_remaining -= count;
-        }
-        // The offset is past the end of the rows; we will
-        // return nothing.
-        (rows.len(), 0)
-    }
-    /// Applies finishing actions to a row set,
-    /// and unrolls it to a unary representation.
-    pub fn finish(
-        &self,
-        mut rows: Vec<(Row, NonZeroUsize)>,
-        // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
-        max_result_size: u64,
-    ) -> Result<Vec<Row>, String> {
-        let max_result_size = usize::cast_from(max_result_size);
+    /// Applies finishing actions to a [`RowCollection`].
+    pub fn finish(&self, rows: RowCollection) -> Result<SortedRowCollectionIter, String> {
         let mut left_datum_vec = mz_repr::DatumVec::new();
         let mut right_datum_vec = mz_repr::DatumVec::new();
-        let sort_by = |(left, _): &(Row, _), (right, _): &(Row, _)| {
+
+        let sort_by = |left: &RowRef, right: &RowRef| {
             let left_datums = left_datum_vec.borrow_with(left);
             let right_datums = right_datum_vec.borrow_with(right);
             compare_columns(&self.order_by, &left_datums, &right_datums, || {
                 left.cmp(right)
             })
         };
-        rows.sort_by(sort_by);
+        let sorted_view = rows.sorted_view(sort_by);
+        let mut iter = sorted_view
+            .into_row_iter()
+            .with_offset(self.offset)
+            .with_projection(self.project.clone());
 
-        let (offset_nth_row, offset_kth_copy) = self.find_offset(&rows);
+        if let Some(limit) = self.limit {
+            let limit = u64::from(limit);
+            let limit = usize::cast_from(limit);
+            iter = iter.with_limit(limit);
+        };
 
-        // Adjust the first returned row's count to account for the offset.
-        if let Some((_, nth_diff)) = rows.get_mut(offset_nth_row) {
-            // Justification for `unwrap`:
-            // we only get here if we return from `get_offset`
-            // having found something to return,
-            // which can only happen if the count of
-            // this row is greater than the offset remaining.
-            *nth_diff = NonZeroUsize::new(nth_diff.get() - offset_kth_copy).unwrap();
-        }
-
-        let limit = self.limit.unwrap_or(NonNeg::<i64>::max());
-
-        // The code below is logically equivalent to:
-        //
-        // let mut total = 0;
-        // for (_, count) in &rows[offset_nth_row..] {
-        //     total += count.get();
-        // }
-        // let return_size = std::cmp::min(total, limit);
-        //
-        // but it breaks early if the limit is reached, instead of scanning the entire code.
-        let return_row_count = rows[offset_nth_row..]
-            .iter()
-            .try_fold(0, |sum: usize, (_, count)| {
-                let new_sum = sum.saturating_add(count.get());
-                if new_sum > usize::cast_from(u64::from(limit)) {
-                    None
-                } else {
-                    Some(new_sum)
-                }
-            })
-            .unwrap_or_else(|| usize::cast_from(u64::from(limit)));
-
-        // Check that the bytes allocated in the Vec below will be less than the minimum possible
-        // byte limit (i.e., if zero rows spill to heap). We still have to check each row below
-        // because they could spill to heap and end up using more memory.
-        const MINIMUM_ROW_BYTES: usize = std::mem::size_of::<Row>();
-        let bytes_to_be_allocated = MINIMUM_ROW_BYTES.saturating_mul(return_row_count);
-        if bytes_to_be_allocated > max_result_size {
-            return Err(format!(
-                "result exceeds max size of {}",
-                ByteSize::b(u64::cast_from(max_result_size))
-            ));
-        }
-
-        let mut ret = Vec::with_capacity(return_row_count);
-        let mut remaining = usize::cast_from(u64::from(limit));
-        let mut row_buf = Row::default();
-        let mut datum_vec = mz_repr::DatumVec::new();
-        let mut total_bytes = 0;
-        for (row, count) in &rows[offset_nth_row..] {
-            if remaining == 0 {
-                break;
-            }
-            let count = std::cmp::min(count.get(), remaining);
-            for _ in 0..count {
-                let new_row = {
-                    let datums = datum_vec.borrow_with(row);
-                    row_buf
-                        .packer()
-                        .extend(self.project.iter().map(|i| &datums[*i]));
-                    row_buf.clone()
-                };
-                total_bytes += new_row.byte_len();
-                if total_bytes > max_result_size {
-                    return Err(format!(
-                        "result exceeds max size of {}",
-                        ByteSize::b(u64::cast_from(max_result_size))
-                    ));
-                }
-                ret.push(new_row);
-            }
-            remaining -= count;
-        }
-
-        Ok(ret)
+        Ok(iter)
     }
 }
 
-/// Compare `left` and `right` using `order`. If that doesn't produce a strict ordering, call `tiebreaker`.
+/// Compare `left` and `right` using `order`. If that doesn't produce a strict
+/// ordering, call `tiebreaker`.
 pub fn compare_columns<F>(
     order: &[ColumnOrder],
     left: &[Datum],
