@@ -3279,7 +3279,7 @@ impl Coordinator {
         if !sink_connections.is_empty() {
             self.controller
                 .storage
-                .update_export_connection(sink_connections)
+                .alter_export_connections(sink_connections)
                 .await
                 .unwrap_or_terminate("altering exports after txn must succeed");
         }

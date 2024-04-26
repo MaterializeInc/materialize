@@ -429,8 +429,8 @@ pub trait StorageController: Debug {
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// For each identified export, update its `StorageSinkConnection`.
-    async fn update_export_connection(
+    /// For each identified export, alter its [`StorageSinkConnection`].
+    async fn alter_export_connections(
         &mut self,
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
     ) -> Result<(), StorageError<Self::Timestamp>>;

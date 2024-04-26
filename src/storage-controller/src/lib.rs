@@ -1295,7 +1295,7 @@ where
     }
 
     /// Create the sinks described by the `ExportDescription`.
-    async fn update_export_connection(
+    async fn alter_export_connections(
         &mut self,
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
