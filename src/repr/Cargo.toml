@@ -41,6 +41,7 @@ mz-ore = { path = "../ore", features = [
     "region",
     "stack",
     "test",
+    "tracing_",
 ], default-features = false }
 mz-persist-types = { path = "../persist-types", default-features = false }
 mz-pgtz = { path = "../pgtz", default-features = false }
