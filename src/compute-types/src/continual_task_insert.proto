@@ -1,0 +1,36 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+// buf breaking: ignore (does not currently require backward-compatibility)
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+import "repr/src/antichain.proto";
+import "repr/src/global_id.proto";
+import "expr/src/refresh_schedule.proto";
+import "repr/src/relation_and_scalar.proto";
+import "storage-types/src/controller.proto";
+import "storage-types/src/sinks.proto";
+import "storage-types/src/connections/aws.proto";
+
+package mz_compute_types.sinks;
+
+message ProtoContinualTaskInsertDesc {
+    mz_repr.global_id.ProtoGlobalId from = 1;
+    mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
+    ProtoPersistTableConnection target_table = 3;
+    ProtoPersistTableConnection retract_from_table = 4;
+}
+
+message ProtoPersistTableConnection {
+    mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
+    mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
+}

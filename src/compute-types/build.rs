@@ -51,6 +51,7 @@ fn main() {
             &[
                 "compute-types/src/dataflows.proto",
                 "compute-types/src/sinks.proto",
+                "compute-types/src/continual_task_insert.proto",
                 "compute-types/src/sources.proto",
                 "compute-types/src/plan.proto",
                 "compute-types/src/plan/flat_plan.proto",

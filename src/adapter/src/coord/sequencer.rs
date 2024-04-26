@@ -213,8 +213,11 @@ impl Coordinator {
                         .await;
                 }
                 Plan::CreateContinuallyInsert(plan) => {
-                    self.sequence_create_continually_insert(ctx, plan, resolved_ids)
+                    let result = self
+                        .sequence_create_continually_insert(ctx.session(), plan, resolved_ids)
                         .await;
+
+                    ctx.retire(result);
                 }
                 Plan::CreateIndex(plan) => {
                     self.sequence_create_index(ctx, plan, resolved_ids).await;
@@ -223,7 +226,6 @@ impl Coordinator {
                     let result = self
                         .sequence_create_type(ctx.session(), plan, resolved_ids)
                         .await;
-                    ctx.retire(result);
                 }
                 Plan::Comment(plan) => {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
