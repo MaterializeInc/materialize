@@ -960,6 +960,15 @@ pub static PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: VarDefinition = VarDefinition::
     true,
 );
 
+/// Sets the `wal_sender_timeout` value to use during the replication phase of
+/// PG sources.
+pub static PG_SOURCE_WAL_SENDER_TIMEOUT: VarDefinition = VarDefinition::new(
+    "pg_source_wal_sender_timeout",
+    value!(Duration; mz_postgres_util::DEFAULT_WAL_SENDER_TIMEOUT),
+    "Sets the `wal_sender_timeout` value to use during the replication phase of PG sources (Materialize)",
+    true,
+);
+
 /// Please see `PgSourceSnapshotConfig`.
 pub static PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT: VarDefinition = VarDefinition::new(
     "pg_source_snapshot_collect_strict_count",
