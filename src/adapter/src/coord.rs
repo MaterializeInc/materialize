@@ -2459,7 +2459,7 @@ impl Coordinator {
                     interval.tick().await;
 
                     // Wait for space in the channel, if we timeout then the coordinator is stuck!
-                    let duration = tokio::time::Duration::from_secs(60);
+                    let duration = tokio::time::Duration::from_secs(30);
                     let timeout = tokio::time::timeout(duration, idle_tx.reserve()).await;
                     let Ok(maybe_permit) = timeout else {
                         // Only log the error if we're newly stuck, to prevent logging repeatedly.
