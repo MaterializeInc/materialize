@@ -77,7 +77,7 @@ pub const STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING: Config<bool> = Config::new(
     "Prevent snapshot buffering in upsert.",
 );
 
-/// if `storage_upsert_prevent_snapshot_buffering` is true, this prevents the upsert
+/// If `storage_upsert_prevent_snapshot_buffering` is true, this prevents the upsert
 /// operator from buffering too many events from the upstream snapshot. In the absence
 /// of hydration flow control, this could prevent certain workloads from causing egregiously
 /// large writes to RocksDB.
@@ -85,6 +85,13 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     "storage_upsert_max_snapshot_batch_buffering",
     None,
     "Limit snapshot buffering in upsert.",
+);
+
+/// How many times to try to cleanup old RocksDB DB's on disk before giving up.
+pub const STORAGE_ROCKSDB_CLEANUP_TRIES: Config<usize> = Config::new(
+    "storage_rocksdb_cleanup_tries",
+    5,
+    "How many times to try to cleanup old RocksDB DB's on disk before giving up.",
 );
 
 /// Adds the full set of all storage `Config`s.
@@ -96,4 +103,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
+        .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
 }

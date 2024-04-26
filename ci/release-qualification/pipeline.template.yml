@@ -127,7 +127,6 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: zippy
             args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=100000, --max-execution-time=8h]
-      skip: "Reenable when #19999 is fixed"
 
   - id: feature-benchmark-scale-plus-one
     label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
