@@ -94,6 +94,8 @@ Confluent
 Connection
 Connections
 Constraint
+Continual
+Continually
 Copy
 Count
 Counter
@@ -357,6 +359,7 @@ Reset
 Respect
 Restrict
 Retain
+Retract
 Return
 Returning
 Revoke
@@ -418,6 +421,7 @@ System
 Table
 Tables
 Tail
+Task
 Temp
 Temporary
 Text

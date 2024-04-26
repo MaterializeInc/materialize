@@ -21,11 +21,12 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement,
-    CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement,
-    TableFactor, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    CreateConnectionStatement, CreateContinuallyInsertStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateSecretStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateSubsourceStatement, CreateTableStatement, CreateTypeStatement,
+    CreateViewStatement, CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident,
+    IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor, UnresolvedItemName,
+    UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -379,6 +380,25 @@ pub fn create_statement(
             query,
             with_options: _,
             as_of: _,
+        }) => {
+            *name = allocate_name(name)?;
+            {
+                let mut normalizer = QueryNormalizer::new();
+                normalizer.visit_query_mut(query);
+                if let Some(err) = normalizer.err {
+                    return Err(err);
+                }
+            }
+            *if_exists = IfExistsBehavior::Error;
+        }
+
+        Statement::CreateContinuallyInsert(CreateContinuallyInsertStatement {
+            if_exists,
+            name,
+            target_table: _,
+            retract_from_table: _,
+            in_cluster: _,
+            query,
         }) => {
             *name = allocate_name(name)?;
             {

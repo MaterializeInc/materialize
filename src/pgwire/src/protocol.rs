@@ -1713,6 +1713,7 @@ where
             | ExecuteResponse::CreatedIndex { .. }
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMaterializedView { .. }
+            | ExecuteResponse::CreatedContinuallyInsert { .. }
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedSchema { .. }
             | ExecuteResponse::CreatedSecret { .. }

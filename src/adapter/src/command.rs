@@ -321,6 +321,8 @@ pub enum ExecuteResponse {
     CreatedViews,
     /// The requested materialized view was created.
     CreatedMaterializedView,
+    /// The requested continual insert was created.
+    CreatedContinuallyInsert,
     /// The requested type was created.
     CreatedType,
     /// The requested prepared statement was removed.
@@ -488,6 +490,9 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::CreatedMaterializedView => {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
+            ExecuteResponseKind::CreatedContinuallyInsert => {
+                Ok(ExecuteResponse::CreatedContinuallyInsert)
+            }
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
@@ -549,6 +554,7 @@ impl ExecuteResponse {
             CreatedView { .. } => Some("CREATE VIEW".into()),
             CreatedViews { .. } => Some("CREATE VIEWS".into()),
             CreatedMaterializedView { .. } => Some("CREATE MATERIALIZED VIEW".into()),
+            CreatedContinuallyInsert { .. } => Some("CREATE CONTINUALLY INSERT".into()),
             CreatedType => Some("CREATE TYPE".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
             DeclaredCursor => Some("DECLARE CURSOR".into()),
@@ -637,6 +643,7 @@ impl ExecuteResponse {
             CreateTable => &[CreatedTable],
             CreateView => &[CreatedView],
             CreateMaterializedView => &[CreatedMaterializedView],
+            CreateContinuallyInsert => &[CreatedContinuallyInsert],
             CreateIndex => &[CreatedIndex],
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],

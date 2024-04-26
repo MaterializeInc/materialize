@@ -1889,6 +1889,9 @@ impl<'a> Parser<'a> {
         {
             self.parse_create_materialized_view()
                 .map_parser_err(StatementKind::CreateMaterializedView)
+        } else if self.peek_keywords(&[CONTINUAL, TASK]) {
+            self.parse_create_continually_insert()
+                .map_parser_err(StatementKind::CreateContinuallyInsert)
         } else if self.peek_keywords(&[USER]) {
             parser_err!(
                 self,
@@ -3509,6 +3512,51 @@ impl<'a> Parser<'a> {
                 query,
                 as_of,
                 with_options,
+            },
+        ))
+    }
+
+    fn parse_create_continually_insert(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let mut if_exists = if self.parse_keyword(OR) {
+            self.expect_keyword(REPLACE)?;
+            IfExistsBehavior::Replace
+        } else {
+            IfExistsBehavior::Error
+        };
+        self.expect_keywords(&[CONTINUAL, TASK])?;
+        if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
+            if_exists = IfExistsBehavior::Skip;
+        }
+
+        let name = self.parse_item_name()?;
+        let in_cluster = self.parse_optional_in_cluster()?;
+
+        self.expect_keyword(AS)?;
+
+        self.expect_keywords(&[INSERT, INTO])?;
+
+        let target_table = self.parse_raw_name()?;
+
+        // Need parens because otherwise the DELETE would be parsed as part of
+        // the query...
+        self.expect_token(&Token::LParen)?;
+        let query = self.parse_query()?;
+        self.expect_token(&Token::RParen)?;
+
+        self.expect_keyword(DELETE)?;
+        self.expect_keyword(ALL)?;
+        self.expect_keyword(FROM)?;
+
+        let retract_from_table = self.parse_raw_name()?;
+
+        Ok(Statement::CreateContinuallyInsert(
+            CreateContinuallyInsertStatement {
+                if_exists,
+                name,
+                target_table,
+                retract_from_table,
+                in_cluster,
+                query,
             },
         ))
     }
