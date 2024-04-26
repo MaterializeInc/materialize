@@ -19,10 +19,10 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use crate::render::upsert::types::{
+use super::types::{
     GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize, ValueMetadata,
 };
-use crate::render::upsert::UpsertKey;
+use super::UpsertKey;
 
 /// A `HashMap` tracking its total size
 pub struct InMemoryHashMap<O> {
