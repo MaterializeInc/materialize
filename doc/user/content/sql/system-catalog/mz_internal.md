@@ -1381,6 +1381,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`bigint list`]: /sql/types/list
 [`boolean`]: /sql/types/boolean
 [`double precision`]: /sql/types/double-precision
+[`interval`]: /sql/types/interval/
 [`jsonb`]: /sql/types/jsonb
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
