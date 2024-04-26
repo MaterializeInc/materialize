@@ -217,7 +217,6 @@ use crate::storage_state::StorageState;
 mod persist_sink;
 pub mod sinks;
 pub mod sources;
-mod upsert;
 
 /// Assemble the "ingestion" side of a dataflow, i.e. the sources.
 ///

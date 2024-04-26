@@ -18,13 +18,13 @@ use mz_rocksdb::RocksDBConfig;
 use prometheus::core::AtomicU64;
 use serde::{de::DeserializeOwned, Serialize};
 
-use super::upsert_bincode_opts;
-use crate::render::upsert::memory::InMemoryHashMap;
-use crate::render::upsert::rocksdb::RocksDB;
-use crate::render::upsert::types::{
+use super::memory::InMemoryHashMap;
+use super::rocksdb::RocksDB;
+use super::types::{
     GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize,
 };
-use crate::render::upsert::UpsertKey;
+use super::upsert_bincode_opts;
+use super::UpsertKey;
 
 pub enum BackendType<O> {
     InMemory(InMemoryHashMap<O>),

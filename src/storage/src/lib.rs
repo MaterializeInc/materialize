@@ -20,6 +20,7 @@ pub mod sink;
 pub mod source;
 pub mod statistics;
 pub mod storage_state;
+mod upsert;
 
 pub(crate) mod healthcheck;
 

@@ -94,8 +94,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use serde::{de::DeserializeOwned, Serialize};
 
+use super::{UpsertKey, UpsertValue};
 use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
-use crate::render::upsert::{UpsertKey, UpsertValue};
 use crate::statistics::SourceStatistics;
 
 /// The default set of `bincode` options used for consolidating
