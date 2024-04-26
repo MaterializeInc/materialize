@@ -315,22 +315,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             )
             .await?;
 
-            mz_ore::soft_assert_no_log! {{
-                let row = simple_query_opt(&client, "SHOW statement_timeout;")
-                    .await?
-                    .unwrap();
-                let timeout = row.get("statement_timeout").unwrap().to_owned(
-                );
-
-                // This only needs to be compatible for values we test; doesn't
-                // need to generalize all possible interval/duration mappings.
-                mz_repr::adt::interval::Interval::from_str(&timeout)
-                    .map(|i| i.duration())
-                    .unwrap()
-                    .unwrap()
-                    == config.config.parameters.pg_source_snapshot_statement_timeout
-            }, "SET statement_timeout in PG snapshot did not take effect"};
-
             let (snapshot, snapshot_lsn) = loop {
                 match snapshot_input.next().await {
                     Some(AsyncEvent::Data(_, mut data)) => {
@@ -584,6 +568,27 @@ async fn set_statement_timeout(client: &Client, timeout: Duration) -> Result<(),
     client
         .simple_query(&format!("SET statement_timeout = {}", timeout.as_millis()))
         .await?;
+
+    mz_ore::soft_assert_or_log! {
+        {
+            let row = simple_query_opt(client, "SHOW statement_timeout;")
+                .await?
+                .unwrap();
+            let session_timeout = row.get("statement_timeout").unwrap().to_owned();
+
+            // This only needs to be compatible for values we test; doesn't need to
+            // generalize all possible interval/duration mappings. This is also
+            // possible to fool if the value is set to the out-of-the-box default,
+            // so we have to ensure that our tests use a distinct value.
+            mz_repr::adt::interval::Interval::from_str(&session_timeout)
+                .map(|i| i.duration())
+                .unwrap()
+                .unwrap()
+                == timeout
+        },
+        "SET statement_timeout in PG snapshot did not take effect"
+    };
+
     Ok(())
 }
 
