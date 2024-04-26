@@ -1043,7 +1043,7 @@ impl<C> PendingWork<C>
 where
     C: Cursor,
     C::KeyOwned: PartialEq + Sized,
-    C::ValOwned: Sized,
+    // C::ValOwned: Sized,
     C::Time: Timestamp,
 {
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.

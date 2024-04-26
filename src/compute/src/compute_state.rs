@@ -1137,7 +1137,6 @@ impl IndexPeek {
         for<'a> Tr::Key<'a>: ToDatumIter,
         for<'a> Tr::Val<'a>: ToDatumIter,
         Tr::KeyOwned: Columnation + Data + FromDatumIter + ToDatumIter,
-        Tr::ValOwned: Columnation + Data + ToDatumIter,
     {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();

@@ -699,7 +699,7 @@ where
             move |input, output| {
                 input.for_each(|cap, data| {
                     capabilities.insert(cap.retain());
-                    batcher.push_batch(data);
+                    batcher.push_container(data);
                 });
 
                 if prev_frontier.borrow() != input.frontier().frontier() {
