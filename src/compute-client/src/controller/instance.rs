@@ -23,7 +23,9 @@ use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, ContinualTaskInsertConnection, PersistSinkConnection,
+};
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
@@ -1179,6 +1181,26 @@ where
                         storage_metadata: metadata,
                     };
                     ComputeSinkConnection::Persist(conn)
+                }
+                ComputeSinkConnection::ContinualTaskInsert(conn) => {
+                    let target_metadata = self
+                        .storage_controller
+                        .collection_metadata(conn.target_id)
+                        .map_err(|_| DataflowCreationError::CollectionMissing(id))?
+                        .clone();
+                    let retract_from_metadata = self
+                        .storage_controller
+                        .collection_metadata(conn.retract_from_id)
+                        .map_err(|_| DataflowCreationError::CollectionMissing(id))?
+                        .clone();
+                    let conn = ContinualTaskInsertConnection {
+                        value_desc: conn.value_desc,
+                        target_id: conn.target_id,
+                        retract_from_id: conn.retract_from_id,
+                        target_metadata,
+                        retract_from_metadata,
+                    };
+                    ComputeSinkConnection::ContinualTaskInsert(conn)
                 }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
                 ComputeSinkConnection::CopyToS3Oneshot(conn) => {

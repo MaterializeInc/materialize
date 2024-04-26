@@ -7,51 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use maplit::btreemap;
-use mz_adapter_types::compaction::CompactionWindow;
-use mz_adapter_types::connection::ConnectionId;
-use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::CollectionPlan;
-use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
-use mz_ore::soft_panic_or_log;
-use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::ColumnName;
-use mz_repr::Datum;
-use mz_repr::Row;
-use mz_sql::ast::ExplainStage;
-use mz_sql::catalog::CatalogError;
-use mz_sql::names::{ObjectId, ResolvedIds};
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql_parser::ast;
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use timely::progress::Antichain;
-use tracing::Span;
 
 use crate::command::ExecuteResponse;
-use crate::coord::sequencer::inner::return_if_err;
-use crate::coord::{
-    Coordinator, CreateMaterializedViewExplain, CreateMaterializedViewFinish,
-    CreateMaterializedViewOptimize, CreateMaterializedViewStage, ExplainContext,
-    ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
-};
+use crate::coord::Coordinator;
 use crate::error::AdapterError;
-use crate::explain::explain_dataflow;
-use crate::explain::explain_plan;
-use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::util::ResultExt;
 use crate::ReadHolds;
-use crate::{catalog, AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider};
+use crate::{CollectionIdBundle, TimestampProvider};
 
 impl Coordinator {
     #[instrument]
@@ -59,7 +32,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         plan: plan::CreateContinuallyInsertPlan,
-        resolved_ids: ResolvedIds,
+        _resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::CreateContinuallyInsertPlan {
             name,
@@ -81,15 +54,15 @@ impl Coordinator {
         // this on the unoptimized plan to better reflect what the user typed.
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
-        let expr_depends_on = expr.depends_on();
+        let _expr_depends_on = expr.depends_on();
 
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: expr_depends_on.clone(),
-            cluster_id: Some(*cluster_id),
-            replica_id: None,
-            role_metadata: session.role_metadata().clone(),
-        };
+        // let validity = PlanValidity {
+        //     transient_revision: self.catalog().transient_revision(),
+        //     dependency_ids: expr_depends_on.clone(),
+        //     cluster_id: Some(*cluster_id),
+        //     replica_id: None,
+        //     role_metadata: session.role_metadata().clone(),
+        // };
 
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -100,9 +73,6 @@ impl Coordinator {
 
         // We're making up a task ID because we're not storing the task in the catalog. Only for this PoC, of course!
         let task_id = self.allocate_transient_id()?;
-
-        // We're not using this, but the optimizer wants it.
-        let connection_id = session.conn_id().clone();
 
         let raw_expr = expr.clone();
 
@@ -123,18 +93,6 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
-        // let mut optimizer = optimize::subscribe::Optimizer::new(
-        //     self.owned_catalog(),
-        //     compute_instance,
-        //     view_id,
-        //     dummy_sink_id,
-        //     connection_id,
-        //     true, /* with snapshot */
-        //     None, /* no UP TO */
-        //     debug_name,
-        //     optimizer_config,
-        //     self.optimizer_metrics(),
-        // );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
         let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
@@ -146,6 +104,51 @@ impl Coordinator {
         // tracing::info!("global_mir_plan:\n {:#?}", global_mir_plan);
         tracing::info!("global_lir_plan:\n {:#?}", global_lir_plan);
 
-        todo!()
+        // Timestamp selection
+        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id.clone());
+
+        let read_holds_owned;
+        let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
+            // In some cases, for example when REFRESH is used, the preparatory
+            // stages will already have acquired ReadHolds, we can re-use those.
+
+            txn_reads
+        } else {
+            // No one has acquired holds, make sure we can determine an as_of
+            // and render our dataflow below.
+            read_holds_owned = self.acquire_read_holds(&id_bundle);
+            &read_holds_owned
+        };
+
+        let dataflow_as_of = self.select_task_timestamps(id_bundle, read_holds)?;
+
+        tracing::info!(?dataflow_as_of, "continual task timestamp selection",);
+
+        // WIP: We're not adding the TASK to the catalog plus a million other things we'd have to be doing...
+
+        let (mut df_desc, _df_meta) = global_lir_plan.unapply();
+
+        df_desc.set_as_of(dataflow_as_of.clone());
+
+        self.ship_dataflow(df_desc, cluster_id.clone()).await;
+
+        Ok(ExecuteResponse::CreatedContinuallyInsert)
+    }
+
+    /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
+    /// materialized view.
+    fn select_task_timestamps(
+        &self,
+        id_bundle: CollectionIdBundle,
+        read_holds: &ReadHolds<mz_repr::Timestamp>,
+    ) -> Result<Antichain<mz_repr::Timestamp>, AdapterError> {
+        assert!(
+            id_bundle.difference(&read_holds.id_bundle()).is_empty(),
+            "we must have read holds for all involved collections"
+        );
+
+        let least_valid_read = self.least_valid_read(read_holds);
+
+        Ok(least_valid_read)
     }
 }

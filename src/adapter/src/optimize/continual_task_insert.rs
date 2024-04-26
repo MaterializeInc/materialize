@@ -208,21 +208,26 @@ impl Optimize<LocalMirPlan> for Optimizer {
         df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
-        let task_description = ContinualTaskInsertDesc {
+        let sink_description = ComputeSinkDesc {
             from: self.view_id,
             from_desc: rel_desc.clone(),
             // target_table: self.target_table.clone(),
             // retract_from_table: self.retrac_from_table.clone(),
-            target_table: PersistTableConnection {
-                value_desc: rel_desc.clone(),
-                storage_metadata: (),
-            },
-            retract_from_table: PersistTableConnection {
-                value_desc: rel_desc.clone(),
-                storage_metadata: (),
-            },
+            connection: ComputeSinkConnection::ContinualTaskInsert(
+                mz_compute_types::sinks::ContinualTaskInsertConnection {
+                    value_desc: rel_desc,
+                    target_id: self.target_table.clone(),
+                    retract_from_id: self.retract_from_table.clone(),
+                    target_metadata: (),
+                    retract_from_metadata: (),
+                },
+            ),
+            with_snapshot: true,
+            up_to: Antichain::new(),
+            non_null_assertions: Vec::new(),
+            refresh_schedule: None,
         };
-        // df_desc.export_sink(self.sink_id, sink_description);
+        df_desc.export_sink(self.task_id, sink_description);
 
         // Prepare expressions in the assembled dataflow.
         let style = ExprPrepStyle::Index;
