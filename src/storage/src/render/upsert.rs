@@ -37,8 +37,10 @@ use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
@@ -150,7 +152,7 @@ use self::types::ValueMetadata;
 /// This leaf operator drops `token` after the input reaches the `resume_upper`.
 /// This is useful to take coordinated actions across all workers, after the `upsert`
 /// operator has rehydrated.
-pub fn rehydration_finished<G, T>(
+pub fn rehydration_finished<G, T, Outer>(
     scope: G,
     source_config: &crate::source::RawSourceCreationConfig,
     // A token that we can drop to signal we are finished rehydrating.
@@ -159,7 +161,8 @@ pub fn rehydration_finished<G, T>(
     input: &Stream<G, Infallible>,
 ) where
     G: Scope<Timestamp = T>,
-    T: Timestamp,
+    T: Timestamp + Refines<Outer>,
+    Outer: Timestamp + TotalOrder,
 {
     let worker_id = source_config.worker_id;
     let id = source_config.id;
@@ -189,7 +192,7 @@ pub fn rehydration_finished<G, T>(
 /// Returns a tuple of
 /// - A collection of the computed upsert operator and,
 /// - A health update stream to propagate errors
-pub(crate) fn upsert<G: Scope, FromTime>(
+pub(crate) fn upsert<G: Scope, FromTime, Outer>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     upsert_envelope: UpsertEnvelope,
     resume_upper: Antichain<G::Timestamp>,
@@ -206,8 +209,9 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder,
     FromTime: timely::ExchangeData + Ord,
+    G::Timestamp: Refines<Outer>,
+    Outer: Timestamp + TotalOrder,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
@@ -352,13 +356,20 @@ where
 /// Helper method for `upsert_inner` used to stage `data` updates
 /// from the input timely edge.
 fn stage_input<T, FromTime>(
-    stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
+    stash: &mut Vec<(
+        T,
+        UpsertKey,
+        Reverse<FromTime>,
+        Option<UpsertValue>,
+        Capability<T>,
+    )>,
     data: &mut Vec<((UpsertKey, Option<UpsertValue>, FromTime), T, Diff)>,
+    cap: Capability<T>,
     input_upper: &Antichain<T>,
     resume_upper: &Antichain<T>,
     storage_shrink_upsert_unused_buffers_by_ratio: usize,
 ) where
-    T: PartialOrder,
+    T: Timestamp,
     FromTime: Ord,
 {
     if PartialOrder::less_equal(input_upper, resume_upper) {
@@ -367,7 +378,7 @@ fn stage_input<T, FromTime>(
 
     stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
         assert!(diff > 0, "invalid upsert input");
-        (time, key, Reverse(order), value)
+        (time, key, Reverse(order), value, cap.clone())
     }));
 
     if storage_shrink_upsert_unused_buffers_by_ratio > 0 {
@@ -381,34 +392,42 @@ fn stage_input<T, FromTime>(
 /// The style of drain we are performing on the stash. `AtTime`-drains cannot
 /// assume that all values have been seen, and must leave tombstones behind for deleted values.
 #[derive(Debug)]
-enum DrainStyle<'a, T> {
+enum DrainStyle<'a, T, O> {
     ToUpper(&'a Antichain<T>),
-    AtTime(T),
+    AtTime(O),
 }
 
 /// Helper method for `upsert_inner` used to stage `data` updates
 /// from the input timely edge.
-async fn drain_staged_input<S, G, T, FromTime, E>(
-    stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
+async fn drain_staged_input<S, G, T, FromTime, E, Outer>(
+    stash: &mut Vec<(
+        T,
+        UpsertKey,
+        Reverse<FromTime>,
+        Option<UpsertValue>,
+        Capability<T>,
+    )>,
     commands_state: &mut indexmap::IndexMap<UpsertKey, types::UpsertValueAndSize<Option<FromTime>>>,
-    output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
+    output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff, Capability<T>)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
-    drain_style: DrainStyle<'_, T>,
+    drain_style: DrainStyle<'_, T, Outer>,
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, Option<FromTime>>,
 ) where
     S: UpsertStateBackend<Option<FromTime>>,
     G: Scope,
-    T: PartialOrder + Ord + Clone + Debug,
+    T: Timestamp + Refines<Outer>,
+    Outer: TotalOrder + Timestamp,
     FromTime: timely::ExchangeData + Ord,
     E: UpsertErrorEmitter<G>,
 {
-    stash.sort_unstable();
+    // clone??
+    stash.sort_unstable_by_key(|(t, uk, ft, _, _)| (t.clone(), uk.clone(), ft.clone()));
 
     // Find the prefix that we can emit
-    let idx = stash.partition_point(|(ts, _, _, _)| match &drain_style {
+    let idx = stash.partition_point(|(ts, _, _, _, _)| match &drain_style {
         DrainStyle::ToUpper(upper) => !upper.less_equal(ts),
-        DrainStyle::AtTime(time) => ts <= time,
+        DrainStyle::AtTime(time) => &ts.clone().to_outer() <= time,
     });
 
     tracing::trace!(?drain_style, updates = idx, "draining stash in upsert");
@@ -416,7 +435,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // Read the previous values _per key_ out of `state`, recording it
     // along with the value with the _latest timestamp for that key_.
     commands_state.clear();
-    for (_, key, _, _) in stash.iter().take(idx) {
+    for (_, key, _, _, _) in stash.iter().take(idx) {
         commands_state.entry(*key).or_default();
     }
 
@@ -440,7 +459,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // order to only process the command with the maximum order within the (ts,
     // key) group. This is achieved by wrapping order in `Reverse(FromTime)` above.;
     let mut commands = stash.drain(..idx).dedup_by(|a, b| {
-        let ((a_ts, a_key, _, _), (b_ts, b_key, _, _)) = (a, b);
+        let ((a_ts, a_key, _, _, _), (b_ts, b_key, _, _, _)) = (a, b);
         a_ts == b_ts && a_key == b_key
     });
 
@@ -457,7 +476,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // This "mini-upsert" technique is actually useful in `UpsertState`'s
     // `merge_snapshot_chunk` implementation, minimizing gets and puts on
     // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
-    while let Some((ts, key, from_time, value)) = commands.next() {
+    while let Some((ts, key, from_time, value, cap)) = commands.next() {
         let mut command_state = if let Entry::Occupied(command_state) = commands_state.entry(key) {
             command_state
         } else {
@@ -488,15 +507,15 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
                     .replace(StateValue::value(value.clone(), Some(from_time.0.clone())))
                 {
                     if let Value::Value(old_value, _) = old_value.into_decoded() {
-                        output_updates.push((old_value, ts.clone(), -1));
+                        output_updates.push((old_value, ts.clone(), -1, cap.clone()));
                     }
                 }
-                output_updates.push((value, ts, 1));
+                output_updates.push((value, ts, 1, cap));
             }
             None => {
                 if let Some(old_value) = existing_value.take() {
                     if let Value::Value(old_value, _) = old_value.into_decoded() {
-                        output_updates.push((old_value, ts, -1));
+                        output_updates.push((old_value, ts, -1, cap));
                     }
                 }
 
@@ -539,7 +558,7 @@ struct UpsertConfig {
     shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
-fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
+fn upsert_inner<G: Scope, FromTime, F, Fut, US, Outer>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     mut key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
@@ -557,11 +576,12 @@ fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<Option<FromTime>>,
     FromTime: timely::ExchangeData + Ord,
+    G::Timestamp: Refines<Outer>,
+    Outer: Timestamp + TotalOrder,
 {
     // Sort key indices to ensure we can construct the key by iterating over the datums of the row
     key_indices.sort_unstable();
@@ -596,7 +616,8 @@ where
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
     let shutdown_button = builder.build(move |caps| async move {
-        let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
+        let [output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
+        let mut output_cap = CapabilitySet::from_elem(output_cap);
 
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
         // (as required for `merge_snapshot_chunk`), with slightly more efficient serialization
@@ -633,13 +654,14 @@ where
                 }
                 input_event = input.next() => {
                     match input_event {
-                        Some(AsyncEvent::Data(_cap, mut data)) => {
+                        Some(AsyncEvent::Data(cap, mut data)) => {
                             stage_input(
                                 &mut stash,
                                 &mut data,
+                                cap,
                                 &input_upper,
                                 &resume_upper,
-                                upsert_config.shrink_upsert_unused_buffers_by_ratio
+                                upsert_config.shrink_upsert_unused_buffers_by_ratio,
                             );
                         }
                         Some(AsyncEvent::Progress(upper)) => {
@@ -706,13 +728,11 @@ where
                 .await
             {
                 Ok(_) => {
-                    if let Some(ts) = snapshot_upper.clone().into_option() {
-                        // As we shutdown, we could ostensibly get data from later than the
-                        // `resume_upper`, which we ignore above. We don't want our output capability to make
-                        // it further than the `resume_upper`.
-                        if !resume_upper.less_equal(&ts) {
-                            output_cap.downgrade(&ts);
-                        }
+                    // As we shutdown, we could ostensibly get data from later than the
+                    // `resume_upper`, which we ignore above. We don't want our output capability to make
+                    // it further than the `resume_upper`.
+                    if PartialOrder::less_equal(&snapshot_upper, &resume_upper) {
+                        output_cap.downgrade(snapshot_upper.iter());
                     }
                 }
                 Err(e) => {
@@ -736,11 +756,6 @@ where
         // will shutdown the `backpressure` operator
         while let Some(_event) = previous.next().await {}
 
-        // After snapshotting, our output frontier is exactly the `resume_upper`
-        if let Some(ts) = resume_upper.as_option() {
-            output_cap.downgrade(ts);
-        }
-
         // Now it's time to emit the error corrections. It doesn't matter at what timestamp we emit
         // them at because all they do is change the representation. The error count at any
         // timestamp remains constant.
@@ -760,17 +775,22 @@ where
                 "attempted to correct non-legacy error"
             );
             tracing::info!("correcting legacy error {error:?} with diff {diff}");
-            let time = output_cap.time().clone();
+            let time = output_cap.first().unwrap().time().clone();
             let retraction = Err(UpsertError::Value(error.clone()));
             error.is_legacy_dont_touch_it = false;
             let insertion = Err(UpsertError::Value(error));
             output_handle
-                .give(&output_cap, (retraction, time.clone(), -diff))
+                .give(
+                    output_cap.first().unwrap(),
+                    (retraction, time.clone(), -diff),
+                )
                 .await;
             output_handle
-                .give(&output_cap, (insertion, time, diff))
+                .give(output_cap.first().unwrap(), (insertion, time, diff))
                 .await;
         }
+
+        drop(output_cap);
 
         tracing::info!(
             "timely-{} upsert source {} finished rehydration",
@@ -787,6 +807,8 @@ where
         // Now can can resume consuming the collection
         let mut output_updates = vec![];
         let mut post_snapshot = true;
+
+        let current_outer_time = resume_upper.first().unwrap().clone().to_outer();
 
         while let Some(event) = {
             // Synthesize a `Progress` event that allows us to drain the `stash` of values
@@ -814,23 +836,28 @@ where
                             updates=%data.len(),
                             "received data in upsert"
                         );
+
+                        let event_time = cap.time().clone();
+
                         stage_input(
                             &mut stash,
                             &mut data,
+                            cap,
                             &input_upper,
                             &resume_upper,
                             upsert_config.shrink_upsert_unused_buffers_by_ratio,
                         );
 
-                        let event_time = cap.time();
                         // If the data is at _exactly_ the output frontier, we can preemptively drain it into the state.
                         // Data within this set events strictly beyond this time are staged as
                         // normal.
                         //
                         // This is a load-bearing optimization, as it is required to avoid buffering
                         // the entire source snapshot in the `stash`.
-                        if prevent_snapshot_buffering && output_cap.time() == event_time {
-                            partial_drain_time = Some(event_time.clone());
+                        if prevent_snapshot_buffering
+                            && current_outer_time == event_time.clone().to_outer()
+                        {
+                            partial_drain_time = Some(event_time.to_outer());
                         }
                     }
                     AsyncEvent::Progress(upper) => {
@@ -844,7 +871,7 @@ where
                         // Disable the partial drain as this progress event covers
                         // the `output_cap` time.
                         partial_drain_time = None;
-                        drain_staged_input::<_, G, _, _, _>(
+                        drain_staged_input::<_, G, _, _, _, Outer>(
                             &mut stash,
                             &mut commands_state,
                             &mut output_updates,
@@ -855,12 +882,9 @@ where
                         )
                         .await;
 
-                        // Emit the _consolidated_ changes to the output.
-                        output_handle
-                            .give_container(&output_cap, &mut output_updates)
-                            .await;
-                        if let Some(ts) = upper.as_option() {
-                            output_cap.downgrade(ts);
+                        for (r, t, d, cap) in output_updates.drain(..) {
+                            // Emit the _consolidated_ changes to the output.
+                            output_handle.give(&cap, (r, t, d)).await;
                         }
                         input_upper = upper;
                     }
@@ -882,7 +906,7 @@ where
             // the minimum. However, because the frontier only advances on `Progress` updates,
             // the collection always accumulates correctly for all keys.
             if let Some(partial_drain_time) = partial_drain_time {
-                drain_staged_input::<_, G, _, _, _>(
+                drain_staged_input::<_, G, _, _, _, Outer>(
                     &mut stash,
                     &mut commands_state,
                     &mut output_updates,
