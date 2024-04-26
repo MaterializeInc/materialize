@@ -142,7 +142,7 @@ async fn report_loop(
                         'active_clusters', (SELECT count(*) FROM mz_clusters WHERE id LIKE 'u%')::int4,
                         'active_cluster_replicas', (
                             SELECT jsonb_object_agg(base.size, coalesce(count, 0))
-                            FROM mz_internal.mz_cluster_replica_sizes base
+                            FROM mz_catalog.mz_cluster_replica_sizes base
                             LEFT JOIN (
                                 SELECT r.size, count(*)::int4
                                 FROM mz_cluster_replicas r
