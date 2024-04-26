@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::mem::{size_of, transmute};
+use std::ops::Deref;
 use std::rc::Rc;
 use std::str;
 
@@ -44,7 +45,9 @@ use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::{arb_datum, DatumKind};
 use crate::{Datum, Timestamp};
 
+pub mod collection;
 pub(crate) mod encoding;
+pub mod iter;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 
@@ -109,6 +112,147 @@ pub struct Row {
     data: CompactBytes,
 }
 
+impl Row {
+    const SIZE: usize = CompactBytes::MAX_INLINE;
+
+    /// A variant of `Row::from_proto` that allows for reuse of internal allocs.
+    pub fn decode_from_proto(&mut self, proto: &ProtoRow) -> Result<(), String> {
+        let mut packer = self.packer();
+        for d in proto.datums.iter() {
+            packer.try_push_proto(d)?;
+        }
+        Ok(())
+    }
+
+    /// Allocate an empty `Row` with a pre-allocated capacity.
+    #[inline]
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            data: CompactBytes::with_capacity(cap),
+        }
+    }
+
+    /// Creates a new row from supplied bytes.
+    ///
+    /// # Safety
+    ///
+    /// This method relies on `data` being an appropriate row encoding, and can
+    /// result in unsafety if this is not the case.
+    pub unsafe fn from_bytes_unchecked(data: &[u8]) -> Self {
+        Row {
+            data: CompactBytes::new(data),
+        }
+    }
+
+    /// Constructs a [`RowPacker`] that will pack datums into this row's
+    /// allocation.
+    ///
+    /// This method clears the existing contents of the row, but retains the
+    /// allocation.
+    pub fn packer(&mut self) -> RowPacker<'_> {
+        self.data.clear();
+        RowPacker { row: self }
+    }
+
+    /// Take some `Datum`s and pack them into a `Row`.
+    ///
+    /// This method builds a `Row` by repeatedly increasing the backing
+    /// allocation. If the contents of the iterator are known ahead of
+    /// time, consider [`Row::with_capacity`] to right-size the allocation
+    /// first, and then [`RowPacker::extend`] to populate it with `Datum`s.
+    /// This avoids the repeated allocation resizing and copying.
+    pub fn pack<'a, I, D>(iter: I) -> Row
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        let mut row = Row::default();
+        row.packer().extend(iter);
+        row
+    }
+
+    /// Use `self` to pack `iter`, and then clone the result.
+    ///
+    /// This is a convenience method meant to reduce boilerplate around row
+    /// formation.
+    pub fn pack_using<'a, I, D>(&mut self, iter: I) -> Row
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        self.packer().extend(iter);
+        self.clone()
+    }
+
+    /// Like [`Row::pack`], but the provided iterator is allowed to produce an
+    /// error, in which case the packing operation is aborted and the error
+    /// returned.
+    pub fn try_pack<'a, I, D, E>(iter: I) -> Result<Row, E>
+    where
+        I: IntoIterator<Item = Result<D, E>>,
+        D: Borrow<Datum<'a>>,
+    {
+        let mut row = Row::default();
+        row.packer().try_extend(iter)?;
+        Ok(row)
+    }
+
+    /// Pack a slice of `Datum`s into a `Row`.
+    ///
+    /// This method has the advantage over `pack` that it can determine the required
+    /// allocation before packing the elements, ensuring only one allocation and no
+    /// redundant copies required.
+    pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
+        // Pre-allocate the needed number of bytes.
+        let mut row = Row::with_capacity(datums_size(slice.iter()));
+        row.packer().extend(slice.iter());
+        row
+    }
+
+    /// Returns the total amount of bytes used by this row.
+    pub fn byte_len(&self) -> usize {
+        let heap_size = if self.data.spilled() {
+            self.data.len()
+        } else {
+            0
+        };
+        let inline_size = std::mem::size_of::<Self>();
+        inline_size.saturating_add(heap_size)
+    }
+
+    /// Returns the total capacity in bytes used by this row.
+    pub fn byte_capacity(&self) -> usize {
+        self.data.capacity()
+    }
+
+    /// Extracts a Row slice containing the entire [`Row`].
+    #[inline]
+    pub fn as_row_ref(&self) -> &RowRef {
+        // SAFETY: We're creating a RowRef from a Row, so we know the data is valid.
+        unsafe { RowRef::from_slice(self.data.as_slice()) }
+    }
+}
+
+impl Borrow<RowRef> for Row {
+    fn borrow(&self) -> &RowRef {
+        self.as_row_ref()
+    }
+}
+
+impl AsRef<RowRef> for Row {
+    fn as_ref(&self) -> &RowRef {
+        self.as_row_ref()
+    }
+}
+
+impl Deref for Row {
+    type Target = RowRef;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_row_ref()
+    }
+}
+
 // Nothing depends on Row being exactly 24, we just want to add visibility to the size.
 static_assertions::const_assert_eq!(std::mem::size_of::<Row>(), 24);
 
@@ -143,22 +287,6 @@ impl Arbitrary for Row {
     }
 }
 
-impl Row {
-    const SIZE: usize = CompactBytes::MAX_INLINE;
-
-    /// A variant of `Row::from_proto` that allows for reuse of internal allocs.
-    pub fn decode_from_proto(&mut self, proto: &ProtoRow) -> Result<(), String> {
-        let mut packer = self.packer();
-        for d in proto.datums.iter() {
-            packer.try_push_proto(d)?;
-        }
-        Ok(())
-    }
-}
-
-/// These implementations order first by length, and then by slice contents.
-/// This allows many comparisons to complete without dereferencing memory.
-/// Warning: These order by the u8 array representation, and NOT by Datum::cmp.
 impl PartialOrd for Row {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -167,11 +295,7 @@ impl PartialOrd for Row {
 
 impl Ord for Row {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.data.len().cmp(&other.data.len()) {
-            std::cmp::Ordering::Less => std::cmp::Ordering::Less,
-            std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
-            std::cmp::Ordering::Equal => self.data.cmp(&other.data),
-        }
+        self.as_ref().cmp(other.as_ref())
     }
 }
 
@@ -256,6 +380,109 @@ mod columnation {
         fn heap_size(&self, callback: impl FnMut(usize, usize)) {
             self.region.heap_size(callback)
         }
+    }
+}
+
+/// A contiguous slice of bytes that are row data.
+///
+/// A [`RowRef`] is to [`Row`] as [`str`] is to [`String`].
+#[derive(PartialEq, Eq)]
+#[repr(transparent)]
+pub struct RowRef([u8]);
+
+impl RowRef {
+    /// Create a [`RowRef`] from a slice of data.
+    ///
+    /// SAFETY:
+    ///
+    /// * The user must guarantee that the provided slice is actually from a [`Row`].
+    ///
+    pub unsafe fn from_slice(row: &[u8]) -> &RowRef {
+        #[allow(clippy::as_conversions)]
+        &*(row as *const _ as *const RowRef)
+    }
+
+    /// Unpack `self` into a `Vec<Datum>` for efficient random access.
+    pub fn unpack(&self) -> Vec<Datum> {
+        // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
+        let len = self.iter().count();
+        let mut vec = Vec::with_capacity(len);
+        vec.extend(self.iter());
+        vec
+    }
+
+    /// Return the first [`Datum`] in `self`
+    ///
+    /// Panics if the [`RowRef`] is empty.
+    pub fn unpack_first(&self) -> Datum {
+        self.iter().next().unwrap()
+    }
+
+    /// Iterate the [`Datum`] elements of the [`RowRef`].
+    pub fn iter(&self) -> DatumListIter {
+        DatumListIter {
+            data: &self.0,
+            offset: 0,
+        }
+    }
+
+    /// For debugging only.
+    pub fn data(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// True iff there is no data in this [`RowRef`].
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl ToOwned for RowRef {
+    type Owned = Row;
+
+    fn to_owned(&self) -> Self::Owned {
+        // SAFETY: RowRef has the invariant that the wrapped data must be a valid Row encoding.
+        unsafe { Row::from_bytes_unchecked(&self.0) }
+    }
+}
+
+impl<'a> IntoIterator for &'a RowRef {
+    type Item = Datum<'a>;
+    type IntoIter = DatumListIter<'a>;
+
+    fn into_iter(self) -> DatumListIter<'a> {
+        DatumListIter {
+            data: &self.0,
+            offset: 0,
+        }
+    }
+}
+
+/// These implementations order first by length, and then by slice contents.
+/// This allows many comparisons to complete without dereferencing memory.
+/// Warning: These order by the u8 array representation, and NOT by Datum::cmp.
+impl PartialOrd for RowRef {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RowRef {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.0.len().cmp(&other.0.len()) {
+            std::cmp::Ordering::Less => std::cmp::Ordering::Less,
+            std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+            std::cmp::Ordering::Equal => self.0.cmp(&other.0),
+        }
+    }
+}
+
+impl fmt::Debug for RowRef {
+    /// Debug representation using the internal datums
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("RowRef{")?;
+        f.debug_list().entries(self.into_iter()).finish()?;
+        f.write_str("}")
     }
 }
 
@@ -1527,144 +1754,6 @@ where
     D: Borrow<Datum<'a>>,
 {
     1 + size_of::<u64>() + datums_size(iter)
-}
-
-// --------------------------------------------------------------------------------
-// public api
-
-impl Row {
-    /// Allocate an empty `Row` with a pre-allocated capacity.
-    #[inline]
-    pub fn with_capacity(cap: usize) -> Self {
-        Self {
-            data: CompactBytes::with_capacity(cap),
-        }
-    }
-
-    /// Creates a new row from supplied bytes.
-    ///
-    /// # Safety
-    ///
-    /// This method relies on `data` being an appropriate row encoding, and can
-    /// result in unsafety if this is not the case.
-    pub unsafe fn from_bytes_unchecked(data: Vec<u8>) -> Self {
-        Row { data: data.into() }
-    }
-
-    /// Constructs a [`RowPacker`] that will pack datums into this row's
-    /// allocation.
-    ///
-    /// This method clears the existing contents of the row, but retains the
-    /// allocation.
-    pub fn packer(&mut self) -> RowPacker<'_> {
-        self.data.clear();
-        RowPacker { row: self }
-    }
-
-    /// Take some `Datum`s and pack them into a `Row`.
-    ///
-    /// This method builds a `Row` by repeatedly increasing the backing
-    /// allocation. If the contents of the iterator are known ahead of
-    /// time, consider [`Row::with_capacity`] to right-size the allocation
-    /// first, and then [`RowPacker::extend`] to populate it with `Datum`s.
-    /// This avoids the repeated allocation resizing and copying.
-    pub fn pack<'a, I, D>(iter: I) -> Row
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
-    {
-        let mut row = Row::default();
-        row.packer().extend(iter);
-        row
-    }
-
-    /// Use `self` to pack `iter`, and then clone the result.
-    ///
-    /// This is a convenience method meant to reduce boilerplate around row
-    /// formation.
-    pub fn pack_using<'a, I, D>(&mut self, iter: I) -> Row
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
-    {
-        self.packer().extend(iter);
-        self.clone()
-    }
-
-    /// Like [`Row::pack`], but the provided iterator is allowed to produce an
-    /// error, in which case the packing operation is aborted and the error
-    /// returned.
-    pub fn try_pack<'a, I, D, E>(iter: I) -> Result<Row, E>
-    where
-        I: IntoIterator<Item = Result<D, E>>,
-        D: Borrow<Datum<'a>>,
-    {
-        let mut row = Row::default();
-        row.packer().try_extend(iter)?;
-        Ok(row)
-    }
-
-    /// Pack a slice of `Datum`s into a `Row`.
-    ///
-    /// This method has the advantage over `pack` that it can determine the required
-    /// allocation before packing the elements, ensuring only one allocation and no
-    /// redundant copies required.
-    pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
-        // Pre-allocate the needed number of bytes.
-        let mut row = Row::with_capacity(datums_size(slice.iter()));
-        row.packer().extend(slice.iter());
-        row
-    }
-
-    /// Returns the total amount of bytes used by this row.
-    pub fn byte_len(&self) -> usize {
-        let heap_size = if self.data.spilled() {
-            self.data.len()
-        } else {
-            0
-        };
-        let inline_size = std::mem::size_of::<Self>();
-        inline_size.saturating_add(heap_size)
-    }
-
-    /// Returns the total capacity in bytes used by this row.
-    pub fn byte_capacity(&self) -> usize {
-        self.data.capacity()
-    }
-
-    /// Unpack `self` into a `Vec<Datum>` for efficient random access.
-    pub fn unpack(&self) -> Vec<Datum> {
-        // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
-        let len = self.iter().count();
-        let mut vec = Vec::with_capacity(len);
-        vec.extend(self.iter());
-        vec
-    }
-
-    /// Return the first `Datum` in `self`
-    ///
-    /// Panics if the `Row` is empty.
-    pub fn unpack_first(&self) -> Datum {
-        self.iter().next().unwrap()
-    }
-
-    /// Iterate the `Datum` elements of the `Row`.
-    pub fn iter(&self) -> DatumListIter {
-        DatumListIter {
-            data: &self.data,
-            offset: 0,
-        }
-    }
-
-    /// For debugging only
-    pub fn data(&self) -> &[u8] {
-        &self.data
-    }
-
-    /// True iff there is no data in this Row
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
 }
 
 impl RowPacker<'_> {

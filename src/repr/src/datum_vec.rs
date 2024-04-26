@@ -16,7 +16,7 @@
 //! It uses `ore::vec::repurpose_allocation` to accomplish this, which contains
 //! unsafe code.
 
-use crate::{Datum, Row};
+use crate::{Datum, RowRef};
 
 /// A re-useable vector of `Datum` with no particular lifetime.
 #[derive(Debug, Default)]
@@ -39,8 +39,9 @@ impl DatumVec {
             inner,
         }
     }
+
     /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`.
-    pub fn borrow_with<'a>(&'a mut self, row: &'a Row) -> DatumVecBorrow<'a> {
+    pub fn borrow_with<'a>(&'a mut self, row: &'a RowRef) -> DatumVecBorrow<'a> {
         let mut borrow = self.borrow();
         borrow.extend(row.iter());
         borrow
@@ -79,6 +80,7 @@ impl<'outer> std::ops::DerefMut for DatumVecBorrow<'outer> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::Row;
 
     #[mz_ore::test]
     fn miri_test_datum_vec() {
