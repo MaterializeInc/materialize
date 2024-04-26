@@ -33,12 +33,15 @@ use mz_persist_types::{Codec64, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceData, SourceDesc};
+use mz_storage_types::sources::{
+    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc,
+};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -400,6 +403,12 @@ pub trait StorageController: Debug {
     async fn alter_ingestion_source_desc(
         &mut self,
         collections: BTreeMap<GlobalId, SourceDesc>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Alters each identified collection to use the correlated [`GenericSourceConnection`].
+    async fn alter_ingestion_connections(
+        &mut self,
+        source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Acquire an immutable reference to the export state, should it exist.

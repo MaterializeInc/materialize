@@ -62,6 +62,7 @@ use mz_storage_client::statistics::{
     SinkStatisticsUpdate, SourceStatisticsUpdate, WebhookStatistics,
 };
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{
     AlterError, CollectionMetadata, PersistTxnTablesImpl, StorageError, TxnsCodecRow,
@@ -72,7 +73,8 @@ use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
-    IngestionDescription, SourceConnection, SourceData, SourceDesc, SourceExport,
+    GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
+    SourceExport,
 };
 use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
@@ -1054,9 +1056,6 @@ where
     ) -> Result<(), StorageError<Self::Timestamp>> {
         self.check_alter_ingestion_source_desc(&collections)?;
 
-        // The set of collections that we should execute after modifying the
-        // source descs.
-        let mut ingestions_to_execute = BTreeSet::new();
         for (id, desc) in collections {
             let collection = self.collection(id).expect("validated exists");
             let curr_ingestion = match &collection.description.data_source {
@@ -1127,11 +1126,55 @@ where
                 };
                 curr_ingestion.desc = desc;
                 curr_ingestion.source_exports = source_exports;
-                ingestions_to_execute.insert(id);
             }
         }
 
-        for id in ingestions_to_execute {
+        // n.b. we do not re-run updated ingestions because updating the source
+        // desc is only done in preparation for adding subsources, which will
+        // then run the ingestion.
+        // 
+        // If this expectation ever changes, we will almost certainly know
+        // because failing to run an altered ingestion means that whatever
+        // changes you expect to occur will not be reflected in the running
+        // dataflow.
+
+        Ok(())
+    }
+
+    async fn alter_ingestion_connections(
+        &mut self,
+        source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let mut ingestions_to_run = BTreeSet::new();
+
+        for (id, conn) in source_connections {
+            let collection = self
+                .collections
+                .get_mut(&id)
+                .ok_or_else(|| StorageError::IdentifierMissing(id))?;
+
+            match &mut collection.description.data_source {
+                DataSource::Ingestion(ingestion) => {
+                    // If the connection hasn't changed, there's no sense in
+                    // re-rendering the dataflow.
+                    if ingestion.desc.connection != conn {
+                        ingestion.desc.connection = conn;
+                        ingestions_to_run.insert(id);
+                    } else {
+                        tracing::debug!(
+                            "update_source_connection called on {id} but the \
+                            connection was the same"
+                        );
+                    }
+                }
+                o => {
+                    tracing::warn!("update_source_connection called on {:?}", o);
+                    Err(StorageError::IdentifierInvalid(id))?;
+                }
+            }
+        }
+
+        for id in ingestions_to_run {
             self.run_ingestion(id)?;
         }
         Ok(())
