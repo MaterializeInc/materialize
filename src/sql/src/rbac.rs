@@ -468,7 +468,7 @@ fn generate_rbac_requirements(
             privileges: plans
                 .iter()
                 .flat_map(
-                    |plan::CreateSourcePlans {
+                    |plan::CreateSourcePlanBundle {
                          source_id: _,
                          plan:
                              plan::CreateSourcePlan {
@@ -973,41 +973,7 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
-        Plan::PurifiedAlterSource {
-            // Keep in sync with  AlterSourcePlan elsewhere; right now this does
-            // not affect the output privileges.
-            alter_source: plan::AlterSourcePlan { id, action: _ },
-            subsources,
-        } => RbacRequirements {
-            ownership: vec![ObjectId::Item(*id)],
-            privileges: subsources
-                .iter()
-                .flat_map(
-                    |plan::CreateSourcePlans {
-                         source_id: _,
-                         plan:
-                             plan::CreateSourcePlan {
-                                 name,
-                                 source,
-                                 if_not_exists: _,
-                                 timeline: _,
-                                 in_cluster,
-                             },
-                         resolved_ids: _,
-                     }| {
-                        generate_required_source_privileges(
-                            name,
-                            &source.data_source,
-                            *in_cluster,
-                            role_id,
-                        )
-                        .into_iter()
-                    },
-                )
-                .collect(),
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+
         Plan::AlterClusterRename(plan::AlterClusterRenamePlan {
             id,
             name: _,

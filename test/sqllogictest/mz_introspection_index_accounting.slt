@@ -329,6 +329,7 @@ mz_object_lifetimes  event_type
 mz_object_lifetimes  id
 mz_object_lifetimes  object_type
 mz_object_lifetimes  occurred_at
+mz_object_lifetimes  previous_id
 mz_object_transitive_dependencies  object_id
 mz_object_transitive_dependencies  referenced_object_id
 mz_objects  id

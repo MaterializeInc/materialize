@@ -17,32 +17,36 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use maplit::{btreemap, btreeset};
+use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
-
 use mz_ore::collections::{CollectionExt, HashSet};
-use mz_ore::task::spawn;
+use mz_ore::task::{self, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
-use mz_ore::{soft_assert_or_log, task};
+use mz_proto::RustType;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_sql::ast::{CreateSubsourceStatement, Ident, UnresolvedItemName, Value};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
     ErrorMessageObjectDescription, ObjectType, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
-    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
+    Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
+use mz_storage_types::sources::postgres::{
+    PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
+};
+use prost::Message as _;
 use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::connection::ConnectionId;
@@ -50,10 +54,11 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type,
 };
 use mz_ore::instrument;
+use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee,
-    ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
-    QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
+    Explainee, ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption,
+    PlannedRoleVariable, QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
@@ -64,9 +69,8 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOptionName, ConnectionOption, ConnectionOptionName,
-    CreateSourceConnection, CreateSourceSubsource, DeferredItemName, PgConfigOption,
-    PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
+    ConnectionOption, ConnectionOptionName, CreateSourceConnection, DeferredItemName,
+    PgConfigOption, PgConfigOptionName, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
@@ -177,7 +181,7 @@ impl Coordinator {
     async fn create_source_inner(
         &mut self,
         session: &Session,
-        plans: Vec<plan::CreateSourcePlans>,
+        plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<CreateSourceInner, AdapterError> {
         let mut ops = vec![];
         let mut sources = vec![];
@@ -185,7 +189,7 @@ impl Coordinator {
         let if_not_exists_ids = plans
             .iter()
             .filter_map(
-                |plan::CreateSourcePlans {
+                |plan::CreateSourcePlanBundle {
                      source_id,
                      plan,
                      resolved_ids: _,
@@ -199,7 +203,7 @@ impl Coordinator {
             )
             .collect::<BTreeMap<_, _>>();
 
-        for plan::CreateSourcePlans {
+        for plan::CreateSourcePlanBundle {
             source_id,
             mut plan,
             resolved_ids,
@@ -257,11 +261,151 @@ impl Coordinator {
         })
     }
 
+    /// Subsources are planned differently from other statements because they
+    /// are typically synthesized from other statements, e.g. `CREATE SOURCE`.
+    /// Because of this, we have usually "missed" the opportunity to plan them
+    /// through the normal statement execution life cycle (the exception being
+    /// during bootstrapping).
+    pub(crate) async fn plan_subsource(
+        &mut self,
+        session: &Session,
+        params: &mz_sql::plan::Params,
+        subsource_stmt: CreateSubsourceStatement<mz_sql::names::Aug>,
+    ) -> Result<CreateSourcePlanBundle, AdapterError> {
+        let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
+        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let plan = self.plan_statement(
+            session,
+            Statement::CreateSubsource(subsource_stmt),
+            params,
+            &resolved_ids,
+        )?;
+        let plan = match plan {
+            Plan::CreateSource(plan) => plan,
+            _ => unreachable!(),
+        };
+        Ok(CreateSourcePlanBundle {
+            source_id,
+            plan,
+            resolved_ids,
+        })
+    }
+
+    /// Prepares an `ALTER SOURCE...ADD SUBSOURCE`.
+    pub(crate) async fn plan_purified_alter_source_add_subsource(
+        &mut self,
+        session: &Session,
+        params: Params,
+        id: GlobalId,
+        options: Vec<AlterSourceAddSubsourceOption<Aug>>,
+        create_subsource_stmts: Vec<CreateSubsourceStatement<Aug>>,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        let mut subsources = Vec::with_capacity(create_subsource_stmts.len());
+        for subsource_stmt in create_subsource_stmts {
+            let s = self
+                .plan_subsource(session, &params, subsource_stmt)
+                .await?;
+            subsources.push(s);
+        }
+
+        let action = mz_sql::plan::AlterSourceAction::AddSubsourceExports {
+            subsources,
+            options,
+        };
+
+        Ok((
+            Plan::AlterSource(mz_sql::plan::AlterSourcePlan { id, action }),
+            ResolvedIds(BTreeSet::new()),
+        ))
+    }
+
+    /// Prepares a `CREATE SOURCE` statement to create its progress subsource,
+    /// the primary source, and any ingestion export subsources (e.g. PG
+    /// tables).
+    pub(crate) async fn plan_purified_create_source(
+        &mut self,
+        ctx: &ExecuteContext,
+        params: Params,
+        progress_stmt: CreateSubsourceStatement<Aug>,
+        mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
+        subsource_stmts: Vec<CreateSubsourceStatement<Aug>>,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        let mut create_source_plans = Vec::with_capacity(subsource_stmts.len() + 2);
+
+        // 1. First plan the progress subsource.
+        //
+        // The primary source depends on this subsource because the primary
+        // source needs to know its shard ID, and the easiest way of
+        // guaranteeing that the shard ID is discoverable is to create this
+        // collection first.
+        assert!(progress_stmt.of_source.is_none());
+        let progress_plan = self
+            .plan_subsource(ctx.session(), &params, progress_stmt)
+            .await?;
+        let progress_full_name = self
+            .catalog()
+            .resolve_full_name(&progress_plan.plan.name, None);
+        let progress_subsource = ResolvedItemName::Item {
+            id: progress_plan.source_id,
+            qualifiers: progress_plan.plan.name.qualifiers.clone(),
+            full_name: progress_full_name,
+            print_id: true,
+        };
+
+        create_source_plans.push(progress_plan);
+
+        // 2. Then plan the main source.
+        //
+        // The subsources need this to exist in order to set their `OF SOURCE`
+        // correctly.
+        source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
+
+        let resolved_ids = mz_sql::names::visit_dependencies(&source_stmt);
+
+        // Plan primary source.
+        let source_plan = match self.plan_statement(
+            ctx.session(),
+            Statement::CreateSource(source_stmt),
+            &params,
+            &resolved_ids,
+        )? {
+            Plan::CreateSource(plan) => plan,
+            p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
+        };
+
+        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
+        let of_source = ResolvedItemName::Item {
+            id: source_id,
+            qualifiers: source_plan.name.qualifiers.clone(),
+            full_name: source_full_name,
+            print_id: true,
+        };
+
+        create_source_plans.push(CreateSourcePlanBundle {
+            source_id,
+            plan: source_plan,
+            resolved_ids: resolved_ids.clone(),
+        });
+
+        // 3. Finally, plan all the subsources
+        for mut stmt in subsource_stmts {
+            stmt.of_source = Some(of_source.clone());
+            let plan = self.plan_subsource(ctx.session(), &params, stmt).await?;
+            create_source_plans.push(plan);
+        }
+
+        Ok((
+            Plan::CreateSources(create_source_plans),
+            ResolvedIds(BTreeSet::new()),
+        ))
+    }
+
     #[instrument]
     pub(super) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
-        plans: Vec<plan::CreateSourcePlans>,
+        plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateSourceInner {
             ops,
@@ -271,39 +415,78 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                let mut read_policy_updates = Vec::new();
+                // Buffer an ingestions' read policies in case their subsources
+                // need to reference it before it's durably recorded.
+                let mut ingestion_read_policies: BTreeMap<_, _> = BTreeMap::new();
+                let mut read_policies: BTreeMap<Option<CompactionWindow>, Vec<GlobalId>> =
+                    BTreeMap::new();
 
-                for (source_id, source) in sources {
+                // To improve the performance of creating a source and many
+                // subsources, we create all of the collections at once. If we
+                // created each collection independently, we would reschedule
+                // the primary source's execution for each subsources, causing
+                // unncessary thrashing.
+                //
+                // Note that creating all of the collections at once should
+                // never be semantic bearing; we should always be able to break
+                // this apart into creating the collections sequentially.
+                let mut collections = Vec::with_capacity(sources.len());
+
+                for (source_id, mut source) in sources {
                     let source_status_collection_id =
                         Some(coord.catalog().resolve_builtin_storage_collection(
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
-                    let (data_source, status_collection_id, set_read_policies) = match source
-                        .data_source
-                    {
+                    let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let ingestion =
                                 ingestion.into_inline_connection(coord.catalog().state());
 
-                            // The parent source dictates all of the subsource's read policies.
-                            let set_read_policies =
-                                ingestion.source_exports.keys().cloned().collect();
+                            ingestion_read_policies
+                                .insert(source_id, source.custom_logical_compaction_window);
 
                             (
                                 DataSource::Ingestion(ingestion),
                                 source_status_collection_id,
-                                set_read_policies,
                             )
                         }
-                        // Subsources use source statuses.
-                        DataSourceDesc::Source => (
-                            DataSource::Other(DataSourceOther::Source),
-                            source_status_collection_id,
-                            // Subsources will inherit their parent source's read_policy.
-                            vec![],
-                        ),
-                        DataSourceDesc::Progress => (DataSource::Progress, None, vec![source_id]),
+                        DataSourceDesc::IngestionExport {
+                            ingestion_id,
+                            external_reference,
+                        } => {
+                            // Propagate source's compaction window if this
+                            // subsource does not have its own value specified.
+                            if source.custom_logical_compaction_window.is_none() {
+                                // Defined as part of the initial set of subsources.
+                                let c = match ingestion_read_policies.get(&ingestion_id) {
+                                    Some(c) => c,
+                                    None => {
+                                        // Added to an existing source.
+                                        let source = coord.catalog().get_entry(&ingestion_id);
+                                        match &source.item {
+                                            CatalogItem::Source(source) => {
+                                                &source.custom_logical_compaction_window
+                                            }
+                                            _ => unreachable!(),
+                                        }
+                                    }
+                                };
+                                source.custom_logical_compaction_window = c.clone();
+                            }
+
+                            (
+                                DataSource::IngestionExport {
+                                    ingestion_id,
+                                    external_reference,
+                                },
+                                source_status_collection_id,
+                            )
+                        }
+                        DataSourceDesc::Source => {
+                            unreachable!("cannot render legacy-style sources")
+                        }
+                        DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
                                 coord.catalog().state().try_get_webhook_url(&source_id)
@@ -311,42 +494,37 @@ impl Coordinator {
                                 session.add_notice(AdapterNotice::WebhookSourceCreated { url })
                             }
 
-                            (DataSource::Webhook, None, vec![source_id])
+                            (DataSource::Webhook, None)
                         }
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
                         }
                     };
 
-                    let storage_metadata = coord.catalog.state().storage_metadata();
+                    collections.push((
+                        source_id,
+                        CollectionDescription::<Timestamp> {
+                            desc: source.desc.clone(),
+                            data_source,
+                            since: None,
+                            status_collection_id,
+                        },
+                    ));
 
-                    coord
-                        .controller
-                        .storage
-                        .create_collections(
-                            storage_metadata,
-                            None,
-                            vec![(
-                                source_id,
-                                CollectionDescription {
-                                    desc: source.desc.clone(),
-                                    data_source,
-                                    since: None,
-                                    status_collection_id,
-                                },
-                            )],
-                        )
-                        .await
-                        .unwrap_or_terminate("cannot fail to create collections");
-
-                    if !set_read_policies.is_empty() {
-                        let compaction_window = source
-                            .custom_logical_compaction_window
-                            .unwrap_or(CompactionWindow::Default);
-
-                        read_policy_updates.push((set_read_policies, compaction_window));
-                    }
+                    read_policies
+                        .entry(source.custom_logical_compaction_window.clone())
+                        .or_default()
+                        .push(source_id);
                 }
+
+                let storage_metadata = coord.catalog.state().storage_metadata();
+
+                coord
+                    .controller
+                    .storage
+                    .create_collections(storage_metadata, None, collections)
+                    .await
+                    .unwrap_or_terminate("cannot fail to create collections");
 
                 // It is _very_ important that we only initialize read policies
                 // after we have created all the sources/collections. Some of
@@ -359,9 +537,12 @@ impl Coordinator {
                 // SUBSOURCE, and all other SUBSOURCES of a SOURCE will depend
                 // on it. Both subsources and sources will show up as a `Source`
                 // in the above.
-                for (storage_policies, compaction_window) in read_policy_updates {
+                for (compaction_window, storage_policies) in read_policies {
                     coord
-                        .initialize_storage_read_policies(storage_policies, compaction_window)
+                        .initialize_storage_read_policies(
+                            storage_policies,
+                            compaction_window.unwrap_or(CompactionWindow::Default),
+                        )
                         .await;
                 }
             })
@@ -3078,7 +3259,7 @@ impl Coordinator {
         let mut connections = VecDeque::new();
         connections.push_front(entry.id());
 
-        let mut sources = BTreeMap::new();
+        let mut source_descs = BTreeMap::new();
         let mut sinks = BTreeMap::new();
 
         while let Some(id) = connections.pop_front() {
@@ -3087,15 +3268,15 @@ impl Coordinator {
                 match entry.item_type() {
                     CatalogItemType::Connection => connections.push_back(*id),
                     CatalogItemType::Source => {
-                        let ingestion =
-                            match &entry.source().expect("known to be source").data_source {
-                                DataSourceDesc::Ingestion(ingestion) => ingestion
-                                    .clone()
-                                    .into_inline_connection(self.catalog().state()),
-                                _ => unreachable!("only ingestions reference connections"),
-                            };
+                        let desc = match &entry.source().expect("known to be source").data_source {
+                            DataSourceDesc::Ingestion(ingestion) => ingestion
+                                .desc
+                                .clone()
+                                .into_inline_connection(self.catalog().state()),
+                            _ => unreachable!("only ingestions reference connections"),
+                        };
 
-                        sources.insert(*id, ingestion);
+                        source_descs.insert(*id, desc);
                     }
                     CatalogItemType::Sink => {
                         let export = entry.sink().expect("known to be sink");
@@ -3112,12 +3293,14 @@ impl Coordinator {
             }
         }
 
-        if !sources.is_empty() {
+        if !source_descs.is_empty() {
+            // TODO(#26767): provide an API to modify the connection without
+            // modifying the entire source desc, just like we offer for sinks.
             self.controller
                 .storage
-                .alter_collection(sources)
+                .alter_ingestion_source_desc(source_descs)
                 .await
-                .expect("altering collection after txn must succeed");
+                .unwrap_or_terminate("cannot fail to alter source desc");
         }
 
         if !sinks.is_empty() {
@@ -3125,7 +3308,7 @@ impl Coordinator {
                 .storage
                 .update_export_connection(sinks)
                 .await
-                .expect("altering exports after txn must succeed")
+                .unwrap_or_terminate("altering exports after txn must succeed");
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
@@ -3136,15 +3319,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         plan::AlterSourcePlan { id, action }: plan::AlterSourcePlan,
-        to_create_subsources: Vec<plan::CreateSourcePlans>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        assert!(
-            to_create_subsources.is_empty()
-                || matches!(action, plan::AlterSourceAction::AddSubsourceExports { .. }),
-            "cannot include subsources with {:?}",
-            action
-        );
-
         let cur_entry = self.catalog().get_entry(&id);
         let cur_source = cur_entry.source().expect("known to be source");
 
@@ -3167,231 +3342,17 @@ impl Coordinator {
         };
 
         match action {
-            plan::AlterSourceAction::DropSubsourceExports { to_drop } => {
-                mz_ore::soft_assert_or_log!(!to_drop.is_empty(), "`to_drop` is empty");
-
-                const ALTER_SOURCE: &str = "ALTER SOURCE...DROP TABLES";
-
-                let (mut create_source_stmt, mut resolved_ids) =
-                    create_sql_to_stmt_deps(self, ALTER_SOURCE, cur_entry.create_sql())?;
-
-                // Ensure that we are only dropping items on which we depend.
-                for t in &to_drop {
-                    // Remove dependency.
-                    let existed = resolved_ids.0.remove(t);
-                    if !existed {
-                        Err(AdapterError::internal(
-                            ALTER_SOURCE,
-                            format!("removed {t}, but {id} did not have dependency"),
-                        ))?;
-                    }
-                }
-
-                // We are doing a lot of unwrapping, so just make an error to reference; all of
-                // these invariants are guaranteed to be true because of how we plan subsources.
-                let purification_err =
-                    || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
-
-                let referenced_subsources = match create_source_stmt
-                    .referenced_subsources
-                    .as_mut()
-                    .ok_or(purification_err())?
-                {
-                    ReferencedSubsources::SubsetTables(ref mut s) => s,
-                    _ => return Err(purification_err()),
-                };
-
-                let mut dropped_references = BTreeSet::new();
-
-                // Fixup referenced_subsources. We panic rather than return
-                // errors here because `retain` is an infallible operation and
-                // actually erroring here is both incredibly unlikely and
-                // recoverable (users can stop trying to drop subsources if it
-                // panics).
-                referenced_subsources.retain(
-                    |CreateSourceSubsource {
-                         subsource,
-                         reference,
-                     }| {
-                        match subsource
-                            .as_ref()
-                            .unwrap_or_else(|| panic!("{}", purification_err().to_string()))
-                        {
-                            DeferredItemName::Named(name) => match name {
-                                // Retain all sources which we still have a dependency on.
-                                ResolvedItemName::Item { id, .. } => {
-                                    let contains = resolved_ids.0.contains(id);
-                                    if !contains {
-                                        dropped_references.insert(reference.clone());
-                                    }
-                                    contains
-                                }
-                                _ => unreachable!("{}", purification_err()),
-                            },
-                            _ => unreachable!("{}", purification_err()),
-                        }
-                    },
-                );
-
-                referenced_subsources.sort();
-
-                // Remove dropped references from text columns.
-                match &mut create_source_stmt.connection {
-                    CreateSourceConnection::Postgres { options, .. } => {
-                        options.retain_mut(|option| {
-                            if option.name != PgConfigOptionName::TextColumns {
-                                return true;
-                            }
-
-                            // We know this is text_cols
-                            match &mut option.value {
-                                Some(WithOptionValue::Sequence(names)) => {
-                                    names.retain(|name| match name {
-                                        WithOptionValue::UnresolvedItemName(
-                                            column_qualified_reference,
-                                        ) => {
-                                            mz_ore::soft_assert_eq_or_log!(
-                                                column_qualified_reference.0.len(), 4
-                                            );
-                                            if column_qualified_reference.0.len() == 4 {
-                                                let mut table = column_qualified_reference.clone();
-                                                table.0.truncate(3);
-                                                !dropped_references.contains(&table)
-                                            } else {
-                                                tracing::warn!(
-                                                    "PgConfigOptionName::TextColumns had unexpected value {:?}; should have 4 components",
-                                                    column_qualified_reference
-                                                );
-                                                true
-                                            }
-                                        }
-                                        _ => true,
-                                    });
-
-                                    names.sort();
-                                    // Only retain this option if there are
-                                    // names left.
-                                    !names.is_empty()
-                                }
-                                _ => true
-                            }
-                        })
-                    }
-                    _ => {}
-                }
-
-                // Open a new catalog, which we will use to re-plan our
-                // statement with the desired subsources.
-                let mut catalog = self.catalog().for_system_session();
-                catalog.mark_id_unresolvable_for_replanning(cur_entry.id());
-
-                // Re-define our source in terms of the amended statement
-                let plan = match mz_sql::plan::plan(
-                    None,
-                    &catalog,
-                    Statement::CreateSource(create_source_stmt),
-                    &Params::empty(),
-                    &resolved_ids,
-                )
-                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
-                {
-                    Plan::CreateSource(plan) => plan,
-                    _ => unreachable!("create source plan is only valid response"),
-                };
-
-                // Ensure we have actually removed the subsource from the source's dependency and
-                // did not in any other way alter the dependencies.
-                let (_, new_resolved_ids) =
-                    create_sql_to_stmt_deps(self, ALTER_SOURCE, &plan.source.create_sql)?;
-
-                if let Some(id) = new_resolved_ids.0.iter().find(|id| to_drop.contains(id)) {
-                    Err(AdapterError::internal(
-                        ALTER_SOURCE,
-                        format!("failed to remove dropped ID {id} from dependencies"),
-                    ))?;
-                }
-
-                if new_resolved_ids.0 != resolved_ids.0 {
-                    Err(AdapterError::internal(
-                        ALTER_SOURCE,
-                        format!("expected resolved items to be {resolved_ids:?}, but is actually {new_resolved_ids:?}"),
-                    ))?;
-                }
-
-                let source = Source::new(
-                    id,
-                    plan,
-                    resolved_ids,
-                    cur_source.custom_logical_compaction_window,
-                    cur_source.is_retained_metrics_object,
-                );
-
-                // Get new ingestion description for storage.
-                let ingestion = match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => ingestion
-                        .clone()
-                        .into_inline_connection(self.catalog().state()),
-                    _ => unreachable!("already verified of type ingestion"),
-                };
-
-                let collection = btreemap! {id => ingestion};
-
-                self.controller
-                    .storage
-                    .check_alter_collection(&collection)
-                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-
-                // Do not drop this source, even though it's a dependency.
-                let primary_source = btreeset! {ObjectId::Item(id)};
-
-                // CASCADE
-                let drops = self.catalog().object_dependents_except(
-                    &to_drop.into_iter().map(ObjectId::Item).collect(),
-                    session.conn_id(),
-                    primary_source,
-                );
-
-                let DropOps {
-                    mut ops,
-                    dropped_active_db,
-                    dropped_active_cluster,
-                    dropped_in_use_indexes,
-                } = self.sequence_drop_common(session, drops)?;
-
-                assert!(
-                    !dropped_active_db && !dropped_active_cluster,
-                    "dropping subsources does not drop DBs or clusters"
-                );
-
-                soft_assert_or_log!(
-                    dropped_in_use_indexes.is_empty(),
-                    "Dropping subsources might drop indexes, but then all objects dependent on the index should also be dropped."
-                );
-
-                // Redefine source.
-                ops.push(catalog::Op::UpdateItem {
-                    id,
-                    // Look this up again so we don't have to hold an immutable reference to the
-                    // entry for so long.
-                    name: self.catalog.get_entry(&id).name().clone(),
-                    to_item: CatalogItem::Source(source),
-                });
-
-                self.catalog_transact(Some(session), ops).await?;
-
-                // Commit the new ingestion to storage.
-                self.controller
-                    .storage
-                    .alter_collection(collection)
-                    .await
-                    .expect("altering collection after txn must succeed");
-            }
             plan::AlterSourceAction::AddSubsourceExports {
                 subsources,
-                details,
                 options,
             } => {
                 const ALTER_SOURCE: &str = "ALTER SOURCE...ADD SUBSOURCES";
+
+                let mz_sql::plan::AlterSourceAddSubsourceOptionExtracted {
+                    text_columns: mut new_text_columns,
+                    details: new_details,
+                    ..
+                } = options.try_into()?;
 
                 // Resolve items in statement
                 let (mut create_source_stmt, resolved_ids) =
@@ -3402,105 +3363,151 @@ impl Coordinator {
                 let purification_err =
                     || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
 
-                match create_source_stmt
-                    .referenced_subsources
-                    .as_mut()
-                    .ok_or(purification_err())?
-                {
-                    ReferencedSubsources::SubsetTables(c) => {
-                        mz_ore::soft_assert_no_log!(
-                            {
-                                let current_references: BTreeSet<_> = c
-                                    .iter()
-                                    .map(|CreateSourceSubsource { reference, .. }| reference)
-                                    .collect();
-                                let subsources: BTreeSet<_> = subsources
-                                    .iter()
-                                    .map(|CreateSourceSubsource { reference, .. }| reference)
-                                    .collect();
-
-                                current_references
-                                    .intersection(&subsources)
-                                    .next()
-                                    .is_none()
-                            },
-                            "cannot add subsources that refer to existing PG tables; this should have errored in purification"
-                        );
-
-                        c.extend(subsources);
-                    }
-                    _ => return Err(purification_err()),
-                };
-
                 let curr_options = match &mut create_source_stmt.connection {
                     CreateSourceConnection::Postgres { options, .. } => options,
                     _ => return Err(purification_err()),
                 };
 
-                // Remove any old detail references
-                curr_options
-                    .retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
+                let mz_sql::plan::PgConfigOptionExtracted {
+                    details,
+                    mut text_columns,
+                    ..
+                } = curr_options.clone().try_into()?;
+
+                // Drop both details and text columns; we will add them back in
+                // as appropriate below.
+                curr_options.retain(|o| {
+                    !matches!(
+                        o.name,
+                        PgConfigOptionName::Details | PgConfigOptionName::TextColumns
+                    )
+                });
+
+                // Get all currently referred-to items
+                let catalog = self.catalog();
+                let curr_references: BTreeSet<_> = catalog
+                    .get_entry(&id)
+                    .used_by()
+                    .into_iter()
+                    .filter_map(|subsource| {
+                        catalog
+                            .get_entry(subsource)
+                            .subsource_details()
+                            .map(|(_id, reference)| reference)
+                    })
+                    .collect();
+
+                let gen_details =
+                    |details: Option<String>| -> Result<PostgresSourcePublicationDetails, AdapterError> {
+                        let details = details.as_ref().ok_or_else(|| {
+                            AdapterError::internal(ALTER_SOURCE, "Postgres source missing details")
+                        })?;
+
+                        let details = hex::decode(details)
+                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+                        let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
+                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+
+                        PostgresSourcePublicationDetails::from_proto(details)
+                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
+                    };
+
+                let mut curr_details = gen_details(details)?;
+                let mut new_details = gen_details(new_details)?;
+
+                // n.b. this does not check publication table names, so we must
+                // do that separately.
+                curr_details
+                    .alter_compatible(cur_entry.id(), &new_details)
+                    .map_err(StorageError::InvalidAlter)?;
+
+                // Trim any unreferred-to tables.
+                curr_details.tables.retain(|table| {
+                    let name = UnresolvedItemName(vec![
+                        // Unchecked is fine beause we have previously verified
+                        // that these are valid idents.
+                        Ident::new_unchecked(curr_details.database.clone()),
+                        Ident::new_unchecked(table.namespace.clone()),
+                        Ident::new_unchecked(table.name.clone()),
+                    ]);
+
+                    // Retain the definition of only those that are still referenced. This
+                    // lets us retain only the minimal set of publication details, which can
+                    // help avoid issues when generating PostgreSQL table casts.
+                    //
+                    // For example, if a table in the publication contains a column whose
+                    // cast requires using `TEXT COLUMNS` but the table is not an ingested
+                    // subsource. This poses an issue because `TEXT COLUMNS` requires that
+                    // the columns refer only to referenced subsources. The best solution to
+                    // this is to ensure that we simply don't try to generate the table cast
+                    // in the first place.
+                    curr_references.contains(&name)
+                });
+
+                mz_ore::soft_assert_eq_or_log!(
+                    curr_details.tables.len(),
+                    curr_references.len(),
+                    "PostgresSourcePublicationDetails must have entry for every reference"
+                );
+
+                let referenced_oids: BTreeSet<_> =
+                    curr_details.tables.iter().map(|t| t.oid).collect();
+
+                // Ensure that new tables are distinct from the current tables. We check the names only because
+                for table in new_details.tables.iter() {
+                    let name = UnresolvedItemName(vec![
+                        // Unchecked is fine beause we have previously verified
+                        // that these are valid idents.
+                        Ident::new_unchecked(curr_details.database.clone()),
+                        Ident::new_unchecked(table.namespace.clone()),
+                        Ident::new_unchecked(table.name.clone()),
+                    ]);
+
+                    // Check both the OIDs and the names of the references to protect against
+                    // hard-to-reason-about renames.
+                    if referenced_oids.contains(&table.oid) || curr_references.contains(&name) {
+                        Err(AdapterError::SubsourceAlreadyReferredTo { name })?;
+                    }
+                }
+
+                // Merge the current table definitions into new tables. Note
+                // this changes the output indexes of the subsources.
+                new_details.tables.extend(curr_details.tables);
 
                 curr_options.push(PgConfigOption {
                     name: PgConfigOptionName::Details,
-                    value: details,
+                    value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                        new_details.into_proto().encode_to_vec(),
+                    )))),
                 });
 
-                // Merge text columns
-                let curr_text_columns = curr_options
-                    .iter_mut()
-                    .find(|option| option.name == PgConfigOptionName::TextColumns);
+                // Drop all text columns that are not currently referred to.
+                text_columns.retain(|column_qualified_reference| {
+                    mz_ore::soft_assert_eq_or_log!(
+                        column_qualified_reference.0.len(),
+                        4,
+                        "all TEXT COLUMNS values must be column-qualified references"
+                    );
+                    let mut table = column_qualified_reference.clone();
+                    table.0.truncate(3);
+                    curr_references.contains(&table)
+                });
 
-                let new_text_columns = options
-                    .into_iter()
-                    .find(|option| option.name == AlterSourceAddSubsourceOptionName::TextColumns);
+                // Merge the current text columns into the new text columns.
+                new_text_columns.extend(text_columns);
 
-                match (curr_text_columns, new_text_columns) {
-                    (Some(curr), Some(new)) => {
-                        let curr = match curr.value {
-                            Some(WithOptionValue::Sequence(ref mut curr)) => curr,
-                            _ => unreachable!(),
-                        };
-                        let new = match new.value {
-                            Some(WithOptionValue::Sequence(new)) => new,
-                            _ => unreachable!(),
-                        };
+                // If we have text columns, add them to the options.
+                if !new_text_columns.is_empty() {
+                    new_text_columns.sort();
+                    let new_text_columns = new_text_columns
+                        .into_iter()
+                        .map(WithOptionValue::UnresolvedItemName)
+                        .collect();
 
-                        curr.extend(new);
-                        curr.sort();
-
-                        mz_ore::soft_assert_no_log!(
-                            curr.iter()
-                                .all(|v| matches!(v, WithOptionValue::UnresolvedItemName(_))),
-                            "all elements of text columns must be UnresolvedItemName, but got {:?}",
-                            curr
-                        );
-
-                        mz_ore::soft_assert_no_log!(
-                            curr.iter().duplicates().next().is_none(),
-                            "TEXT COLUMN references must be unique among both sets, but got {:?}",
-                            curr
-                        );
-                    }
-                    (None, Some(new)) => {
-                        mz_ore::soft_assert_no_log!(
-                            match &new.value {
-                                Some(WithOptionValue::Sequence(v)) => v
-                                    .iter()
-                                    .all(|v| matches!(v, WithOptionValue::UnresolvedItemName(_))),
-                                _ => false,
-                            },
-                            "TEXT COLUMNS must have a sequence of unresolved item names but got {:?}",
-                            new.value
-                        );
-
-                        curr_options.push(PgConfigOption {
-                            name: PgConfigOptionName::TextColumns,
-                            value: new.value,
-                        })
-                    }
-                    // No change
-                    _ => {}
+                    curr_options.push(PgConfigOption {
+                        name: PgConfigOptionName::TextColumns,
+                        value: Some(WithOptionValue::Sequence(new_text_columns)),
+                    });
                 }
 
                 let mut catalog = self.catalog().for_system_session();
@@ -3526,13 +3533,7 @@ impl Coordinator {
                 let source = Source::new(
                     id,
                     plan,
-                    ResolvedIds(
-                        resolved_ids
-                            .0
-                            .into_iter()
-                            .chain(to_create_subsources.iter().map(|csp| csp.source_id))
-                            .collect(),
-                    ),
+                    resolved_ids,
                     cur_source.custom_logical_compaction_window,
                     cur_source.is_retained_metrics_object,
                 );
@@ -3540,45 +3541,54 @@ impl Coordinator {
                 let source_compaction_window = source.custom_logical_compaction_window;
 
                 // Get new ingestion description for storage.
-                let ingestion = match &source.data_source {
+                let desc = match &source.data_source {
                     DataSourceDesc::Ingestion(ingestion) => ingestion
+                        .desc
                         .clone()
                         .into_inline_connection(self.catalog().state()),
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
-                let collection = btreemap! {id => ingestion};
+                let descs = btreemap! {id => desc};
 
                 self.controller
                     .storage
-                    .check_alter_collection(&collection)
+                    .check_alter_ingestion_source_desc(&descs)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
+                // Redefine source. This must be done before we create any new
+                // subsources so that it has the right ingestion.
+                let mut ops = vec![catalog::Op::UpdateItem {
+                    id,
+                    // Look this up again so we don't have to hold an immutable reference to the
+                    // entry for so long.
+                    name: self.catalog.get_entry(&id).name().clone(),
+                    to_item: CatalogItem::Source(source),
+                }];
+
                 let CreateSourceInner {
-                    mut ops,
+                    ops: new_ops,
                     sources,
                     if_not_exists_ids,
-                } = self
-                    .create_source_inner(session, to_create_subsources)
-                    .await?;
+                } = self.create_source_inner(session, subsources).await?;
+
+                ops.extend(new_ops.into_iter());
 
                 assert!(
                     if_not_exists_ids.is_empty(),
                     "IF NOT EXISTS not supported for ALTER SOURCE...ADD SUBSOURCES"
                 );
 
-                // Redefine source.
-                ops.push(catalog::Op::UpdateItem {
-                    id,
-                    // Look this up again so we don't have to hold an immutable reference to the
-                    // entry for so long.
-                    name: self.catalog.get_entry(&id).name().clone(),
-                    to_item: CatalogItem::Source(source),
-                });
-
                 self.catalog_transact(Some(session), ops).await?;
 
+                self.controller
+                    .storage
+                    .alter_ingestion_source_desc(descs)
+                    .await
+                    .unwrap_or_terminate("cannot fail to alter source desc");
+
                 let mut source_ids = Vec::with_capacity(sources.len());
+                let mut collections = Vec::with_capacity(sources.len());
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(self.catalog().resolve_builtin_storage_collection(
@@ -3587,47 +3597,44 @@ impl Coordinator {
 
                     let (data_source, status_collection_id) = match source.data_source {
                         // Subsources use source statuses.
-                        DataSourceDesc::Source => (
-                            DataSource::Other(DataSourceOther::Source),
+                        DataSourceDesc::IngestionExport {
+                            ingestion_id,
+                            external_reference,
+                        } => (
+                            DataSource::IngestionExport {
+                                ingestion_id,
+                                external_reference,
+                            },
                             source_status_collection_id,
                         ),
                         o => {
                             unreachable!(
-                                "ALTER SOURCE...ADD SUBSOURCE only creates subsources but got {:?}",
+                                "ALTER SOURCE...ADD SUBSOURCE only creates SourceExport but got {:?}",
                                 o
                             )
                         }
                     };
 
-                    let storage_metadata = self.catalog.state().storage_metadata();
-
-                    self.controller
-                        .storage
-                        .create_collections(
-                            storage_metadata,
-                            None,
-                            vec![(
-                                source_id,
-                                CollectionDescription {
-                                    desc: source.desc.clone(),
-                                    data_source,
-                                    since: None,
-                                    status_collection_id,
-                                },
-                            )],
-                        )
-                        .await
-                        .unwrap_or_terminate("cannot fail to create collections");
+                    collections.push((
+                        source_id,
+                        CollectionDescription {
+                            desc: source.desc.clone(),
+                            data_source,
+                            since: None,
+                            status_collection_id,
+                        },
+                    ));
 
                     source_ids.push(source_id);
                 }
 
-                // Commit the new ingestion to storage.
+                let storage_metadata = self.catalog.state().storage_metadata();
+
                 self.controller
                     .storage
-                    .alter_collection(collection)
+                    .create_collections(storage_metadata, None, collections)
                     .await
-                    .expect("altering collection after txn must succeed");
+                    .unwrap_or_terminate("cannot fail to create collections");
 
                 self.initialize_storage_read_policies(
                     source_ids,
@@ -4132,10 +4139,10 @@ impl Coordinator {
                     });
                 ops.extend(dependent_index_ops);
 
-                // Alter owner cascades down to sub-sources and progress collections.
+                // Alter owner cascades down to progress collections.
                 let dependent_subsources =
                     entry
-                        .subsources()
+                        .progress_id()
                         .into_iter()
                         .map(|id| catalog::Op::UpdateOwner {
                             id: ObjectId::Item(id),

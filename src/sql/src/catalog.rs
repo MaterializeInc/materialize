@@ -614,14 +614,16 @@ pub trait CatalogItem {
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
 
-    /// Reports whether this catalog item is a subsource.
-    fn is_subsource(&self) -> bool;
+    /// Reports whether this catalog entry is a subsource and, if it is, the
+    /// ingestion it is a subsource of, as well as the item it exports.
+    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName)>;
+
+    /// Returns the mapping of `GloablIds` to output indices for this source.
+    // TODO(#26764, #26769): this should no longer be used.
+    fn source_exports(&self) -> BTreeMap<GlobalId, usize>;
 
     /// Reports whether this catalog item is a progress source.
     fn is_progress_source(&self) -> bool;
-
-    /// If this catalog item is a source, it return the IDs of its subsources.
-    fn subsources(&self) -> BTreeSet<GlobalId>;
 
     /// If this catalog item is a source, it return the IDs of its progress collection.
     fn progress_id(&self) -> Option<GlobalId>;
@@ -738,6 +740,23 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
+        }
+    }
+}
+
+impl From<CatalogItemType> for mz_audit_log::ObjectType {
+    fn from(value: CatalogItemType) -> Self {
+        match value {
+            CatalogItemType::Table => mz_audit_log::ObjectType::Table,
+            CatalogItemType::Source => mz_audit_log::ObjectType::Source,
+            CatalogItemType::View => mz_audit_log::ObjectType::View,
+            CatalogItemType::MaterializedView => mz_audit_log::ObjectType::MaterializedView,
+            CatalogItemType::Index => mz_audit_log::ObjectType::Index,
+            CatalogItemType::Type => mz_audit_log::ObjectType::Type,
+            CatalogItemType::Sink => mz_audit_log::ObjectType::Sink,
+            CatalogItemType::Func => mz_audit_log::ObjectType::Func,
+            CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
+            CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
         }
     }
 }

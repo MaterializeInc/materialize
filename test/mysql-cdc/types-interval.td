@@ -65,7 +65,7 @@ contains: error decoding value
 # Drop and recreate the source to confirm the decoding
 # error is also encountered in the snapshot phase
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
@@ -74,4 +74,4 @@ contains: error decoding value
 ! SELECT * FROM t1;
 contains: error decoding value
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;

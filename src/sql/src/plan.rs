@@ -45,8 +45,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ConnectionOptionName, CreateSourceSubsource, QualifiedReplica,
-    TransactionIsolationLevel, TransactionMode, Value, WithOptionValue,
+    AlterSourceAddSubsourceOption, ConnectionOptionName, QualifiedReplica,
+    TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
@@ -96,7 +96,10 @@ pub use notice::PlanNotice;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
-pub use statement::ddl::{PlannedAlterRoleOption, PlannedRoleVariable};
+pub use statement::ddl::{
+    AlterSourceAddSubsourceOptionExtracted, PgConfigOptionExtracted, PlannedAlterRoleOption,
+    PlannedRoleVariable,
+};
 pub use statement::{
     describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementContext,
     StatementDesc,
@@ -113,7 +116,7 @@ pub enum Plan {
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
     CreateSource(CreateSourcePlan),
-    CreateSources(Vec<CreateSourcePlans>),
+    CreateSources(Vec<CreateSourcePlanBundle>),
     CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
@@ -153,12 +156,6 @@ pub enum Plan {
     AlterSetCluster(AlterSetClusterPlan),
     AlterConnection(AlterConnectionPlan),
     AlterSource(AlterSourcePlan),
-    PurifiedAlterSource {
-        // The `ALTER SOURCE` plan
-        alter_source: AlterSourcePlan,
-        // The plan to create any subsources added in the `ALTER SOURCE` statement.
-        subsources: Vec<CreateSourcePlans>,
-    },
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
@@ -377,7 +374,7 @@ impl Plan {
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterConnection(_) => "alter connection",
-            Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
+            Plan::AlterSource(_) => "alter source",
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterItemSwap(_) => "swap item",
             Plan::AlterSchemaRename(_) => "alter rename schema",
@@ -576,8 +573,9 @@ pub struct CreateSourcePlan {
     pub in_cluster: Option<ClusterId>,
 }
 
+/// A [`CreateSourcePlan`] and the metadata necessary to sequence it.
 #[derive(Debug)]
-pub struct CreateSourcePlans {
+pub struct CreateSourcePlanBundle {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
     pub resolved_ids: ResolvedIds,
@@ -1015,12 +1013,8 @@ pub struct AlterConnectionPlan {
 
 #[derive(Debug)]
 pub enum AlterSourceAction {
-    DropSubsourceExports {
-        to_drop: BTreeSet<GlobalId>,
-    },
     AddSubsourceExports {
-        subsources: Vec<CreateSourceSubsource<Aug>>,
-        details: Option<WithOptionValue<Aug>>,
+        subsources: Vec<CreateSourcePlanBundle>,
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,
     },
 }
@@ -1266,11 +1260,19 @@ pub struct Source {
     pub compaction_window: Option<CompactionWindow>,
 }
 
+// TODO(#26768): do we need all of these `DataSourceDesc`s?
 #[derive(Debug, Clone)]
 pub enum DataSourceDesc {
     /// Receives data from an external system.
     Ingestion(Ingestion),
+    /// This source receives its data from the identified ingestion,
+    /// specifically the output identified by `external_reference`.
+    IngestionExport {
+        ingestion_id: GlobalId,
+        external_reference: UnresolvedItemName,
+    },
     /// Receives data from some other source.
+    // TODO(#26764): delete
     Source,
     /// Receives data from the source's reclocking/remapping operations.
     Progress,

@@ -19,6 +19,7 @@ use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_timely_util::antichain::AntichainExt;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -205,6 +206,12 @@ pub enum StorageError<T> {
     PersistShardAlreadyInUse(String),
     /// Persist txn shard already exists.
     PersistTxnShardAlreadyExists,
+    /// The item that a subsource refers to is unexpectedly missing from the
+    /// source.
+    MissingSubsourceReference {
+        ingestion_id: GlobalId,
+        reference: UnresolvedItemName,
+    },
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -230,6 +237,7 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
             Self::CollectionMetadataAlreadyExists(_) => None,
             Self::PersistShardAlreadyInUse(_) => None,
             Self::PersistTxnShardAlreadyExists => None,
+            Self::MissingSubsourceReference { .. } => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -301,6 +309,14 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
             Self::PersistTxnShardAlreadyExists => {
                 write!(f, "persist txn shard already exists")
             }
+            Self::MissingSubsourceReference {
+                ingestion_id,
+                reference,
+            } => write!(
+                f,
+                "ingestion {ingestion_id} unexpectedly missing reference to {}",
+                reference
+            ),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }

@@ -62,7 +62,7 @@ INSERT INTO timestamp_table SELECT * FROM timestamp_table;
 "2011-11-11 20:11:11.123456 UTC"
 "2011-11-11 20:11:11.123456 UTC"
 
-> DROP SOURCE mz_source_timestamp;
+> DROP SOURCE mz_source_timestamp CASCADE;
 
 # Mz does not support TIME WITH TIME ZOINE
 ! CREATE SOURCE mz_source

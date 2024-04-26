@@ -31,13 +31,14 @@ use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_types::{Codec64, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceData};
+use mz_storage_types::sources::{IngestionDescription, SourceData, SourceDesc};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -87,6 +88,18 @@ pub enum IntrospectionType {
 pub enum DataSource {
     /// Ingest data from some external source.
     Ingestion(IngestionDescription),
+    /// This source receives its data from the identified ingestion,
+    /// specifically the output identified by `external_reference`.
+    ///
+    /// The referenced ingestion must be created before all of its exports.
+    IngestionExport {
+        ingestion_id: GlobalId,
+        // This is an `UnresolvedItemName` because the structure works for PG,
+        // MySQL, and load generator sources. However, in the future, it should
+        // be sufficiently genericized to support all multi-output sources we
+        // support.
+        external_reference: UnresolvedItemName,
+    },
     /// Data comes from introspection sources, which the controller itself is
     /// responsible for generating.
     Introspection(IntrospectionType),
@@ -96,7 +109,6 @@ pub enum DataSource {
     Webhook,
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
-    // TODO? Add a means to track some data sources' GlobalIds.
     Other(DataSourceOther),
 }
 
@@ -108,8 +120,6 @@ pub enum DataSourceOther {
     TableWrites,
     /// Compute maintains, i.e. it is a `MATERIALIZED VIEW`.
     Compute,
-    /// Some other sources writes this data, i.e. a subsource.
-    Source,
 }
 
 /// Describes a request to create a source.
@@ -127,32 +137,6 @@ pub struct CollectionDescription<T> {
 }
 
 impl<T> CollectionDescription<T> {
-    /// Returns IDs for all storage objects that this `CollectionDescription`
-    /// depends on.
-    pub fn get_storage_dependencies(&self) -> Vec<GlobalId> {
-        let mut result = Vec::new();
-
-        // NOTE: Exhaustive match for future proofing.
-        match &self.data_source {
-            DataSource::Ingestion(ingestion) => {
-                result.push(ingestion.remap_collection_id);
-            }
-            DataSource::Webhook | DataSource::Introspection(_) | DataSource::Progress => {
-                // Introspection, Progress, and Webhook sources have no dependencies, for now.
-                //
-                // TODO(parkmycar): Once webhook sources support validation, then they will have
-                // dependencies.
-                //
-                // See <https://github.com/MaterializeInc/materialize/issues/20211>.
-            }
-            DataSource::Other(_) => {
-                // We don't know anything about it's dependencies.
-            }
-        }
-
-        result
-    }
-
     pub fn from_desc(desc: RelationDesc, source: DataSourceOther) -> Self {
         Self {
             desc,
@@ -397,20 +381,25 @@ pub trait StorageController: Debug {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Check that the collection associated with `id` can be altered to represent the given
-    /// `ingestion`.
+    /// Check that the ingestion associated with each `id` can use the
+    /// correlated [`SourceDesc`].
     ///
-    /// Note that this check is optimistic and its return of `Ok(())` does not guarantee that
-    /// subsequent calls to `alter_collection` are guaranteed to succeed.
-    fn check_alter_collection(
+    /// Note that this check is optimistic and its return of `Ok(())` does not
+    /// guarantee that subsequent calls to `alter_ingestion_source_desc` are
+    /// guaranteed to succeed.
+    ///
+    /// # Panics
+    /// - If `id` is not correlated to a collection with an
+    ///   [`IngestionDescription`].
+    fn check_alter_ingestion_source_desc(
         &mut self,
-        collections: &BTreeMap<GlobalId, IngestionDescription>,
+        collections: &BTreeMap<GlobalId, SourceDesc>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Alter the identified collection to use the described ingestion.
-    async fn alter_collection(
+    /// Alters each identified collection to use the correlated [`SourceDesc`].
+    async fn alter_ingestion_source_desc(
         &mut self,
-        collections: BTreeMap<GlobalId, IngestionDescription>,
+        collections: BTreeMap<GlobalId, SourceDesc>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -483,7 +472,7 @@ pub trait StorageController: Debug {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
-    );
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///

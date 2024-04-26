@@ -34,6 +34,7 @@ use mz_repr::{
     ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow, RelationDesc, Row,
     RowDecoder, RowEncoder,
 };
+use mz_sql_parser::ast::UnresolvedItemName;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -70,17 +71,41 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
-    /// The source description
+    /// The source description.
+    ///
+    /// # Warning
+    /// Any time this field changes, you _must_ recalculate the [`SourceExport`]
+    /// values in [`Self::source_exports`].
     pub desc: SourceDesc<C>,
     /// Additional storage controller metadata needed to ingest this source
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     ///
-    /// This field includes the primary source's ID, which might need to be
-    /// filtered out to understand which exports are data-bearing subsources.
+    /// # Notes
+    /// - For multi-output sources:
+    ///     - Add subsources by adding a new [`SourceExport`]. Look up the
+    ///       appropriate output index using
+    ///       [`SourceConnection::output_idx_for_name`], which is available
+    ///       through [`SourceDesc::connection`].
+    ///     - Remove subsources by removing the [`SourceExport`].
     ///
-    /// Note that this does _not_ include the remap collection, which is tracked
-    /// in its own field.
+    ///   Re-rendering/executing the source after making these modifications
+    ///   adds and drops the subsource, respectively.
+    /// - Any time the [`Self::desc`] field changes, you must recalculate the
+    ///   [`SourceExport`] values.
+    /// - This field includes the primary source's ID, which might need to be
+    ///   filtered out to understand which exports are ingestion export
+    ///   subsources.
+    /// - This field does _not_ include the remap collection, which is tracked
+    ///   in its own field.
+    /// - This field should not be populated by the storage controller in
+    ///   response to collections being created.
+    // TODO(#26764, #26769): after implementing subsource dependency inversion,
+    // we should consider creating a version of this struct in planning without
+    // `source_exports`; right now that field is always empty in the catalog's
+    // version of the source and it misleadingly looks like it might have the
+    // actual exports in it. However, this cannot be removed until after the
+    // migration.
     #[proptest(
         strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 0..4)"
     )]
@@ -211,7 +236,17 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct SourceExport<S = ()> {
-    /// The index of the exported output stream
+    /// The index of the exported output stream.
+    ///
+    /// For all sources, the output index `0` is meant to be the "primary
+    /// source"'s output. For Kafka, this represents the data ingested by the
+    /// topic. However, for multi-output sources like PG and MySQL, this is an
+    /// unused collection.
+    ///
+    /// To account for the 0th index belong to the primary source,
+    /// implementations of [`SourceConnection::output_idx_for_name`] might need
+    /// to adjust the output index, e.g. by adding 1 to the index of the name
+    /// they search for.
     pub output_index: usize,
     /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
@@ -594,6 +629,15 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// Returns metadata columns that this connection *instance* will produce once rendered. The
     /// columns are returned in the order specified by the user.
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
+
+    /// Returns the output index for `name` if this source contains it.
+    ///
+    /// We use the output index to provide a consistent correlation in multi-output sources between
+    /// the ingestion dataflow and storage rendering's use of persist as a sink.
+    ///
+    /// We want to allow dynamic lookup of these values because the output index can change. if e.g.
+    /// the source's underlying structure changes due to adding and removing subsources.
+    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize>;
 }
 
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -890,6 +934,15 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Postgres(conn) => conn.metadata_columns(),
             Self::MySql(conn) => conn.metadata_columns(),
             Self::LoadGenerator(conn) => conn.metadata_columns(),
+        }
+    }
+
+    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
+        match self {
+            Self::Kafka(conn) => conn.output_idx_for_name(name),
+            Self::Postgres(conn) => conn.output_idx_for_name(name),
+            Self::MySql(conn) => conn.output_idx_for_name(name),
+            Self::LoadGenerator(conn) => conn.output_idx_for_name(name),
         }
     }
 }

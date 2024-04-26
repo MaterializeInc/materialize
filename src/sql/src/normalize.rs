@@ -281,6 +281,7 @@ pub fn create_statement(
             name,
             columns,
             constraints: _,
+            of_source: _,
             if_not_exists,
             with_options: _,
         }) => {
@@ -509,7 +510,7 @@ macro_rules! generate_extracted_config {
             pub struct [<$option_ty Extracted>] {
                 pub(crate) seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>,
                 $(
-                    pub(crate) [<$option_name:snake>]: generate_extracted_config!(
+                    pub [<$option_name:snake>]: generate_extracted_config!(
                         @ifty $allow_multiple,
                         Vec::<$t>,
                         $t

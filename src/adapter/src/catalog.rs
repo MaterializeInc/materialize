@@ -887,18 +887,8 @@ impl Catalog {
         object_ids: &Vec<ObjectId>,
         conn_id: &ConnectionId,
     ) -> Vec<ObjectId> {
-        let seen = BTreeSet::new();
-        self.object_dependents_except(object_ids, conn_id, seen)
-    }
-
-    pub(crate) fn object_dependents_except(
-        &self,
-        object_ids: &Vec<ObjectId>,
-        conn_id: &ConnectionId,
-        mut except: BTreeSet<ObjectId>,
-    ) -> Vec<ObjectId> {
-        self.state
-            .object_dependents(object_ids, conn_id, &mut except)
+        let mut seen = BTreeSet::new();
+        self.state.object_dependents(object_ids, conn_id, &mut seen)
     }
 
     fn full_name_detail(name: &FullItemName) -> FullNameV1 {

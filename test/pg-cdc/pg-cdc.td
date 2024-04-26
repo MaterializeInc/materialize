@@ -173,7 +173,7 @@ ALTER SYSTEM SET pg_source_wal_sender_timeout = 0;
 pk_table subsource
 test_slot_source_progress progress
 
-> DROP SOURCE test_slot_source
+> DROP SOURCE test_slot_source CASCADE
 
 # TODO: enable once we land #24586
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
@@ -336,6 +336,22 @@ types_table           subsource <null>  <null>
 utf8_table            subsource <null>  <null>
 таблица               subsource <null>  <null>
 
+# Ensure all ingestion export subsources have an ID greater than the primary source ID
+> SELECT bool_and(primary_source_id < subsource_id)
+  FROM
+      (SELECT id AS primary_source_id FROM mz_sources WHERE type = 'postgres')
+          CROSS JOIN (SELECT id AS subsource_id FROM mz_sources WHERE type = 'subsource');
+true
+
+# Ensure progress subsources have an ID less than the primary source ID
+> SELECT progress_source_id < primary_source_id
+    FROM (
+        SELECT
+            (SELECT id FROM mz_sources WHERE type = 'postgres') AS primary_source_id,
+            (SELECT id FROM mz_sources WHERE type = 'progress') AS progress_source_id
+    );
+true
+
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
 
@@ -358,13 +374,6 @@ id             replication_slot         timeline_id
 u<SUPPRESSED>  materialize<SUPPRESSED>  <SUPPRESSED>
 
 $ unset-regex
-
-# Cannot drop subsources independent of primary source
-! DROP SOURCE conflict_table
-contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
-
-! DROP SOURCE conflict_table CASCADE
-contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 #
 # Perform sanity checks of the initial snapshot
@@ -582,7 +591,7 @@ true
 > SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table';
 true
 
-> DROP SOURCE large_cluster_source;
+> DROP SOURCE large_cluster_source CASCADE;
 
 #
 # Remove all data on the Postgres side
@@ -828,7 +837,7 @@ another_source          postgres  ${arg.default-replica-size} cdc_cluster
 another_source_progress progress  <null> <null>
 another_table           subsource <null> <null>
 
-> DROP SOURCE another_source
+> DROP SOURCE another_source CASCADE
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA conflict_schema CASCADE;

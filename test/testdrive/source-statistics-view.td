@@ -39,4 +39,4 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
   WHERE s.name IN ('counter')
 counter true true true true true true true true true true true true
 
-> DROP SOURCE counter
+> DROP SOURCE counter CASCADE

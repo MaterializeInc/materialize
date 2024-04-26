@@ -147,7 +147,7 @@ mz_source 1 1
   ORDER BY s.name
 alt true
 
-> ALTER SOURCE mz_source DROP SUBSOURCE alt;
+> DROP SOURCE alt;
 
 > SELECT
     count(*)

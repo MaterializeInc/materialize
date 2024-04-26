@@ -118,21 +118,21 @@ use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCL
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalDuration, TryFromValue};
+use crate::plan::WebhookValidation;
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan,
     AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
-    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
-    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
-    ReplicaConfig, Secret, Sink, Source, Table, Type, VariableValue, View, WebhookBodyFormat,
-    WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ClusterSchedule,
+    CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
+    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
+    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
 };
 use crate::session::vars;
 use crate::session::vars::ENABLE_CLUSTER_SCHEDULE_REFRESH;
@@ -649,7 +649,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (mut external_connection, available_subsources) = match connection {
+    let (external_connection, available_subsources) = match connection {
         CreateSourceConnection::Kafka {
             connection: connection_name,
             options,
@@ -1052,8 +1052,11 @@ pub fn plan_create_source(
 
             for (index, table) in details.tables.iter().enumerate() {
                 let name = FullItemName {
-                    // In MySQL we use 'mysql' as the default database name since there is
-                    // no concept of a 'database' in MySQL (schemas and databases are the same thing)
+                    // In MySQL we use 'mysql' as the default database name
+                    // since there is no concept of a 'database' in MySQL
+                    // (schemas and databases are the same thing)
+                    //
+                    //TODO(#26764, #26772): remove this.
                     database: RawDatabaseSpecifier::Name("mysql".to_string()),
                     schema: table.schema_name.clone(),
                     item: table.name.clone(),
@@ -1105,37 +1108,50 @@ pub fn plan_create_source(
         }
     };
 
-    let (available_subsources, requested_subsources) = match (
-        available_subsources,
-        referenced_subsources,
-    ) {
-        (Some(available_subsources), Some(ReferencedSubsources::SubsetTables(subsources))) => {
-            let mut requested_subsources = vec![];
-            for subsource in subsources {
-                let name = subsource.reference.clone();
+    // TODO(#26764): enable this assert
+    //
+    // mz_ore::soft_assert_or_log!( referenced_subsources.is_none(), "referenced
+    //     subsources must be cleared in purification" );
+    //
+    // TODO(#26764): remove available_subsources, requested_subsources--this
+    // will be handled in purification only.
+    let (available_subsources, requested_subsources) = match (available_subsources, referenced_subsources) {
+            (Some(available_subsources), Some(ReferencedSubsources::SubsetTables(subsources))) => {
+                let mut requested_subsources = vec![];
+                for subsource in subsources {
+                    let name = subsource.reference.clone();
 
-                let target = match &subsource.subsource {
-                    Some(DeferredItemName::Named(target)) => target.clone(),
-                    _ => {
-                        sql_bail!("[internal error] subsources must be named during purification")
-                    }
-                };
+                    let target = match &subsource.subsource {
+                        // migration: this only needs to be supported for one
+                        // version to allow booting old-style subsources.
+                        None => continue,
+                        Some(DeferredItemName::Named(target)) => target.clone(),
+                        _ => {
+                            sql_bail!(
+                                "[internal error] subsources must be named during purification"
+                            )
+                        }
+                    };
 
-                requested_subsources.push((name, target));
+                    requested_subsources.push((name, target));
+                }
+                (available_subsources, requested_subsources)
             }
-            (available_subsources, requested_subsources)
-        }
-        (Some(_), None) => {
-            // Multi-output sources must have a table selection clause
-            sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
-        }
-        (None, Some(_))
-        | (Some(_), Some(ReferencedSubsources::All | ReferencedSubsources::SubsetSchemas(_))) => {
-            sql_bail!("[internal error] subsources should be resolved during purification")
-        }
-        (None, None) => (BTreeMap::new(), vec![]),
-    };
+            // Some(_), None indicates that this is a new-style source that
+            // doesn't track its subsources directly.
+            (Some(_), None)
+            // `(None, None)` indicates that this a non-subsource bearing
+            // source.
+            | (None, None) => (BTreeMap::new(), vec![]),
+            (None, Some(_))
+            | (Some(_), Some(ReferencedSubsources::All | ReferencedSubsources::SubsetSchemas(_))) =>
+            {
+                sql_bail!("[internal error] subsources should be resolved during purification")
+            }
+        };
 
+    // TODO(#26764): remove this code; subsource exports will no longer be
+    // tracked by planning.
     let mut subsource_exports = BTreeMap::new();
     for (name, target) in requested_subsources {
         let name = normalize::full_name(name)?;
@@ -1159,25 +1175,6 @@ pub fn plan_create_source(
         // we don't allow users to manually target subsources and rely on purification generating
         // correct definitions.
         subsource_exports.insert(target_id, *idx);
-    }
-
-    if let GenericSourceConnection::Postgres(conn) = &mut external_connection {
-        // Now that we know which subsources sources we want, we can remove all
-        // unused table casts from this connection; this represents the
-        // authoritative statement about which publication tables should be
-        // used within storage.
-
-        // we want to temporarily test if any users are referring to the same table in their PG
-        // sources.
-        let mut used_pos: Vec<_> = subsource_exports.values().collect();
-        used_pos.sort();
-
-        if let Some(_) = used_pos.iter().duplicates().next() {
-            tracing::warn!("multiple references to same upstream table in PG source");
-        }
-
-        let used_pos: BTreeSet<_> = used_pos.into_iter().collect();
-        conn.table_casts.retain(|pos, _| used_pos.contains(pos));
     }
 
     let CreateSourceOptionExtracted {
@@ -1495,7 +1492,8 @@ pub fn plan_create_source(
 generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
-    (References, bool, Default(false))
+    (References, bool, Default(false)),
+    (ExternalReference, UnresolvedItemName)
 );
 
 pub fn plan_create_subsource(
@@ -1505,6 +1503,7 @@ pub fn plan_create_subsource(
     let CreateSubsourceStatement {
         name,
         columns,
+        of_source,
         constraints,
         if_not_exists,
         with_options,
@@ -1513,6 +1512,7 @@ pub fn plan_create_subsource(
     let CreateSubsourceOptionExtracted {
         progress,
         references,
+        external_reference,
         ..
     } = with_options.clone().try_into()?;
 
@@ -1521,7 +1521,7 @@ pub fn plan_create_subsource(
     // statements, so this would fire in integration testing if we failed to
     // uphold it.
     assert!(
-        progress ^ references,
+        (progress ^ references) ^ (external_reference.is_some() && of_source.is_some()),
         "CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option"
     );
 
@@ -1623,8 +1623,28 @@ pub fn plan_create_subsource(
         }
     }
 
+    let data_source = if let Some(source_reference) = of_source {
+        // This is a subsource with the "natural" dependency order, i.e. it is
+        // not a legacy subsource with the inverted structure.
+        let ingestion_id = *source_reference.item_id();
+        let external_reference = external_reference.unwrap();
+
+        DataSourceDesc::IngestionExport {
+            ingestion_id,
+            external_reference,
+        }
+    } else if progress {
+        DataSourceDesc::Progress
+    } else if references {
+        // This is a legacy subsource with the inverted dependency structure.
+        DataSourceDesc::Source
+    } else {
+        panic!("subsources must specify one of `external_reference`, `progress`, or `references`")
+    };
+
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
+
     let create_sql = normalize::create_statement(scx, Statement::CreateSubsource(stmt))?;
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -1632,13 +1652,7 @@ pub fn plan_create_subsource(
 
     let source = Source {
         create_sql,
-        data_source: if progress {
-            DataSourceDesc::Progress
-        } else if references {
-            DataSourceDesc::Source
-        } else {
-            unreachable!("state prohibited above")
-        },
+        data_source,
         desc,
         compaction_window: None,
     };
@@ -1854,17 +1868,10 @@ pub(crate) fn load_generator_ast_to_generator(
     let mut available_subsources = BTreeMap::new();
     for (i, (name, desc)) in load_generator.views().iter().enumerate() {
         let name = FullItemName {
-            database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
-            schema: match load_generator {
-                LoadGenerator::Counter { .. } => "counter".into(),
-                LoadGenerator::Marketing => "marketing".into(),
-                LoadGenerator::Auction => "auction".into(),
-                LoadGenerator::Datums => "datums".into(),
-                LoadGenerator::Tpch { .. } => "tpch".into(),
-                LoadGenerator::KeyValue { .. } => "key_value".into(),
-                // Please use `snake_case` for any multi-word load generators
-                // that you add.
-            },
+            database: RawDatabaseSpecifier::Name(
+                mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME.to_owned(),
+            ),
+            schema: load_generator.schema_name().into(),
             item: name.to_string(),
         };
         // The zero-th output is the main output
@@ -4223,28 +4230,6 @@ fn plan_drop_item(
     name: UnresolvedItemName,
     cascade: bool,
 ) -> Result<Option<GlobalId>, PlanError> {
-    plan_drop_item_inner(scx, object_type, if_exists, name, cascade, false)
-}
-
-/// Like [`plan_drop_item`] but specialized for the case of dropping subsources
-/// in response to `ALTER SOURCE...DROP SUBSOURCE...`
-fn plan_drop_subsource(
-    scx: &StatementContext,
-    if_exists: bool,
-    name: UnresolvedItemName,
-    cascade: bool,
-) -> Result<Option<GlobalId>, PlanError> {
-    plan_drop_item_inner(scx, ObjectType::Source, if_exists, name, cascade, true)
-}
-
-fn plan_drop_item_inner(
-    scx: &StatementContext,
-    object_type: ObjectType,
-    if_exists: bool,
-    name: UnresolvedItemName,
-    cascade: bool,
-    allow_dropping_subsources: bool,
-) -> Result<Option<GlobalId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
         // Return a more helpful error on `DROP VIEW <materialized-view>`.
@@ -4267,85 +4252,26 @@ fn plan_drop_item_inner(
                     scx.catalog.minimal_qualification(catalog_item.name()),
                 );
             }
-            let item_type = catalog_item.item_type();
-
-            // Check if object is subsource if drop command doesn't allow dropping them, e.g. ALTER
-            // SOURCE can drop subsources, but DROP SOURCE cannot.
-            let primary_source = match item_type {
-                CatalogItemType::Source => catalog_item
-                    .used_by()
-                    .iter()
-                    .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source),
-                _ => None,
-            };
-
-            if let Some(source_id) = primary_source {
-                // Progress collections can never get dropped independently.
-                if Some(catalog_item.id()) == scx.catalog.get_item(source_id).progress_id() {
-                    return Err(PlanError::DropProgressCollection {
-                        progress_collection: scx
-                            .catalog
-                            .minimal_qualification(catalog_item.name())
-                            .to_string(),
-                        source: scx
-                            .catalog
-                            .minimal_qualification(scx.catalog.get_item(source_id).name())
-                            .to_string(),
-                    });
-                }
-                if !allow_dropping_subsources {
-                    return Err(PlanError::DropSubsource {
-                        subsource: scx
-                            .catalog
-                            .minimal_qualification(catalog_item.name())
-                            .to_string(),
-                        source: scx
-                            .catalog
-                            .minimal_qualification(scx.catalog.get_item(source_id).name())
-                            .to_string(),
-                    });
-                }
-            }
 
             if !cascade {
-                let entry_id = catalog_item.id();
-                // When this item gets dropped it will also drop its subsources, so we need to check the
-                // users of those
-                let mut dropped_items = catalog_item
-                    .subsources()
-                    .iter()
-                    .map(|id| scx.catalog.get_item(id))
-                    .collect_vec();
-                dropped_items.push(catalog_item);
-
-                for entry in dropped_items {
-                    for id in entry.used_by() {
-                        // The catalog_entry we're trying to drop will appear in the used_by list of
-                        // its subsources so we need to exclude it from cascade checking since it
-                        // will be dropped. Similarly, if we're dropping a subsource, the primary
-                        // source will show up in its dependents but should not prevent the drop.
-                        if id == &entry_id || Some(id) == primary_source {
-                            continue;
-                        }
-
-                        let dep = scx.catalog.get_item(id);
-                        if dependency_prevents_drop(object_type, dep) {
-                            return Err(PlanError::DependentObjectsStillExist {
-                                object_type: catalog_item.item_type().to_string(),
-                                object_name: scx
-                                    .catalog
-                                    .minimal_qualification(catalog_item.name())
-                                    .to_string(),
-                                dependents: vec![(
-                                    dep.item_type().to_string(),
-                                    scx.catalog.minimal_qualification(dep.name()).to_string(),
-                                )],
-                            });
-                        }
+                for id in catalog_item.used_by() {
+                    let dep = scx.catalog.get_item(id);
+                    if dependency_prevents_drop(object_type, dep) {
+                        return Err(PlanError::DependentObjectsStillExist {
+                            object_type: catalog_item.item_type().to_string(),
+                            object_name: scx
+                                .catalog
+                                .minimal_qualification(catalog_item.name())
+                                .to_string(),
+                            dependents: vec![(
+                                dep.item_type().to_string(),
+                                scx.catalog.minimal_qualification(dep.name()).to_string(),
+                            )],
+                        });
                     }
-                    // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
-                    //  relies on entry. Unfortunately, we don't have that information readily available.
                 }
+                // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
+                //  relies on entry. Unfortunately, we don't have that information readily available.
             }
             Some(catalog_item.id())
         }
@@ -4462,10 +4388,10 @@ pub fn plan_drop_owned(
     for item in scx.catalog.get_items() {
         if role_ids.contains(&item.owner_id()) {
             if !cascade {
-                // When this item gets dropped it will also drop its subsources, so we need to
+                // When this item gets dropped it will also drop its progress source, so we need to
                 // check the users of those.
                 for sub_item in item
-                    .subsources()
+                    .progress_id()
                     .iter()
                     .map(|id| scx.catalog.get_item(id))
                     .chain(iter::once(item))
@@ -5731,7 +5657,8 @@ pub fn describe_alter_source(
 
 generate_extracted_config!(
     AlterSourceAddSubsourceOption,
-    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
+    (Details, String)
 );
 
 pub fn plan_alter_source(
@@ -5744,19 +5671,17 @@ pub fn plan_alter_source(
         action,
     } = stmt;
     let object_type = ObjectType::Source;
-    let entry = match resolve_item_or_type(scx, object_type, source_name.clone(), if_exists)? {
-        Some(entry) => entry,
-        None => {
-            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: source_name.to_string(),
-                object_type,
-            });
 
-            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
-        }
-    };
+    if resolve_item_or_type(scx, object_type, source_name.clone(), if_exists)?.is_none() {
+        scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+            name: source_name.to_string(),
+            object_type,
+        });
 
-    let action = match action {
+        return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+    }
+
+    match action {
         AlterSourceAction::SetOptions(options) => {
             let mut options = options.into_iter();
             let option = options.next().unwrap();
@@ -5772,6 +5697,8 @@ pub fn plan_alter_source(
                     option.value,
                 );
             }
+            // n.b we use this statement in purification in a way that cannot be
+            // planned directly.
             sql_bail!(
                 "Cannot modify the {} of a SOURCE.",
                 option.name.to_ast_string()
@@ -5794,68 +5721,13 @@ pub fn plan_alter_source(
             }
             sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
         }
-        AlterSourceAction::DropSubsources {
-            if_exists,
-            names,
-            cascade,
-        } => {
-            let mut to_drop = BTreeSet::new();
-            let subsources = entry.subsources();
-            for name in names {
-                match plan_drop_subsource(scx, if_exists, name.clone(), cascade)? {
-                    Some(dropped_id) => {
-                        if !subsources.contains(&dropped_id) {
-                            let dropped_entry = scx.catalog.get_item(&dropped_id);
-                            return Err(PlanError::DropNonSubsource {
-                                non_subsource: scx
-                                    .catalog
-                                    .minimal_qualification(dropped_entry.name())
-                                    .to_string(),
-                                source: scx.catalog.minimal_qualification(entry.name()).to_string(),
-                            });
-                        }
-
-                        to_drop.insert(dropped_id);
-                    }
-                    None => {
-                        scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                            name: name.to_string(),
-                            object_type: ObjectType::Source,
-                        });
-                    }
-                }
-            }
-
-            // Cannot drop last non-progress subsource
-            if subsources.len().saturating_sub(to_drop.len()) <= 1 {
-                return Err(PlanError::DropLastSubsource {
-                    source: scx.catalog.minimal_qualification(entry.name()).to_string(),
-                });
-            }
-
-            if to_drop.is_empty() {
-                return Ok(Plan::AlterNoop(AlterNoopPlan {
-                    object_type: ObjectType::Source,
-                }));
-            } else {
-                crate::plan::AlterSourceAction::DropSubsourceExports { to_drop }
-            }
+        AlterSourceAction::DropSubsources { .. } => {
+            sql_bail!("ALTER SOURCE...DROP SUBSOURCE no longer supported; use DROP SOURCE")
         }
-        AlterSourceAction::AddSubsources {
-            subsources,
-            details,
-            options,
-        } => crate::plan::AlterSourceAction::AddSubsourceExports {
-            subsources,
-            details,
-            options,
-        },
+        AlterSourceAction::AddSubsources { .. } => {
+            unreachable!("ALTER SOURCE...ADD SUBSOURCE must be purified")
+        }
     };
-
-    Ok(Plan::AlterSource(AlterSourcePlan {
-        id: entry.id(),
-        action,
-    }))
 }
 
 pub fn describe_alter_system_set(

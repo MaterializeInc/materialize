@@ -31,7 +31,7 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Expr, Raw, Statement, Value, WithOptionValue};
+use mz_sql::ast::{Expr, Raw, Statement, UnresolvedItemName, Value, WithOptionValue};
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogTypeDetails,
@@ -52,7 +52,8 @@ use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
-    IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
+    GenericSourceConnection, IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope,
+    SourceExport, Timeline,
 };
 use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
@@ -328,6 +329,9 @@ pub struct CatalogEntry {
     pub item: CatalogItem,
     #[serde(skip)]
     pub referenced_by: Vec<GlobalId>,
+    // TODO(#26794)––this should have an invariant tied to it that all
+    // dependents (i.e. entries in this field) have IDs greater than this
+    // entry's ID.
     #[serde(skip)]
     pub used_by: Vec<GlobalId>,
     pub id: GlobalId,
@@ -389,11 +393,19 @@ impl Table {
     }
 }
 
+// TODO(#26768): do we need all of these `DataSourceDesc`s?
 #[derive(Debug, Clone, Serialize)]
 pub enum DataSourceDesc {
     /// Receives data from an external system
     Ingestion(IngestionDescription<(), ReferencedConnection>),
+    /// This source receives its data from the identified ingestion,
+    /// specifically the output identified by `external_reference`.
+    IngestionExport {
+        ingestion_id: GlobalId,
+        external_reference: UnresolvedItemName,
+    },
     /// Receives data from some other source
+    // TODO(#26764): delete
     Source,
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
@@ -420,6 +432,8 @@ impl DataSourceDesc {
         ingestion: PlanIngestion,
         instance_id: ClusterId,
     ) -> DataSourceDesc {
+        // TODO(#26769): planning should no longer generate source exports once
+        // we fix subsource dependency inversion.
         let source_exports = ingestion
             .subsource_exports
             .iter()
@@ -492,6 +506,19 @@ impl Source {
                     );
                     DataSourceDesc::Progress
                 }
+                mz_sql::plan::DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                } => {
+                    assert!(
+                        plan.in_cluster.is_none(),
+                        "subsources must not have a host config or cluster_id defined"
+                    );
+                    DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                    }
+                }
                 mz_sql::plan::DataSourceDesc::Source => {
                     assert!(
                         plan.in_cluster.is_none(),
@@ -523,21 +550,12 @@ impl Source {
         }
     }
 
-    /// Returns whether this source ingests data from an external source.
-    pub fn is_external(&self) -> bool {
-        match self.data_source {
-            DataSourceDesc::Ingestion(_) | DataSourceDesc::Webhook { .. } => true,
-            DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Progress
-            | DataSourceDesc::Source => false,
-        }
-    }
-
     /// Type of the source.
     pub fn source_type(&self) -> &str {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
             DataSourceDesc::Progress => "progress",
+            DataSourceDesc::IngestionExport { .. } => "subsource",
             DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
             DataSourceDesc::Webhook { .. } => "webhook",
@@ -555,6 +573,7 @@ impl Source {
                 None => (None, None),
             },
             DataSourceDesc::Introspection(_)
+            | DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => (None, None),
@@ -589,7 +608,8 @@ impl Source {
                     Some("materialize")
                 }
             },
-            DataSourceDesc::Introspection(_)
+            DataSourceDesc::IngestionExport { .. }
+            | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => None,
@@ -600,7 +620,8 @@ impl Source {
     pub fn connection_id(&self) -> Option<GlobalId> {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.connection_id(),
-            DataSourceDesc::Introspection(_)
+            DataSourceDesc::IngestionExport { .. }
+            | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => None,
@@ -617,12 +638,28 @@ impl Source {
     pub fn user_controllable_persist_shard_count(&self) -> i64 {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => {
-                // Ingestions with subsources only use persist shards for their
-                // subsources (i.e. not the primary source's persist shard);
-                // those without subsources use 1 (their primary source's
-                // persist shard).
-                std::cmp::max(1, i64::try_from(ingestion.source_exports.len().saturating_sub(1)).expect("fewer than i64::MAX persist shards"))
+                match &ingestion.desc.connection {
+                    // These multi-output sources do not use their primary
+                    // source's data shard, so we don't include it in accounting
+                    // for users.
+                    GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_) => 0,
+                    GenericSourceConnection::LoadGenerator(lg) => {
+                        // TODO: make this a method on the load generator.
+                        if lg.load_generator.views().is_empty() {
+                            // Load generator writes directly to its persist shard
+                            1
+                        } else {
+                            // Load generator has 1 persist shard per output,
+                            // which will be accounted for by `SourceExport`.
+                            0
+                        }
+                    }
+                    GenericSourceConnection::Kafka(_) => 1,
+                }
             }
+            //  DataSourceDesc::IngestionExport represents a subsource, which
+            //  use a data shard.
+            DataSourceDesc::IngestionExport { .. } => 1,
             DataSourceDesc::Webhook { .. } => 1,
             //  DataSourceDesc::Source represents subsources, which are accounted for in their
             //  primary source's ingestion.
@@ -825,7 +862,8 @@ impl CatalogItem {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
-                DataSourceDesc::Introspection(_)
+                DataSourceDesc::IngestionExport { .. }
+                | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => Ok(None),
@@ -1187,6 +1225,10 @@ impl CatalogItem {
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.instance_id),
+                // This is somewhat of a lie because the export runs on the same
+                // cluster as its ingestion but we don't yet have a way of
+                // cross-referencing the items
+                DataSourceDesc::IngestionExport { .. } => None,
                 DataSourceDesc::Webhook { cluster_id, .. } => Some(*cluster_id),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
@@ -1443,14 +1485,34 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Source(_))
     }
 
-    /// Reports whether this catalog entry is a subsource.
-    pub fn is_subsource(&self) -> bool {
+    /// Reports whether this catalog entry is a subsource and, if it is, the
+    /// ingestion it is a subsource of, as well as the item it exports.
+    pub fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName)> {
         match &self.item() {
-            CatalogItem::Source(source) => matches!(
-                &source.data_source,
-                DataSourceDesc::Progress | DataSourceDesc::Source
-            ),
-            _ => false,
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                } => Some((*ingestion_id, external_reference)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Returns the mapping of `GloablIds` to output indices for this source.
+    // TODO(#26764, #26769): this should no longer be used.
+    pub fn source_exports(&self) -> BTreeMap<GlobalId, usize> {
+        match &self.item() {
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => ingestion
+                    .source_exports
+                    .iter()
+                    .map(|(id, export)| (*id, export.output_index))
+                    .collect(),
+                _ => BTreeMap::new(),
+            },
+            _ => BTreeMap::new(),
         }
     }
 
@@ -1459,41 +1521,13 @@ impl CatalogEntry {
         self.item().is_progress_source()
     }
 
-    /// Returns the `GlobalId` of all of this entry's subsources.
-    pub fn subsources(&self) -> BTreeSet<GlobalId> {
-        match &self.item() {
-            CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => ingestion
-                    .source_exports
-                    .keys()
-                    .filter(|id| id != &&self.id)
-                    .copied()
-                    .chain(std::iter::once(ingestion.remap_collection_id))
-                    .collect(),
-                DataSourceDesc::Introspection(_)
-                | DataSourceDesc::Webhook { .. }
-                | DataSourceDesc::Progress
-                | DataSourceDesc::Source => BTreeSet::new(),
-            },
-            CatalogItem::Table(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::Index(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => BTreeSet::new(),
-        }
-    }
-
     /// Returns the `GlobalId` of all of this entry's progress ID.
     pub fn progress_id(&self) -> Option<GlobalId> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
-                DataSourceDesc::Introspection(_)
+                DataSourceDesc::IngestionExport { .. }
+                | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Source => None,
@@ -2236,16 +2270,16 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.used_by()
     }
 
-    fn is_subsource(&self) -> bool {
-        self.is_subsource()
+    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName)> {
+        self.subsource_details()
+    }
+
+    fn source_exports(&self) -> BTreeMap<GlobalId, usize> {
+        self.source_exports()
     }
 
     fn is_progress_source(&self) -> bool {
         self.is_progress_source()
-    }
-
-    fn subsources(&self) -> BTreeSet<GlobalId> {
-        self.subsources()
     }
 
     fn progress_id(&self) -> Option<GlobalId> {

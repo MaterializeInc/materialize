@@ -2338,8 +2338,10 @@ ALTER CLUSTER materialize_public_s OWNER TO joe
 statement error altering the owner of a cluster replica is not supported
 ALTER CLUSTER REPLICA materialize_public_s.linked OWNER TO joe
 
-statement error cannot ALTER this type of source
+simple conn=mz_system,user=mz_system
 ALTER SOURCE accounts OWNER TO joe
+----
+COMPLETE 0
 
 statement error cannot ALTER this type of source
 ALTER SOURCE s_progress OWNER TO joe
@@ -2351,7 +2353,7 @@ SELECT mz_sources.name, mz_roles.name
   WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
 ----
-accounts       materialize
+accounts       joe
 auctions       materialize
 bids           materialize
 organizations  materialize
@@ -2389,12 +2391,12 @@ SELECT mz_sources.name, mz_roles.name
   ORDER BY mz_sources.name
 ----
 accounts       joe
-auctions       joe
-bids           joe
-organizations  joe
+auctions       materialize
+bids           materialize
+organizations  materialize
 s              joe
 s_progress     joe
-users          joe
+users          materialize
 
 query TT
 SELECT mz_clusters.name, mz_roles.name
@@ -2412,9 +2414,8 @@ SELECT mz_cluster_replicas.name, mz_roles.name
   WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
 ----
 
-
 simple conn=mz_system,user=mz_system
-DROP SOURCE s
+DROP SOURCE s CASCADE
 ----
 COMPLETE 0
 

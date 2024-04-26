@@ -92,7 +92,7 @@ def populate(
         input=dedent(
             """
             > DROP MATERIALIZED VIEW IF EXISTS mv;
-            > DROP SOURCE IF EXISTS source;
+            > DROP SOURCE IF EXISTS source CASCADE;
             """
         )
         + dedent(drop_cluster_statement_sql)

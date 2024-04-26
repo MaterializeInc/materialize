@@ -44,4 +44,5 @@ message ProtoPostgresSourcePublicationDetails {
     repeated mz_postgres_util.desc.ProtoPostgresTableDesc tables = 1;
     string slot = 2;
     optional uint64 timeline_id = 3;
+    string database = 4;
 }

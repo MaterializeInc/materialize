@@ -23,7 +23,7 @@ use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
+    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
     FetchPlan, MutationKind, Params, Plan, PlanKind, QueryWhen, RaisePlan,
 };
 use mz_sql::rbac;
@@ -148,7 +148,7 @@ impl Coordinator {
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),
-                            vec![CreateSourcePlans {
+                            vec![CreateSourcePlanBundle {
                                 source_id,
                                 plan,
                                 resolved_ids,
@@ -424,17 +424,9 @@ impl Coordinator {
                     let result = self.sequence_alter_secret(ctx.session(), plan).await;
                     ctx.retire(result);
                 }
-                Plan::PurifiedAlterSource {
-                    alter_source,
-                    subsources,
-                } => {
-                    let result = self
-                        .sequence_alter_source(ctx.session_mut(), alter_source, subsources)
-                        .await;
+                Plan::AlterSource(plan) => {
+                    let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
                     ctx.retire(result);
-                }
-                Plan::AlterSource(_) => {
-                    unreachable!("ALTER SOURCE must be purified")
                 }
                 Plan::AlterSystemSet(plan) => {
                     let result = self.sequence_alter_system_set(ctx.session(), plan).await;

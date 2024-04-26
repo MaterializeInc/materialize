@@ -112,9 +112,9 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
-use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
+use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::names::{Aug, ResolvedIds};
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
@@ -347,10 +347,7 @@ pub struct BackgroundWorkResult<T> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
-pub type PurifiedStatementReady = BackgroundWorkResult<(
-    Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-    Statement<Aug>,
-)>;
+pub type PurifiedStatementReady = BackgroundWorkResult<mz_sql::pure::PurifiedStatement>;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -1473,113 +1470,7 @@ impl Coordinator {
         debug!("coordinator init: initializing storage collections");
         self.bootstrap_storage_collections().await;
 
-        // Load catalog entries based on topological dependency sorting. We do
-        // this to reinforce that `GlobalId`'s `Ord` implementation does not
-        // express the entries' dependency graph.
-        let mut entries_awaiting_dependencies: BTreeMap<
-            GlobalId,
-            Vec<(CatalogEntry, Vec<GlobalId>)>,
-        > = BTreeMap::new();
-
-        let mut loaded_items = BTreeSet::new();
-
-        // Subsources must be created immediately before their primary source
-        // without any intermediary collections between them. This version of MZ
-        // needs this because it sets tighter bounds on collections' sinces.
-        // Without this, dependent collections can place read holds on the
-        // subsource, which can result in panics if we adjust the subsource's
-        // since.
-        //
-        // This can likely be removed in the next version of Materialize
-        // (v0.46).
-        let mut entries_awaiting_dependent: BTreeMap<GlobalId, Vec<CatalogEntry>> = BTreeMap::new();
-        let mut awaited_dependent_seen = BTreeSet::new();
-
-        let mut unsorted_entries: VecDeque<_> = self
-            .catalog()
-            .entries()
-            .cloned()
-            .map(|entry| {
-                let remaining_deps = entry.uses().into_iter().collect::<Vec<_>>();
-                (entry, remaining_deps)
-            })
-            .collect();
-        let mut entries = Vec::with_capacity(unsorted_entries.len());
-
-        while let Some((entry, mut remaining_deps)) = unsorted_entries.pop_front() {
-            let awaiting_this_dep = entries_awaiting_dependent.get(&entry.id());
-            remaining_deps.retain(|dep| {
-                // Consider dependency filled if item is loaded or if this
-                // dependency is waiting on this entry.
-                !loaded_items.contains(dep)
-                    && awaiting_this_dep
-                        .map(|awaiting| awaiting.iter().all(|e| e.id() != *dep))
-                        .unwrap_or(true)
-            });
-
-            // While you cannot assume anything about the ordering of
-            // dependencies based on their GlobalId, it is not secret knowledge
-            // that the most likely final dependency is that with the greatest
-            // ID.
-            match remaining_deps.last() {
-                Some(dep) => {
-                    entries_awaiting_dependencies
-                        .entry(*dep)
-                        .or_default()
-                        .push((entry, remaining_deps));
-                }
-                None => {
-                    let id = entry.id();
-
-                    if let Some(waiting_on_this_dep) = entries_awaiting_dependencies.remove(&id) {
-                        unsorted_entries.extend(waiting_on_this_dep);
-                    }
-
-                    if let Some(waiting_on_this_dependent) = entries_awaiting_dependent.remove(&id)
-                    {
-                        mz_ore::soft_assert_no_log! {{
-                            let subsources =  entry.subsources();
-                            let w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
-                            w.iter().all(|w| subsources.contains(w))
-                        }, "expect that items are exactly source's subsources"}
-
-                        // Re-enqueue objects and continue.
-                        for entry in
-                            std::iter::once(entry).chain(waiting_on_this_dependent.into_iter())
-                        {
-                            awaited_dependent_seen.insert(entry.id());
-                            unsorted_entries.push_front((entry, vec![]));
-                        }
-                        continue;
-                    }
-
-                    // Subsources wait on their primary source before being
-                    // added.
-                    if entry.is_subsource() && !awaited_dependent_seen.contains(&id) {
-                        let min = entry
-                            .used_by()
-                            .into_iter()
-                            .min()
-                            .expect("subsource always used");
-
-                        entries_awaiting_dependent
-                            .entry(*min)
-                            .or_default()
-                            .push(entry);
-                        continue;
-                    }
-
-                    awaited_dependent_seen.remove(&id);
-                    loaded_items.insert(id);
-                    entries.push(entry);
-                }
-            }
-        }
-
-        assert!(
-            entries_awaiting_dependent.is_empty() && entries_awaiting_dependencies.is_empty(),
-            "items not cleared from queue {entries_awaiting_dependent:?}, {entries_awaiting_dependencies:?}"
-        );
+        let entries: Vec<_> = self.catalog().entries().cloned().collect();
 
         debug!("coordinator init: optimizing dataflow plans");
         self.bootstrap_dataflow_plans(&entries)?;
@@ -1598,6 +1489,18 @@ impl Coordinator {
         let local_read_ts_for_index_bootstrapping = self.get_local_read_ts().await;
 
         for entry in &entries {
+            // TODO(#26794): we should move this invariant into `CatalogEntry`.
+            mz_ore::soft_assert_or_log!(
+                entry
+                    .used_by()
+                    .iter()
+                    .all(|dependent_id| *dependent_id > entry.id),
+                "item dependencies should respect `GlobalId`'s PartialOrd \
+                but {:?} depends on {:?}",
+                entry.id,
+                entry.used_by()
+            );
+
             debug!(
                 "coordinator init: installing {} {}",
                 entry.item().typ(),
@@ -1952,27 +1855,34 @@ impl Coordinator {
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
 
         let source_desc = |source: &Source| {
-            let (data_source, status_collection_id) = match &source.data_source {
+            let (data_source, status_collection_id) = match source.data_source.clone() {
                 // Re-announce the source description.
                 DataSourceDesc::Ingestion(ingestion) => {
-                    let ingestion = ingestion.clone().into_inline_connection(catalog.state());
+                    let ingestion = ingestion.into_inline_connection(catalog.state());
 
                     (
                         DataSource::Ingestion(ingestion.clone()),
                         Some(source_status_collection_id),
                     )
                 }
-                // Subsources use source statuses.
-                DataSourceDesc::Source => (
-                    DataSource::Other(DataSourceOther::Source),
+                DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                } => (
+                    DataSource::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                    },
                     Some(source_status_collection_id),
                 ),
+                // Subsources use source statuses.
+                DataSourceDesc::Source => unreachable!("cannot render legacy-style subsources"),
                 DataSourceDesc::Webhook { .. } => {
                     (DataSource::Webhook, Some(source_status_collection_id))
                 }
                 DataSourceDesc::Progress => (DataSource::Progress, None),
                 DataSourceDesc::Introspection(introspection) => {
-                    (DataSource::Introspection(*introspection), None)
+                    (DataSource::Introspection(introspection), None)
                 }
             };
             CollectionDescription {

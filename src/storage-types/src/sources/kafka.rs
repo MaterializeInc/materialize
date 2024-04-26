@@ -189,6 +189,10 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
             })
             .collect()
     }
+
+    fn output_idx_for_name(&self, _name: &mz_sql_parser::ast::UnresolvedItemName) -> Option<usize> {
+        None
+    }
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {

@@ -24,7 +24,7 @@ def test_create_drop_source(mz: MaterializeApplication) -> None:
                 FROM LOAD GENERATOR COUNTER
                 (TICK INTERVAL '500ms');
 
-            > DROP SOURCE counter;
+            > DROP SOURCE counter CASCADE;
             """
         ),
         no_reset=True,

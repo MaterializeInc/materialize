@@ -2843,8 +2843,8 @@ pub static MZ_SOURCE_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
             mz_catalog.mz_sources AS subsources
                 JOIN
                     mz_internal.mz_object_dependencies AS deps
-                    ON subsources.id = deps.referenced_object_id
-                JOIN mz_catalog.mz_sources AS sources ON sources.id = deps.object_id
+                    ON subsources.id = deps.object_id
+                JOIN mz_catalog.mz_sources AS sources ON sources.id = deps.referenced_object_id
     ),
      -- Determine which collection's ID to use for the status
     id_of_status_to_use AS
@@ -3272,13 +3272,14 @@ pub static MZ_OBJECT_LIFETIMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_object_lifetimes",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_LIFETIMES_OID,
-    column_defs: Some("id, object_type, event_type, occurred_at"),
+    column_defs: Some("id, previous_id, object_type, event_type, occurred_at"),
     sql: "
     SELECT
         CASE
             WHEN a.object_type = 'cluster-replica' THEN a.details ->> 'replica_id'
             ELSE a.details ->> 'id'
         END id,
+        a.details ->> 'previous_id',
         a.object_type,
         a.event_type,
         a.occurred_at
@@ -6126,9 +6127,9 @@ subsources_with_clusters AS (
     SELECT ss.id, ps.cluster_id
     FROM mz_catalog.mz_sources ss
     JOIN mz_internal.mz_object_dependencies d
-        ON (d.referenced_object_id = ss.id)
+        ON (d.object_id = ss.id)
     JOIN sources_maintained_by_dataflows ps
-        ON (ps.id = d.object_id)
+        ON (ps.id = d.referenced_object_id)
     WHERE ss.type = 'subsource'
 ),
 sources_with_clusters AS (

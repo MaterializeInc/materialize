@@ -14,17 +14,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
 use mz_repr::adt::system::Oid;
-use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
-    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    DeferredItemName, Ident, Value, WithOptionValue,
+    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
+    WithOptionValue,
 };
-use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
 use crate::catalog::SubsourceCatalog;
-use crate::names::{Aug, PartialItemName};
+use crate::names::{Aug, PartialItemName, ResolvedItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
@@ -81,6 +80,11 @@ pub(super) async fn validate_requested_subsources_privileges(
     Ok(())
 }
 
+/// Generate a mapping of `Oid`s to column names that should be ingested as text
+/// (rather than their type in the upstream database).
+///
+/// Additionally, modify `text_columns` so that they contain database-qualified
+/// references to the columns.
 pub(super) fn generate_text_columns(
     publication_catalog: &SubsourceCatalog<&PostgresTableDesc>,
     text_columns: &mut [UnresolvedItemName],
@@ -155,24 +159,25 @@ pub(super) fn generate_text_columns(
     Ok(text_cols_dict)
 }
 
-pub(crate) fn generate_targeted_subsources<F>(
+pub(crate) fn generate_targeted_subsources(
     scx: &StatementContext,
+    source_name: Option<ResolvedItemName>,
     validated_requested_subsources: Vec<RequestedSubsource<'_, PostgresTableDesc>>,
     mut text_cols_dict: BTreeMap<u32, BTreeSet<String>>,
-    mut get_transient_subsource_id: F,
     publication_tables: &[PostgresTableDesc],
 ) -> Result<
     (
-        Vec<CreateSourceSubsource<Aug>>,
-        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+        Vec<CreateSubsourceStatement<Aug>>,
+        // These are the tables referenced by the subsources. We want this set
+        // of tables separately so we can retain only table definitions that are
+        // referenced by subsources. This helps avoid issues when generating PG
+        // source table casts.
+        Vec<PostgresTableDesc>,
     ),
     PlanError,
->
-where
-    F: FnMut() -> u64,
-{
-    let mut targeted_subsources = vec![];
+> {
     let mut subsources = vec![];
+    let mut referenced_tables = vec![];
 
     // Aggregate all unrecognized types.
     let mut unsupported_cols = vec![];
@@ -255,20 +260,13 @@ where
             }
         }
 
-        // Create the targeted AST node for the original CREATE SOURCE statement
-        let transient_id = GlobalId::Transient(get_transient_subsource_id());
-
-        let subsource = scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
-
-        targeted_subsources.push(CreateSourceSubsource {
-            reference: upstream_name,
-            subsource: Some(DeferredItemName::Named(subsource)),
-        });
-
         // Create the subsource statement
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
             columns,
+            // We might not know the primary source's `GlobalId` yet; if not,
+            // we'll fill it in once we generate it.
+            of_source: source_name.clone(),
             // TODO(petrosagg): nothing stops us from getting the constraints of the
             // upstream tables and mirroring them here which will lead to more optimization
             // opportunities if for example there is a primary key or an index.
@@ -280,11 +278,12 @@ where
             constraints,
             if_not_exists: false,
             with_options: vec![CreateSubsourceOption {
-                name: CreateSubsourceOptionName::References,
-                value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                name: CreateSubsourceOptionName::ExternalReference,
+                value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
             }],
         };
-        subsources.push((transient_id, subsource));
+        subsources.push(subsource);
+        referenced_tables.push(table.clone())
     }
 
     if !unsupported_cols.is_empty() {
@@ -318,9 +317,7 @@ where
         })?;
     }
 
-    targeted_subsources.sort();
-
-    Ok((targeted_subsources, subsources))
+    Ok((subsources, referenced_tables))
 }
 
 mod privileges {
