@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use maplit::{btreemap, btreeset};
+use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -3522,11 +3522,9 @@ impl Coordinator {
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
-                let descs = btreemap! {id => desc};
-
                 self.controller
                     .storage
-                    .check_alter_ingestion_source_desc(&descs)
+                    .check_alter_ingestion_source_desc(id, &desc)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 // Redefine source. This must be done before we create any new
@@ -3556,7 +3554,7 @@ impl Coordinator {
 
                 self.controller
                     .storage
-                    .alter_ingestion_source_desc(descs)
+                    .alter_ingestion_source_desc(id, desc)
                     .await
                     .unwrap_or_terminate("cannot fail to alter source desc");
 

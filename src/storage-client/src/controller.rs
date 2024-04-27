@@ -384,25 +384,23 @@ pub trait StorageController: Debug {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Check that the ingestion associated with each `id` can use the
-    /// correlated [`SourceDesc`].
+    /// Check that the ingestion associated with `id` can use the provided
+    /// [`SourceDesc`].
     ///
     /// Note that this check is optimistic and its return of `Ok(())` does not
     /// guarantee that subsequent calls to `alter_ingestion_source_desc` are
     /// guaranteed to succeed.
-    ///
-    /// # Panics
-    /// - If `id` is not correlated to a collection with an
-    ///   [`IngestionDescription`].
     fn check_alter_ingestion_source_desc(
         &mut self,
-        collections: &BTreeMap<GlobalId, SourceDesc>,
+        ingestion_id: GlobalId,
+        source_desc: &SourceDesc,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Alters each identified collection to use the correlated [`SourceDesc`].
+    /// Alters the identified collection to use the provided [`SourceDesc`].
     async fn alter_ingestion_source_desc(
         &mut self,
-        collections: BTreeMap<GlobalId, SourceDesc>,
+        ingestion_id: GlobalId,
+        source_desc: SourceDesc,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Alters each identified collection to use the correlated [`GenericSourceConnection`].
