@@ -1493,7 +1493,6 @@ pub fn plan_create_source(
 generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
-    (References, bool, Default(false)),
     (ExternalReference, UnresolvedItemName)
 );
 

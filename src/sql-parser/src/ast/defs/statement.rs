@@ -1086,8 +1086,6 @@ impl_display_t!(ReferencedSubsources);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateSubsourceOptionName {
     Progress,
-    // TODO(delte)
-    References,
     // Tracks which item this subsource references in the primary source.
     ExternalReference,
 }
@@ -1097,9 +1095,6 @@ impl AstDisplay for CreateSubsourceOptionName {
         match self {
             CreateSubsourceOptionName::Progress => {
                 f.write_str("PROGRESS");
-            }
-            CreateSubsourceOptionName::References => {
-                f.write_str("REFERENCES");
             }
             CreateSubsourceOptionName::ExternalReference => {
                 f.write_str("EXTERNAL REFERENCE");
@@ -1116,9 +1111,9 @@ impl WithOptionName for CreateSubsourceOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            CreateSubsourceOptionName::Progress
-            | CreateSubsourceOptionName::References
-            | CreateSubsourceOptionName::ExternalReference => false,
+            CreateSubsourceOptionName::Progress | CreateSubsourceOptionName::ExternalReference => {
+                false
+            }
         }
     }
 }

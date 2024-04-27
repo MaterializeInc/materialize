@@ -2622,13 +2622,12 @@ impl<'a> Parser<'a> {
     fn parse_create_subsource_option_name(
         &mut self,
     ) -> Result<CreateSubsourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[EXTERNAL, PROGRESS, REFERENCES])? {
+        let name = match self.expect_one_of_keywords(&[EXTERNAL, PROGRESS])? {
             EXTERNAL => {
                 self.expect_keyword(REFERENCE)?;
                 CreateSubsourceOptionName::ExternalReference
             }
             PROGRESS => CreateSubsourceOptionName::Progress,
-            REFERENCES => CreateSubsourceOptionName::References,
             _ => unreachable!(),
         };
         Ok(name)

@@ -496,7 +496,7 @@ CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn FOR TABLES (foo, bar as 
 ----
 CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn FOR TABLES (foo, bar AS qux, baz AS zop)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(Deferred(UnresolvedItemName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Deferred(UnresolvedItemName([Ident("zop")]))) }])), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(UnresolvedItemName([Ident("qux")])) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(UnresolvedItemName([Ident("zop")])) }])), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn FOR TABLES ([s1 AS foo.bar]);
@@ -1327,35 +1327,35 @@ ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g
 ----
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(Deferred(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")]))) }], options: [] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")])) }], options: [] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d, a.b.c AS d.e.f.g
 ----
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d, a.b.c AS d.e.f.g
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: Some(Deferred(UnresolvedItemName([Ident("d"), Ident("e"), Ident("f"), Ident("g")]))) }], options: [] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: Some(UnresolvedItemName([Ident("d"), Ident("e"), Ident("f"), Ident("g")])) }], options: [] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g, a.b.c
 ----
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g, a.b.c
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(Deferred(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }], options: [] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")])) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }], options: [] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d, a.b.c AS d.e.f.g, a.b.c
 ----
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d, a.b.c AS d.e.f.g, a.b.c
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: Some(Deferred(UnresolvedItemName([Ident("d"), Ident("e"), Ident("f"), Ident("g")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }], options: [] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: Some(UnresolvedItemName([Ident("d"), Ident("e"), Ident("f"), Ident("g")])) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }], options: [] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g, a.b.c, a.b.c.d AS e.f.g
 ----
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g, a.b.c, a.b.c.d AS e.f.g
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(Deferred(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(Deferred(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")]))) }], options: [] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")])) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")])) }], options: [] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a, b.c, c, d.e
@@ -1377,35 +1377,35 @@ ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g WITH (TEXT COLUMNS [a.b, c.d])
 ----
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g WITH (TEXT COLUMNS = (a.b, c.d))
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(Deferred(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")]))) }], options: [AlterSourceAddSubsourceOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b")])), UnresolvedItemName(UnresolvedItemName([Ident("c"), Ident("d")]))])) }] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")])) }], options: [AlterSourceAddSubsourceOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b")])), UnresolvedItemName(UnresolvedItemName([Ident("c"), Ident("d")]))])) }] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d, a.b.c AS d.e.f.g WITH (TEXT COLUMNS [a.b, c.d])
 ----
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d, a.b.c AS d.e.f.g WITH (TEXT COLUMNS = (a.b, c.d))
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: Some(Deferred(UnresolvedItemName([Ident("d"), Ident("e"), Ident("f"), Ident("g")]))) }], options: [AlterSourceAddSubsourceOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b")])), UnresolvedItemName(UnresolvedItemName([Ident("c"), Ident("d")]))])) }] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: Some(UnresolvedItemName([Ident("d"), Ident("e"), Ident("f"), Ident("g")])) }], options: [AlterSourceAddSubsourceOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b")])), UnresolvedItemName(UnresolvedItemName([Ident("c"), Ident("d")]))])) }] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g, a.b.c WITH (TEXT COLUMNS [a.b, c.d])
 ----
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g, a.b.c WITH (TEXT COLUMNS = (a.b, c.d))
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(Deferred(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }], options: [AlterSourceAddSubsourceOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b")])), UnresolvedItemName(UnresolvedItemName([Ident("c"), Ident("d")]))])) }] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")])) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }], options: [AlterSourceAddSubsourceOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b")])), UnresolvedItemName(UnresolvedItemName([Ident("c"), Ident("d")]))])) }] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d, a.b.c AS d.e.f.g, a.b.c WITH (TEXT COLUMNS [a.b, c.d])
 ----
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d, a.b.c AS d.e.f.g, a.b.c WITH (TEXT COLUMNS = (a.b, c.d))
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: Some(Deferred(UnresolvedItemName([Ident("d"), Ident("e"), Ident("f"), Ident("g")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }], options: [AlterSourceAddSubsourceOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b")])), UnresolvedItemName(UnresolvedItemName([Ident("c"), Ident("d")]))])) }] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: Some(UnresolvedItemName([Ident("d"), Ident("e"), Ident("f"), Ident("g")])) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }], options: [AlterSourceAddSubsourceOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b")])), UnresolvedItemName(UnresolvedItemName([Ident("c"), Ident("d")]))])) }] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g, a.b.c, a.b.c.d AS e.f.g WITH (TEXT COLUMNS [a.b, c.d])
 ----
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d AS e.f.g, a.b.c, a.b.c.d AS e.f.g WITH (TEXT COLUMNS = (a.b, c.d))
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(Deferred(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(Deferred(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")]))) }], options: [AlterSourceAddSubsourceOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b")])), UnresolvedItemName(UnresolvedItemName([Ident("c"), Ident("d")]))])) }] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")])) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d")]), subsource: Some(UnresolvedItemName([Ident("e"), Ident("f"), Ident("g")])) }], options: [AlterSourceAddSubsourceOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b")])), UnresolvedItemName(UnresolvedItemName([Ident("c"), Ident("d")]))])) }] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a, b.c, c, d.e WITH (TEXT COLUMNS [a.b, c.d])
@@ -1433,7 +1433,7 @@ ALTER SOURCE IF EXISTS n ADD TABLE a, b.c AS d
 ----
 ALTER SOURCE IF EXISTS n ADD SUBSOURCE a, b.c AS d
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: true, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("b"), Ident("c")]), subsource: Some(Deferred(UnresolvedItemName([Ident("d")]))) }], options: [] } })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: true, action: AddSubsources { subsources: [CreateSourceSubsource { reference: UnresolvedItemName([Ident("a")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("b"), Ident("c")]), subsource: Some(UnresolvedItemName([Ident("d")])) }], options: [] } })
 
 parse-statement
 ALTER SOURCE IF EXISTS n ADD SOURCE a, b.c AS d
@@ -2597,7 +2597,7 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FO
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (foo, bar AS qux, baz AS zop)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(Deferred(UnresolvedItemName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Deferred(UnresolvedItemName([Ident("zop")]))) }])), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(UnresolvedItemName([Ident("qux")])) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(UnresolvedItemName([Ident("zop")])) }])), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar]);
@@ -2609,9 +2609,9 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FO
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar]);
 ----
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar])
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Named(Id("s1", UnresolvedItemName([Ident("foo"), Ident("bar")])))) }])), progress_subsource: None })
+error: Expected identifier, found left square bracket
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar]);
+                                                                                                 ^
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar] AS baz);
