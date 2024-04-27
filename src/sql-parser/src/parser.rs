@@ -2725,10 +2725,10 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_subsource_references(&mut self) -> Result<CreateSourceSubsource<Raw>, ParserError> {
+    fn parse_subsource_references(&mut self) -> Result<CreateSourceSubsource, ParserError> {
         let reference = self.parse_item_name()?;
         let subsource = if self.parse_one_of_keywords(&[AS, INTO]).is_some() {
-            Some(self.parse_deferred_item_name()?)
+            Some(self.parse_item_name()?)
         } else {
             None
         };

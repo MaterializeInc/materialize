@@ -20,9 +20,9 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    CreateSourceSubsource, DeferredItemName, Ident, ObjectType, ReferencedSubsources,
-    ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
-    SystemObjectType, WithOptionValue,
+    CreateSourceSubsource, Ident, ObjectType, ReferencedSubsources, ShowCreateConnectionStatement,
+    ShowCreateMaterializedViewStatement, ShowObjectType, SystemObjectType, UnresolvedItemName,
+    WithOptionValue,
 };
 use query::QueryContext;
 
@@ -935,15 +935,9 @@ fn humanize_sql_for_show_create(
                     let item = catalog.get_item(subsource);
                     item.subsource_details().map(|(_id, reference)| {
                         let name = item.name();
-                        (
-                            reference.clone(),
-                            ResolvedItemName::Item {
-                                id: item.id(),
-                                qualifiers: name.qualifiers.clone(),
-                                full_name: catalog.resolve_full_name(name),
-                                print_id: false,
-                            },
-                        )
+                        let subsource_name = catalog.resolve_full_name(name);
+                        let subsource_name = UnresolvedItemName::from(subsource_name);
+                        (reference.clone(), subsource_name)
                     })
                 })
                 .collect();
@@ -1045,7 +1039,7 @@ fn humanize_sql_for_show_create(
                     .into_iter()
                     .map(|(reference, name)| CreateSourceSubsource {
                         reference,
-                        subsource: Some(DeferredItemName::Named(name)),
+                        subsource: Some(name),
                     })
                     .collect();
                 subsources.sort();
