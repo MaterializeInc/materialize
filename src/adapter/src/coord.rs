@@ -1868,8 +1868,20 @@ impl Coordinator {
         let source_desc = |source: &Source| {
             let (data_source, status_collection_id) = match source.data_source.clone() {
                 // Re-announce the source description.
-                DataSourceDesc::Ingestion(ingestion) => {
-                    let ingestion = ingestion.into_inline_connection(catalog.state());
+                DataSourceDesc::Ingestion {
+                    ingestion_desc:
+                        mz_sql::plan::Ingestion {
+                            desc,
+                            progress_subsource,
+                        },
+                    cluster_id,
+                } => {
+                    let desc = desc.into_inline_connection(catalog.state());
+                    let ingestion = mz_storage_types::sources::IngestionDescription::new(
+                        desc,
+                        cluster_id,
+                        progress_subsource,
+                    );
 
                     (
                         DataSource::Ingestion(ingestion.clone()),

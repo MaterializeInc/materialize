@@ -50,10 +50,10 @@ use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope,
-    SourceExport, Timeline,
+    GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, Timeline,
 };
 use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
@@ -393,11 +393,25 @@ impl Table {
     }
 }
 
+/// A description of a source ingestion
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct Ingestion {
+    /// The source description.
+    pub desc: SourceDesc<ReferencedConnection>,
+    /// The ID of the instance in which to install the source.
+    pub instance_id: StorageInstanceId,
+    /// The ID of this ingestion's remap/progress collection.
+    pub remap_collection_id: GlobalId,
+}
+
 // TODO(#26768): do we need all of these `DataSourceDesc`s?
 #[derive(Debug, Clone, Serialize)]
 pub enum DataSourceDesc {
     /// Receives data from an external system
-    Ingestion(IngestionDescription<(), ReferencedConnection>),
+    Ingestion {
+        ingestion_desc: PlanIngestion,
+        cluster_id: ClusterId,
+    },
     /// This source receives its data from the identified ingestion,
     /// specifically the output identified by `external_reference`.
     IngestionExport {
@@ -419,40 +433,6 @@ pub enum DataSourceDesc {
         /// The cluster which this source is associated with.
         cluster_id: ClusterId,
     },
-}
-
-impl DataSourceDesc {
-    /// Describes the ingestion to the adapter, which essentially just enriches the a higher-level
-    /// [`PlanIngestion`] with a [`ClusterId`].
-    pub fn ingestion(
-        id: GlobalId,
-        ingestion: PlanIngestion,
-        instance_id: ClusterId,
-    ) -> DataSourceDesc {
-        // TODO(#26769): planning should no longer generate source exports once
-        // we fix subsource dependency inversion.
-        let source_exports = ingestion
-            .subsource_exports
-            .iter()
-            // By convention the first output corresponds to the main source object
-            .chain(std::iter::once((&id, &0)))
-            .map(|(id, output_index)| {
-                let export = SourceExport {
-                    output_index: *output_index,
-                    storage_metadata: (),
-                };
-                (*id, export)
-            })
-            .collect();
-
-        DataSourceDesc::Ingestion(IngestionDescription {
-            desc: ingestion.desc.clone(),
-            ingestion_metadata: (),
-            source_exports,
-            instance_id,
-            remap_collection_id: ingestion.progress_subsource,
-        })
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -481,7 +461,6 @@ impl Source {
     /// - If a non-ingestion-based source has a defined cluster config in its plan.
     /// - If a non-ingestion-based source is given a cluster_id.
     pub fn new(
-        id: GlobalId,
         plan: CreateSourcePlan,
         resolved_ids: ResolvedIds,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -490,12 +469,14 @@ impl Source {
         Source {
             create_sql: Some(plan.source.create_sql),
             data_source: match plan.source.data_source {
-                mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => DataSourceDesc::ingestion(
-                    id,
-                    ingestion,
-                    plan.in_cluster
-                        .expect("ingestion-based sources must be given a cluster ID"),
-                ),
+                mz_sql::plan::DataSourceDesc::Ingestion(ingestion_desc) => {
+                    DataSourceDesc::Ingestion {
+                        ingestion_desc,
+                        cluster_id: plan
+                            .in_cluster
+                            .expect("ingestion-based sources must be given a cluster ID"),
+                    }
+                }
                 mz_sql::plan::DataSourceDesc::Progress => {
                     assert!(
                         plan.in_cluster.is_none(),
@@ -543,7 +524,9 @@ impl Source {
     /// Type of the source.
     pub fn source_type(&self) -> &str {
         match &self.data_source {
-            DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                ingestion_desc.desc.connection.name()
+            }
             DataSourceDesc::Progress => "progress",
             DataSourceDesc::IngestionExport { .. } => "subsource",
             DataSourceDesc::Introspection(_) => "source",
@@ -554,7 +537,8 @@ impl Source {
     /// The key and value formats of the source.
     pub fn formats(&self) -> (Option<&str>, Option<&str>) {
         match &self.data_source {
-            DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.encoding {
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => match &ingestion_desc.desc.encoding
+            {
                 Some(encoding) => match &encoding.key {
                     Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
                     None => (None, Some(encoding.value.type_())),
@@ -579,23 +563,27 @@ impl Source {
             // `SourceEnvelope` itself, but that one feels more like an internal
             // thing and adapter should own how we represent envelopes as a
             // string? It would not be hard to convince me otherwise, though.
-            DataSourceDesc::Ingestion(ingestion) => match ingestion.desc.envelope() {
-                SourceEnvelope::None(_) => Some("none"),
-                SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
-                    mz_storage_types::sources::envelope::UpsertStyle::Default(_) => Some("upsert"),
-                    mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
-                        // NOTE(aljoscha): Should we somehow mark that this is
-                        // using upsert internally? See note above about
-                        // DEBEZIUM.
-                        Some("debezium")
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                match ingestion_desc.desc.envelope() {
+                    SourceEnvelope::None(_) => Some("none"),
+                    SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
+                        mz_storage_types::sources::envelope::UpsertStyle::Default(_) => {
+                            Some("upsert")
+                        }
+                        mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
+                            // NOTE(aljoscha): Should we somehow mark that this is
+                            // using upsert internally? See note above about
+                            // DEBEZIUM.
+                            Some("debezium")
+                        }
+                    },
+                    SourceEnvelope::CdcV2 => {
+                        // TODO(aljoscha): Should we even report this? It's
+                        // currently not exposed.
+                        Some("materialize")
                     }
-                },
-                SourceEnvelope::CdcV2 => {
-                    // TODO(aljoscha): Should we even report this? It's
-                    // currently not exposed.
-                    Some("materialize")
                 }
-            },
+            }
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
@@ -606,7 +594,9 @@ impl Source {
     /// Connection ID of the source, if one exists.
     pub fn connection_id(&self) -> Option<GlobalId> {
         match &self.data_source {
-            DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.connection_id(),
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                ingestion_desc.desc.connection.connection_id()
+            }
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
@@ -623,8 +613,8 @@ impl Source {
     /// the limit calculation.
     pub fn user_controllable_persist_shard_count(&self) -> i64 {
         match &self.data_source {
-            DataSourceDesc::Ingestion(ingestion) => {
-                match &ingestion.desc.connection {
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                match &ingestion_desc.desc.connection {
                     // These multi-output sources do not use their primary
                     // source's data shard, so we don't include it in accounting
                     // for users.
@@ -843,7 +833,7 @@ impl CatalogItem {
     ) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
+                DataSourceDesc::Ingestion { ingestion_desc, .. } => Ok(Some(&ingestion_desc.desc)),
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
@@ -1205,7 +1195,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => Some(ingestion.instance_id),
+                DataSourceDesc::Ingestion { cluster_id, .. } => Some(*cluster_id),
                 // This is somewhat of a lie because the export runs on the same
                 // cluster as its ingestion but we don't yet have a way of
                 // cross-referencing the items
@@ -1489,7 +1479,9 @@ impl CatalogEntry {
     pub fn progress_id(&self) -> Option<GlobalId> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
+                DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                    Some(ingestion_desc.progress_subsource)
+                }
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress

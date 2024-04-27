@@ -848,19 +848,14 @@ impl CatalogState {
         return Ok((plan, resolved_ids));
     }
 
-    pub(crate) fn deserialize_item(
-        &self,
-        id: GlobalId,
-        create_sql: &str,
-    ) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(id, create_sql, None, false, None)
+    pub(crate) fn deserialize_item(&self, create_sql: &str) -> Result<CatalogItem, AdapterError> {
+        self.parse_item(create_sql, None, false, None)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
     #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
-        id: GlobalId,
         create_sql: &str,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
@@ -889,11 +884,10 @@ impl CatalogState {
             }) => CatalogItem::Source(Source {
                 create_sql: Some(source.create_sql),
                 data_source: match source.data_source {
-                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
-                        DataSourceDesc::ingestion(
-                            id,
-                            ingestion,
-                            match in_cluster {
+                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion_desc) => {
+                        DataSourceDesc::Ingestion {
+                            ingestion_desc,
+                            cluster_id: match in_cluster {
                                 Some(id) => id,
                                 None => {
                                     return Err(AdapterError::Unstructured(anyhow::anyhow!(
@@ -901,7 +895,7 @@ impl CatalogState {
                                     )))
                                 }
                             },
-                        )
+                        }
                     }
                     mz_sql::plan::DataSourceDesc::IngestionExport {
                         ingestion_id,
@@ -2404,7 +2398,7 @@ impl CatalogState {
             };
             let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
             match source.data_source {
-                DataSourceDesc::Ingestion(_) => {
+                DataSourceDesc::Ingestion { .. } => {
                     // For sources, look up each dependent subsource and propagate.
                     cws.entry(source_cw).or_default().insert(id);
                     ids.extend(entry.used_by());

@@ -1281,10 +1281,9 @@ pub enum DataSourceDesc {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Ingestion {
     pub desc: SourceDesc<ReferencedConnection>,
-    pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
 }
 

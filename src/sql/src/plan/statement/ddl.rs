@@ -1373,7 +1373,6 @@ pub fn plan_create_source(
         create_sql,
         data_source: DataSourceDesc::Ingestion(Ingestion {
             desc: source_desc,
-            subsource_exports: BTreeMap::new(),
             progress_subsource,
         }),
         desc,

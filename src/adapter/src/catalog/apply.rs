@@ -487,7 +487,6 @@ impl CatalogState {
             Builtin::Index(index) => {
                 let mut item = self
                     .parse_item(
-                        id,
                         &index.create_sql(),
                         None,
                         index.is_retained_metrics_object,
@@ -631,7 +630,7 @@ impl CatalogState {
                 static LOGGING_ERROR: Lazy<Regex> =
                     Lazy::new(|| Regex::new("mz_catalog.[^']*").expect("valid regex"));
 
-                let catalog_item = match self.deserialize_item(item.id, &item.create_sql) {
+                let catalog_item = match self.deserialize_item(&item.create_sql) {
                     Ok(item) => item,
                     Err(AdapterError::Catalog(Error {
                         kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(name)),

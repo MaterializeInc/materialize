@@ -219,8 +219,10 @@ impl Coordinator {
                         }
                         CatalogItem::Source(source) => {
                             sources_to_drop.push(*id);
-                            if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
-                                match &ingestion.desc.connection {
+                            if let DataSourceDesc::Ingestion { ingestion_desc, .. } =
+                                &source.data_source
+                            {
+                                match &ingestion_desc.desc.connection {
                                     GenericSourceConnection::Postgres(conn) => {
                                         let conn = conn
                                             .clone()
