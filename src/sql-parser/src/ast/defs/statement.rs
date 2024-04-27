@@ -1086,6 +1086,7 @@ impl_display_t!(ReferencedSubsources);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateSubsourceOptionName {
     Progress,
+    // TODO(delte)
     References,
     // Tracks which item this subsource references in the primary source.
     ExternalReference,

@@ -911,7 +911,6 @@ impl CatalogState {
                         external_reference,
                     },
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
-                    mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
                     mz_sql::plan::DataSourceDesc::Webhook {
                         validate_using,
                         body_format,
@@ -2422,7 +2421,6 @@ impl CatalogState {
                         .unwrap_or(source_cw);
                     cws.entry(cw).or_default().insert(id);
                 }
-                DataSourceDesc::Source => unreachable!(),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Webhook { .. } => {

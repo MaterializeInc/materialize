@@ -299,8 +299,7 @@ impl<'a> DataflowBuilder<'a> {
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
-            | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Source => false,
+            | DataSourceDesc::Webhook { .. } => false,
         }
     }
 

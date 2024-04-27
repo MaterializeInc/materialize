@@ -1271,9 +1271,6 @@ pub enum DataSourceDesc {
         ingestion_id: GlobalId,
         external_reference: UnresolvedItemName,
     },
-    /// Receives data from some other source.
-    // TODO(#26764): delete
-    Source,
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP post requests.

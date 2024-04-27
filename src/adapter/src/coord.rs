@@ -1886,8 +1886,6 @@ impl Coordinator {
                     },
                     Some(source_status_collection_id),
                 ),
-                // Subsources use source statuses.
-                DataSourceDesc::Source => unreachable!("cannot render legacy-style subsources"),
                 DataSourceDesc::Webhook { .. } => {
                     (DataSource::Webhook, Some(source_status_collection_id))
                 }

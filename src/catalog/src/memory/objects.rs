@@ -404,9 +404,6 @@ pub enum DataSourceDesc {
         ingestion_id: GlobalId,
         external_reference: UnresolvedItemName,
     },
-    /// Receives data from some other source
-    // TODO(#26764): delete
-    Source,
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
     /// Receives data from the source's reclocking/remapping operations.
@@ -468,8 +465,8 @@ pub struct Source {
     pub timeline: Timeline,
     pub resolved_ids: ResolvedIds,
     /// This value is ignored for subsources, i.e. for
-    /// [`DataSourceDesc::Source`]. Instead, it uses the primary sources logical
-    /// compaction window.
+    /// [`DataSourceDesc::IngestionExport`]. Instead, it uses the primary
+    /// sources logical compaction window.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
@@ -519,13 +516,6 @@ impl Source {
                         external_reference,
                     }
                 }
-                mz_sql::plan::DataSourceDesc::Source => {
-                    assert!(
-                        plan.in_cluster.is_none(),
-                        "subsources must not have a host config or cluster_id defined"
-                    );
-                    DataSourceDesc::Source
-                }
                 mz_sql::plan::DataSourceDesc::Webhook {
                     validate_using,
                     body_format,
@@ -556,7 +546,6 @@ impl Source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
             DataSourceDesc::Progress => "progress",
             DataSourceDesc::IngestionExport { .. } => "subsource",
-            DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
             DataSourceDesc::Webhook { .. } => "webhook",
         }
@@ -575,8 +564,7 @@ impl Source {
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress
-            | DataSourceDesc::Source => (None, None),
+            | DataSourceDesc::Progress => (None, None),
         }
     }
 
@@ -611,8 +599,7 @@ impl Source {
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress
-            | DataSourceDesc::Source => None,
+            | DataSourceDesc::Progress => None,
         }
     }
 
@@ -623,8 +610,7 @@ impl Source {
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress
-            | DataSourceDesc::Source => None,
+            | DataSourceDesc::Progress => None,
         }
     }
 
@@ -661,13 +647,9 @@ impl Source {
             //  use a data shard.
             DataSourceDesc::IngestionExport { .. } => 1,
             DataSourceDesc::Webhook { .. } => 1,
-            //  DataSourceDesc::Source represents subsources, which are accounted for in their
-            //  primary source's ingestion.
-            DataSourceDesc::Source
             // Introspection and progress subsources are not under the user's control, so shouldn't
             // count toward their quota.
-            | DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Progress => 0,
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => 0,
         }
     }
 }
@@ -865,8 +847,7 @@ impl CatalogItem {
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
-                | DataSourceDesc::Progress
-                | DataSourceDesc::Source => Ok(None),
+                | DataSourceDesc::Progress => Ok(None),
             },
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: entry.name().item.to_string(),
@@ -1230,9 +1211,7 @@ impl CatalogItem {
                 // cross-referencing the items
                 DataSourceDesc::IngestionExport { .. } => None,
                 DataSourceDesc::Webhook { cluster_id, .. } => Some(*cluster_id),
-                DataSourceDesc::Introspection(_)
-                | DataSourceDesc::Progress
-                | DataSourceDesc::Source => None,
+                DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
             CatalogItem::Table(_)
@@ -1530,8 +1509,7 @@ impl CatalogEntry {
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
-                | DataSourceDesc::Webhook { .. }
-                | DataSourceDesc::Source => None,
+                | DataSourceDesc::Webhook { .. } => None,
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)

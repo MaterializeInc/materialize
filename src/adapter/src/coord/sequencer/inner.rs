@@ -452,9 +452,6 @@ impl Coordinator {
                             },
                             source_status_collection_id,
                         ),
-                        DataSourceDesc::Source => {
-                            unreachable!("cannot render legacy-style sources")
-                        }
                         DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
