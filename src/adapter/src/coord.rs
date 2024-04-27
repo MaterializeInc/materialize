@@ -1506,14 +1506,29 @@ impl Coordinator {
                 entry.item().typ(),
                 entry.id()
             );
-            let policy = entry.item().initial_logical_compaction_window();
+            let mut policy = entry.item().initial_logical_compaction_window();
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
                 // indexes are always built individually and does not store information
                 // about how it was built. If we start building multiple sinks and/or indexes
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
+                CatalogItem::Source(source) => {
+                    // Propagate source compaction windows to subsources if needed.
+                    if source.custom_logical_compaction_window.is_none() {
+                        if let DataSourceDesc::IngestionExport { ingestion_id, .. } =
+                            source.data_source
+                        {
+                            policy = Some(
+                                self.catalog()
+                                    .get_entry(&ingestion_id)
+                                    .source()
+                                    .expect("must be source")
+                                    .custom_logical_compaction_window
+                                    .unwrap_or_default(),
+                            );
+                        }
+                    }
                     policies_to_set
                         .entry(policy.expect("sources have a compaction window"))
                         .or_insert_with(Default::default)
@@ -1713,10 +1728,6 @@ impl Coordinator {
         // Having installed all entries, creating all constraints, we can now relax read policies.
         //
         // TODO -- Improve `initialize_read_policies` API so we can avoid calling this in a loop.
-        //
-        // As of this writing, there can only be at most two keys in `policies_to_set`,
-        // so the extra load isn't crazy, but that might not be true in general if we
-        // open up custom compaction windows to users.
         for (cw, policies) in policies_to_set {
             self.initialize_read_policies(&policies, cw).await;
         }
