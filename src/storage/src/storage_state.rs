@@ -1192,7 +1192,9 @@ impl StorageState {
                             // restart a sink in the future.
                             export_description.as_of.clone_from(&frontier);
                         }
-                        None if self.ingestions.contains_key(&id) => (),
+                        // reported_frontiers contains both ingestions and their
+                        // exports
+                        None if self.reported_frontiers.contains_key(&id) => (),
                         None => panic!("AllowCompaction command for non-existent {id}"),
                     }
 
