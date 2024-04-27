@@ -424,7 +424,16 @@ impl CatalogState {
                     let source_type = source.source_type();
                     let connection_id = source.connection_id();
                     let envelope = source.envelope();
-                    let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
+                    let cluster_entry = match source.data_source {
+                        // Ingestion exports don't have their own cluster, but
+                        // run on their ingestion's cluster.
+                        DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                            self.get_entry(&ingestion_id)
+                        }
+                        _ => entry,
+                    };
+
+                    let cluster_id = cluster_entry.item().cluster_id().map(|id| id.to_string());
 
                     let (key_format, value_format) = source.formats();
 

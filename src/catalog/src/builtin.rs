@@ -6150,26 +6150,10 @@ materialized_views AS (
 -- dataflows, so we need to find the ones that are. Generally, sources that
 -- have a cluster ID are maintained by a dataflow running on that cluster.
 -- Webhook sources are an exception to this rule.
-sources_maintained_by_dataflows AS (
+sources_with_clusters AS (
     SELECT id, cluster_id
     FROM mz_catalog.mz_sources
     WHERE cluster_id IS NOT NULL AND type != 'webhook'
-),
--- Cluster IDs are missing for subsources in `mz_sources` (#24235), so we need
--- to add them manually here by looking up the parent sources.
-subsources_with_clusters AS (
-    SELECT ss.id, ps.cluster_id
-    FROM mz_catalog.mz_sources ss
-    JOIN mz_internal.mz_object_dependencies d
-        ON (d.object_id = ss.id)
-    JOIN sources_maintained_by_dataflows ps
-        ON (ps.id = d.referenced_object_id)
-    WHERE ss.type = 'subsource'
-),
-sources_with_clusters AS (
-    SELECT id, cluster_id FROM sources_maintained_by_dataflows
-    UNION ALL
-    SELECT id, cluster_id FROM subsources_with_clusters
 ),
 sources AS (
     SELECT
