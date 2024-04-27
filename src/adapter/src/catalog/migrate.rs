@@ -18,9 +18,11 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::VisitMut;
+use mz_sql::ast::{CreateSubsourceOption, CreateSubsourceOptionName, UnresolvedItemName};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sources::GenericSourceConnection;
 use semver::Version;
 use tracing::info;
 
@@ -155,6 +157,7 @@ pub(crate) async fn migrate(
     //
     // Each migration should be a function that takes `tx` and `conn_cat` as
     // input and stages arbitrary transformations to the catalog on `tx`.
+    mysql_subsources_remove_unnecessary_db_name(tx, &conn_cat)?;
 
     info!(
         "migration from catalog version {:?} complete",
@@ -187,6 +190,11 @@ fn _assign_new_user_global_ids(
     use mz_sql::names::CommentObjectId;
     use mz_sql_parser::ast::RawItemName;
     use mz_storage_client::controller::StorageTxn;
+
+    // !WARNING!
+    //
+    // double-check that using this fn doesn't interfer with any other
+    // migrations
 
     // Convert the IDs we need into a set with constant-time lookup.
     let news_new_id_set: BTreeSet<_> = needs_new_id
@@ -545,6 +553,95 @@ fn ast_rewrite_create_source_pg_database_details(
     }
 
     Rewriter { cat }.visit_statement_mut(stmt);
+
+    Ok(())
+}
+
+fn mysql_subsources_remove_unnecessary_db_name(
+    tx: &mut Transaction<'_>,
+    conn_catalog: &ConnCatalog,
+) -> Result<(), anyhow::Error> {
+    let items = conn_catalog.get_items();
+    let mysql_subsources_to_update: Vec<_> = items
+        .into_iter()
+        .filter_map(|item| match item.subsource_details() {
+            Some((ingestion_id, external_reference)) => {
+                match conn_catalog
+                    .state()
+                    .get_entry(&ingestion_id)
+                    .source_desc()
+                    .expect("exports refer to ingestions")
+                    .expect("exports refer to ingestions")
+                    .connection
+                {
+                    GenericSourceConnection::MySql(_) => {
+                        let mut updated_reference = external_reference.0.clone();
+                        if updated_reference.len() == 3 {
+                            let fake_database_name = updated_reference.remove(0);
+                            if fake_database_name.as_str() != "mysql" {
+                                return Some(Err(anyhow::anyhow!("MySQL subsource's left-most qualification should have been 'mysql' but was {}", fake_database_name)));
+                            }
+
+                            Some(Ok((item, updated_reference)))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            None => None,
+        }).collect::<Result<Vec<_>, _>>()?;
+
+    let mut updated_items = BTreeMap::new();
+    for (item, updated_reference) in mysql_subsources_to_update {
+        let mut subsource_stmt = mz_sql_parser::parser::parse_statements(item.create_sql())
+            .expect("parsing persisted create_sql must succeed")
+            .into_element()
+            .ast;
+
+        match &mut subsource_stmt {
+            Statement::CreateSubsource(create_subsource_stmt) => {
+                create_subsource_stmt
+                    .with_options
+                    .retain(|o| o.name != CreateSubsourceOptionName::ExternalReference);
+
+                create_subsource_stmt
+                    .with_options
+                    .push(CreateSubsourceOption {
+                        name: CreateSubsourceOptionName::ExternalReference,
+                        value: Some(mz_sql::ast::WithOptionValue::UnresolvedItemName(
+                            UnresolvedItemName(updated_reference),
+                        )),
+                    });
+            }
+            _ => unreachable!("must be subsource"),
+        }
+
+        updated_items.insert(item.id(), subsource_stmt.to_ast_string_stable());
+    }
+
+    let updated_items: BTreeMap<_, _> = tx
+        .get_items()
+        .filter_map(|item| {
+            updated_items.remove(&item.id).map(|new_create_sql| {
+                (
+                    item.id,
+                    Item {
+                        id: item.id,
+                        oid: item.oid,
+                        schema_id: item.schema_id,
+                        name: item.name,
+                        create_sql: new_create_sql,
+                        owner_id: item.owner_id,
+                        privileges: item.privileges,
+                    },
+                )
+            })
+        })
+        .collect();
+
+    tx.update_items(updated_items)?;
 
     Ok(())
 }

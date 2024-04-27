@@ -76,6 +76,7 @@ use self::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
     LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
 };
+use self::mysql::MYSQL_DATABASE_FAKE_NAME;
 
 pub(crate) mod error;
 mod mysql;
@@ -1075,11 +1076,22 @@ async fn purify_create_source(
                 ReferencedSubsources::SubsetTables(subsources) => {
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
-                    validated_requested_subsources.extend(subsource_gen(
-                        subsources,
-                        &mysql_catalog,
-                        source_name,
-                    )?);
+                    validated_requested_subsources =
+                        subsource_gen(subsources, &mysql_catalog, source_name)?;
+
+                    // subsource_gen automatically inserts the "fully qualified
+                    // name," which for MySQL sources includes the fake database
+                    // name.
+                    for requested_subsource in validated_requested_subsources.iter_mut() {
+                        let fake_database_name = requested_subsource.upstream_name.0.remove(0);
+                        if fake_database_name.as_str() != MYSQL_DATABASE_FAKE_NAME {
+                            sql_bail!(
+                                    "[internal error]: expected first element of upstream reference to be {}, but is {}",
+                                    MYSQL_DATABASE_FAKE_NAME,
+                                    fake_database_name.as_str()
+                                );
+                        }
+                    }
                 }
             }
 
