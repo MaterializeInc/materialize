@@ -20,13 +20,13 @@ $ set-arg-default single-replica-cluster=quickstart
 > SHOW SOURCES
 name          type           size                         cluster
 -----------------------------------------------------------------
-accounts      subsource      <null>                       <null>
-auctions      subsource      <null>                       <null>
-bids          subsource      <null>                       <null>
+accounts      subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
+auctions      subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
+bids          subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
 demo          load-generator ${arg.default-replica-size}  ${arg.single-replica-cluster}
-demo_progress progress       <null>                       <null>
-organizations subsource      <null>                       <null>
-users         subsource      <null>                       <null>
+demo_progress progress       <null> <null>
+organizations subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
+users         subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
 
 > SHOW COLUMNS FROM auctions
 end_time false "timestamp with time zone"
