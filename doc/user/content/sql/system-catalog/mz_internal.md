@@ -504,6 +504,28 @@ system.
 | `replication_slot`  | [`text`]         | The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from. |
 | `timeline_id`       | [`uint8`]        | The PostgreSQL [timeline ID](https://www.postgresql.org/docs/current/continuous-archiving.html#BACKUP-TIMELINES) determined on source creation.
 
+### `mz_postgres_source_tables`
+
+The `mz_postgres_source_tables` table contains a row for each PostgreSQL table ingested by a subsource.
+
+<!-- RELATION_SPEC mz_internal.mz_postgres_source_tables -->
+| Field               | Type             | Meaning                                                                                                        |
+| ------------------- | ---------------- | --------                                                                                                       |
+| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `schema_name`  | [`text`]         | The ingested upstream table's schema name. |
+| `table_name`  | [`text`]         | The ingested upstream table's name. |
+
+### `mz_mysql_source_tables`
+
+The `mz_mysql_source_tables` table contains a row for each MySQL table ingested by a subsource.
+
+<!-- RELATION_SPEC mz_internal.mz_mysql_source_tables -->
+| Field               | Type             | Meaning                                                                                                        |
+| ------------------- | ---------------- | --------                                                                                                       |
+| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `schema_name`  | [`text`]         | The ingested upstream table's schema name. This is also sometimes referred to as the upstream table's database name.|
+| `table_name`  | [`text`]         | The ingested upstream table's name. |
+
 <!--
 ### `mz_prepared_statement_history`
 

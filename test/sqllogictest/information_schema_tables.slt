@@ -569,6 +569,10 @@ mz_message_counts_sent_raw
 SOURCE
 materialize
 mz_internal
+mz_mysql_source_tables
+BASE TABLE
+materialize
+mz_internal
 mz_notices
 VIEW
 materialize
@@ -611,6 +615,10 @@ materialize
 mz_internal
 mz_peek_durations_histogram_raw
 SOURCE
+materialize
+mz_internal
+mz_postgres_source_tables
+BASE TABLE
 materialize
 mz_internal
 mz_postgres_sources
