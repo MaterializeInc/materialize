@@ -36,6 +36,9 @@ from materialize.checks.mzcompose_actions import (
 from materialize.checks.mzcompose_actions import (
     RestartSourcePostgres as RestartSourcePostgresAction,
 )
+from materialize.checks.mzcompose_actions import (
+    SystemVarChange as SystemVarChangeAction,
+)
 from materialize.mz_version import MzVersion
 
 
@@ -245,5 +248,37 @@ class RestartRedpandaDebezium(Scenario):
             RestartRedpandaDebeziumAction(),
             Manipulate(self, phase=2),
             RestartRedpandaDebeziumAction(),
+            Validate(self),
+        ]
+
+
+# This scenario is not instantiated. Create a subclass to use it.
+class SystemVarChange(Scenario):
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        seed: str | None,
+        name: str,
+        value_1: str,
+        value_2: str,
+    ):
+        super().__init__(checks, executor, seed)
+        self.name = name
+        self.value_1 = value_1
+        self.value_2 = value_2
+
+    def actions(self) -> list[Action]:
+        return [
+            StartMz(self),
+            Initialize(self),
+            SystemVarChangeAction(name=self.name, value=self.value_1),
+            Manipulate(self, phase=1),
+            SystemVarChangeAction(name=self.name, value=self.value_2),
+            Manipulate(self, phase=2),
+            # validate with value_2
+            Validate(self),
+            SystemVarChangeAction(name=self.name, value=self.value_1),
+            # validate with value_1
             Validate(self),
         ]

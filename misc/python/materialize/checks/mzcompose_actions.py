@@ -406,3 +406,20 @@ class PromoteMz(MzcomposeAction):
 
         mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
         e.current_mz_version = mz_version
+
+
+class SystemVarChange(MzcomposeAction):
+    """Changes a system var."""
+
+    def __init__(self, name: str, value: str):
+        self.name = name
+        self.value = value
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+
+        c.sql(
+            f"ALTER SYSTEM SET {self.name} = {self.value};",
+            port=6877,
+            user="mz_system",
+        )
