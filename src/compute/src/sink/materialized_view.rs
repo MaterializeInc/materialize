@@ -17,6 +17,7 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
+use mz_compute_types::dyncfgs::ENABLE_MATERIALIZED_VIEW_SINK_V2;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
@@ -42,6 +43,7 @@ use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
 use crate::sink::correction::Correction;
+use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for MaterializedViewSinkConnection<CollectionMetadata>
@@ -79,15 +81,28 @@ where
             )
         }
 
-        persist_sink(
-            sink_id,
-            &self.storage_metadata,
-            ok_collection,
-            err_collection,
-            as_of,
-            compute_state,
-            start_signal,
-        )
+        if ENABLE_MATERIALIZED_VIEW_SINK_V2.get(&compute_state.worker_config) {
+            let token = materialized_view_v2::persist_sink(
+                sink_id,
+                &self.storage_metadata,
+                ok_collection,
+                err_collection,
+                as_of,
+                compute_state,
+                start_signal,
+            );
+            Some(token)
+        } else {
+            persist_sink(
+                sink_id,
+                &self.storage_metadata,
+                ok_collection,
+                err_collection,
+                as_of,
+                compute_state,
+                start_signal,
+            )
+        }
     }
 }
 
