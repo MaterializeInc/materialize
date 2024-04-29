@@ -203,8 +203,10 @@ impl<D: Data> Correction<D> {
     pub fn set_lower(&mut self, lower: Antichain<Timestamp>) {
         assert!(PartialOrder::less_equal(&self.lower, &lower));
 
-        self.advance_by(&lower);
-        self.lower = lower;
+        if lower != self.lower {
+            self.advance_by(&lower);
+            self.lower = lower;
+        }
     }
 
     /// Advance all contained updates by the given frontier.
