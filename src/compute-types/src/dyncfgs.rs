@@ -21,6 +21,13 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
      linear joins.",
 );
 
+/// Whether rendering should use the new `persist_sink` implementation.
+pub const ENABLE_PERSIST_SINK_V2: Config<bool> = Config::new(
+    "enable_compute_persist_sink_v2",
+    true,
+    "Whether compute should use the new `persist_sink` implementation to render MVs.",
+);
+
 /// The yielding behavior with which linear joins should be rendered.
 pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
     "linear_join_yielding",
@@ -119,6 +126,7 @@ pub const COPY_TO_S3_MULTIPART_PART_SIZE_BYTES: Config<usize> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ENABLE_MZ_JOIN_CORE)
+        .add(&ENABLE_PERSIST_SINK_V2)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)

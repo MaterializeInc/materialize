@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
+use mz_compute_types::dyncfgs::ENABLE_PERSIST_SINK_V2;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
@@ -43,6 +44,7 @@ use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
 use crate::sink::correction::Correction;
+use crate::sink::persist_sink_v2;
 use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
@@ -71,15 +73,28 @@ where
             )
         }
 
-        persist_sink(
-            sink_id,
-            &self.storage_metadata,
-            ok_collection,
-            err_collection,
-            as_of,
-            compute_state,
-            start_signal,
-        )
+        if ENABLE_PERSIST_SINK_V2.get(&compute_state.worker_config) {
+            let token = persist_sink_v2::persist_sink(
+                sink_id,
+                &self.storage_metadata,
+                ok_collection,
+                err_collection,
+                as_of,
+                compute_state,
+                start_signal,
+            );
+            Some(token)
+        } else {
+            persist_sink(
+                sink_id,
+                &self.storage_metadata,
+                ok_collection,
+                err_collection,
+                as_of,
+                compute_state,
+                start_signal,
+            )
+        }
     }
 }
 
