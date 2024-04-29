@@ -282,3 +282,15 @@ class SystemVarChange(Scenario):
             # validate with value_1
             Validate(self),
         ]
+
+
+class TogglePersistRoundtripSpine(SystemVarChange):
+    def __init__(self, checks: list[type[Check]], executor: Executor, seed: str | None):
+        super().__init__(
+            checks,
+            executor,
+            seed,
+            name="persist_roundtrip_spine",
+            value_1="FALSE",
+            value_2="TRUE",
+        )
