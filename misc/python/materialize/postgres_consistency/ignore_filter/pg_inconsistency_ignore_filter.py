@@ -412,6 +412,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if _error_message_is_about_zero_or_value_ranges(mz_error_msg):
             return YesIgnore("Caused by a different precision")
 
+        if query_template.limit == 0:
+            return YesIgnore("#17189: LIMIT 0 does not swallow errors")
+
         return NoIgnore()
 
     def _shall_ignore_content_mismatch(
