@@ -10,6 +10,7 @@
 mod copy_to_s3_oneshot;
 mod correction;
 mod persist_sink;
+mod persist_sink_v2;
 mod refresh;
 mod subscribe;
 
