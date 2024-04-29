@@ -374,6 +374,7 @@ class CopyToS3Action(Action):
                 'is not allowed from the "mz_introspection" cluster',
                 "copy has been terminated because underlying relation",
                 "Relation contains unimplemented arrow types",
+                "Cannot encode the following columns/types",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
