@@ -327,12 +327,12 @@ impl crate::coord::Coordinator {
     /// with a read policy that allows no compaction.
     pub(crate) async fn initialize_storage_read_policies(
         &mut self,
-        ids: Vec<GlobalId>,
+        ids: BTreeSet<GlobalId>,
         compaction_window: CompactionWindow,
     ) {
         self.initialize_read_policies(
             &CollectionIdBundle {
-                storage_ids: ids.into_iter().collect(),
+                storage_ids: ids,
                 compute_ids: BTreeMap::new(),
             },
             compaction_window,

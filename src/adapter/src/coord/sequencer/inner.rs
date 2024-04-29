@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use maplit::btreemap;
+use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -407,6 +407,7 @@ impl Coordinator {
         session: &mut Session,
         plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let source_ids: Vec<_> = plans.iter().map(|plan| plan.source_id).collect();
         let CreateSourceInner {
             ops,
             sources,
@@ -415,12 +416,6 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                // Buffer an ingestions' read policies in case their subsources
-                // need to reference it before it's durably recorded.
-                let mut ingestion_read_policies: BTreeMap<_, _> = BTreeMap::new();
-                let mut read_policies: BTreeMap<Option<CompactionWindow>, Vec<GlobalId>> =
-                    BTreeMap::new();
-
                 // To improve the performance of creating a source and many
                 // subsources, we create all of the collections at once. If we
                 // created each collection independently, we would reschedule
@@ -432,7 +427,7 @@ impl Coordinator {
                 // this apart into creating the collections sequentially.
                 let mut collections = Vec::with_capacity(sources.len());
 
-                for (source_id, mut source) in sources {
+                for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(coord.catalog().resolve_builtin_storage_collection(
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
@@ -442,10 +437,6 @@ impl Coordinator {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let ingestion =
                                 ingestion.into_inline_connection(coord.catalog().state());
-
-                            ingestion_read_policies
-                                .insert(source_id, source.custom_logical_compaction_window);
-
                             (
                                 DataSource::Ingestion(ingestion),
                                 source_status_collection_id,
@@ -454,35 +445,13 @@ impl Coordinator {
                         DataSourceDesc::IngestionExport {
                             ingestion_id,
                             external_reference,
-                        } => {
-                            // Propagate source's compaction window if this
-                            // subsource does not have its own value specified.
-                            if source.custom_logical_compaction_window.is_none() {
-                                // Defined as part of the initial set of subsources.
-                                let c = match ingestion_read_policies.get(&ingestion_id) {
-                                    Some(c) => c,
-                                    None => {
-                                        // Added to an existing source.
-                                        let source = coord.catalog().get_entry(&ingestion_id);
-                                        match &source.item {
-                                            CatalogItem::Source(source) => {
-                                                &source.custom_logical_compaction_window
-                                            }
-                                            _ => unreachable!(),
-                                        }
-                                    }
-                                };
-                                source.custom_logical_compaction_window = c.clone();
-                            }
-
-                            (
-                                DataSource::IngestionExport {
-                                    ingestion_id,
-                                    external_reference,
-                                },
-                                source_status_collection_id,
-                            )
-                        }
+                        } => (
+                            DataSource::IngestionExport {
+                                ingestion_id,
+                                external_reference,
+                            },
+                            source_status_collection_id,
+                        ),
                         DataSourceDesc::Source => {
                             unreachable!("cannot render legacy-style sources")
                         }
@@ -510,11 +479,6 @@ impl Coordinator {
                             status_collection_id,
                         },
                     ));
-
-                    read_policies
-                        .entry(source.custom_logical_compaction_window.clone())
-                        .or_default()
-                        .push(source_id);
                 }
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
@@ -537,12 +501,20 @@ impl Coordinator {
                 // SUBSOURCE, and all other SUBSOURCES of a SOURCE will depend
                 // on it. Both subsources and sources will show up as a `Source`
                 // in the above.
+                let mut read_policies: BTreeMap<CompactionWindow, BTreeSet<GlobalId>> =
+                    BTreeMap::new();
+                // Although there should only be one parent source that sequence_create_source is
+                // ever called with, hedge our bets a bit and collect the compaction windows for
+                // each id in the bundle (these should all be identical). This is some extra work
+                // but seems safer.
+                let policies = coord
+                    .catalog()
+                    .state()
+                    .source_compaction_windows(source_ids);
+                read_policies.extend(policies);
                 for (compaction_window, storage_policies) in read_policies {
                     coord
-                        .initialize_storage_read_policies(
-                            storage_policies,
-                            compaction_window.unwrap_or(CompactionWindow::Default),
-                        )
+                        .initialize_storage_read_policies(storage_policies, compaction_window)
                         .await;
                 }
             })
@@ -832,7 +804,7 @@ impl Coordinator {
 
                 coord
                     .initialize_storage_read_policies(
-                        vec![table_id],
+                        btreeset![table_id],
                         table
                             .custom_logical_compaction_window
                             .unwrap_or(CompactionWindow::Default),
@@ -2817,10 +2789,13 @@ impl Coordinator {
         }];
         self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
             let cluster = match coord.catalog().get_entry(&plan.id).item() {
-                CatalogItem::Table(_)
-                | CatalogItem::Source(_)
-                | CatalogItem::MaterializedView(_) => None,
+                CatalogItem::Table(_) | CatalogItem::MaterializedView(_) => None,
                 CatalogItem::Index(index) => Some(index.cluster_id),
+                CatalogItem::Source(_) => {
+                    let read_policies = coord.catalog().source_read_policies(plan.id);
+                    coord.update_storage_base_read_policies(read_policies);
+                    return;
+                }
                 CatalogItem::Log(_)
                 | CatalogItem::View(_)
                 | CatalogItem::Sink(_)
@@ -2831,10 +2806,10 @@ impl Coordinator {
             };
             match cluster {
                 Some(cluster) => {
-                    coord.update_compute_base_read_policy(cluster, plan.id, plan.window.into())
+                    coord.update_compute_base_read_policy(cluster, plan.id, plan.window.into());
                 }
                 None => {
-                    coord.update_storage_base_read_policies(vec![(plan.id, plan.window.into())])
+                    coord.update_storage_base_read_policies(vec![(plan.id, plan.window.into())]);
                 }
             }
         })
@@ -3587,7 +3562,7 @@ impl Coordinator {
                     .await
                     .unwrap_or_terminate("cannot fail to alter source desc");
 
-                let mut source_ids = Vec::with_capacity(sources.len());
+                let mut source_ids = BTreeSet::new();
                 let mut collections = Vec::with_capacity(sources.len());
                 for (source_id, source) in sources {
                     let source_status_collection_id =
@@ -3625,7 +3600,7 @@ impl Coordinator {
                         },
                     ));
 
-                    source_ids.push(source_id);
+                    source_ids.insert(source_id);
                 }
 
                 let storage_metadata = self.catalog.state().storage_metadata();

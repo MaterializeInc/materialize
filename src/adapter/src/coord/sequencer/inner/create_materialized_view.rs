@@ -9,6 +9,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
+use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::refresh_schedule::RefreshSchedule;
@@ -676,7 +677,7 @@ impl Coordinator {
 
                 coord
                     .initialize_storage_read_policies(
-                        vec![sink_id],
+                        btreeset![sink_id],
                         compaction_window.unwrap_or(CompactionWindow::Default),
                     )
                     .await;

@@ -1245,7 +1245,8 @@ impl CatalogItem {
         }
     }
 
-    /// The custom compaction window, if any has been set.
+    /// The custom compaction window, if any has been set. This does not reflect any propagated
+    /// compaction window (i.e., source -> subsource).
     pub fn custom_logical_compaction_window(&self) -> Option<CompactionWindow> {
         match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
@@ -1263,7 +1264,8 @@ impl CatalogItem {
     }
 
     /// Mutable access to the custom compaction window, or None if this type does not support custom
-    /// compaction windows.
+    /// compaction windows. This does not reflect any propagated compaction window (i.e., source ->
+    /// subsource).
     pub fn custom_logical_compaction_window_mut(
         &mut self,
     ) -> Option<&mut Option<CompactionWindow>> {
@@ -1283,14 +1285,13 @@ impl CatalogItem {
         Some(cw)
     }
 
-    /// The initial compaction window, for objects that have one; that is,
-    /// tables, sources, indexes, and MVs.
+    /// The initial compaction window, for objects that have one; that is, tables, sources, indexes,
+    /// and MVs. This does not reflect any propagated compaction window (i.e., source -> subsource).
     ///
-    /// If `custom_logical_compaction_window()` returns something, use
-    /// that.  Otherwise, use a sensible default (currently 1s).
+    /// If `custom_logical_compaction_window()` returns something, use that.  Otherwise, use a
+    /// sensible default (currently 1s).
     ///
-    /// For objects that do not have the concept of compaction window,
-    /// return None.
+    /// For objects that do not have the concept of compaction window, return None.
     pub fn initial_logical_compaction_window(&self) -> Option<CompactionWindow> {
         let custom_logical_compaction_window = match self {
             CatalogItem::Table(_)

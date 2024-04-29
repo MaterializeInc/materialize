@@ -2383,6 +2383,55 @@ impl CatalogState {
     pub fn storage_metadata(&self) -> &StorageMetadata {
         &self.storage_metadata
     }
+
+    /// For the Sources ids in `ids`, return the compaction windows for all `ids` and additional ids
+    /// that propagate from them. Specifically, if `ids` contains a source, it and all of its
+    /// subsources will be added to the result.
+    pub fn source_compaction_windows(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> BTreeMap<CompactionWindow, BTreeSet<GlobalId>> {
+        let mut cws: BTreeMap<CompactionWindow, BTreeSet<GlobalId>> = BTreeMap::new();
+        let mut ids = VecDeque::from_iter(ids);
+        let mut seen = BTreeSet::new();
+        while let Some(id) = ids.pop_front() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let entry = self.get_entry(&id);
+            let Some(source) = entry.source() else {
+                // Views could depend on sources, so ignore them if added by used_by below.
+                continue;
+            };
+            let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
+            match source.data_source {
+                DataSourceDesc::Ingestion(_) => {
+                    // For sources, look up each dependent subsource and propagate.
+                    cws.entry(source_cw).or_default().insert(id);
+                    ids.extend(entry.used_by());
+                }
+                DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                    // For subsources, look up the parent source and propagate the compaction
+                    // window.
+                    let ingestion = self
+                        .get_entry(&ingestion_id)
+                        .source()
+                        .expect("must be source");
+                    let cw = ingestion
+                        .custom_logical_compaction_window
+                        .unwrap_or(source_cw);
+                    cws.entry(cw).or_default().insert(id);
+                }
+                DataSourceDesc::Source => unreachable!(),
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Webhook { .. } => {
+                    cws.entry(source_cw).or_default().insert(id);
+                }
+            }
+        }
+        cws
+    }
 }
 
 impl ConnectionResolver for CatalogState {

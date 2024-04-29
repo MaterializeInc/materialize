@@ -92,3 +92,29 @@ ALTER INDEX idx_b SET (RETAIN HISTORY FOR '6m')
 
 statement ok
 ALTER INDEX idx_b SET (RETAIN HISTORY FOR '4m')
+
+# Test subsource propagation. Test sources with and without subsources and view dependencies to
+# ensure the alter code correctly ignores the views.
+statement ok
+CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+----
+
+statement ok
+CREATE VIEW auction_house_view AS SELECT * FROM users
+----
+
+statement ok
+ALTER SOURCE auction_house SET (RETAIN HISTORY FOR '1m')
+----
+
+statement ok
+CREATE SOURCE counter FROM LOAD GENERATOR COUNTER
+----
+
+statement ok
+CREATE VIEW counter_view AS SELECT * FROM counter
+----
+
+statement ok
+ALTER SOURCE counter SET (RETAIN HISTORY FOR '1m')
+----
