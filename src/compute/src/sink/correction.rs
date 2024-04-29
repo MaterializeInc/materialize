@@ -36,6 +36,8 @@ use timely::PartialOrder;
 pub(super) struct Correction<D> {
     /// Stashed updates by time.
     updates: BTreeMap<Timestamp, ConsolidatingVec<D>>,
+    /// Lower frontier to which all inserted times are advanced.
+    lower: Antichain<Timestamp>,
 
     /// Total length and capacity of vectors in `updates`.
     ///
@@ -52,6 +54,7 @@ impl<D> Correction<D> {
     pub fn new(metrics: SinkMetrics, worker_metrics: SinkWorkerMetrics) -> Self {
         Self {
             updates: Default::default(),
+            lower: Antichain::from_elem(Timestamp::MIN),
             total_size: Default::default(),
             metrics,
             worker_metrics,
@@ -75,12 +78,46 @@ impl<D> Correction<D> {
 impl<D: Data> Correction<D> {
     /// Insert a batch of updates.
     pub fn insert(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
+        let Some(lower_ts) = self.lower.as_option() else {
+            // If the lower bound is the empty frontier, discard all updates.
+            return;
+        };
+
+        for (_, time, _) in &mut updates {
+            *time = std::cmp::max(*time, *lower_ts);
+        }
+        self.insert_inner(updates);
+    }
+
+    /// Insert a batch of updates, after negating their diffs.
+    pub fn insert_negated(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
+        let Some(lower_ts) = self.lower.as_option() else {
+            // If the lower bound is the empty frontier, discard all updates.
+            return;
+        };
+
+        for (_, time, diff) in &mut updates {
+            *time = std::cmp::max(*time, *lower_ts);
+            *diff = -*diff;
+        }
+        self.insert_inner(updates);
+    }
+
+    /// Insert a batch of updates.
+    ///
+    /// The given `updates` must all have been advanced by `self.lower`.
+    fn insert_inner(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
         consolidate_updates(&mut updates);
         updates.sort_unstable_by_key(|(_, time, _)| *time);
 
         let mut new_size = self.total_size;
         let mut updates = updates.into_iter().peekable();
         while let Some(&(_, time, _)) = updates.peek() {
+            debug_assert!(
+                self.lower.less_equal(&time),
+                "update not advanced by `lower`"
+            );
+
             let data = updates
                 .peeking_take_while(|(_, t, _)| *t == time)
                 .map(|(d, _, r)| (d, r));
@@ -142,6 +179,32 @@ impl<D: Data> Correction<D> {
         range
             .flat_map(|(t, data)| data.iter().map(|(d, r)| (d.clone(), *t, *r)))
             .exact_size(update_count)
+    }
+
+    /// Consolidate and return updates before the given `upper`.
+    pub fn updates_before(
+        &mut self,
+        upper: &Antichain<Timestamp>,
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + '_ {
+        let lower = Antichain::from_elem(Timestamp::MIN);
+        self.updates_within(&lower, upper)
+    }
+
+    /// Return the lower bound for contained and future updates.
+    pub fn lower(&self) -> &Antichain<Timestamp> {
+        &self.lower
+    }
+
+    /// Set the lower bound for contained and future updates to the given frontier.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `lower` is less than the current lower bound.
+    pub fn set_lower(&mut self, lower: Antichain<Timestamp>) {
+        assert!(PartialOrder::less_equal(&self.lower, &lower));
+
+        self.advance_by(&lower);
+        self.lower = lower;
     }
 
     /// Advance all contained updates by the given frontier.
