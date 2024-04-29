@@ -8,19 +8,26 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
-use std::borrow::Borrow;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
+use itertools::Itertools;
 use mz_compute_types::sinks::{ComputeSinkDesc, ContinualTaskInsertConnection};
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::operators::shard_source::SnapshotMode;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage_types::controller::CollectionMetadata;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_client::Diagnostics;
+use mz_persist_txn::metrics::Metrics as TxnMetrics;
+use mz_persist_txn::txns::{Tidy, TxnsHandle};
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::PersistEpoch;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Concat, Map};
@@ -47,8 +54,6 @@ where
     ) -> Option<Rc<dyn Any>> {
         let mut scope = sinked_collection.inner.scope();
         tracing::info!("render: {:#?}", sink);
-
-        let name = format!("ContinualTaskInsert({})", sink_id);
 
         let (to_retract_ok_stream, to_retract_err_stream, to_retract_token) =
             mz_storage_operators::persist_source::persist_source(
@@ -97,9 +102,74 @@ where
         let mut to_retract_input =
             task_op.new_disconnected_input(&to_retract_stream, Exchange::new(move |_| hashed_id));
 
+        let persist_clients = Arc::clone(&compute_state.persist_clients);
+        let target_metadata = self.target_metadata.clone();
+        let retract_from_metadata = self.retract_from_metadata.clone();
+
         let task_button = task_op.build(move |_capabilities| async move {
             if !active_worker {
                 return;
+            }
+
+            let txns_id = target_metadata.txns_shard.expect("missing txns shard id");
+
+            // Get ourselves a TxnsHandle
+            let dummy_metrics_registry = MetricsRegistry::new();
+            let txns_client = persist_clients
+                .open(target_metadata.persist_location.clone())
+                .await
+                .expect("location should be valid");
+            let txns_metrics = Arc::new(TxnMetrics::new(&dummy_metrics_registry));
+            let mut txns: TxnsHandle<SourceData, (), Timestamp, i64, PersistEpoch, TxnsCodecRow> =
+                TxnsHandle::open(
+                    mz_repr::Timestamp::minimum(),
+                    txns_client.clone(),
+                    Arc::clone(&txns_metrics),
+                    txns_id,
+                    Arc::new(RelationDesc::empty()),
+                    Arc::new(UnitSchema),
+                )
+                .await;
+            // Keep track of any work we have to do.
+            let mut tidy = Tidy::default();
+
+            let diagnostics = Diagnostics {
+                shard_name: target_metadata.data_shard.to_string(),
+                handle_purpose: format!("continual task write for {}", sink_id),
+            };
+
+            let mut register_ts = 0.into();
+            loop {
+                let insert_write = txns_client
+                    .open_writer(
+                        target_metadata.data_shard,
+                        Arc::new(target_metadata.relation_desc.clone()),
+                        Arc::new(UnitSchema),
+                        diagnostics.clone(),
+                    )
+                    .await
+                    .expect("invalid persist usage");
+                let retract_write = txns_client
+                    .open_writer(
+                        retract_from_metadata.data_shard,
+                        Arc::new(retract_from_metadata.relation_desc.clone()),
+                        Arc::new(UnitSchema),
+                        diagnostics.clone(),
+                    )
+                    .await
+                    .expect("invalid persist usage");
+                let handles = vec![insert_write, retract_write];
+                let res = txns.register(register_ts, handles).await;
+                match res {
+                    Ok(_) => {
+                        tracing::info!("registered our table shards!");
+                        break;
+                    }
+                    Err(ts) => {
+                        tracing::error!(%ts, "could not register table shards!");
+                        register_ts = ts;
+                    }
+                }
             }
 
             let mut to_insert_upper = Antichain::from_elem(mz_repr::Timestamp::minimum());
@@ -128,9 +198,10 @@ where
                     }
                     Some(event) = to_retract_input.next() => {
                         match event {
-                            Event::Data(_ts, mut data) => {
+                            Event::Data(_ts, data) => {
                                 tracing::info!("to_retract: {:?}", data);
-                                to_retract_buffer.append(&mut data);
+                                let mut retract_data = data.into_iter().map(|(update, ts, diff)| (update, ts, -diff)).collect_vec();
+                                to_retract_buffer.append(&mut retract_data);
                             }
                             Event::Progress(upper) => {
                                 // Trying not to be cute with join_assign and
@@ -166,6 +237,55 @@ where
                     ?to_retract_buffer,
                     "should transactionally append!"
                 );
+
+                let write_ts = upper.into_option().expect("must have single-element upper");
+
+                // Can only start writing after the time at which our shards
+                // have been registered.
+                if !(write_ts > register_ts) {
+                    continue;
+                }
+
+                if to_insert_buffer.is_empty() && to_retract_buffer.is_empty() {
+                    continue;
+                }
+
+                let mut txn = txns.begin();
+                for (update, _ts, diff) in to_insert_buffer.iter() {
+                    txn.write(&target_metadata.data_shard, update.clone(), (), *diff)
+                        .await;
+                }
+                for (update, _ts, diff) in to_retract_buffer.iter() {
+                    txn.write(&retract_from_metadata.data_shard, update.clone(), (), *diff)
+                        .await;
+                }
+                // Sneak in any txns shard tidying from previous commits.
+                txn.tidy(std::mem::take(&mut tidy));
+
+                let txn_res = txn.commit_at(&mut txns, write_ts.clone()).await;
+
+                match txn_res {
+                    Ok(apply) => {
+                        tracing::info!("applying {:?}", apply);
+                        let new_tidy = apply.apply(&mut txns).await;
+
+                        tidy.merge(new_tidy);
+
+                        // We don't serve any reads out of this TxnsHandle, so go ahead
+                        // and compact as aggressively as we can (i.e. to the time we
+                        // just wrote).
+                        let () = txns.compact_to(write_ts).await;
+                    }
+                    Err(current) => {
+                        tidy.merge(txn.take_tidy());
+                        tracing::info!(
+                            "unable to commit txn at {:?} current={:?}",
+                            write_ts,
+                            current
+                        );
+                        // We'll retry next time the uppers move.
+                    }
+                };
             }
         });
 
