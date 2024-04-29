@@ -379,11 +379,8 @@ impl Catalog {
     }
 
     /// For the Sources ids in `ids`, return the read policies for all `ids` and additional ids that
-    /// propagate from them. Specifically, `ids` contains a source, all of its subsources will be
-    /// added to the result.
-    ///
-    /// # Panics
-    /// Panics if any of `ids` is not a `Source` item type.
+    /// propagate from them. Specifically, `ids` contains a source, it and all of its subsources
+    /// will be added to the result.
     pub fn source_read_policies(
         &self,
         id: GlobalId,

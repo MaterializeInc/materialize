@@ -2385,11 +2385,8 @@ impl CatalogState {
     }
 
     /// For the Sources ids in `ids`, return the compaction windows for all `ids` and additional ids
-    /// that propagate from them. Specifically, `ids` contains a source, all of its subsources will
-    /// be added to the result.
-    ///
-    /// # Panics
-    /// Panics if any of `ids` is not a `Source` item type.
+    /// that propagate from them. Specifically, if `ids` contains a source, it and all of its
+    /// subsources will be added to the result.
     pub fn source_compaction_windows(
         &self,
         ids: impl IntoIterator<Item = GlobalId>,
@@ -2402,7 +2399,10 @@ impl CatalogState {
                 continue;
             }
             let entry = self.get_entry(&id);
-            let source = entry.source().expect("must be source");
+            let Some(source) = entry.source() else {
+                // Views could depend on sources, so ignore them if added by used_by below.
+                continue;
+            };
             let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
             match source.data_source {
                 DataSourceDesc::Ingestion(_) => {
