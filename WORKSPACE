@@ -47,20 +47,29 @@ llvm_register_toolchains()
 # Rules for building C/C++ projects that use foreign build systems, e.g. Make. One case that we use
 # this for is building `openssl`.
 #
-# TODO(parkmycar): Move off of my fork.
+# TODO(parkmycar): We currently maintain a fork for a few reasons:
+#
+# 1. Bootstrapping pkg_config fails.
+# 2. Versions of `make` >4.3 are buggy and have a segfault, we hit this segfault when building jemalloc.
+#    See: <https://github.com/bazelbuild/rules_foreign_cc/issues/898>
+# 3. Some libraries, e.g. jemalloc, preprocess and compile code in two separate steps, so we need
+#    to make sure the sysroot is provided in CPPFLAGS, if it's set in CFLAGS.
+#    See: <https://github.com/bazelbuild/rules_foreign_cc/pull/1023>
+#
 
-RULES_FOREIGN_CC_VERSION = "b2b2825e8800c982b8b2d4355047987c26d8b1ad"
-RULES_FOREIGN_CC_SHA256 = "f6f5dc552231fa3399dacfc0b221d6461da7bbfbf5e11b8cd93ce4e63f17b585"
+RULES_FOREIGN_CC_VERSION = "a51d26c1822bec82a62a6bc0f1484ab1e0b1a3eb"
+RULES_FOREIGN_CC_INTEGRITY = "sha256-8NPGMB4Vn1W/JmAvdRaOm29GUv8uxXLxRKdJb5GQKww="
 
-http_archive(
+maybe(
+    http_archive,
     name = "rules_foreign_cc",
-    sha256 = RULES_FOREIGN_CC_SHA256,
+    integrity = RULES_FOREIGN_CC_INTEGRITY,
     strip_prefix = "rules_foreign_cc-{0}".format(RULES_FOREIGN_CC_VERSION),
     url = "https://github.com/ParkMyCar/rules_foreign_cc/archive/{0}.tar.gz".format(RULES_FOREIGN_CC_VERSION),
 )
 load("@rules_foreign_cc//foreign_cc:repositories.bzl", "rules_foreign_cc_dependencies")
 
-rules_foreign_cc_dependencies()
+rules_foreign_cc_dependencies(make_version = "4.2")
 
 # `bazel-lib`
 #

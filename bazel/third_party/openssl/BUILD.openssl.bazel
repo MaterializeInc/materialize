@@ -20,7 +20,7 @@ Adapted from the OpenSSL build file in the `rules_rust` examples:
 https://github.com/bazelbuild/rules_rust/blob/21eed19188c0359d72f9a508a0c0e7040ff20070/examples/crate_universe/multi_package/3rdparty/BUILD.openssl.bazel
 """
 
-load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make", "configure_make_variant", "runnable_binary")
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
 
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
@@ -74,17 +74,13 @@ configure_make(
     name = "openssl",
     configure_command = "config",
     configure_in_place = True,
-    configure_options = CONFIGURE_OPTIONS + select({
-        "@//bazel/platforms:linux_arm": ["linux-aarch64"],
-        "@//bazel/platforms:linux_x86_64": ["linux-x86_64"],
-        "@//bazel/platforms:macos_arm": ["darwin64-arm-cc"],
-        "@//bazel/platforms:macos_x86_64": ["darwin64-x86_64-cc"],
-        "//conditions:default": [],
-    }),
+    configure_options = CONFIGURE_OPTIONS,
     env = select({
         "@platforms//os:macos": {"ARFLAGS": "-o"},
         "//conditions:default": {},
     }),
+    # TODO(parkmycar): Figure out how to dynamically provide a number of jobs to foreign_cc rules.
+    args = ["-j8"],
     lib_name = LIB_NAME,
     lib_source = ":all_srcs",
     # Note that for Linux builds, libssl must come before libcrypto on the linker command-line.

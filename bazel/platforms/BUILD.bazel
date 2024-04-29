@@ -30,7 +30,7 @@ selects.config_setting_group(
     name = "linux_arm",
     match_all = [
         "@platforms//os:linux",
-        "@platforms//cpu:arm",
+        "@platforms//cpu:arm64",
     ],
     visibility = ["//visibility:public"],
 )
@@ -48,7 +48,7 @@ selects.config_setting_group(
     name = "macos_arm",
     match_all = [
         "@platforms//os:macos",
-        "@platforms//cpu:arm",
+        "@platforms//cpu:arm64",
     ],
     visibility = ["//visibility:public"],
 )
