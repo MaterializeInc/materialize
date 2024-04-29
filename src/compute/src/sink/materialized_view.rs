@@ -803,10 +803,9 @@ where
                 }
                 Some(event) = persist_oks_input.next() => {
                     match event {
-                        Event::Data(_cap, mut data) => {
+                        Event::Data(_cap, data) => {
                             // Extract persist rows as negative contributions to `correction_oks`.
-                            let updates = data.drain(..).map(|(d, t, r)| (d, t, -r)).collect();
-                            correction_oks.insert(updates);
+                            correction_oks.insert_negated(data);
 
                             continue;
                         }
@@ -817,10 +816,9 @@ where
                 }
                 Some(event) = persist_errs_input.next() => {
                     match event {
-                        Event::Data(_cap, mut data) => {
+                        Event::Data(_cap, data) => {
                             // Extract persist rows as negative contributions to `correction_errs`.
-                            let updates = data.drain(..).map(|(d, t, r)| (d, t, -r)).collect();
-                            correction_errs.insert(updates);
+                            correction_errs.insert_negated(data);
 
                             continue;
                         }
