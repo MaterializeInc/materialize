@@ -184,6 +184,8 @@ timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git"
 differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 
+lgalloc = { git = "https://github.com/antiguru/rust-lgalloc.git", branch = "memmap_noreserve" }
+
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

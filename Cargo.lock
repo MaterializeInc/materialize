@@ -3474,12 +3474,11 @@ dependencies = [
 [[package]]
 name = "lgalloc"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2879fd18080c6076399d8ace2fafaedf994e47bdd6b75462266077f7926b6374"
+source = "git+https://github.com/antiguru/rust-lgalloc.git?branch=memmap_noreserve#96be4336b5ca9747049aa065d641d36b189555fd"
 dependencies = [
  "crossbeam-deque",
  "libc",
- "memmap2",
+ "memmap2 0.9.4",
  "numa_maps",
  "page_size",
  "tempfile",
@@ -3691,6 +3690,14 @@ name = "memmap2"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5172b50c23043ff43dd53e51392f36519d9b35a8f3a410d30ece5d1aedd58ae"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "memmap2"
+version = "0.9.4"
+source = "git+https://github.com/antiguru/memmap2-rs?branch=map_noreserve#87b9a4a104d34d8e722890f72015307457a78202"
 dependencies = [
  "libc",
 ]
@@ -9017,7 +9024,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5d7c8cd6663e22c348c74cf0b2c77d196fd252c7efe5594ae05edb07d0475da"
 dependencies = [
  "debugid",
- "memmap2",
+ "memmap2 0.5.4",
  "stable_deref_trait",
  "uuid",
 ]
