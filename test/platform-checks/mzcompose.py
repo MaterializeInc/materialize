@@ -229,7 +229,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             for check in checks:
                 print(f"Running individual check {check}, scenario {scenario_class}")
                 setup(c)
-                scenario = scenario_class(checks=[check], executor=executor)
+                scenario = scenario_class(
+                    checks=[check], executor=executor, seed=args.seed
+                )
                 scenario.run()
                 teardown(c)
         else:
