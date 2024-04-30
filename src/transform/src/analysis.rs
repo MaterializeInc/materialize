@@ -44,6 +44,7 @@ pub trait Analysis: 'static {
     /// The return result will be associated with this expression for this analysis,
     /// and the analyses will continue.
     fn derive(
+        &self,
         expr: &MirRelationExpr,
         index: usize,
         results: &[Self::Value],
@@ -258,7 +259,7 @@ pub mod common {
                 result: Derived::default(),
                 features,
             };
-            builder.require::<SubtreeSize>();
+            builder.require(SubtreeSize);
             builder
         }
     }
@@ -268,7 +269,7 @@ pub mod common {
         ///
         /// This ensures that `A` will be performed, and before any analysis that
         /// invokes this method.
-        pub fn require<A: Analysis>(&mut self) {
+        pub fn require<A: Analysis>(&mut self, analysis: A) {
             // The method recursively descends through required analyses, first
             // installing each in `result.analyses` and second in `result.order`.
             // The first is an obligation, and serves as an indication that we have
@@ -285,6 +286,7 @@ pub mod common {
                 self.result.analyses.insert(
                     type_id,
                     Box::new(Bundle::<A> {
+                        analysis,
                         results: Vec::new(),
                         fuel: 100,
                         allow_optimistic: self.features.enable_letrec_fixpoint_analysis,
@@ -368,6 +370,9 @@ pub mod common {
 
     /// A wrapper for analysis state.
     struct Bundle<A: Analysis> {
+        /// The algorithm instance used to derive the results.
+        analysis: A,
+        /// A vector of results.
         results: Vec<A::Value>,
         /// Counts down with each `LetRec` re-iteration, to avoid unbounded effort.
         /// Should it reach zero, the analysis should discard its results and restart as if pessimistic.
@@ -449,13 +454,13 @@ pub mod common {
                 // Visit `body` and then the `LetRec` and return whether it evolved.
                 let body = upper - 2;
                 self.analyse_optimistic(exprs, body + 1 - sizes[body], body + 1, depends, lattice)?;
-                let value = A::derive(exprs[upper - 1], upper - 1, &self.results[..], depends);
+                let value = self.derive(exprs[upper - 1], upper - 1, depends);
                 Ok(lattice.meet_assign(&mut self.results[upper - 1], value))
             } else {
                 // If not a `LetRec`, we still want to revisit results and update them with meet.
                 let mut changed = false;
                 for index in lower..upper {
-                    let value = A::derive(exprs[index], index, &self.results[..], depends);
+                    let value = self.derive(exprs[index], index, depends);
                     changed = lattice.meet_assign(&mut self.results[index], value);
                 }
                 Ok(changed)
@@ -467,10 +472,15 @@ pub mod common {
             // TODO: consider making iterative, from some `bottom()` up using `join_assign()`.
             self.results.clear();
             for (index, expr) in exprs.iter().enumerate() {
-                self.results
-                    .push(A::derive(expr, index, &self.results[..], depends));
+                self.results.push(self.derive(expr, index, depends));
             }
             true
+        }
+
+        #[inline]
+        fn derive(&self, expr: &MirRelationExpr, index: usize, depends: &Derived) -> A::Value {
+            self.analysis
+                .derive(expr, index, &self.results[..], depends)
         }
     }
 }
@@ -492,6 +502,7 @@ pub mod subtree {
         type Value = usize;
 
         fn derive(
+            &self,
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
@@ -525,6 +536,7 @@ mod arity {
         type Value = usize;
 
         fn derive(
+            &self,
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
@@ -555,6 +567,7 @@ mod types {
         type Value = Option<Vec<ColumnType>>;
 
         fn derive(
+            &self,
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
@@ -598,10 +611,11 @@ mod unique_keys {
         type Value = Vec<Vec<usize>>;
 
         fn announce_dependencies(builder: &mut DerivedBuilder) {
-            builder.require::<Arity>();
+            builder.require(Arity);
         }
 
         fn derive(
+            &self,
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
@@ -708,6 +722,7 @@ mod non_negative {
         type Value = bool;
 
         fn derive(
+            &self,
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
