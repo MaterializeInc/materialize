@@ -14,7 +14,7 @@ use mz_expr_parser::{handle_define, try_parse_mir, TestCatalog};
 use mz_ore::str::Indent;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{ExplainConfig, PlanRenderingContext};
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom, StatementKind};
 use mz_transform::attribute::annotate_plan;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::TypeErrorHumanizer;
@@ -259,8 +259,12 @@ fn apply_transform<T: mz_transform::Transform>(
     let features = mz_repr::optimize::OptimizerFeatures::default();
     let typecheck_ctx = mz_transform::typecheck::empty_context();
     let mut df_meta = DataflowMetainfo::default();
-    let mut transform_ctx =
-        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+    let mut transform_ctx = mz_transform::TransformCtx::local(
+        StatementKind::Peek,
+        &features,
+        &typecheck_ctx,
+        &mut df_meta,
+    );
 
     // Apply the transformation, returning early on TransformError.
     transform

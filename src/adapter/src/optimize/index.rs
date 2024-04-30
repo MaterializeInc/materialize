@@ -185,6 +185,7 @@ impl Optimize<Index> for Optimizer {
         // Construct TransformCtx for global optimization.
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::global(
+            STATEMENT_KIND,
             &df_builder,
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
             &self.config.features,
