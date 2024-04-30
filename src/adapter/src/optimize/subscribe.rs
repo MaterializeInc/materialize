@@ -20,6 +20,7 @@ use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeS
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
+use mz_repr::optimize::StatementKind;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_sql::plan::SubscribeFrom;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -80,6 +81,9 @@ impl std::fmt::Debug for Optimizer {
             .finish_non_exhaustive()
     }
 }
+
+/// The [`StatementKind`] optimized by this [`Optimizer`].
+static STATEMENT_KIND: StatementKind = StatementKind::Subscribe;
 
 impl Optimizer {
     pub fn new(
@@ -342,8 +346,9 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
         let df_desc = Plan::finalize_dataflow(df_desc, &self.config.features)?;
 
         self.duration += time.elapsed();
+        let label = STATEMENT_KIND.metric_label(None);
         self.metrics
-            .observe_e2e_optimization_time("subscribe", self.duration);
+            .observe_e2e_optimization_time(label, self.duration);
 
         // Return the plan at the end of this `optimize` step.
         Ok(GlobalLirPlan { df_desc, df_meta })

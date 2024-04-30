@@ -20,6 +20,7 @@ use mz_compute_types::sinks::{
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
+use mz_repr::optimize::StatementKind;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
@@ -63,6 +64,9 @@ pub struct Optimizer {
     /// The time spent performing optimization so far.
     duration: Duration,
 }
+
+/// The [`StatementKind`] optimized by this [`Optimizer`].
+static STATEMENT_KIND: StatementKind = StatementKind::CopyTo;
 
 impl Optimizer {
     pub fn new(
@@ -354,8 +358,9 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         trace_plan(&df_desc);
 
         self.duration += time.elapsed();
+        let label = STATEMENT_KIND.metric_label(None);
         self.metrics
-            .observe_e2e_optimization_time("copy_to", self.duration);
+            .observe_e2e_optimization_time(label, self.duration);
 
         Ok(GlobalLirPlan { df_desc, df_meta })
     }

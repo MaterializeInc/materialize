@@ -12,6 +12,7 @@
 use std::time::Instant;
 
 use mz_expr::OptimizedMirRelationExpr;
+use mz_repr::optimize::StatementKind;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
@@ -31,6 +32,9 @@ pub struct Optimizer {
     /// coordinator context and the metrics are not available.
     metrics: Option<OptimizerMetrics>,
 }
+
+/// The [`StatementKind`] optimized by this [`Optimizer`].
+static STATEMENT_KIND: StatementKind = StatementKind::CreateView;
 
 impl Optimizer {
     pub fn new(config: OptimizerConfig, metrics: Option<OptimizerMetrics>) -> Self {
@@ -61,7 +65,8 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
         if let Some(metrics) = &self.metrics {
-            metrics.observe_e2e_optimization_time("view", time.elapsed());
+            let label = STATEMENT_KIND.metric_label(None);
+            metrics.observe_e2e_optimization_time(label, time.elapsed());
         }
 
         // Return the resulting OptimizedMirRelationExpr.

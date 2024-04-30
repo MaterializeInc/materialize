@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
 use mz_repr::explain::trace_plan;
+use mz_repr::optimize::StatementKind;
 use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -65,6 +66,9 @@ pub struct Optimizer {
     /// The time spent performing optimization so far.
     duration: Duration,
 }
+
+/// The [`StatementKind`] optimized by this [`Optimizer`].
+static STATEMENT_KIND: StatementKind = StatementKind::CreateIndex;
 
 impl Optimizer {
     pub fn new(
@@ -245,8 +249,9 @@ impl Optimize<GlobalMirPlan> for Optimizer {
         trace_plan(&df_desc);
 
         self.duration += time.elapsed();
+        let label = STATEMENT_KIND.metric_label(None);
         self.metrics
-            .observe_e2e_optimization_time("index", self.duration);
+            .observe_e2e_optimization_time(label, self.duration);
 
         // Return the plan at the end of this `optimize` step.
         Ok(GlobalLirPlan { df_desc, df_meta })

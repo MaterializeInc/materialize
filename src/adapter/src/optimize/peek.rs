@@ -18,6 +18,7 @@ use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_repr::explain::trace_plan;
+use mz_repr::optimize::StatementKind;
 use mz_repr::{GlobalId, RelationType, Timestamp};
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
@@ -61,6 +62,9 @@ pub struct Optimizer {
     /// The time spent performing optimization so far.
     duration: Duration,
 }
+
+/// The [`StatementKind`] optimized by this [`Optimizer`].
+static STATEMENT_KIND: StatementKind = StatementKind::Peek;
 
 impl Optimizer {
     pub fn new(
@@ -387,8 +391,8 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 
         self.duration += time.elapsed();
         let label = match &peek_plan {
-            PeekPlan::FastPath(_) => "peek:fast_path",
-            PeekPlan::SlowPath(_) => "peek:slow_path",
+            PeekPlan::FastPath(_) => STATEMENT_KIND.metric_label(Some(false)),
+            PeekPlan::SlowPath(_) => STATEMENT_KIND.metric_label(Some(true)),
         };
         self.metrics
             .observe_e2e_optimization_time(label, self.duration);
