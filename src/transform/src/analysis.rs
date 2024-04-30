@@ -773,3 +773,232 @@ mod non_negative {
         }
     }
 }
+
+mod column_names {
+    use std::ops::Range;
+
+    use super::Analysis;
+    use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+    use mz_repr::GlobalId;
+
+    #[derive(Debug, Clone)]
+    pub enum ColumnName {
+        Global(GlobalId, usize),
+        Unknown,
+    }
+
+    impl ColumnName {
+        fn is_known(&self) -> bool {
+            matches!(self, ColumnName::Global(..))
+        }
+    }
+
+    /// Compute the column types of each subtree of a [MirRelationExpr] from the
+    /// bottom-up.
+    #[derive(Debug)]
+    pub struct ColumnNames;
+
+    impl ColumnNames {
+        /// fallback schema consisting of ordinal column names: #0, #1, ...
+        fn anonymous(range: Range<usize>) -> impl Iterator<Item = ColumnName> {
+            range.map(|_| ColumnName::Unknown)
+        }
+
+        /// fallback schema consisting of ordinal column names: #0, #1, ...
+        fn extend_with_scalars(column_names: &mut Vec<ColumnName>, scalars: &Vec<MirScalarExpr>) {
+            for scalar in scalars {
+                column_names.push(match scalar {
+                    MirScalarExpr::Column(c) => column_names[*c].clone(),
+                    _ => ColumnName::Unknown,
+                });
+            }
+        }
+    }
+
+    impl Analysis for ColumnNames {
+        type Value = Vec<ColumnName>;
+
+        fn derive(
+            &self,
+            expr: &MirRelationExpr,
+            index: usize,
+            results: &[Self::Value],
+            depends: &crate::analysis::Derived,
+        ) -> Self::Value {
+            use MirRelationExpr::*;
+
+            match expr {
+                Constant { rows: _, typ } => {
+                    // Fallback to an anonymous schema for constants.
+                    ColumnNames::anonymous(0..typ.arity()).collect()
+                }
+                Get {
+                    id: Id::Global(id),
+                    typ,
+                    access_strategy: _,
+                } => {
+                    // Emit ColumnName::Global instanceds for each column in the
+                    // `Get` type. Those can be resolved to real names later when an
+                    // ExpressionHumanizer is available.
+                    (0..typ.columns().len())
+                        .map(|c| ColumnName::Global(*id, c))
+                        .collect()
+                }
+                Get {
+                    id: Id::Local(id),
+                    typ,
+                    access_strategy: _,
+                } => {
+                    let index_child = *depends.bindings().get(id).expect("id in scope");
+                    if index_child < results.len() {
+                        results[index_child].clone()
+                    } else {
+                        // Possible because we infer LetRec bindings in order. This
+                        // can be improved by introducing a fixpoint loop in the
+                        // Env<A>::schedule_tasks LetRec handling block.
+                        ColumnNames::anonymous(0..typ.arity()).collect()
+                    }
+                }
+                Let {
+                    id: _,
+                    value: _,
+                    body: _,
+                } => {
+                    // Return the column names of the `body`.
+                    results[index - 1].clone()
+                }
+                LetRec {
+                    ids: _,
+                    values: _,
+                    limits: _,
+                    body: _,
+                } => {
+                    // Return the column names of the `body`.
+                    results[index - 1].clone()
+                }
+                Project { input: _, outputs } => {
+                    // Permute the column names of the input.
+                    let input_column_names = &results[index - 1];
+                    let mut column_names = vec![];
+                    for col in outputs {
+                        column_names.push(input_column_names[*col].clone());
+                    }
+                    column_names
+                }
+                Map { input: _, scalars } => {
+                    // Extend the column names of the input with anonymous columns.
+                    let mut column_names = results[index - 1].clone();
+                    Self::extend_with_scalars(&mut column_names, scalars);
+                    column_names
+                }
+                FlatMap {
+                    input: _,
+                    func,
+                    exprs: _,
+                } => {
+                    // Extend the column names of the input with anonymous columns.
+                    let mut column_names = results[index - 1].clone();
+                    let func_output_start = column_names.len();
+                    let func_output_end = column_names.len() + func.output_arity();
+                    column_names.extend(Self::anonymous(func_output_start..func_output_end));
+                    column_names
+                }
+                Filter {
+                    input: _,
+                    predicates: _,
+                } => {
+                    // Return the column names of the `input`.
+                    results[index - 1].clone()
+                }
+                Join {
+                    inputs: _,
+                    equivalences: _,
+                    implementation: _,
+                } => {
+                    let mut input_results = depends
+                        .children_of_rev(index, expr.children().count())
+                        .map(|child| &results[child])
+                        .collect::<Vec<_>>();
+                    input_results.reverse();
+
+                    let mut column_names = vec![];
+                    for input_column_names in input_results {
+                        column_names.extend(input_column_names.iter().cloned());
+                    }
+                    column_names
+                }
+                Reduce {
+                    input: _,
+                    group_key,
+                    aggregates,
+                    monotonic: _,
+                    expected_group_size: _,
+                } => {
+                    // We clone and extend the input vector and then remove the part
+                    // associated with the input at the end.
+                    let mut column_names = results[index - 1].clone();
+                    let input_arity = column_names.len();
+
+                    // Infer the group key part.
+                    Self::extend_with_scalars(&mut column_names, group_key);
+                    // Infer the aggregates part.
+                    let aggs_start = group_key.len();
+                    let aggs_end = group_key.len() + aggregates.len();
+                    column_names.extend(Self::anonymous(aggs_start..aggs_end));
+                    // Remove the prefix associated with the input
+                    column_names.drain(0..input_arity);
+
+                    column_names
+                }
+                TopK {
+                    input: _,
+                    group_key: _,
+                    order_key: _,
+                    limit: _,
+                    offset: _,
+                    monotonic: _,
+                    expected_group_size: _,
+                } => {
+                    // Return the column names of the `input`.
+                    results[index - 1].clone()
+                }
+                Negate { input: _ } => {
+                    // Return the column names of the `input`.
+                    results[index - 1].clone()
+                }
+                Threshold { input: _ } => {
+                    // Return the column names of the `input`.
+                    results[index - 1].clone()
+                }
+                Union { base: _, inputs: _ } => {
+                    // Use the first non-empty column across all inputs.
+                    let mut column_names = vec![];
+
+                    let mut inputs_results = depends
+                        .children_of_rev(index, expr.children().count())
+                        .map(|child| &results[child])
+                        .collect::<Vec<_>>();
+
+                    let base_results = inputs_results.pop().unwrap();
+                    inputs_results.reverse();
+
+                    for (i, mut column_name) in base_results.iter().cloned().enumerate() {
+                        for input_results in inputs_results.iter() {
+                            if !column_name.is_known() && input_results[i].is_known() {
+                                column_name = input_results[i].clone();
+                                break;
+                            }
+                        }
+                        column_names.push(column_name);
+                    }
+
+                    column_names
+                }
+                ArrangeBy { input: _, keys: _ } => {
+                    // Return the column names of the `input`.
+                    results[index - 1].clone()
+                }
+            }
+        }
+    }
+}
