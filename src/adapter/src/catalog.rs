@@ -1411,6 +1411,18 @@ impl ExprHumanizer for ConnCatalog<'_> {
             .unwrap_or(None)
     }
 
+    fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {
+        self.state
+            .entry_by_id
+            .get(&id)
+            .try_map(|entry| {
+                let desc = entry.desc(&self.resolve_full_name(entry.name()))?;
+                let column_name = desc.get_name(column);
+                Ok::<_, SqlCatalogError>(column_name.to_string())
+            })
+            .unwrap_or(None)
+    }
+
     fn id_exists(&self, id: GlobalId) -> bool {
         self.state.entry_by_id.contains_key(&id)
     }

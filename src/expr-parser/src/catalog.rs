@@ -92,6 +92,13 @@ impl ExprHumanizer for TestCatalog {
         self.objects.get(src_name).map(|(_, cols, _)| cols.clone())
     }
 
+    fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {
+        let src_name = self.get_source_name(&id)?;
+        self.objects
+            .get(src_name)
+            .map(|(_, cols, _)| cols[column].clone())
+    }
+
     fn id_exists(&self, id: GlobalId) -> bool {
         self.names.contains_key(&id)
     }
