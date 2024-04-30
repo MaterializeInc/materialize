@@ -649,6 +649,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn proptest_row_collection() {
         fn row_collection_roundtrips(rows: Vec<Row>) {
             let collection = RowCollection::from(&rows);
@@ -672,6 +673,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn proptest_merge() {
         fn row_collection_merge(a: Vec<Row>, b: Vec<Row>) {
             let mut a_col = RowCollection::from(&a);
@@ -697,6 +699,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn proptest_sort() {
         fn row_collection_sort(mut a: Vec<Row>) {
             let a_col = RowCollection::from(&a);
