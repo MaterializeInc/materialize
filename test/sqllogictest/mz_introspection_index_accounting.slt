@@ -95,6 +95,7 @@ mz_source_statistics_ind  CREATE␠INDEX␠"mz_source_statistics_ind"␠IN␠CLU
 mz_source_status_history_ind  CREATE␠INDEX␠"mz_source_status_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_source_status_history"␠("source_id")
 mz_source_statuses_ind  CREATE␠INDEX␠"mz_source_statuses_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_source_statuses"␠("id")
 mz_sources_ind  CREATE␠INDEX␠"mz_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_sources"␠("id")
+mz_webhook_sources_ind  CREATE␠INDEX␠"mz_webhook_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_webhook_sources"␠("id")
 
 # Record all transitive dependencies (tables, sources, views, mvs) of indexes on
 # the mz_introspection cluster.
@@ -589,3 +590,6 @@ mz_views  owner_id
 mz_views  privileges
 mz_views  redacted_create_sql
 mz_views  schema_id
+mz_webhook_sources  id
+mz_webhook_sources  name
+mz_webhook_sources  url
