@@ -26,8 +26,8 @@ use crate::row::{Row, RowRef};
 /// * [`streaming_iterator`](https://docs.rs/streaming-iterator/latest/streaming_iterator/)
 /// * [`lending-iterator`](https://docs.rs/lending-iterator/latest/lending_iterator/)
 ///
-/// Neither have an `IntoLendingIterator` trait that is useful for our interface, or do they don't
-/// work well with trait objects.
+/// Neither have an `IntoLendingIterator` trait that is useful for our interface, nor do they work
+/// well with trait objects.
 pub trait RowIterator: Debug {
     /// Returns the next [`RowRef`] advancing the iterator.
     fn next(&mut self) -> Option<&RowRef>;
