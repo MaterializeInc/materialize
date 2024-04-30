@@ -201,10 +201,10 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use mz_ore::error::ErrorExt;
-use mz_repr::{GlobalId, Row};
+use mz_repr::{GlobalId, Row, RowPacker};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription};
+use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceExport};
 use timely::communication::Allocate;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::dataflow::Scope;
@@ -304,18 +304,46 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut upper_streams = vec![];
             let mut health_streams = vec![source_health];
-            for (export_id, export) in description.source_exports {
-                let (ok, err) = outputs
-                    .get_mut(export.output_index)
-                    .expect("known to exist");
-                let source_data = ok.map(Ok).concat(&err.map(Err));
+
+            // Determine the maximum arity we expect from each given output
+            // index. This lets us avoid truncating the row in the vast majority
+            // of cases where there is only one ID (and therefore arity) for the
+            // given output index.
+            let mut max_arity_by_output_idx = BTreeMap::new();
+            for souce_export in description.source_exports.values() {
+                let max_arity = max_arity_by_output_idx
+                    .entry(souce_export.output_index)
+                    .or_insert(souce_export.arity);
+                *max_arity = std::cmp::max(*max_arity, souce_export.arity);
+            }
+
+            for (
+                export_id,
+                SourceExport {
+                    output_index,
+                    arity,
+                    storage_metadata,
+                },
+            ) in description.source_exports
+            {
+                let (ok, err) = outputs.get_mut(output_index).expect("known to exist");
+                let max_arity = max_arity_by_output_idx[&output_index];
+
+                let source_data = ok
+                    .map(move |mut row| {
+                        if arity < max_arity {
+                            RowPacker::for_existing_row(&mut row).truncate_datums(arity);
+                        }
+                        Ok(row)
+                    })
+                    .concat(&err.map(Err));
 
                 let metrics = storage_state.metrics.get_source_persist_sink_metrics(
                     export_id,
                     primary_source_id,
                     worker_id,
-                    &export.storage_metadata.data_shard,
-                    export.output_index,
+                    &storage_metadata.data_shard,
+                    output_index,
                 );
 
                 tracing::info!(
@@ -324,11 +352,11 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
                     mz_scope,
                     export_id,
-                    export.storage_metadata.clone(),
+                    storage_metadata.clone(),
                     source_data,
                     storage_state,
                     metrics,
-                    export.output_index,
+                    output_index,
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);
@@ -343,7 +371,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     }
                 });
                 health_streams.push(sink_health.leave());
-                health_configs.insert(export.output_index, export_id);
+                health_configs.insert(output_index, export_id);
             }
 
             mz_scope
