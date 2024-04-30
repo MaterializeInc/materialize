@@ -264,6 +264,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             }
         };
 
+        // Figure out the most recent timestamp that had a physical write to
+        // the data shard.
         let last_reg = data_times.last_reg();
         let mut physical_ts = last_reg.register_ts.clone();
         if let Some(forget_ts) = &last_reg.forget_ts {
