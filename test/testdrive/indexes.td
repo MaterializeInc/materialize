@@ -299,6 +299,7 @@ mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operator
 mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_introspection    {worker_id,duration_ns}
 mz_frontiers_ind                                            mz_frontiers                                 mz_introspection    {object_id}
 mz_indexes_ind                                              mz_indexes                                   mz_introspection    {id}
+mz_kafka_sources_ind mz_kafka_sources        mz_introspection    {id}
 mz_materialized_views_ind                                   mz_materialized_views                        mz_introspection    {id}
 mz_message_batch_counts_received_raw_s2_primary_idx         mz_message_batch_counts_received_raw         mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_batch_counts_sent_raw_s2_primary_idx             mz_message_batch_counts_sent_raw             mz_introspection    {channel_id,from_worker_id,to_worker_id}
