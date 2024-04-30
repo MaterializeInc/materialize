@@ -15,7 +15,10 @@ use mz_expr::MirRelationExpr;
 
 pub use common::{Derived, DerivedBuilder, DerivedView};
 
+pub use crate::attribute::Cardinality;
 pub use arity::Arity;
+pub use column_names::ColumnNames;
+pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
 pub use subtree::SubtreeSize;
 pub use types::RelationType;
@@ -1000,5 +1003,156 @@ mod column_names {
                 }
             }
         }
+    }
+}
+
+mod explain {
+    //! Derived attributes framework and definitions.
+
+    use std::collections::BTreeMap;
+
+    use mz_expr::explain::ExplainContext;
+    use mz_expr::MirRelationExpr;
+    use mz_ore::stack::RecursionLimitError;
+    use mz_repr::explain::{AnnotatedPlan, Attributes};
+
+    // Attributes should have shortened paths when exported.
+    use crate::analysis::column_names::ColumnName;
+    use crate::analysis::DerivedBuilder;
+    use crate::attribute::cardinality::HumanizedSymbolicExpression;
+
+    impl<'c> From<&ExplainContext<'c>> for DerivedBuilder<'c> {
+        fn from(context: &ExplainContext<'c>) -> DerivedBuilder<'c> {
+            let mut builder = DerivedBuilder::new(context.features);
+            if context.config.subtree_size {
+                builder.require(super::SubtreeSize);
+            }
+            if context.config.non_negative {
+                builder.require(super::NonNegative);
+            }
+            if context.config.types {
+                builder.require(super::RelationType);
+            }
+            if context.config.arity {
+                builder.require(super::Arity);
+            }
+            if context.config.keys {
+                builder.require(super::UniqueKeys);
+            }
+            if context.config.cardinality {
+                builder.require(crate::attribute::cardinality::Cardinality::default());
+            }
+            if context.config.column_names || context.config.humanized_exprs {
+                builder.require(super::ColumnNames);
+            }
+            builder
+        }
+    }
+
+    /// Produce an [`AnnotatedPlan`] wrapping the given [`MirRelationExpr`] along
+    /// with [`Attributes`] derived from the given context configuration.
+    pub fn annotate_plan<'a>(
+        plan: &'a MirRelationExpr,
+        context: &'a ExplainContext,
+    ) -> Result<AnnotatedPlan<'a, MirRelationExpr>, RecursionLimitError> {
+        let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
+        let config = context.config;
+
+        // We want to annotate the plan with attributes in the following cases:
+        // 1. An attribute was explicitly requested in the ExplainConfig.
+        // 2. Humanized expressions were requested in the ExplainConfig (in which
+        //    case we need to derive the ColumnNames attribute).
+        if config.requires_attributes() || config.humanized_exprs {
+            // get the annotation keys
+            let subtree_refs = plan.post_order_vec();
+            // get the annotation values
+            let builder = DerivedBuilder::from(context);
+            let derived = builder.visit(plan);
+
+            if config.subtree_size {
+                for (expr, subtree_size) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::SubtreeSize>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.subtree_size = Some(*subtree_size);
+                }
+            }
+            if config.non_negative {
+                for (expr, non_negative) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::NonNegative>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.non_negative = Some(*non_negative);
+                }
+            }
+
+            if config.arity {
+                for (expr, arity) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::Arity>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.arity = Some(*arity);
+                }
+            }
+
+            if config.types {
+                for (expr, types) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived
+                        .results::<super::RelationType>()
+                        .unwrap()
+                        .into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.types = Some(types.clone());
+                }
+            }
+
+            if config.keys {
+                for (expr, keys) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::UniqueKeys>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.keys = Some(keys.clone());
+                }
+            }
+
+            if config.cardinality {
+                for (expr, card) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::Cardinality>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    let value = HumanizedSymbolicExpression::new(card, context.humanizer);
+                    attrs.cardinality = Some(value.to_string());
+                }
+            }
+
+            if config.column_names || config.humanized_exprs {
+                for (expr, column_names) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::ColumnNames>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    let value = column_names
+                        .iter()
+                        .map(|column_name| match column_name {
+                            ColumnName::Global(id, c) => context
+                                .humanizer
+                                .humanize_column(*id, *c)
+                                .unwrap_or_default(),
+                            ColumnName::Unknown => String::new(),
+                        })
+                        .collect();
+                    attrs.column_names = Some(value);
+                }
+            }
+        }
+
+        Ok(AnnotatedPlan { plan, annotations })
     }
 }

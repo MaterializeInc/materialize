@@ -512,11 +512,11 @@ Explained Query:
               ReadStorage materialize.public.people // { non_negative: true }
           Threshold // { non_negative: true }
             Union // { non_negative: false }
-              Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
+              Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
                 Get l0 // { non_negative: true }
               Negate // { non_negative: false }
-                Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
-                  Filter (#0 > 1) // { non_negative: false }
+                Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
+                  Filter (#0 > 1) // { non_negative: true }
                     Get l0 // { non_negative: true }
 
 Target cluster: quickstart

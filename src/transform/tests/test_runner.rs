@@ -543,13 +543,13 @@ mod tests {
 }
 
 /// This duplicates code from `mz_adapter` as we don't want to move
-/// [`mz_transform::attribute`] and [`mz_transform::normalize_lets`] to
+/// [`mz_transform::analysis`] and [`mz_transform::normalize_lets`] to
 /// [`mz_expr`].
 mod explain {
     use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainSinglePlan};
     use mz_expr::MirRelationExpr;
     use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
-    use mz_transform::attribute::annotate_plan;
+    use mz_transform::analysis::annotate_plan;
     use mz_transform::normalize_lets::normalize_lets;
 
     /// Newtype struct for wrapping types that should

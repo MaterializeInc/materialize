@@ -23,7 +23,7 @@ use mz_expr::explain::{
 };
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
-use mz_transform::attribute::annotate_plan;
+use mz_transform::analysis::annotate_plan;
 use mz_transform::normalize_lets::normalize_lets;
 
 use crate::explain::Explainable;

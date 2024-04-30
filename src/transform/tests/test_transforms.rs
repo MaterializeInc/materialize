@@ -15,7 +15,7 @@ use mz_ore::str::Indent;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{ExplainConfig, PlanRenderingContext};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_transform::attribute::annotate_plan;
+use mz_transform::analysis::annotate_plan;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::TypeErrorHumanizer;
 
