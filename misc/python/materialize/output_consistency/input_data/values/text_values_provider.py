@@ -27,6 +27,8 @@ TEXT_DATA_TYPE_WITH_VALUES.add_raw_value(
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'a'", "VAL_1", set())
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'abc'", "VAL_2", set())
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'xAAx'", "VAL_3", set())
+TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'0*a*B_c-dE.$=#(%)?!'", "VAL_4", set())
+TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'äÖüß'", "VAL_5", set())
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'ff00aa'", "HEX_VAL", set())
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value(
     "' mAA m\n\t '",
