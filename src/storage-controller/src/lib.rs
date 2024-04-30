@@ -619,6 +619,7 @@ where
                     id,
                     SourceExport {
                         output_index: 0,
+                        arity: description.desc.typ().arity(),
                         storage_metadata: (),
                     },
                 );
@@ -733,6 +734,7 @@ where
                                 id,
                                 SourceExport {
                                     output_index,
+                                    arity: collection_state.description.desc.typ().arity(),
                                     storage_metadata: (),
                                 },
                             )
@@ -1078,6 +1080,7 @@ where
             ingestion_id,
             SourceExport {
                 output_index: 0,
+                arity: collection.description.desc.typ().arity(),
                 storage_metadata: (),
             },
         );
@@ -1095,10 +1098,12 @@ where
                 continue;
             }
 
+            let export_collection = self.collection(*export_id)?;
+
             let DataSource::IngestionExport {
                 ingestion_id,
                 external_reference,
-            } = &self.collection(*export_id)?.description.data_source
+            } = &export_collection.description.data_source
             else {
                 panic!("source exports must be DataSource::IngestionExport")
             };
@@ -1115,6 +1120,7 @@ where
                 *export_id,
                 SourceExport {
                     output_index,
+                    arity: export_collection.description.desc.typ().arity(),
                     storage_metadata: (),
                 },
             );
@@ -3622,6 +3628,7 @@ where
             export_id,
             SourceExport {
                 output_index,
+                arity,
                 storage_metadata: (),
             },
         ) in ingestion_description.source_exports
@@ -3631,6 +3638,7 @@ where
                 export_id,
                 SourceExport {
                     storage_metadata: export_storage_metadata,
+                    arity,
                     output_index,
                 },
             );

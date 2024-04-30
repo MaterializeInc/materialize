@@ -20,6 +20,7 @@ use std::time::Duration;
 use bytes::BufMut;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
@@ -172,6 +173,7 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
                                 SourceExport {
                                     output_index: _,
                                     storage_metadata: l_metadata,
+                                    arity: l_arity,
                                 },
                             ),
                             (
@@ -179,12 +181,14 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
                                 SourceExport {
                                     output_index: _,
                                     storage_metadata: r_metadata,
+                                    arity: r_arity,
                                 },
                             ),
                         ) => {
                             // the output index may change, but the table's metadata
                             // may not
-                            l_metadata.alter_compatible(id, r_metadata).is_ok()
+                            l_arity == r_arity
+                                && l_metadata.alter_compatible(id, r_metadata).is_ok()
                         }
                         _ => true,
                     }),
@@ -248,6 +252,22 @@ pub struct SourceExport<S = ()> {
     /// to adjust the output index, e.g. by adding 1 to the index of the name
     /// they search for.
     pub output_index: usize,
+    /// The width of this subsource's output.
+    ///
+    /// We use this field to demux one output stream from an ingestion into
+    /// multiple persist shards with (ostensibly) different schemas.
+    ///
+    /// Because this feature tracks only the arity of the output, other layers
+    /// of MZ must ensure the correctness of this behavior, i.e. that the
+    /// schemas of the wider relation is a strict prefix of the narrower
+    /// versions.
+    ///
+    /// This feature is meant to support ingesting columns that have been added
+    /// to an upstream relation; it's been designed to accomplish exactly and
+    /// only that. In the future, we might envision supporting something more
+    /// complex, such as re-ordering columns from the output to the input.
+    /// Fortunately, this feature doesn't preclude that extension.
+    pub arity: usize,
     /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
 }
@@ -304,6 +324,7 @@ impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceEx
         ProtoSourceExport {
             id: Some(entry.0.into_proto()),
             output_index: entry.1.output_index.into_proto(),
+            arity: u64::cast_from(entry.1.arity),
             storage_metadata: Some(entry.1.storage_metadata.into_proto()),
         }
     }
@@ -313,6 +334,7 @@ impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceEx
             self.id.into_rust_if_some("ProtoSourceExport::id")?,
             SourceExport {
                 output_index: self.output_index.into_rust()?,
+                arity: usize::cast_from(self.arity),
                 storage_metadata: self
                     .storage_metadata
                     .into_rust_if_some("ProtoSourceExport::storage_metadata")?,

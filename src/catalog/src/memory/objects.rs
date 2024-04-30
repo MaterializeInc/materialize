@@ -441,6 +441,9 @@ impl DataSourceDesc {
             .chain(std::iter::once((&id, &0)))
             .map(|(id, output_index)| {
                 let export = SourceExport {
+                    // This value will never be observed by a running ingestion,
+                    // and will be removed as part of #26769.
+                    arity: 0,
                     output_index: *output_index,
                     storage_metadata: (),
                 };
