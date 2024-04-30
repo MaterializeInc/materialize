@@ -37,6 +37,7 @@ class ExpressionCharacteristics(Enum):
     """Lines with tabulators, newlines, and further whitespace types"""
     TEXT_WITH_BACKSLASH_CHAR = 142
     TEXT_WITH_SPECIAL_NON_SPACE_CHARS = 143
+    TEXT_WITH_ESZETT = 144
 
     JSON_EMPTY = 150
     JSON_ARRAY = 151
