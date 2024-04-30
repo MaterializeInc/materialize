@@ -193,6 +193,15 @@ TEXT_OPERATION_TYPES.append(chr_function)
 
 TEXT_OPERATION_TYPES.append(
     DbFunction(
+        "initcap",
+        [TextOperationParam()],
+        TextReturnTypeSpec(),
+        since_mz_version=MzVersion.parse_mz("v0.97.0"),
+    )
+)
+
+TEXT_OPERATION_TYPES.append(
+    DbFunction(
         "left",
         [TextOperationParam(), MaxSignedInt4OperationParam()],
         TextReturnTypeSpec(),
