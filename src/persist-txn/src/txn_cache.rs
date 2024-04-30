@@ -264,42 +264,35 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             }
         };
 
-        // If we're before the most recent registration, it's always safe to
-        // read to that point normally. If we're before a known write then we
-        // can read all the way past the write. So we see if either of these
-        // are true and read to the later event.
         let last_reg = data_times.last_reg();
-        let mut read_to = last_reg.register_ts.clone();
-        if let Some(latest_write) = data_times.writes.back() {
-            read_to = std::cmp::max(read_to, latest_write.step_forward());
-        }
-        if ts < read_to {
-            return ReadDataTo(read_to);
-        }
-
-        // The most recent forget is set, which means it's not registered as of
-        // the latest information we have. Emit logical progress up to the
-        // forget and then read to the current progress point normally.
+        let mut physical_ts = last_reg.register_ts.clone();
         if let Some(forget_ts) = &last_reg.forget_ts {
-            assert!(*forget_ts < self.progress_exclusive);
-            if ts <= *forget_ts {
-                return EmitLogicalProgress(forget_ts.step_forward());
-            } else if ts < self.progress_exclusive {
-                return ReadDataTo(self.progress_exclusive.clone());
-            }
+            physical_ts = std::cmp::max(physical_ts, forget_ts.clone());
+        }
+        if let Some(latest_write) = data_times.writes.back() {
+            physical_ts = std::cmp::max(physical_ts, latest_write.clone());
         }
 
-        // No writes were > ts, look to see if the txns upper has advanced
-        // past ts.
-        if ts < self.progress_exclusive {
+        if ts >= self.progress_exclusive {
+            // All caught up, we have to wait.
+            WaitForTxnsProgress
+        } else if ts <= physical_ts {
+            // There was some physical write, so read up to that time.
+            ReadDataTo(physical_ts.step_forward())
+        } else if self.registered_at(data_id, &ts) {
             // Emitting logical progress at the wrong time is a correctness bug,
             // so be extra defensive about the necessary conditions: the most
             // recent registration is still active and we're in it.
             assert!(last_reg.forget_ts.is_none() && last_reg.contains(&ts));
-            return EmitLogicalProgress(self.progress_exclusive.clone());
+            // The shard is registered so
+            EmitLogicalProgress(self.progress_exclusive.clone())
+        } else {
+            // The most recent forget is set, which means it's not registered as of
+            // the latest information we have. Read to the current progress point
+            // normally.
+            assert!(ts > last_reg.register_ts && last_reg.forget_ts.is_some());
+            ReadDataTo(self.progress_exclusive.clone())
         }
-        // Nope, all caught up, we have to wait.
-        WaitForTxnsProgress
     }
 
     /// Returns the minimum timestamp not known to be applied by this cache.
@@ -1111,7 +1104,7 @@ mod tests {
 
         // ts 2 (register)
         c.push_register(d0, 2, 1, 2);
-        testcase(&mut c, 2, d0, ds(None, 2, 3), EmitLogicalProgress(3));
+        testcase(&mut c, 2, d0, ds(None, 2, 3), ReadDataTo(3));
 
         // ts 3 (registered, not written)
         testcase(&mut c, 3, d0, ds(None, 3, 4), EmitLogicalProgress(4));
@@ -1138,7 +1131,7 @@ mod tests {
         // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
         c.push_register(d0, 8, -1, 8);
-        testcase(&mut c, 8, d0, ds(None, 8, 9), EmitLogicalProgress(9));
+        testcase(&mut c, 8, d0, ds(None, 8, 9), ReadDataTo(9));
 
         // ts 9 (not registered, not written). This ReadDataTo would block until
         // the write happens at ts 10.
@@ -1153,14 +1146,14 @@ mod tests {
 
         // ts 12 (registered, previously forgotten)
         c.push_register(d0, 12, 1, 12);
-        testcase(&mut c, 12, d0, ds(None, 12, 13), EmitLogicalProgress(13));
+        testcase(&mut c, 12, d0, ds(None, 12, 13), ReadDataTo(13));
 
         // ts 13 (forgotten, registered at preceding ts)
         // Revisit when
         // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
         c.push_register(d0, 13, -1, 13);
-        testcase(&mut c, 13, d0, ds(None, 13, 14), EmitLogicalProgress(14));
+        testcase(&mut c, 13, d0, ds(None, 13, 14), ReadDataTo(14));
 
         // Now that we have more history, some of the old answers change! In
         // particular, we have more information on unapplied writes, empty
@@ -1181,20 +1174,20 @@ mod tests {
         assert_eq!(c.data_snapshot(d0, 12), ds(None, 12, 14));
         assert_eq!(c.data_snapshot(d0, 13), ds(None, 13, 14));
 
-        assert_eq!(c.data_listen_next(&d0, 0), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 1), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 2), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 3), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 4), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 5), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 6), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 7), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 8), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 9), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 10), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 11), ReadDataTo(12));
-        assert_eq!(c.data_listen_next(&d0, 12), EmitLogicalProgress(14));
-        assert_eq!(c.data_listen_next(&d0, 13), EmitLogicalProgress(14));
+        assert_eq!(c.data_listen_next(&d0, 0), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 1), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 2), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 3), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 4), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 5), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 6), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 7), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 8), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 9), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 10), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 11), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 12), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 13), ReadDataTo(14));
         assert_eq!(c.data_listen_next(&d0, 14), WaitForTxnsProgress);
     }
 
