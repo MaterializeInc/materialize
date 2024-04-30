@@ -2456,7 +2456,7 @@ where
             //   timestamp given to us by the coordinator).
             // - That all txn writes through `init_ts` have been applied
             //   (materialized physically in the data shards).
-            let empty_txn = txns.begin();
+            let mut empty_txn = txns.begin();
             let apply = empty_txn
                 .commit_at(&mut txns, init_ts.clone())
                 .await
