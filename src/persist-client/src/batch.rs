@@ -144,37 +144,6 @@ where
         self.batch.desc.lower()
     }
 
-    /// Efficiently rewrites the timestamps in this not-yet-committed batch.
-    ///
-    /// This [Batch] represents potentially large amounts of data, which may
-    /// have partly or entirely been spilled to s3. This call bulk edits the
-    /// timestamps of all data in this batch in a metadata-only operation (i.e.
-    /// without network calls).
-    ///
-    /// Specifically, every timestamp in the batch is logically advanced_by the
-    /// provided `frontier`.
-    ///
-    /// This method may be called multiple times, with later calls overriding
-    /// previous ones, but the rewrite frontier may not regress across calls.
-    ///
-    /// When this batch was created, it was given an `upper`, which bounds the
-    /// staged data it represents. To allow rewrite past this original `upper`,
-    /// this call accepts a new `upper` which replaces the previous one. Like
-    /// the rewrite frontier, the upper may not regress across calls.
-    ///
-    /// Multiple batches with various rewrite frontiers may be used in a single
-    /// [crate::write::WriteHandle::compare_and_append_batch] call. This is an
-    /// expected usage.
-    pub fn rewrite_ts(
-        &mut self,
-        frontier: &Antichain<T>,
-        new_upper: Antichain<T>,
-    ) -> Result<(), InvalidUsage<T>> {
-        self.batch
-            .rewrite_ts(frontier, new_upper)
-            .map_err(InvalidUsage::InvalidRewrite)
-    }
-
     /// Marks the blobs that this batch handle points to as consumed, likely
     /// because they were appended to a shard.
     ///
@@ -284,6 +253,45 @@ where
             parts.push(part);
         }
         self.batch.parts = parts;
+    }
+}
+
+impl<K, V, T, D> Batch<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+{
+    /// Efficiently rewrites the timestamps in this not-yet-committed batch.
+    ///
+    /// This [Batch] represents potentially large amounts of data, which may
+    /// have partly or entirely been spilled to s3. This call bulk edits the
+    /// timestamps of all data in this batch in a metadata-only operation (i.e.
+    /// without network calls).
+    ///
+    /// Specifically, every timestamp in the batch is logically advanced_by the
+    /// provided `frontier`.
+    ///
+    /// This method may be called multiple times, with later calls overriding
+    /// previous ones, but the rewrite frontier may not regress across calls.
+    ///
+    /// When this batch was created, it was given an `upper`, which bounds the
+    /// staged data it represents. To allow rewrite past this original `upper`,
+    /// this call accepts a new `upper` which replaces the previous one. Like
+    /// the rewrite frontier, the upper may not regress across calls.
+    ///
+    /// Multiple batches with various rewrite frontiers may be used in a single
+    /// [crate::write::WriteHandle::compare_and_append_batch] call. This is an
+    /// expected usage.
+    pub fn rewrite_ts(
+        &mut self,
+        frontier: &Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<(), InvalidUsage<T>> {
+        self.batch
+            .rewrite_ts(frontier, new_upper)
+            .map_err(InvalidUsage::InvalidRewrite)
     }
 }
 
