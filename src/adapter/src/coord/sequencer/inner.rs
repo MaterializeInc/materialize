@@ -2575,7 +2575,6 @@ impl Coordinator {
             let make_diffs =
                 move |mut rows: Box<dyn RowIterator>| -> Result<Vec<(Row, Diff)>, AdapterError> {
                     let arena = RowArena::new();
-                    // Use 2x row len incase there's some assignments.
                     let mut diffs = Vec::new();
                     let mut datum_vec = mz_repr::DatumVec::new();
 

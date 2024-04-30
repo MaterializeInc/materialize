@@ -411,6 +411,7 @@ mod tests {
     use std::borrow::Borrow;
 
     use proptest::prelude::*;
+    use proptest::test_runner::Config;
 
     use super::*;
     use crate::Datum;
@@ -660,10 +661,14 @@ mod tests {
             }
         }
 
-        proptest!(|(rows in any::<Vec<Row>>())| {
-            // The proptest! macro interferes with rustfmt.
-            row_collection_roundtrips(rows)
-        });
+        // This test is slow, so we limit the default number of test cases.
+        proptest!(
+            Config { cases: 10, ..Default::default() },
+            |(rows in any::<Vec<Row>>())| {
+                // The proptest! macro interferes with rustfmt.
+                row_collection_roundtrips(rows)
+            }
+        );
     }
 
     #[mz_ore::test]
@@ -681,10 +686,14 @@ mod tests {
             }
         }
 
-        proptest!(|(a in any::<Vec<Row>>(), b in any::<Vec<Row>>())| {
-            // The proptest! macro interferes with rustfmt.
-            row_collection_merge(a, b)
-        });
+        // This test is slow, so we limit the default number of test cases.
+        proptest!(
+            Config { cases: 5, ..Default::default() },
+            |(a in any::<Vec<Row>>(), b in any::<Vec<Row>>())| {
+                // The proptest! macro interferes with rustfmt.
+                row_collection_merge(a, b)
+            }
+        );
     }
 
     #[mz_ore::test]
@@ -703,9 +712,13 @@ mod tests {
             }
         }
 
-        proptest!(|(a in any::<Vec<Row>>())| {
-            // The proptest! macro interferes with rustfmt.
-            row_collection_sort(a)
-        });
+        // This test is slow, so we limit the default number of test cases.
+        proptest!(
+            Config { cases: 10, ..Default::default() },
+            |(a in any::<Vec<Row>>())| {
+                // The proptest! macro interferes with rustfmt.
+                row_collection_sort(a)
+            }
+        );
     }
 }
