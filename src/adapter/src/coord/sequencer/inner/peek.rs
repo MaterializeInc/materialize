@@ -863,10 +863,9 @@ impl Coordinator {
                 Box::new((uuid, StatementLifecycleEvent::ComputeDependenciesFinished)),
             )
         }
-        let max_query_result_size = std::cmp::min(
-            ctx.session().vars().max_query_result_size(),
-            self.catalog().system_config().max_result_size(),
-        );
+
+        let max_query_size = ctx.session().vars().max_query_result_size();
+        let max_result_size = self.catalog().system_config().max_result_size();
 
         // Implement the peek, and capture the response.
         let resp = self
@@ -876,7 +875,8 @@ impl Coordinator {
                 optimizer.finishing().clone(),
                 optimizer.cluster_id(),
                 target_replica,
-                max_query_result_size,
+                max_result_size,
+                Some(max_query_size),
             )
             .await?;
 

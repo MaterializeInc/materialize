@@ -820,7 +820,13 @@ impl Coordinator {
                 offset: 0,
                 project: (0..plan.returning[0].0.iter().count()).collect(),
             };
-            return match finishing.finish(RowCollection::new(plan.returning)) {
+            let max_returned_query_size = session.vars().max_query_result_size();
+
+            return match finishing.finish(
+                RowCollection::new(plan.returning),
+                plan.max_result_size,
+                Some(max_returned_query_size),
+            ) {
                 Ok(rows) => Ok(Self::send_immediate_rows(rows)),
                 Err(e) => Err(AdapterError::ResultSize(e)),
             };

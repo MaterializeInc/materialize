@@ -10,6 +10,7 @@
 //! Defines types for working with collections of [`Row`].
 
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use mz_ore::cast::CastFrom;
@@ -86,7 +87,7 @@ impl RowCollection {
         self.metadata.iter().map(|meta| meta.diff.get()).sum()
     }
 
-    /// Total count of ([`Row`], [`EncodedRowMetadata`]) pairs in this collection.
+    /// Total count of ([`Row`], `EncodedRowMetadata`) pairs in this collection.
     pub fn entries(&self) -> usize {
         self.metadata.len()
     }
@@ -134,7 +135,7 @@ impl RowCollection {
 
         SortedRowCollection {
             collection: self,
-            sorted_view: view,
+            sorted_view: view.into(),
         }
     }
 }
@@ -218,7 +219,7 @@ pub struct SortedRowCollection {
     /// The inner [`RowCollection`].
     collection: RowCollection,
     /// Indexes into the inner collection that represent the sorted order.
-    sorted_view: Vec<usize>,
+    sorted_view: Arc<[usize]>,
 }
 
 impl SortedRowCollection {
@@ -235,7 +236,7 @@ impl SortedRowCollection {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SortedRowCollectionIter {
     /// Collection we're iterating over.
     collection: SortedRowCollection,
@@ -245,8 +246,6 @@ pub struct SortedRowCollectionIter {
     /// Number of diffs we've emitted for the current row.
     diff_idx: usize,
 
-    /// Start yielding rows after we've offset this many values into the iterator.
-    offset: Option<usize>,
     /// Maximum number of rows this iterator will yield.
     limit: Option<usize>,
 
@@ -257,14 +256,19 @@ pub struct SortedRowCollectionIter {
 }
 
 impl SortedRowCollectionIter {
-    /// Returns the inner [`SortedRowCollection`].
+    /// Returns the inner `SortedRowCollection`.
     pub fn into_inner(self) -> SortedRowCollection {
         self.collection
     }
 
-    /// Sets the offset for this iterator.
-    pub fn with_offset(mut self, offset: usize) -> SortedRowCollectionIter {
-        self.offset = Some(offset);
+    /// Immediately applies an offset to this iterator.
+    pub fn apply_offset(mut self, offset: usize) -> SortedRowCollectionIter {
+        Self::advance_by(
+            &self.collection,
+            &mut self.row_idx,
+            &mut self.diff_idx,
+            offset,
+        );
         self
     }
 
@@ -341,17 +345,6 @@ impl SortedRowCollectionIter {
 
 impl RowIterator for SortedRowCollectionIter {
     fn next(&mut self) -> Option<&RowRef> {
-        // Advance past our offset.
-        if let Some(offset) = self.offset {
-            Self::advance_by(
-                &self.collection,
-                &mut self.row_idx,
-                &mut self.diff_idx,
-                offset,
-            );
-        }
-        self.offset = None;
-
         // Bail if we've reached our limit.
         if let Some(0) = self.limit {
             return None;
@@ -375,18 +368,6 @@ impl RowIterator for SortedRowCollectionIter {
     }
 
     fn peek(&mut self) -> Option<&RowRef> {
-        // Even for peek we still have to advance past any offset, otherwise we
-        // could return a Row that shouldn't have been yielded.
-        if let Some(offset) = self.offset {
-            Self::advance_by(
-                &self.collection,
-                &mut self.row_idx,
-                &mut self.diff_idx,
-                offset,
-            );
-        }
-        self.offset = None;
-
         // Bail if we've reached our limit.
         if let Some(0) = self.limit {
             return None;
@@ -417,7 +398,6 @@ impl IntoRowIterator for SortedRowCollection {
             collection: self,
             row_idx: 0,
             diff_idx: 0,
-            offset: None,
             limit: None,
             projection: None,
             // Note: Neither of these types allocate until elements are pushed in.
@@ -520,7 +500,7 @@ mod tests {
         let col = col.sorted_view(|a, b| a.cmp(b));
 
         // Test with a reasonable offset that does not span rows.
-        let mut iter = col.into_row_iter().with_offset(1);
+        let mut iter = col.into_row_iter().apply_offset(1);
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
@@ -531,7 +511,7 @@ mod tests {
         let col = iter.into_inner();
 
         // Test with an offset that spans the first row.
-        let mut iter = col.into_row_iter().with_offset(3);
+        let mut iter = col.into_row_iter().apply_offset(3);
 
         assert_eq!(iter.peek(), Some(a.borrow()));
 
@@ -543,7 +523,7 @@ mod tests {
         let col = iter.into_inner();
 
         // Test with an offset that passes the entire collection.
-        let mut iter = col.into_row_iter().with_offset(100);
+        let mut iter = col.into_row_iter().apply_offset(100);
         assert_eq!(iter.peek(), None);
         assert_eq!(iter.next(), None);
         assert_eq!(iter.peek(), None);

@@ -441,8 +441,8 @@ impl crate::coord::Coordinator {
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
-        // TODO(parkmycar): Consider how max result size fits in here.
-        _max_result_size: u64,
+        max_result_size: u64,
+        max_returned_query_size: Option<u64>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         let PlannedPeek {
             plan: fast_path,
@@ -482,22 +482,23 @@ impl crate::coord::Coordinator {
             let row_collection = RowCollection::new(results);
             let row_count = row_collection.count();
 
-            let (ret, reason) = match finishing.finish(row_collection) {
-                Ok(rows) => {
-                    let rows_returned = u64::cast_from(row_count);
-                    (
-                        Ok(Self::send_immediate_rows(rows)),
-                        StatementEndedExecutionReason::Success {
-                            rows_returned: Some(rows_returned),
-                            execution_strategy: Some(StatementExecutionStrategy::Constant),
-                        },
-                    )
-                }
-                Err(error) => (
-                    Err(AdapterError::ResultSize(error.clone())),
-                    StatementEndedExecutionReason::Errored { error },
-                ),
-            };
+            let (ret, reason) =
+                match finishing.finish(row_collection, max_result_size, max_returned_query_size) {
+                    Ok(rows) => {
+                        let rows_returned = u64::cast_from(row_count);
+                        (
+                            Ok(Self::send_immediate_rows(rows)),
+                            StatementEndedExecutionReason::Success {
+                                rows_returned: Some(rows_returned),
+                                execution_strategy: Some(StatementExecutionStrategy::Constant),
+                            },
+                        )
+                    }
+                    Err(error) => (
+                        Err(AdapterError::ResultSize(error.clone())),
+                        StatementEndedExecutionReason::Errored { error },
+                    ),
+                };
             self.retire_execution(reason, std::mem::take(ctx_extra));
             return ret;
         }
@@ -638,10 +639,12 @@ impl crate::coord::Coordinator {
         let rows_rx = rows_rx.map_ok_or_else(
             |e| PeekResponseUnary::Error(e.to_string()),
             move |resp| match resp {
-                PeekResponse::Rows(rows) => match finishing.finish(rows) {
-                    Ok(rows) => PeekResponseUnary::Rows(Box::new(rows)),
-                    Err(e) => PeekResponseUnary::Error(e),
-                },
+                PeekResponse::Rows(rows) => {
+                    match finishing.finish(rows, max_result_size, max_returned_query_size) {
+                        Ok(rows) => PeekResponseUnary::Rows(Box::new(rows)),
+                        Err(e) => PeekResponseUnary::Error(e),
+                    }
+                }
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),
             },

@@ -385,7 +385,7 @@ mod columnation {
 
 /// A contiguous slice of bytes that are row data.
 ///
-/// A [`RowRef`] is to [`Row`] as [`str`] is to [`String`].
+/// A [`RowRef`] is to [`Row`] as [`prim@str`] is to [`String`].
 #[derive(PartialEq, Eq)]
 #[repr(transparent)]
 pub struct RowRef([u8]);

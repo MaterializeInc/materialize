@@ -15,6 +15,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::num::NonZeroU64;
 
+use bytesize::ByteSize;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
@@ -31,7 +32,7 @@ use mz_repr::explain::{
 };
 use mz_repr::{
     ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row,
-    RowCollection, RowRef, ScalarType, SortedRowCollectionIter,
+    RowCollection, RowIterator, RowRef, ScalarType, SortedRowCollectionIter,
 };
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -3080,7 +3081,24 @@ impl<L> RowSetFinishing<L> {
 
 impl RowSetFinishing {
     /// Applies finishing actions to a [`RowCollection`].
-    pub fn finish(&self, rows: RowCollection) -> Result<SortedRowCollectionIter, String> {
+    ///
+    ///
+    pub fn finish(
+        &self,
+        rows: RowCollection,
+        max_result_size: u64,
+        max_returned_query_size: Option<u64>,
+    ) -> Result<SortedRowCollectionIter, String> {
+        // How much additional memory is required to make a sorted view.
+        let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
+        let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
+
+        // Bail if creating the sorted view would require us to use too much memory.
+        if required_memory > usize::cast_from(max_result_size) {
+            let max_bytes = ByteSize::b(max_result_size);
+            return Err(format!("result exceeds max size of {max_bytes}",));
+        }
+
         let mut left_datum_vec = mz_repr::DatumVec::new();
         let mut right_datum_vec = mz_repr::DatumVec::new();
 
@@ -3094,7 +3112,7 @@ impl RowSetFinishing {
         let sorted_view = rows.sorted_view(sort_by);
         let mut iter = sorted_view
             .into_row_iter()
-            .with_offset(self.offset)
+            .apply_offset(self.offset)
             .with_projection(self.project.clone());
 
         if let Some(limit) = self.limit {
@@ -3102,6 +3120,18 @@ impl RowSetFinishing {
             let limit = usize::cast_from(limit);
             iter = iter.with_limit(limit);
         };
+
+        // Bail if we would end up returning more data to the client than they can support.
+        if let Some(max) = max_returned_query_size {
+            // TODO(parkmycar): Re-implement out LIMIT and OFFSET logic so we can calculate
+            // the remaining bytes via `(Row, Diff)` tuples.
+            let remaining_bytes: usize = iter.clone().map(|row| row.data().len()).sum();
+
+            if remaining_bytes > usize::cast_from(max) {
+                let max_bytes = ByteSize::b(max);
+                return Err(format!("result exceeds max size of {max_bytes}"));
+            }
+        }
 
         Ok(iter)
     }
