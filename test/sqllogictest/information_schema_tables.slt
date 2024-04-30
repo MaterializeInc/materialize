@@ -525,6 +525,10 @@ mz_global_frontiers
 VIEW
 materialize
 mz_internal
+mz_history_retention_strategies
+BASE TABLE
+materialize
+mz_internal
 mz_hydration_statuses
 VIEW
 materialize

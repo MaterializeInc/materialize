@@ -341,6 +341,17 @@ At this time, we do not make any guarantees about the freshness of these numbers
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
 
+### `mz_history_retention_strategies`
+
+The `mz_history_retention_strategies` table describes the history retention strategies of objects that have compaction windows (tables, sources, indexes, materialized views).
+
+<!-- RELATION_SPEC mz_internal.mz_history_retention_strategies -->
+| Field | Type | Meaning |
+| - | - | - |
+| `id` | [`text`] | The ID of the object. |
+| `strategy` | [`text`] | The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field. |
+| `value` | [`jsonb]` | The value of the strategy. For `FOR`, is a number of milliseconds. |
+
 ### `mz_hydration_statuses`
 
 The `mz_hydration_statuses` view describes the per-replica hydration status of
