@@ -88,7 +88,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_inline_writes_total_max_bytes": "1048576",
     "persist_pubsub_client_enabled": "true",
     "persist_pubsub_push_diff_enabled": "true",
-    "persist_roundtrip_spine": "true",
     "persist_sink_minimum_batch_updates": "128",
     "persist_stats_audit_percent": "100",
     "persist_txn_tables": "lazy",

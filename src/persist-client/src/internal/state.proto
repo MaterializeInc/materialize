@@ -67,7 +67,6 @@ message ProtoSpineBatch {
     uint64 level = 1;
     ProtoU64Description desc = 2;
     repeated ProtoSpineId parts = 3;
-    repeated ProtoU64Description descs = 4;
 }
 
 message ProtoIdSpineBatch {

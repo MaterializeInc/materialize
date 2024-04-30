@@ -114,21 +114,11 @@ impl<T: Timestamp + Lattice> Default for Trace<T> {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ThinSpineBatch<T> {
     pub(crate) level: usize,
     pub(crate) desc: Description<T>,
     pub(crate) parts: Vec<SpineId>,
-    /// NB: this exists to validate legacy batch bounds during the migration;
-    /// it can be deleted once the roundtrip_structure flag is permanently rolled out.
-    pub(crate) descs: Vec<Description<T>>,
-}
-
-impl<T: PartialEq> PartialEq for ThinSpineBatch<T> {
-    fn eq(&self, other: &Self) -> bool {
-        // Ignore the temporary descs vector when comparing for equality.
-        (self.level, &self.desc, &self.parts).eq(&(other.level, &other.desc, &other.parts))
-    }
 }
 
 /// This is a "flattened" representation of a Trace. Goals:
@@ -188,7 +178,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
                         level,
                         desc: id_batch.batch.desc.clone(),
                         parts: vec![push_hollow_batch(id_batch)],
-                        descs: vec![id_batch.batch.desc.clone()],
                     },
                 ),
                 SpineBatch::Fueled {
@@ -201,8 +190,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                     ThinSpineBatch {
                         level,
                         desc: desc.clone(),
-                        parts: parts.iter().map(&mut push_hollow_batch).collect(),
-                        descs: parts.iter().map(|b| b.batch.desc.clone()).collect(),
+                        parts: parts.into_iter().map(&mut push_hollow_batch).collect(),
                     },
                 ),
             };
@@ -268,81 +256,23 @@ impl<T: Timestamp + Lattice> Trace<T> {
         let mut legacy_batches: Vec<_> = legacy_batches.into_iter().map(|(k, _)| k).collect();
         legacy_batches.sort_by(|a, b| compare_chains(a.desc.lower(), b.desc.lower()).reverse());
 
-        let mut pop_batch =
-            |id: SpineId, expected_desc: Option<&Description<T>>| -> Result<_, String> {
-                let mut batch = hollow_batches
-                    .remove(&id)
-                    .or_else(|| legacy_batches.pop())
-                    .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
+        let mut pop_batch = |id: SpineId, spine_desc: &Description<T>| -> Result<_, String> {
+            let batch = hollow_batches
+                .remove(&id)
+                .or_else(|| legacy_batches.pop())
+                .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
 
-                let Some(expected_desc) = expected_desc else {
-                    return Ok(IdHollowBatch { id, batch });
-                };
+            if !PartialOrder::less_equal(spine_desc.lower(), batch.desc.lower())
+                || !PartialOrder::less_equal(batch.desc.upper(), spine_desc.upper())
+            {
+                return Err(format!(
+                    "hollow batch desc {:?} did not fall within spine batch desc {:?}",
+                    batch.desc, spine_desc
+                ));
+            }
 
-                if expected_desc.lower() != batch.desc.lower() {
-                    return Err(format!(
-                        "hollow batch lower {:?} did not match expected lower {:?}",
-                        batch.desc.lower().elements(),
-                        expected_desc.lower().elements()
-                    ));
-                }
-
-                // Empty legacy batches are not deterministic: different nodes may split them up
-                // in different ways. For now, we rearrange them such to match the spine data.
-                if batch.parts.is_empty() && batch.runs.is_empty() && batch.len == 0 {
-                    let mut new_upper = batch.desc.upper().clone();
-
-                    // While our current batch is too small, and there's another empty batch
-                    // in the list, roll it in.
-                    while PartialOrder::less_than(&new_upper, expected_desc.upper()) {
-                        let Some(next_batch) = legacy_batches.pop() else {
-                            break;
-                        };
-                        if next_batch.parts.is_empty() {
-                            new_upper = next_batch.desc.upper().clone();
-                        } else {
-                            legacy_batches.push(next_batch);
-                            break;
-                        }
-                    }
-
-                    // If our current batch is too large, split it by the expected upper
-                    // and preserve the remainder.
-                    if PartialOrder::less_than(expected_desc.upper(), &new_upper) {
-                        legacy_batches.push(Arc::new(HollowBatch {
-                            desc: Description::new(
-                                expected_desc.upper().clone(),
-                                new_upper.clone(),
-                                batch.desc.since().clone(),
-                            ),
-                            parts: vec![],
-                            len: 0,
-                            runs: vec![],
-                        }));
-                        new_upper = expected_desc.upper().clone();
-                    }
-                    batch = Arc::new(HollowBatch {
-                        desc: Description::new(
-                            batch.desc.lower().clone(),
-                            new_upper,
-                            expected_desc.since().clone(),
-                        ),
-                        parts: vec![],
-                        len: 0,
-                        runs: vec![],
-                    })
-                }
-
-                if expected_desc.upper() != batch.desc.upper() {
-                    return Err(format!(
-                        "hollow batch upper {:?} did not match expected upper {:?}",
-                        batch.desc.upper().elements(),
-                        expected_desc.upper().elements()
-                    ));
-                }
-
-                Ok(IdHollowBatch { id, batch })
-            };
+            Ok(IdHollowBatch { id, batch })
+        };
 
         let (upper, next_id) = if let Some((id, batch)) = spine_batches.last_key_value() {
             (batch.desc.upper().clone(), id.1)
@@ -358,13 +288,12 @@ impl<T: Timestamp + Lattice> Trace<T> {
             let level = batch.level;
             let batch = if batch.parts.len() == 1 {
                 let id = batch.parts.pop().expect("popping from nonempty vec");
-                SpineBatch::Merged(pop_batch(id, Some(&batch.desc))?)
+                SpineBatch::Merged(pop_batch(id, &batch.desc)?)
             } else {
                 let parts = batch
                     .parts
                     .into_iter()
-                    .zip(batch.descs.iter().map(Some).chain(std::iter::repeat(None)))
-                    .map(|(id, desc)| pop_batch(id, desc))
+                    .map(|id| pop_batch(id, &batch.desc))
                     .collect::<Result<Vec<_>, _>>()?;
                 let len = parts.iter().map(|p| (*p).batch.len).sum();
                 SpineBatch::Fueled {

@@ -984,7 +984,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoSpineBatch> for ThinSpineBatch<T> {
             desc: Some(self.desc.into_proto()),
             parts: self.parts.into_proto(),
             level: self.level.into_proto(),
-            descs: self.descs.into_proto(),
         }
     }
 
@@ -992,13 +991,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoSpineBatch> for ThinSpineBatch<T> {
         let level = proto.level.into_rust()?;
         let desc = proto.desc.into_rust_if_some("ProtoSpineBatch::desc")?;
         let parts = proto.parts.into_rust()?;
-        let descs = proto.descs.into_rust()?;
-        Ok(ThinSpineBatch {
-            level,
-            desc,
-            parts,
-            descs,
-        })
+        Ok(ThinSpineBatch { level, desc, parts })
     }
 }
 
