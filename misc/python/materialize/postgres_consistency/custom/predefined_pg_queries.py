@@ -101,7 +101,7 @@ def create_pg_timezone_names_query() -> QueryTemplate:
         "Asia/Hebron",
         # abbrev, utc_offset, is_dst differ (as of 2024-04-25)
         "Africa/Cairo",
-        "Egypt"
+        "Egypt",
         # abbrev differs
         "Europe/Kirov",
         "Europe/Volgograd",
