@@ -12,6 +12,8 @@ import subprocess
 import time
 from textwrap import dedent
 
+import pytest
+
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.cluster import cluster_pod_name
 
@@ -147,6 +149,7 @@ def kill_clusterd(
         pass
 
 
+@pytest.mark.long
 def test_kill_all_storage_clusterds(mz: MaterializeApplication) -> None:
     """Kill all clusterds"""
     populate(mz, 1)
@@ -157,6 +160,7 @@ def test_kill_all_storage_clusterds(mz: MaterializeApplication) -> None:
     validate(mz, 1)
 
 
+@pytest.mark.long
 def test_kill_one_storage_clusterd(mz: MaterializeApplication) -> None:
     """Kill one clusterd out of $CLUSTER_SIZE"""
     populate(mz, 2)
@@ -164,6 +168,7 @@ def test_kill_one_storage_clusterd(mz: MaterializeApplication) -> None:
     validate(mz, 2)
 
 
+@pytest.mark.long
 def test_kill_first_storage_clusterd(mz: MaterializeApplication) -> None:
     """Kill the first clusterd out of $CLUSTER_SIZE"""
     populate(mz, 3)
@@ -171,6 +176,7 @@ def test_kill_first_storage_clusterd(mz: MaterializeApplication) -> None:
     validate(mz, 3)
 
 
+@pytest.mark.long
 def test_kill_all_but_one_storage_clusterd(mz: MaterializeApplication) -> None:
     """Kill all clusterds except one"""
     populate(mz, 4)
@@ -180,6 +186,7 @@ def test_kill_all_but_one_storage_clusterd(mz: MaterializeApplication) -> None:
     validate(mz, 4)
 
 
+@pytest.mark.long
 def test_kill_storage_while_suspended(mz: MaterializeApplication) -> None:
     """Suspend a clusterd and resume it after the rest of the cluster went down."""
     populate(mz, 5)
@@ -191,6 +198,7 @@ def test_kill_storage_while_suspended(mz: MaterializeApplication) -> None:
     validate(mz, 5)
 
 
+@pytest.mark.long
 def test_suspend_while_killing_storage(mz: MaterializeApplication) -> None:
     """Suspend a clusterd while the cluster is going down and resume it after."""
     populate(mz, 6)
@@ -201,6 +209,7 @@ def test_suspend_while_killing_storage(mz: MaterializeApplication) -> None:
     validate(mz, 6)
 
 
+@pytest.mark.long
 def test_suspend_all_but_one_storage(mz: MaterializeApplication) -> None:
     """Suspend all clusterds while killing one."""
     populate(mz, 7)
