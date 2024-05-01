@@ -28,6 +28,7 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
+use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::info;
@@ -436,7 +437,8 @@ impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
     }
 }
 
-impl<T: Timestamp> HollowBatch<T> {
+// See the comment on [Batch::rewrite_ts] for why this is TotalOrder.
+impl<T: Timestamp + TotalOrder> HollowBatch<T> {
     pub(crate) fn rewrite_ts(
         &mut self,
         frontier: &Antichain<T>,
