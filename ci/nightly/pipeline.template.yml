@@ -798,6 +798,17 @@ steps:
               args: [--scenario=MigrateX86Aarch64]
         sanitizer: skip
 
+      - id: checks-toggle-persist-roundtrip-spine
+        label: "Checks toggling persist roundtrip spine"
+        depends_on: build-aarch64
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=TogglePersistRoundtripSpine, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-migrate-aarch64-x86-64
         label: "Checks migrate from aarch64 to x86-64"
         depends_on: [build-x86_64, build-aarch64]
