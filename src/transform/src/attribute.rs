@@ -18,7 +18,6 @@ use mz_ore::stack::RecursionLimitError;
 use mz_repr::explain::{AnnotatedPlan, Attributes};
 
 mod arity;
-pub mod cardinality;
 mod column_names;
 mod non_negative;
 mod relation_type;
@@ -27,7 +26,6 @@ mod unique_keys;
 
 // Attributes should have shortened paths when exported.
 pub use arity::Arity;
-pub use cardinality::Cardinality;
 pub use column_names::ColumnNames;
 pub use non_negative::NonNegative;
 pub use relation_type::RelationType;
@@ -283,9 +281,6 @@ impl<'c> From<&ExplainContext<'c>> for DerivedAttributes<'c> {
         if context.config.keys {
             builder.require(UniqueKeys::default());
         }
-        if context.config.cardinality {
-            builder.require(Cardinality::default());
-        }
         if context.config.column_names || context.config.humanized_exprs {
             builder.require(ColumnNames::new(context.humanizer));
         }
@@ -336,7 +331,7 @@ impl<'c> DerivedAttributes<'c> {
         self.trim_attr::<RelationType>();
         self.trim_attr::<Arity>();
         self.trim_attr::<UniqueKeys>();
-        self.trim_attr::<Cardinality>();
+
         self.trim_attr::<ColumnNames>();
     }
 }
@@ -350,7 +345,6 @@ impl<'c> Visitor<MirRelationExpr> for DerivedAttributes<'c> {
         self.pre_visit::<RelationType>(expr);
         self.pre_visit::<Arity>(expr);
         self.pre_visit::<UniqueKeys>(expr);
-        self.pre_visit::<Cardinality>(expr);
         self.pre_visit::<ColumnNames>(expr);
     }
 
@@ -363,7 +357,6 @@ impl<'c> Visitor<MirRelationExpr> for DerivedAttributes<'c> {
         self.post_visit::<RelationType>(expr);
         self.post_visit::<Arity>(expr);
         self.post_visit::<UniqueKeys>(expr);
-        self.post_visit::<Cardinality>(expr);
         self.post_visit::<ColumnNames>(expr);
     }
 }
@@ -436,7 +429,6 @@ pub struct AttributeStore<'c> {
     arity: Option<Arity>,
     relation_type: Option<RelationType>,
     unique_keys: Option<UniqueKeys>,
-    cardinality: Option<Cardinality>,
     column_names: Option<ColumnNames<'c>>,
 }
 
@@ -473,7 +465,6 @@ attribute_store_container_for!(non_negative);
 attribute_store_container_for!(arity);
 attribute_store_container_for!(relation_type);
 attribute_store_container_for!(unique_keys);
-attribute_store_container_for!(cardinality);
 
 impl<'a> AttributeContainer<ColumnNames<'a>> for AttributeStore<'a> {
     fn push_attribute(&mut self, value: ColumnNames<'a>) {
@@ -563,19 +554,6 @@ pub fn annotate_plan<'a>(
             ) {
                 let attrs = annotations.entry(expr).or_default();
                 attrs.keys = Some(keys);
-            }
-        }
-
-        if config.cardinality {
-            for (expr, cardinality) in std::iter::zip(
-                subtree_refs.iter(),
-                attributes.remove_results::<Cardinality>().into_iter(),
-            ) {
-                let cardinality =
-                    cardinality::HumanizedSymbolicExpression::new(&cardinality, context.humanizer)
-                        .to_string();
-                let attrs = annotations.entry(expr).or_default();
-                attrs.cardinality = Some(cardinality);
             }
         }
 
