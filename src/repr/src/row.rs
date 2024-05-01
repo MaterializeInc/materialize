@@ -228,8 +228,7 @@ impl Row {
     /// Extracts a Row slice containing the entire [`Row`].
     #[inline]
     pub fn as_row_ref(&self) -> &RowRef {
-        // SAFETY: We're creating a RowRef from a Row, so we know the data is valid.
-        unsafe { RowRef::from_slice(self.data.as_slice()) }
+        RowRef::from_slice(self.data.as_slice())
     }
 }
 
@@ -393,13 +392,13 @@ pub struct RowRef([u8]);
 impl RowRef {
     /// Create a [`RowRef`] from a slice of data.
     ///
-    /// SAFETY:
-    ///
-    /// * The user must guarantee that the provided slice is actually from a [`Row`].
-    ///
-    pub unsafe fn from_slice(row: &[u8]) -> &RowRef {
+    /// We do not check that the provided slice is valid [`Row`] data, will panic on read
+    /// if the data is invalid.
+    pub fn from_slice(row: &[u8]) -> &RowRef {
         #[allow(clippy::as_conversions)]
-        &*(row as *const _ as *const RowRef)
+        let ptr = row as *const [u8] as *const RowRef;
+        // SAFETY: We know `ptr` is non-null and aligned because it came from a &[u8].
+        unsafe { &*ptr }
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.

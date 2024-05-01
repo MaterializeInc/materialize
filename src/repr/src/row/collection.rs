@@ -27,7 +27,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.row.collection.rs"));
 ///
 /// Note: the encoding format we use to represent [`Row`]s in this struct is
 /// not stable, and thus should never be persisted durably.
-#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct RowCollection {
     /// Contiguous blob of encoded Rows.
     encoded: Bytes,
@@ -115,8 +115,7 @@ impl RowCollection {
         };
 
         let slice = &self.encoded[lower_offset..upper.offset];
-        // SAFETY: We know all of the data in a RowCollection are valid Rows.
-        let row = unsafe { RowRef::from_slice(slice) };
+        let row = RowRef::from_slice(slice);
 
         Some((row, upper))
     }
