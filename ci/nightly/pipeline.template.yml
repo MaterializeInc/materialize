@@ -253,6 +253,8 @@ steps:
         label: Full Testdrive in Cloudtest (K8s)
         depends_on: build-aarch64
         timeout_in_minutes: 300
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
           queue: linux-aarch64-large
         plugins:
@@ -815,6 +817,8 @@ steps:
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-aarch64
         timeout_in_minutes: 60
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
           queue: linux-aarch64-large
         plugins:
