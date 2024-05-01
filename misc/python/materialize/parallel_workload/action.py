@@ -899,6 +899,11 @@ class FlipFlagsAction(Action):
         BOOLEAN_FLAG_VALUES = ["TRUE", "FALSE"]
 
         self.flags_with_values: dict[str, list[str]] = dict()
+        self.flags_with_values["persist_roundtrip_spine"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values[
+            "enable_variadic_left_join_lowering"
+        ] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
 
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
