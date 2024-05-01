@@ -65,6 +65,8 @@ Field          | Type       | Meaning
 ---------------|------------|----------
 `id`           | [`text`]   | The ID of the type.
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_cluster_replica_sizes -->
+
 ### `mz_cluster_replicas`
 
 The `mz_cluster_replicas` table contains a row for each cluster replica in the system.

@@ -116,17 +116,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  disk_bytes  uint8
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_sizes' ORDER BY position
-----
-1  size  text
-2  processes  uint8
-3  workers  uint8
-4  cpu_nano_cores  uint8
-5  memory_bytes  uint8
-6  disk_bytes  uint8
-7  credits_per_hour  numeric
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_statuses' ORDER BY position
 ----
 1  replica_id  text
@@ -750,7 +739,6 @@ mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
 mz_cluster_replica_history
 mz_cluster_replica_metrics
-mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
 mz_cluster_schedules

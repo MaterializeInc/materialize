@@ -191,7 +191,6 @@ The values in this table may change at any time. You should not rely on them for
 any kind of capacity planning.
 {{< /warning >}}
 
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_sizes -->
 | Field                  | Type        | Meaning                                                                                                                                                      |
 |------------------------|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `size`                 | [`text`]    | The human-readable replica size.                                                                                                                             |
