@@ -106,6 +106,17 @@ pub mod common {
             }
             None
         }
+        /// Return an owned version of analysis results derived so far,
+        /// replacing them with an empty vector.
+        pub fn take_results<A: Analysis>(&mut self) -> Option<Vec<A::Value>> {
+            let type_id = TypeId::of::<Bundle<A>>();
+            if let Some(bundle) = self.analyses.get_mut(&type_id) {
+                if let Some(bundle) = bundle.as_any_mut().downcast_mut::<Bundle<A>>() {
+                    return Some(std::mem::take(&mut bundle.results));
+                }
+            }
+            None
+        }
         /// Bindings from local identifiers to result offsets for analysis values.
         pub fn bindings(&self) -> &BTreeMap<LocalId, usize> {
             &self.bindings
@@ -369,6 +380,10 @@ pub mod common {
         ///
         /// NOTE: This is required until <https://github.com/rust-lang/rfcs/issues/2765> is fixed
         fn as_any(&self) -> &dyn std::any::Any;
+        /// Upcasts `self` to a `&mut dyn Any`.
+        ///
+        /// NOTE: This is required until <https://github.com/rust-lang/rfcs/issues/2765> is fixed
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
     }
 
     /// A wrapper for analysis state.
@@ -406,6 +421,9 @@ pub mod common {
             update
         }
         fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
             self
         }
     }

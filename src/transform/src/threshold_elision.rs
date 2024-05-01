@@ -15,10 +15,10 @@
 //! The Subset(X) notation means that the collection is a multiset subset of X:
 //! multiplicities of each record in Subset(X) are at most that of X.
 
-use mz_expr::visit::{Visit, Visitor, VisitorMut};
+use mz_expr::visit::{Visit, VisitorMut};
 use mz_expr::MirRelationExpr;
 
-use crate::attribute::{DerivedAttributes, DerivedAttributesBuilder, NonNegative, SubtreeSize};
+use crate::analysis::{Analysis, DerivedBuilder, NonNegative, SubtreeSize};
 use crate::TransformCtx;
 
 /// Remove Threshold operators that have no effect.
@@ -34,49 +34,52 @@ impl crate::Transform for ThresholdElision {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let mut visitor = ThresholdElisionAction::default();
+        let mut builder = DerivedBuilder::new(ctx.features);
+        builder.require(NonNegative);
+        builder.require(SubtreeSize);
+        let mut derived = builder.visit(&*relation);
+        let subtree_size = derived.take_results::<SubtreeSize>().unwrap();
+        let non_negative = derived.take_results::<NonNegative>().unwrap();
+
+        let mut visitor = Action::new(subtree_size, non_negative);
         let result = relation.visit_mut(&mut visitor).map_err(From::from);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
 }
 
-struct ThresholdElisionAction {
-    deriver: DerivedAttributes<'static>,
+struct Action {
+    subtree_size: Vec<<SubtreeSize as Analysis>::Value>,
+    non_negative: Vec<<NonNegative as Analysis>::Value>,
+    index: usize,
 }
 
-impl Default for ThresholdElisionAction {
-    fn default() -> Self {
-        let mut builder = DerivedAttributesBuilder::default();
-        builder.require(NonNegative::default());
-        builder.require(SubtreeSize::default());
-        Self {
-            deriver: builder.finish(),
-        }
-    }
-}
-
-impl VisitorMut<MirRelationExpr> for ThresholdElisionAction {
-    fn pre_visit(&mut self, expr: &mut MirRelationExpr) {
-        self.deriver.pre_visit(expr);
-    }
+impl VisitorMut<MirRelationExpr> for Action {
+    fn pre_visit(&mut self, _expr: &mut MirRelationExpr) {}
 
     fn post_visit(&mut self, expr: &mut MirRelationExpr) {
-        self.deriver.post_visit(expr);
         self.action(expr);
     }
 }
 
-impl ThresholdElisionAction {
+impl Action {
+    fn new(
+        subtree_size: Vec<<SubtreeSize as Analysis>::Value>,
+        non_negative: Vec<<NonNegative as Analysis>::Value>,
+    ) -> Self {
+        Self {
+            subtree_size,
+            non_negative,
+            index: 0,
+        }
+    }
+
     /// Remove Threshold operators with no effect.
     pub fn action(&mut self, expr: &mut MirRelationExpr) {
-        // The results vectors or all attributes should be equal after each step.
-        debug_assert_eq!(
-            self.deriver.get_results::<NonNegative>().len(),
-            self.deriver.get_results::<SubtreeSize>().len()
-        );
+        // The result result vectors should be equal after each step.
+        debug_assert_eq!(self.non_negative.len(), self.subtree_size.len());
 
         if let MirRelationExpr::Threshold { input } = expr {
             // We look for the pattern `Union { base, Negate(Subset(base)) }`.
@@ -89,29 +92,36 @@ impl ThresholdElisionAction {
                         // - the Union (i.e., the Threshold input) is n - 2,
                         // - the Union input[0] is at position n - 3 and its subtree size is m,
                         // - the Union base therefore is at position n - m - 3
-                        let n = self.deriver.get_results::<NonNegative>().len();
-                        let m = self.deriver.get_results::<SubtreeSize>()[n - 3];
-                        if self.deriver.get_results::<NonNegative>()[n - m - 3]
-                            && is_superset_of(base, &*input)
-                        {
+                        let n = self.index;
+                        let m = self.subtree_size[n - 3];
+                        if self.non_negative[n - m - 3] && is_superset_of(base, &*input) {
                             should_replace = true;
                         }
                     }
                 }
             }
             if should_replace {
-                // Replace the root Threshold with its input.
-                *expr = input.take_dangerous();
                 // Trim the attribute result vectors inferred so far to adjust for the above change.
-                self.deriver.trim();
+                self.subtree_size.remove(self.index);
+                self.non_negative.remove(self.index);
+
                 // We can be a bit smarter when adjusting the NonNegative result. Since the Threshold
                 // at the root can only be safely elided iff its input is non-negative, we can overwrite
                 // the new last value to be `true`.
-                if let Some(result) = self.deriver.get_results_mut::<NonNegative>().last_mut() {
+                if let Some(result) = self.non_negative.get_mut(self.index - 1) {
                     *result = true;
                 }
+
+                // Replace the root Threshold with its input.
+                *expr = input.take_dangerous();
+
+                // Adjust index by -1 to account for removing the current root.
+                self.index -= 1;
             }
         }
+
+        // Advance the index to the next node in post-visit order.
+        self.index += 1;
     }
 }
 
