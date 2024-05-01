@@ -407,7 +407,9 @@ fn verify_schema(
         })
         .collect();
 
-    match expected_desc.determine_compatibility(current_desc, &allow_oids_to_change_by_col_num) {
+    match expected_desc
+        .determine_logical_replication_compatibility(current_desc, &allow_oids_to_change_by_col_num)
+    {
         Ok(()) => Ok(()),
         Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
     }

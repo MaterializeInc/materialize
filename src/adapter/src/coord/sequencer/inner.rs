@@ -3342,8 +3342,8 @@ impl Coordinator {
                 };
 
                 let mz_sql::plan::PgConfigOptionExtracted {
-                    details,
-                    mut text_columns,
+                    details: curr_details,
+                    text_columns: mut curr_text_columns,
                     ..
                 } = curr_options.clone().try_into()?;
 
@@ -3358,15 +3358,21 @@ impl Coordinator {
 
                 // Get all currently referred-to items
                 let catalog = self.catalog();
-                let curr_references: BTreeSet<_> = catalog
+                let curr_subsources_by_reference: BTreeMap<_, _> = catalog
                     .get_entry(&id)
                     .used_by()
                     .into_iter()
                     .filter_map(|subsource| {
-                        catalog
-                            .get_entry(subsource)
-                            .subsource_details()
-                            .map(|(_id, reference)| reference)
+                        let entry = catalog.get_entry(subsource);
+
+                        entry.subsource_details().map(|(_id, reference)| {
+                            let subsource_name = entry.name();
+                            let subsource_full_name =
+                                catalog.resolve_full_name(subsource_name, Some(session.conn_id()));
+                            let subsource_name = UnresolvedItemName::from(subsource_full_name);
+
+                            (reference, subsource_name)
+                        })
                     })
                     .collect();
 
@@ -3385,7 +3391,7 @@ impl Coordinator {
                             .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
                     };
 
-                let mut curr_details = gen_details(details)?;
+                let curr_details = gen_details(curr_details)?;
                 let mut new_details = gen_details(new_details)?;
 
                 // n.b. this does not check publication table names, so we must
@@ -3394,9 +3400,17 @@ impl Coordinator {
                     .alter_compatible(cur_entry.id(), &new_details)
                     .map_err(StorageError::InvalidAlter)?;
 
+                let PostgresSourcePublicationDetails {
+                    tables: curr_tables,
+                    ..
+                } = curr_details;
+
+                let mut curr_tables_by_name = BTreeMap::new();
+                let mut curr_table_names_by_oid = BTreeMap::new();
+
                 // Trim any unreferred-to tables.
-                curr_details.tables.retain(|table| {
-                    let name = UnresolvedItemName(vec![
+                for table in curr_tables {
+                    let curr_table_name = UnresolvedItemName(vec![
                         // Unchecked is fine beause we have previously verified
                         // that these are valid idents.
                         Ident::new_unchecked(curr_details.database.clone()),
@@ -3414,21 +3428,77 @@ impl Coordinator {
                     // the columns refer only to referenced subsources. The best solution to
                     // this is to ensure that we simply don't try to generate the table cast
                     // in the first place.
-                    curr_references.contains(&name)
-                });
+                    if curr_subsources_by_reference.contains_key(&curr_table_name) {
+                        curr_table_names_by_oid.insert(table.oid, curr_table_name.clone());
+                        curr_tables_by_name.insert(curr_table_name, table);
+                    }
+                }
 
                 mz_ore::soft_assert_eq_or_log!(
-                    curr_details.tables.len(),
-                    curr_references.len(),
+                    curr_tables_by_name.len(),
+                    curr_subsources_by_reference.len(),
                     "PostgresSourcePublicationDetails must have entry for every reference"
                 );
 
-                let referenced_oids: BTreeSet<_> =
-                    curr_details.tables.iter().map(|t| t.oid).collect();
+                // Track the set of text columns.
+                let mut curr_text_columns_mapping: BTreeMap<u32, BTreeSet<u16>> = BTreeMap::new();
 
-                // Ensure that new tables are distinct from the current tables. We check the names only because
+                // Drop all text columns that are not currently referred to.
+                curr_text_columns.retain(|column_qualified_reference| {
+                    mz_ore::soft_assert_eq_or_log!(
+                        column_qualified_reference.0.len(),
+                        4,
+                        "all TEXT COLUMNS values must be column-qualified references"
+                    );
+                    let mut table_name = column_qualified_reference.clone();
+                    let col = table_name.0.pop().expect("non-zero");
+                    match curr_tables_by_name.get(&table_name) {
+                        None => false,
+                        Some(t) => {
+                            let text_cols = curr_text_columns_mapping.entry(t.oid).or_default();
+                            let col = t
+                                .columns
+                                .iter()
+                                .find(|c| c.name == col.as_str())
+                                .expect("TEXT COLUMNS references all valid");
+                            text_cols.insert(col.col_num);
+                            true
+                        }
+                    }
+                });
+
+                let mut new_tables_by_name = BTreeMap::new();
+
                 for table in new_details.tables.iter() {
-                    let name = UnresolvedItemName(vec![
+                    let new_table_name = UnresolvedItemName(vec![
+                        // Unchecked is fine beause we have previously verified
+                        // that these are valid idents.
+                        Ident::new_unchecked(new_details.database.clone()),
+                        Ident::new_unchecked(table.namespace.clone()),
+                        Ident::new_unchecked(table.name.clone()),
+                    ]);
+                    new_tables_by_name.insert(new_table_name, table);
+                }
+
+                let mut new_text_columns_mapping: BTreeMap<u32, BTreeSet<u16>> = BTreeMap::new();
+
+                for column_qualified_reference in new_text_columns.iter() {
+                    let mut table_name = column_qualified_reference.clone();
+                    let col = table_name.0.pop().expect("non-zero");
+                    let t = &new_tables_by_name[&table_name];
+                    let text_cols = new_text_columns_mapping.entry(t.oid).or_default();
+                    let col = t
+                        .columns
+                        .iter()
+                        .find(|c| c.name == col.as_str())
+                        .expect("TEXT COLUMNS references all valid");
+                    text_cols.insert(col.col_num);
+                }
+
+                // Determine if we have any duplicate references, and determine
+                // their validity.
+                for table in new_details.tables.iter() {
+                    let table_name = UnresolvedItemName(vec![
                         // Unchecked is fine beause we have previously verified
                         // that these are valid idents.
                         Ident::new_unchecked(curr_details.database.clone()),
@@ -3436,16 +3506,66 @@ impl Coordinator {
                         Ident::new_unchecked(table.name.clone()),
                     ]);
 
-                    // Check both the OIDs and the names of the references to protect against
-                    // hard-to-reason-about renames.
-                    if referenced_oids.contains(&table.oid) || curr_references.contains(&name) {
-                        Err(AdapterError::SubsourceAlreadyReferredTo { name })?;
+                    // Check this table's OID vs. currently referenced OIDs.
+                    if let Some(curr_table_name) = curr_table_names_by_oid.remove(&table.oid) {
+                        if table_name != curr_table_name {
+                            let subsource = curr_subsources_by_reference[&curr_table_name].clone();
+                            return Err(AdapterError::SubsourceNameChanged {
+                                new_name: table_name,
+                                old_name: curr_table_name,
+                                subsource,
+                            });
+                        }
+                    }
+
+                    // If this reference is in the upstream table, we either
+                    // want to use the new table's definition or error.
+                    if let Some(curr_table) = curr_tables_by_name.remove(&table_name) {
+                        let curr_text_cols = curr_text_columns_mapping
+                            .remove(&table.oid)
+                            .unwrap_or_default();
+
+                        // New subsources schema must be "logical replication
+                        // compatible" and ingest new columns.
+                        if curr_table
+                            .determine_logical_replication_compatibility(table, &curr_text_cols)
+                            .is_err()
+                            || curr_table.columns.len() == table.columns.len()
+                        {
+                            let subsource = curr_subsources_by_reference[&table_name].clone();
+                            return Err(AdapterError::SubsourceSchemaIncompatible {
+                                name: table_name,
+                                subsource,
+                            });
+                        };
+
+                        let new_text_cols = new_text_columns_mapping
+                            .remove(&table.oid)
+                            .unwrap_or_default();
+
+                        for curr_col in curr_table.columns.iter() {
+                            if curr_text_cols.contains(&curr_col.col_num)
+                                != new_text_cols.contains(&curr_col.col_num)
+                            {
+                                let mut column_name = table_name.clone();
+                                column_name
+                                    .0
+                                    .push(Ident::new_unchecked(curr_col.name.clone()));
+                                let subsource = curr_subsources_by_reference[&name].clone();
+                                return Err(AdapterError::SubsourceSchemaTextColumnsMismatch {
+                                    column_name,
+                                    subsource,
+                                    curr_contains_options: curr_text_cols
+                                        .contains(&curr_col.col_num),
+                                });
+                            }
+                        }
                     }
                 }
 
                 // Merge the current table definitions into new tables. Note
                 // this changes the output indexes of the subsources.
-                new_details.tables.extend(curr_details.tables);
+                new_details.tables.extend(curr_tables_by_name.into_values());
 
                 curr_options.push(PgConfigOption {
                     name: PgConfigOptionName::Details,
@@ -3454,24 +3574,15 @@ impl Coordinator {
                     )))),
                 });
 
-                // Drop all text columns that are not currently referred to.
-                text_columns.retain(|column_qualified_reference| {
-                    mz_ore::soft_assert_eq_or_log!(
-                        column_qualified_reference.0.len(),
-                        4,
-                        "all TEXT COLUMNS values must be column-qualified references"
-                    );
-                    let mut table = column_qualified_reference.clone();
-                    table.0.truncate(3);
-                    curr_references.contains(&table)
-                });
-
                 // Merge the current text columns into the new text columns.
-                new_text_columns.extend(text_columns);
+                new_text_columns.extend(curr_text_columns);
 
                 // If we have text columns, add them to the options.
                 if !new_text_columns.is_empty() {
                     new_text_columns.sort();
+                    // We have guaranteed that simply deduplicating the text
+                    // column references is sufficient with the checks above.
+                    new_text_columns.dedup();
                     let new_text_columns = new_text_columns
                         .into_iter()
                         .map(WithOptionValue::UnresolvedItemName)

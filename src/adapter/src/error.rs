@@ -25,6 +25,7 @@ use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
 use mz_repr::{NotNullViolation, Timestamp};
+use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::UnresolvedItemName;
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
@@ -221,9 +222,26 @@ pub enum AdapterError {
         found: Duration,
         name: String,
     },
-    /// An ALTER SOURCE referred to an upstream table that's already referred to.
-    SubsourceAlreadyReferredTo {
+    /// Trying to add a subsource whose name has been changed.
+    ///
+    /// n.b. at the time of the commit that introduced this error, we used these
+    /// names to demultiplex source outputs to multiple persist shards, so we
+    /// couldn't handle this ambiguity. i.e. the `old_name` would not be able to
+    /// determine which output index it should be using to pull its data out of
+    /// the ingestion.
+    SubsourceNameChanged {
+        old_name: UnresolvedItemName,
+        new_name: UnresolvedItemName,
+        subsource: UnresolvedItemName,
+    },
+    SubsourceSchemaIncompatible {
         name: UnresolvedItemName,
+        subsource: UnresolvedItemName,
+    },
+    SubsourceSchemaTextColumnsMismatch {
+        column_name: UnresolvedItemName,
+        subsource: UnresolvedItemName,
+        curr_contains_options: bool,
     },
 }
 
@@ -334,6 +352,42 @@ impl AdapterError {
                         format!("{:?}", least_valid_read)
                     }
                 ))
+            },
+            AdapterError::SubsourceNameChanged { new_name, old_name, subsource } => {
+                Some(
+                    format!(
+                        "{} is currently ingested by {}, but is referred to as {}",
+                        new_name.to_ast_string().quoted(),
+                        subsource.to_ast_string().quoted(),
+                        old_name.to_ast_string().quoted()
+                    )
+                )
+            }
+            AdapterError::SubsourceSchemaIncompatible { subsource, name } => {
+                Some(
+                    format!(
+                        "new schema for {} incompatible with current ingestion ({})",
+                        name.to_ast_string().quoted(),
+                        subsource.to_ast_string().quoted()
+                    )
+                )
+            }
+            AdapterError::SubsourceSchemaTextColumnsMismatch { column_name , subsource, curr_contains_options } => {
+                Some(
+                    if *curr_contains_options {
+                        format!(
+                            "current ingestion ({}) specifies TEXT COLUMNS on {}, but new subsource does not",
+                            subsource.to_ast_string().quoted(),
+                            column_name.to_ast_string().quoted()
+                        )
+                    } else {
+                        format!(
+                            "new subsource specifies TEXT COLUMNS on {}, but current ingestion ({}) does not",
+                            column_name.to_ast_string().quoted(),
+                            subsource.to_ast_string().quoted()
+                        )
+                    }
+                )
             }
             _ => None,
         }
@@ -400,9 +454,24 @@ impl AdapterError {
                  either at the explicitly specified timestamp, or now if the given timestamp would \
                  be in the past.".to_string()
             ),
-            Self::SubsourceAlreadyReferredTo { .. } => {
-                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
+            Self::SubsourceNameChanged { subsource, .. } => {
+                Some(
+                    format!(
+                        "rename the referred-to table in PostgreSQL or run DROP SOURCE {} in Materialize",
+                        subsource.to_ast_string().quoted()
+                    )
+                )
+            }
+            Self::SubsourceSchemaIncompatible { .. } => {
+                Some(format!("See ALTER SOURCE documentation"))
             },
+            Self::SubsourceSchemaTextColumnsMismatch {column_name, subsource, curr_contains_options } => {
+                if *curr_contains_options {
+                    Some(format!("Specify TEXT COLUMNS = ({}) when adding subsource", column_name.to_ast_string().quoted()))
+                } else {
+                    Some(format!("Drop the current subsource using DROP SOURCE {}", subsource.to_ast_string().quoted()))
+                }
+            }
             _ => None,
         }
     }
@@ -525,9 +594,11 @@ impl AdapterError {
             AdapterError::MaterializedViewWouldNeverRefresh(_, _) => SqlState::DATA_EXCEPTION,
             AdapterError::InputNotReadableAtRefreshAtTime(_, _) => SqlState::DATA_EXCEPTION,
             AdapterError::RequiredRetainHistory { .. } => SqlState::INTERNAL_ERROR,
-            // Calling this `FEATURE_NOT_SUPPORTED` because we will eventually allow multiple
-            // references to the same subsource (albeit with different schemas).
-            AdapterError::SubsourceAlreadyReferredTo { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::SubsourceNameChanged { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::SubsourceSchemaIncompatible { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::SubsourceSchemaTextColumnsMismatch { .. } => {
+                SqlState::FEATURE_NOT_SUPPORTED
+            }
         }
     }
 
@@ -753,8 +824,12 @@ impl fmt::Display for AdapterError {
                     "dependent index {name} has a RETAIN HISTORY of {found:?}, but must be at least {required:?}"
                 )
             }
-            Self::SubsourceAlreadyReferredTo { name } => {
-                write!(f, "another subsource already refers to {}", name)
+            Self::SubsourceNameChanged { .. } => {
+                write!(f, "ambiguous subsource references")
+            }
+            Self::SubsourceSchemaIncompatible { .. }
+            | Self::SubsourceSchemaTextColumnsMismatch { .. } => {
+                write!(f, "new subsource schema incompatible with existing subsource referring to same table")
             }
         }
     }

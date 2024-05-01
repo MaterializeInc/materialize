@@ -50,26 +50,8 @@ INSERT INTO table_a VALUES (2, 'two');
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE table_a CASCADE;
 
-!ALTER SOURCE mz_source ADD SUBSOURCE table_b;
+! ALTER SOURCE mz_source ADD SUBSOURCE table_b;
 contains:PUBLICATION mz_source is empty
-
-# Adding a table with the same name as a running table does not allow you to add
-# the new table, even though its OID is the different.
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
-ALTER TABLE table_a REPLICA IDENTITY FULL;
-INSERT INTO table_a VALUES (9, 'nine');
-
-# Current table_a is not new table_a. Note that this only works right now
-# because we are bad at detecting dropped tables.
-> SELECT * FROM table_a;
-1 one
-2 two
-
-# We are not aware that the new table_a is different
-!ALTER SOURCE mz_source ADD SUBSOURCE table_a;
-contains:another subsource already refers to postgres.public.table_a
 
 > DROP SOURCE mz_source CASCADE;
 
@@ -77,8 +59,9 @@ contains:another subsource already refers to postgres.public.table_a
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 
-DELETE FROM table_a;
+CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (1, 'one');
+ALTER TABLE table_a REPLICA IDENTITY FULL;
 INSERT INTO table_a VALUES (2, 'two');
 
 CREATE TABLE table_b (pk INTEGER PRIMARY KEY, f2 TEXT);
@@ -222,7 +205,7 @@ mz_source_progress    progress
 > ALTER SOURCE mz_source ADD SUBSOURCE table_g;
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_g;
-contains:another subsource already refers to postgres.public.table_g
+contains:new subsource schema incompatible with existing subsource referring to same table
 
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a, table_b AS tb;
 
@@ -230,8 +213,23 @@ contains:another subsource already refers to postgres.public.table_g
 1 one
 2 two
 
-! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
-contains:another subsource already refers to postgres.public.table_a
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE table_a RENAME TO table_z;
+
+! ALTER SOURCE mz_source ADD SUBSOURCE table_z;
+contains:ambiguous subsource references
+detail:"postgres.public.table_z" is currently ingested by "materialize.public.table_a", but is referred to as "postgres.public.table_a"
+
+> DROP SOURCE table_a;
+> ALTER SOURCE mz_source ADD SUBSOURCE table_z;
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP TABLE table_z CASCADE;
+CREATE TABLE table_z (a int);
+ALTER TABLE table_z REPLICA IDENTITY FULL;
+
+! ALTER SOURCE mz_source ADD SUBSOURCE table_z;
+contains:new subsource schema incompatible with existing subsource referring to same table
 
 > SELECT * FROM tb;
 1 one
@@ -256,13 +254,25 @@ INSERT INTO table_h VALUES (2, 'two');
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress progress
-table_a            subsource
 table_g            subsource
 table_h            subsource
+table_z            subsource
 tb                 subsource
 
 #
 # Complex subsource operations
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
+INSERT INTO table_a VALUES (1, 'one');
+ALTER TABLE table_a REPLICA IDENTITY FULL;
+INSERT INTO table_a VALUES (2, 'two');
+
+> ALTER SOURCE mz_source ADD SUBSOURCE table_a;
+
+> SELECT * FROM table_a;
+1 one
+2 two
 
 # If your schema change breaks the subsource, you can fix it.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -367,8 +377,8 @@ INSERT INTO table_f VALUES (3, 'var1');
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 <null>
 
-! ALTER SOURCE mz_source ADD SUBSOURCE table_e WITH (TEXT COLUMNS (table_z.a));
-contains:invalid TEXT COLUMNS option value: table table_z not found in source
+! ALTER SOURCE mz_source ADD SUBSOURCE table_e WITH (TEXT COLUMNS (table_y.a));
+contains:invalid TEXT COLUMNS option value: table table_y not found in source
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_e WITH (TEXT COLUMNS [table_f.f2]);
 contains:TEXT COLUMNS refers to table not currently being added
