@@ -147,7 +147,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     /// given timestamp.
     ///
     /// Specifically, a data shard is registered at a timestamp `ts` if it has a
-    /// `register_ts <= ts` but no `forget_ts >= ts`.
+    /// `register_ts <= ts` but no `register_ts < forget_ts < ts`.
     pub fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
         self.assert_only_data_id(data_id);
         let Some(data_times) = self.datas.get(data_id) else {
@@ -172,17 +172,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     ///
     /// A data shard might be definite at times past the physical upper because
     /// of invariants maintained by this txn system. As a result, this method
-    /// discovers the latest write before the `as_of`.
+    /// discovers the latest potentially unapplied write before the `as_of`.
     ///
     /// Callers must first wait for `update_gt` with the same or later timestamp
     /// to return. Panics otherwise.
-    ///
-    /// Returns Err if that data shard has not been registered at the given ts.
     pub fn data_snapshot(&self, data_id: ShardId, as_of: T) -> DataSnapshot<T> {
         self.assert_only_data_id(&data_id);
         assert!(self.progress_exclusive > as_of);
         let Some(all) = self.datas.get(&data_id) else {
-            // Not registered at this time, so we know there are no unapplied
+            // Not registered currently, so we know there are no unapplied
             // writes.
             return DataSnapshot {
                 data_id,
@@ -191,7 +189,19 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 empty_to: self.progress_exclusive.clone(),
             };
         };
-        let latest_write = all.writes.iter().rev().find(|x| **x <= as_of).cloned();
+        let lastest_forget = all
+            .registered
+            .iter()
+            .rev()
+            .find_map(|reg| reg.forget_ts.as_ref());
+        // Forgetting a shard guarantees that all previous writes have been applied.
+        let applied = |x| matches!(lastest_forget, Some(forget_ts) if forget_ts >= x);
+        let latest_write = all
+            .writes
+            .iter()
+            .rev()
+            .find(|x| **x <= as_of && !applied(x))
+            .cloned();
         let empty_to = all
             .writes
             .iter()
@@ -227,8 +237,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     /// Note that this is a state machine on `self.progress_exclusive` and the
     /// listen progress. DataListenNext indicates which state transitions to
     /// take.
-    ///
-    /// Returns Err if that data shard has not been registered at the given ts.
     pub fn data_listen_next(&self, data_id: &ShardId, ts: T) -> DataListenNext<T> {
         self.assert_only_data_id(data_id);
         assert!(self.progress_exclusive >= ts);
@@ -255,45 +263,38 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 return WaitForTxnsProgress;
             }
         };
-        // See if any txns writes are >= our timestamp, if so, we can read all
-        // the way past the write.
-        if let Some(latest_write) = data_times.writes.back() {
-            if &ts <= latest_write {
-                return ReadDataTo(latest_write.step_forward());
-            }
-        }
 
-        // The most recent forget is set, which means it's not registered as of
-        // the latest information we have. Read to the current progress point
-        // normally.
+        // Figure out the most recent timestamp that had a physical write to
+        // the data shard.
         let last_reg = data_times.last_reg();
-        if last_reg.forget_ts.is_some() {
-            if ts < self.progress_exclusive {
-                return ReadDataTo(self.progress_exclusive.clone());
-            } else {
-                // TODO(txn): Make sure to add a regression test for this when
-                // we redo the data_listen_next unit test.
-                return WaitForTxnsProgress;
-            }
+        let mut physical_ts = last_reg.register_ts.clone();
+        if let Some(forget_ts) = &last_reg.forget_ts {
+            physical_ts = std::cmp::max(physical_ts, forget_ts.clone());
+        }
+        if let Some(latest_write) = data_times.writes.back() {
+            physical_ts = std::cmp::max(physical_ts, latest_write.clone());
         }
 
-        // If we're before the most recent registration, it's always safe to
-        // read to that point normally.
-        if ts < last_reg.register_ts {
-            return ReadDataTo(last_reg.register_ts.clone());
-        }
-
-        // No writes were > ts, look to see if the txns upper has advanced
-        // past ts.
-        if ts < self.progress_exclusive {
+        if ts >= self.progress_exclusive {
+            // All caught up, we have to wait.
+            WaitForTxnsProgress
+        } else if ts <= physical_ts {
+            // There was some physical write, so read up to that time.
+            ReadDataTo(physical_ts.step_forward())
+        } else if self.registered_at(data_id, &ts) {
             // Emitting logical progress at the wrong time is a correctness bug,
             // so be extra defensive about the necessary conditions: the most
             // recent registration is still active and we're in it.
             assert!(last_reg.forget_ts.is_none() && last_reg.contains(&ts));
-            return EmitLogicalProgress(self.progress_exclusive.clone());
+            // The shard is registered so
+            EmitLogicalProgress(self.progress_exclusive.clone())
+        } else {
+            // The most recent forget is set, which means it's not registered as of
+            // the latest information we have. Read to the current progress point
+            // normally.
+            assert!(ts > last_reg.register_ts && last_reg.forget_ts.is_some());
+            ReadDataTo(self.progress_exclusive.clone())
         }
-        // Nope, all caught up, we have to wait.
-        WaitForTxnsProgress
     }
 
     /// Returns the minimum timestamp not known to be applied by this cache.
@@ -1051,127 +1052,145 @@ mod tests {
         }
     }
 
-    // TODO(txn): Rewrite this test to exercise more edge cases, something like:
-    // registrations at `[2,4], [8,9]` and writes at 1, 3, 6, 10, 12.
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // too slow
-    async fn data_snapshot() {
-        fn ds(
-            data_id: ShardId,
-            latest_write: Option<u64>,
-            as_of: u64,
-            empty_to: u64,
-        ) -> DataSnapshot<u64> {
+    #[mz_ore::test]
+    fn txns_cache_data_snapshot_and_listen_next() {
+        let d0 = ShardId::new();
+        let ds = |latest_write: Option<u64>, as_of: u64, empty_to: u64| -> DataSnapshot<u64> {
             DataSnapshot {
-                data_id,
+                data_id: d0,
                 latest_write,
                 as_of,
                 empty_to,
             }
+        };
+        #[track_caller]
+        fn testcase(
+            cache: &mut TxnsCacheState<u64>,
+            ts: u64,
+            data_id: ShardId,
+            snap_expected: DataSnapshot<u64>,
+            listen_expected: DataListenNext<u64>,
+        ) {
+            cache.progress_exclusive = ts + 1;
+            assert_eq!(cache.data_snapshot(data_id, ts), snap_expected);
+            assert_eq!(cache.data_listen_next(&data_id, ts), listen_expected);
+            assert_eq!(
+                cache.data_listen_next(&data_id, ts + 1),
+                WaitForTxnsProgress
+            );
         }
 
-        let mut txns = TxnsHandle::expect_open(PersistClient::new_for_tests().await).await;
-        let log = txns.new_log();
-        let d0 = ShardId::new();
-        txns.expect_commit_at(3, d0, &[], &log).await;
+        // This attempts to exercise all the various interesting edge cases of
+        // data_snapshot and data_listen_subscribe using the following sequence
+        // of events:
+        //
+        // - Registrations at: [2,8], [12,13]
+        // - Direct writes at: 1, 10
+        // - Writes via txns at: 4, 5, 7
+        let mut c = TxnsCacheState::new(ShardId::new(), 0, None);
 
-        let mut cache = TxnsCache::expect_open(3, &txns).await;
-        assert_eq!(cache.progress_exclusive, 4);
+        // empty
+        assert_eq!(c.progress_exclusive, 0);
+        assert!(mz_ore::panic::catch_unwind(|| c.data_snapshot(d0, 0)).is_err());
+        assert_eq!(c.data_listen_next(&d0, 0), WaitForTxnsProgress);
 
-        // We can answer inclusive queries at < progress. The data shard isn't
-        // registered at this timestamp, so it's a normal shard and we can read
-        // it normally.
-        assert_eq!(cache.data_snapshot(d0, 2), ds(d0, None, 2, 4));
+        // ts 0 (never registered)
+        testcase(&mut c, 0, d0, ds(None, 0, 1), ReadDataTo(1));
 
-        // Register a data shard. We're able to read before and at the register
-        // ts.
-        cache.push_register(d0, 4, 1, 4);
-        cache.progress_exclusive = 5;
-        assert_eq!(cache.data_snapshot(d0, 3), ds(d0, None, 3, 5));
-        assert_eq!(cache.data_snapshot(d0, 4), ds(d0, None, 4, 5));
+        // ts 1 (direct write)
+        // - The cache knows everything < 2.
+        // - d0 is not registered in the cache.
+        // - We know the shard can't be written to via txn < 2.
+        // - So go read the shard normally up to 2.
+        testcase(&mut c, 1, d0, ds(None, 1, 2), ReadDataTo(2));
 
-        // Advance time. Nothing got written at 5, so we still don't have a
-        // previous write.
-        cache.progress_exclusive = 6;
-        assert_eq!(cache.data_snapshot(d0, 5), ds(d0, None, 5, 6));
+        // ts 2 (register)
+        c.push_register(d0, 2, 1, 2);
+        testcase(&mut c, 2, d0, ds(None, 2, 3), ReadDataTo(3));
 
-        // Write a batch. Apply will advance the physical upper, so we read
-        // as_of the commit ts.
-        cache.push_append(d0, vec![0xA0], 6, 1);
-        cache.progress_exclusive = 7;
-        assert_eq!(cache.data_snapshot(d0, 6), ds(d0, Some(6), 6, 7));
+        // ts 3 (registered, not written)
+        testcase(&mut c, 3, d0, ds(None, 3, 4), EmitLogicalProgress(4));
 
-        // An unrelated batch doesn't change the answer. Neither does retracting
-        // the batch.
-        let other = ShardId::new();
-        cache.push_register(other, 7, 1, 7);
-        cache.push_append(other, vec![0xB0], 7, 1);
-        cache.push_append(d0, vec![0xA0], 7, -1);
-        cache.progress_exclusive = 8;
-        assert_eq!(cache.data_snapshot(d0, 7), ds(d0, Some(6), 7, 8));
+        // ts 4 (written via txns)
+        c.push_append(d0, vec![4], 4, 1);
+        testcase(&mut c, 4, d0, ds(Some(4), 4, 5), ReadDataTo(5));
 
-        // All of the previous answers are still the same (mod empty_to).
-        assert_eq!(cache.data_snapshot(d0, 2), ds(d0, None, 2, 6));
-        assert_eq!(cache.data_snapshot(d0, 3), ds(d0, None, 3, 6));
-        assert_eq!(cache.data_snapshot(d0, 4), ds(d0, None, 4, 6));
-        assert_eq!(cache.data_snapshot(d0, 5), ds(d0, None, 5, 6));
-        assert_eq!(cache.data_snapshot(d0, 6), ds(d0, Some(6), 6, 8));
-    }
+        // ts 5 (written via txns, write at preceding ts)
+        c.push_append(d0, vec![5], 5, 1);
+        testcase(&mut c, 5, d0, ds(Some(5), 5, 6), ReadDataTo(6));
 
-    // TODO(txn): Rewrite this test to exercise more edge cases, something like:
-    // registrations at `[2,4], [8,9]` and writes at 1, 3, 6, 10, 12.
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // too slow
-    async fn txns_cache_data_listen_next() {
-        let mut txns = TxnsHandle::expect_open(PersistClient::new_for_tests().await).await;
-        let log = txns.new_log();
-        let d0 = ShardId::new();
-        txns.expect_commit_at(3, d0, &[], &log).await;
+        // ts 6 (registered, not written, write at preceding ts)
+        testcase(&mut c, 6, d0, ds(Some(5), 6, 7), EmitLogicalProgress(7));
 
-        let mut cache = TxnsCache::expect_open(3, &txns).await;
-        assert_eq!(cache.progress_exclusive, 4);
+        // ts 7 (written via txns, write at non-preceding ts)
+        c.push_append(d0, vec![7], 7, 1);
+        testcase(&mut c, 7, d0, ds(Some(7), 7, 8), ReadDataTo(8));
 
-        // We can answer exclusive queries at <= progress. The data shard is not
-        // registered yet, so we read it as a normal shard.
-        assert_eq!(cache.data_listen_next(&d0, 3), ReadDataTo(4));
-        assert_eq!(cache.data_listen_next(&d0, 4), WaitForTxnsProgress);
+        // ts 8 (forget). Forget guarantees that all writes are applied, so no
+        // latest_write. It also currently is inclusive, so we can emit logical
+        // progress, though we might want to make the interval half-open?
+        // Revisit when
+        // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
+        // it's unclear how to encode the register timestamp in a forget.
+        c.push_register(d0, 8, -1, 8);
+        testcase(&mut c, 8, d0, ds(None, 8, 9), ReadDataTo(9));
 
-        // Register a data shard. The paired snapshot would advance the physical
-        // upper, so we're able to read at the register ts.
-        cache.push_register(d0, 4, 1, 4);
-        cache.progress_exclusive = 5;
-        // assert_eq!(cache.data_listen_next(&d0, 4), ReadDataTo(5));
-        // assert_eq!(cache.data_listen_next(&d0, 5), WaitForTxnsProgress);
+        // ts 9 (not registered, not written). This ReadDataTo would block until
+        // the write happens at ts 10.
+        testcase(&mut c, 9, d0, ds(None, 9, 10), ReadDataTo(10));
 
-        // Advance time. Now we can resolve queries at higher times. Nothing got
-        // written at 5, so the physical upper hasn't moved, but we're now
-        // guaranteed that `[5, 6)` is empty.
-        cache.progress_exclusive = 6;
-        assert_eq!(cache.data_listen_next(&d0, 5), EmitLogicalProgress(6));
+        // ts 10 (written directly)
+        testcase(&mut c, 10, d0, ds(None, 10, 11), ReadDataTo(11));
 
-        // Write a batch. Apply will advance the physical upper, so now we need
-        // to wait for the data upper to advance past the commit ts.
-        cache.push_append(d0, vec![0xA0], 6, 1);
-        cache.progress_exclusive = 7;
-        assert_eq!(cache.data_listen_next(&d0, 6), ReadDataTo(7));
+        // ts 11 (not registered, not written) This ReadDataTo would block until
+        // the register happens at 12.
+        testcase(&mut c, 11, d0, ds(None, 11, 12), ReadDataTo(12));
 
-        // An unrelated batch is another empty space guarantee. Ditto retracting
-        // the batch.
-        let other = ShardId::new();
-        cache.push_register(other, 7, 1, 7);
-        cache.push_append(other, vec![0xB0], 7, 1);
-        cache.push_append(d0, vec![0xA0], 7, -1);
-        cache.progress_exclusive = 8;
-        assert_eq!(cache.data_listen_next(&d0, 7), EmitLogicalProgress(8));
+        // ts 12 (registered, previously forgotten)
+        c.push_register(d0, 12, 1, 12);
+        testcase(&mut c, 12, d0, ds(None, 12, 13), ReadDataTo(13));
 
-        // Unlike a snapshot, the previous answers have changed! This is because
-        // it's silly (inefficient) to walk through the state machine for a big
-        // range of time once you know of a later write that advances the
-        // physical upper.
-        // assert_eq!(cache.data_listen_next(&d0, 3), ReadDataTo(7));
-        // assert_eq!(cache.data_listen_next(&d0, 4), ReadDataTo(7));
-        assert_eq!(cache.data_listen_next(&d0, 5), ReadDataTo(7));
-        assert_eq!(cache.data_listen_next(&d0, 6), ReadDataTo(7));
+        // ts 13 (forgotten, registered at preceding ts)
+        // Revisit when
+        // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
+        // it's unclear how to encode the register timestamp in a forget.
+        c.push_register(d0, 13, -1, 13);
+        testcase(&mut c, 13, d0, ds(None, 13, 14), ReadDataTo(14));
+
+        // Now that we have more history, some of the old answers change! In
+        // particular, we have more information on unapplied writes, empty
+        // times, and can ReadDataTo much later times.
+
+        assert_eq!(c.data_snapshot(d0, 0), ds(None, 0, 4));
+        assert_eq!(c.data_snapshot(d0, 1), ds(None, 1, 4));
+        assert_eq!(c.data_snapshot(d0, 2), ds(None, 2, 4));
+        assert_eq!(c.data_snapshot(d0, 3), ds(None, 3, 4));
+        assert_eq!(c.data_snapshot(d0, 4), ds(None, 4, 5));
+        assert_eq!(c.data_snapshot(d0, 5), ds(None, 5, 7));
+        assert_eq!(c.data_snapshot(d0, 6), ds(None, 6, 7));
+        assert_eq!(c.data_snapshot(d0, 7), ds(None, 7, 14));
+        assert_eq!(c.data_snapshot(d0, 8), ds(None, 8, 14));
+        assert_eq!(c.data_snapshot(d0, 9), ds(None, 9, 14));
+        assert_eq!(c.data_snapshot(d0, 10), ds(None, 10, 14));
+        assert_eq!(c.data_snapshot(d0, 11), ds(None, 11, 14));
+        assert_eq!(c.data_snapshot(d0, 12), ds(None, 12, 14));
+        assert_eq!(c.data_snapshot(d0, 13), ds(None, 13, 14));
+
+        assert_eq!(c.data_listen_next(&d0, 0), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 1), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 2), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 3), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 4), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 5), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 6), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 7), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 8), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 9), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 10), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 11), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 12), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 13), ReadDataTo(14));
+        assert_eq!(c.data_listen_next(&d0, 14), WaitForTxnsProgress);
     }
 
     #[mz_ore::test(tokio::test)]
