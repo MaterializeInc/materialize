@@ -10,7 +10,6 @@
 
 /.cargo                             @benesch
 /.config                            @benesch
-/.devcontainer                      @mjibson
 /.github                            @benesch
 /bin
 /bin/lint-versions                  @MaterializeInc/testing
