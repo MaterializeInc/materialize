@@ -899,9 +899,8 @@ pub static WEBHOOKS_SECRETS_CACHING_TTL_SECS: VarDefinition = VarDefinition::new
 
 pub static COORD_SLOW_MESSAGE_WARN_THRESHOLD: VarDefinition = VarDefinition::new(
     "coord_slow_message_warn_threshold",
-    // Note(parkmycar): This value was chosen arbitrarily.
-    value!(Duration; Duration::from_secs(5)),
-    "Sets the threshold at which we will warn! for a coordinator message being slow.",
+    value!(Duration; Duration::from_secs(30)),
+    "Sets the threshold at which we will error! for a coordinator message being slow.",
     true,
 );
 
