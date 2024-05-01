@@ -192,7 +192,9 @@ pub struct EncodedRowMetadata {
     offset: usize,
     /// Diff for the Row.
     ///
-    /// TODO(parkmycar): Consider making this a `NonZeroU32`.
+    /// TODO(parkmycar): Consider making this a smaller type, note that some compute introspection
+    /// collections, e.g. `mz_scheduling_elapsed_raw`, encodes nano seconds in the diff field which
+    /// requires a u64.
     diff: NonZeroUsize,
 }
 
