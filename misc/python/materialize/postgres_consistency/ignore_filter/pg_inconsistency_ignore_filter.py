@@ -547,6 +547,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             if value1_str == value2_str:
                 return YesIgnore("#24687: different representation of DECIMAL type")
 
+        if query_template.matches_any_expression(
+            lambda expression: expression.has_any_characteristic(
+                {ExpressionCharacteristics.TEXT_WITH_ESZETT},
+            ),
+            True,
+        ) and query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="upper"), True
+        ):
+            return YesIgnore("#26846: eszett in upper")
+
         return NoIgnore()
 
     def _shall_ignore_row_count_mismatch(
