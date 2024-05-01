@@ -92,7 +92,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_client::sink::{TopicCleanupPolicy, TopicConfig};
 use mz_storage_types::configuration::StorageConfiguration;
@@ -347,29 +347,48 @@ impl TransactionalProducer {
     /// the system.
     async fn send(
         &mut self,
-        key: Option<&[u8]>,
-        value: Option<&[u8]>,
+        message: &KafkaMessage,
         time: Timestamp,
         diff: Diff,
     ) -> Result<(), ContextCreationError> {
         assert_eq!(diff, 1, "invalid sink update");
 
-        let headers = OwnedHeaders::new().insert(Header {
+        let mut headers = OwnedHeaders::new().insert(Header {
             key: "materialize-timestamp",
             value: Some(time.to_string().as_bytes()),
         });
+        for header in &message.headers {
+            // Headers that start with `materialize-` are reserved for our
+            // internal use, so we silently drop any such user-specified
+            // headers. While this behavior is documented, it'd be a nicer UX to
+            // send a warning or error somewhere. Unfortunately sinks don't have
+            // anywhere user-visible to send errors. See #17672.
+            if header.key.starts_with("materialize-") {
+                continue;
+            }
+
+            headers = headers.insert(Header {
+                key: header.key.as_str(),
+                value: header.value.as_ref(),
+            });
+        }
         let record = BaseRecord {
             topic: &self.data_topic,
-            key,
-            payload: value,
+            key: message.key.as_ref(),
+            payload: message.value.as_ref(),
             headers: Some(headers),
             partition: None,
             timestamp: None,
             delivery_opaque: (),
         };
-        let key_size = key.map(|k| k.len()).unwrap_or(0);
-        let value_size = value.map(|k| k.len()).unwrap_or(0);
-        let record_size = u64::cast_from(key_size + value_size);
+        let key_size = message.key.as_ref().map(|k| k.len()).unwrap_or(0);
+        let value_size = message.value.as_ref().map(|k| k.len()).unwrap_or(0);
+        let headers_size = message
+            .headers
+            .iter()
+            .map(|h| h.key.len() + h.value.as_ref().map(|v| v.len()).unwrap_or(0))
+            .sum::<usize>();
+        let record_size = u64::cast_from(key_size + value_size + headers_size);
         self.statistics.inc_messages_staged_by(1);
         self.staged_messages += 1;
         self.statistics.inc_bytes_staged_by(record_size);
@@ -496,6 +515,26 @@ async fn collect_statistics(
     }
 }
 
+/// A message to produce to Kafka.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct KafkaMessage {
+    /// The message key.
+    key: Option<Vec<u8>>,
+    /// The message value.
+    value: Option<Vec<u8>>,
+    /// Message headers.
+    headers: Vec<KafkaHeader>,
+}
+
+/// A header to attach to a Kafka message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct KafkaHeader {
+    /// The header key.
+    key: String,
+    /// The header value.
+    value: Option<Vec<u8>>,
+}
+
 /// Sinks a collection of encoded rows to Kafka.
 ///
 /// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
@@ -503,7 +542,7 @@ async fn collect_statistics(
 /// Updates are sent in ascending timestamp order.
 fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     name: String,
-    input: &Collection<G, (Option<Vec<u8>>, Option<Vec<u8>>), Diff>,
+    input: &Collection<G, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -624,7 +663,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             while let Some(event) = input.next().await {
                 match event {
                     Event::Data(_cap, batch) => {
-                        for ((key, value), time, diff) in batch {
+                        for (message, time, diff) in batch {
                             // We want to publish updates in time order and we know that we have
                             // already committed all times not beyond `upper`. Therefore, if this
                             // update happens *exactly* at upper then it is the minimum pending
@@ -636,15 +675,13 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                             // can be *exactly* at upper but we can't know ahead of time which one
                             // will be advanced in the next progress message.
                             match upper.cmp(&time) {
-                                Ordering::Less => deferred_updates.push(((key, value), time, diff)),
+                                Ordering::Less => deferred_updates.push((message, time, diff)),
                                 Ordering::Equal => {
                                     if !transaction_begun {
                                         producer.begin_transaction().await?;
                                         transaction_begun = true;
                                     }
-                                    producer
-                                        .send(key.as_deref(), value.as_deref(), time, diff)
-                                        .await?;
+                                    producer.send(&message, time, diff).await?;
                                 }
                                 Ordering::Greater => continue,
                             }
@@ -685,10 +722,8 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                                 .drain_filter_swapping(|(_, time, _)| !progress.less_equal(time)),
                         );
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-                        for ((key, value), time, diff) in extra_updates.drain(..) {
-                            producer
-                                .send(key.as_deref(), value.as_deref(), time, diff)
-                                .await?;
+                        for (message, time, diff) in extra_updates.drain(..) {
+                            producer.send(&message, time, diff).await?;
                         }
 
                         info!("{name}: committing transaction for {}", progress.pretty());
@@ -1086,7 +1121,7 @@ fn encode_collection<G: Scope>(
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
 ) -> (
-    Collection<G, (Option<Vec<u8>>, Option<Vec<u8>>), Diff>,
+    Collection<G, KafkaMessage, Diff>,
     Stream<G, HealthStatusMessage>,
     PressOnDropButton,
 ) {
@@ -1159,9 +1194,18 @@ fn encode_collection<G: Scope>(
             while let Some(event) = input.next().await {
                 if let Event::Data(cap, rows) = event {
                     for ((key, value), time, diff) in rows {
+                        let headers = match (connection.headers_index, &value) {
+                            (Some(i), Some(v)) => encode_headers(v.iter().nth(i).unwrap()),
+                            _ => vec![],
+                        };
                         let key = key.map(|key| encoder.encode_key_unchecked(key));
                         let value = value.map(|value| encoder.encode_value_unchecked(value));
-                        output.give(&cap, ((key, value), time, diff)).await;
+                        let message = KafkaMessage {
+                            key,
+                            value,
+                            headers,
+                        };
+                        output.give(&cap, (message, time, diff)).await;
                     }
                 }
             }
@@ -1176,6 +1220,25 @@ fn encode_collection<G: Scope>(
     });
 
     (stream.as_collection(), statuses, button.press_on_drop())
+}
+
+fn encode_headers(datum: Datum) -> Vec<KafkaHeader> {
+    let mut out = vec![];
+    if datum.is_null() {
+        return out;
+    }
+    for (key, value) in datum.unwrap_map().iter() {
+        out.push(KafkaHeader {
+            key: key.into(),
+            value: match value {
+                Datum::Null => None,
+                Datum::String(s) => Some(s.as_bytes().to_vec()),
+                Datum::Bytes(b) => Some(b.to_vec()),
+                _ => panic!("encode_headers called with unexpected header value {value:?}"),
+            },
+        })
+    }
+    out
 }
 
 #[cfg(test)]

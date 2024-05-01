@@ -2079,6 +2079,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_kafka_sink_headers,
+        desc: "Enable the HEADERS option for Kafka sinks",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

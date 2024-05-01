@@ -538,42 +538,42 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic', PROGRESS GROU
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic', PROGRESS GROUP ID PREFIX = 'prefix', COMPRESSION TYPE = gzip) FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }, KafkaSinkConfigOption { name: ProgressGroupIdPrefix, value: Some(Value(String("prefix"))) }, KafkaSinkConfigOption { name: CompressionType, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("gzip")]))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }, KafkaSinkConfigOption { name: ProgressGroupIdPrefix, value: Some(Value(String("prefix"))) }, KafkaSinkConfigOption { name: CompressionType, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("gzip")]))) }], key: None, headers: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK FROM bar INTO KAFKA CONNECTION baz
 ----
 CREATE SINK FROM bar INTO KAFKA CONNECTION baz
 =>
-CreateSink(CreateSinkStatement { name: None, in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [], key: None }, format: None, envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: None, in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [], key: None, headers: None }, format: None, envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK from FROM bar INTO KAFKA CONNECTION baz
 ----
 CREATE SINK "from" FROM bar INTO KAFKA CONNECTION baz
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("from")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [], key: None }, format: None, envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("from")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [], key: None, headers: None }, format: None, envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz
 ----
 CREATE SINK IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz
 =>
-CreateSink(CreateSinkStatement { name: None, in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [], key: None }, format: None, envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: None, in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [], key: None, headers: None }, format: None, envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK in IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz
 ----
 CREATE SINK in IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("in")])), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [], key: None }, format: None, envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("in")])), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [], key: None, headers: None }, format: None, envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK in FROM bar INTO KAFKA CONNECTION baz
 ----
 CREATE SINK in FROM bar INTO KAFKA CONNECTION baz
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("in")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [], key: None }, format: None, envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("in")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [], key: None, headers: None }, format: None, envelope: None, with_options: [] })
 
 parse-statement
 CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') INCLUDE TIMESTAMP;
@@ -594,14 +594,14 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) NO
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }) }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }), headers: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK foo IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 ----
 CREATE SINK foo IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }) }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }), headers: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
@@ -629,56 +629,56 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES 
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = false)
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = false)
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(false))) }] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(false))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = TRUE) ENVELOPE UPSERT
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = true) ENVELOPE UPSERT
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(true))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(true))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS TRUE) ENVELOPE UPSERT
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = true) ENVELOPE UPSERT
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(true))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(true))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS) ENVELOPE UPSERT
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS) ENVELOPE UPSERT
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: None }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: None }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL VALUES) ENVELOPE UPSERT
@@ -692,7 +692,7 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO U
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = false) ENVELOPE UPSERT
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(false))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(false))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON bar) ENVELOPE UPSERT
@@ -714,7 +714,21 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO U
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON TYPE bar = 'bar comment', KEY DOC ON COLUMN bar.a = 'a comment', VALUE DOC ON COLUMN bar.b = 'b comment') ENVELOPE UPSERT
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Type(Name(UnresolvedItemName([Ident("bar")]))), for_schema: All }), value: Some(Value(String("bar comment"))) }, CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Column(RawColumnName { relation: Name(UnresolvedItemName([Ident("bar")])), column: Ident("a") }), for_schema: KeyOnly }), value: Some(Value(String("a comment"))) }, CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Column(RawColumnName { relation: Name(UnresolvedItemName([Ident("bar")])), column: Ident("b") }), for_schema: ValueOnly }), value: Some(Value(String("b comment"))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Type(Name(UnresolvedItemName([Ident("bar")]))), for_schema: All }), value: Some(Value(String("bar comment"))) }, CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Column(RawColumnName { relation: Name(UnresolvedItemName([Ident("bar")])), column: Ident("a") }), for_schema: KeyOnly }), value: Some(Value(String("a comment"))) }, CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Column(RawColumnName { relation: Name(UnresolvedItemName([Ident("bar")])), column: Ident("b") }), for_schema: ValueOnly }), value: Some(Value(String("b comment"))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+
+parse-statement
+CREATE SINK foo IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') HEADERS header_column
+----
+CREATE SINK foo IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') HEADERS header_column
+=>
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: Some(Ident("header_column")) }, format: None, envelope: None, with_options: [] })
+
+parse-statement
+CREATE SINK foo IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') HEADERS header_column FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2
+----
+CREATE SINK foo IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') HEADERS header_column FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2
+=>
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: Some(Ident("header_column")) }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: None, with_options: [] })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)

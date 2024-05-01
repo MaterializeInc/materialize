@@ -393,6 +393,7 @@ async fn purify_create_sink(
             connection,
             options,
             key: _,
+            headers: _,
         } => {
             let scx = StatementContext::new(None, &catalog);
             let connection = {

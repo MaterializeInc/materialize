@@ -1215,6 +1215,7 @@ pub enum CreateSinkConnection<T: AstInfo> {
         connection: T::ItemName,
         options: Vec<KafkaSinkConfigOption<T>>,
         key: Option<KafkaSinkKey>,
+        headers: Option<Ident>,
     },
 }
 
@@ -1225,6 +1226,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 connection,
                 options,
                 key,
+                headers,
             } => {
                 f.write_str("KAFKA CONNECTION ");
                 f.write_node(connection);
@@ -1235,6 +1237,10 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 }
                 if let Some(key) = key.as_ref() {
                     f.write_node(key);
+                }
+                if let Some(headers) = headers {
+                    f.write_str(" HEADERS ");
+                    f.write_node(headers);
                 }
             }
         }

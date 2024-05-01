@@ -3298,10 +3298,17 @@ impl<'a> Parser<'a> {
                 None
             };
 
+        let headers = if self.parse_keyword(HEADERS) {
+            Some(self.parse_identifier()?)
+        } else {
+            None
+        };
+
         Ok(CreateSinkConnection::Kafka {
             connection,
             options,
             key,
+            headers,
         })
     }
 

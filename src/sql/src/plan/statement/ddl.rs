@@ -135,8 +135,9 @@ use crate::plan::{
     VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
 };
 use crate::session::vars;
-use crate::session::vars::ENABLE_CLUSTER_SCHEDULE_REFRESH;
-use crate::session::vars::ENABLE_REFRESH_EVERY_MVS;
+use crate::session::vars::{
+    ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
+};
 
 mod connection;
 
@@ -2771,6 +2772,42 @@ pub fn plan_create_sink(
         }
     };
 
+    let headers_index = match &connection {
+        CreateSinkConnection::Kafka {
+            headers: Some(headers),
+            ..
+        } => {
+            scx.require_feature_flag(&ENABLE_KAFKA_SINK_HEADERS)?;
+
+            match envelope {
+                SinkEnvelope::Upsert => (),
+                SinkEnvelope::Debezium => {
+                    sql_bail!("HEADERS option is not supported with ENVELOPE DEBEZIUM")
+                }
+            };
+
+            let headers = normalize::column_name(headers.clone());
+            let (idx, ty) = desc
+                .get_by_name(&headers)
+                .ok_or_else(|| sql_err!("HEADERS column ({}) is unknown", headers))?;
+
+            if desc.get_unambiguous_name(idx).is_none() {
+                sql_bail!("HEADERS column ({}) is ambiguous", headers);
+            }
+
+            match &ty.scalar_type {
+                ScalarType::Map { value_type, .. }
+                    if matches!(&**value_type, ScalarType::String | ScalarType::Bytes) => {}
+                _ => sql_bail!(
+                    "HEADERS column must have type map[text => text] or map[text => bytea]"
+                ),
+            }
+
+            Some(idx)
+        }
+        _ => None,
+    };
+
     // pick the first valid natural relation key, if any
     let relation_key_indices = desc.typ().keys.get(0).cloned();
 
@@ -2801,6 +2838,7 @@ pub fn plan_create_sink(
             format,
             relation_key_indices,
             key_desc_and_indices,
+            headers_index,
             desc.into_owned(),
             envelope,
             from.id(),
@@ -2952,6 +2990,7 @@ fn kafka_sink_builder(
     format: Option<Format<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    headers_index: Option<usize>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
     sink_from: GlobalId,
@@ -3091,6 +3130,7 @@ fn kafka_sink_builder(
         topic: topic_name,
         relation_key_indices,
         key_desc_and_indices,
+        headers_index,
         value_desc,
         compression_type,
         progress_group_id,

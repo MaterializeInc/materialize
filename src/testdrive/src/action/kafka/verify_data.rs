@@ -11,8 +11,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{cmp, str};
 
-use anyhow::{anyhow, bail, ensure, Context};
-use itertools::Itertools;
+use anyhow::{bail, ensure, Context};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Headers, Message};
@@ -160,23 +159,25 @@ pub async fn run_verify_data(
                 consumer
                     .store_offset_from_message(&message)
                     .context("storing message offset")?;
-                let headers = header_keys
-                    .iter()
-                    .map(|k| {
-                        // Expect a unique header with the given key and a UTF8-formatted body.
-                        let headers = message.headers().context("expected headers for message")?;
-                        let header = headers
-                            .iter()
-                            .filter(|i| i.key == k)
-                            .exactly_one()
-                            .map_err(|_| {
-                                anyhow!("expected exactly one header with the given key")
-                            })?;
-                        let value =
-                            str::from_utf8(header.value.context("expected value for header")?)?;
-                        Ok(value.to_owned())
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?;
+
+                let mut headers = vec![];
+                for header_key in &header_keys {
+                    // Expect a unique header with the given key and a UTF8-formatted body.
+                    let hs = message.headers().context("expected headers for message")?;
+                    let mut hs = hs.iter().filter(|i| i.key == header_key);
+                    let h = hs.next();
+                    if hs.next().is_some() {
+                        bail!("expected at most one header with key {header_key}");
+                    }
+                    match h {
+                        None => headers.push("<missing>".into()),
+                        Some(h) => {
+                            let value = str::from_utf8(h.value.unwrap_or(b"<null>"))?;
+                            headers.push(value.into());
+                        }
+                    }
+                }
+
                 actual_bytes.push(Record {
                     headers,
                     key: message.key().map(|b| b.to_owned()),
