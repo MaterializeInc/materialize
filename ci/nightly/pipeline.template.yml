@@ -253,6 +253,8 @@ steps:
         label: Full Testdrive in Cloudtest (K8s)
         depends_on: build-aarch64
         timeout_in_minutes: 300
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
           queue: linux-aarch64-large
         plugins:
@@ -826,12 +828,28 @@ steps:
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-aarch64
         timeout_in_minutes: 60
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
           queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_upgrade.py]
+        sanitizer: skip
+
+      - id: cloudtest-slow
+        label: "Slow Cloudtest"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+        agents:
+          queue: linux-aarch64
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/cloudtest:
+              args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
         sanitizer: skip
 
   - group: "K8s node recovery cloudtest"
