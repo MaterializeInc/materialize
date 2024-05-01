@@ -6689,7 +6689,7 @@ ON mz_internal.mz_recent_activity_log_thinned (sql_hash)",
 };
 
 pub const MZ_KAFKA_SOURCES_IND: BuiltinIndex = BuiltinIndex {
-    name: "mz_kafka_sources",
+    name: "mz_kafka_sources_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_KAFKA_SOURCES_IND_OID,
     sql: "IN CLUSTER mz_introspection
@@ -7195,6 +7195,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_FRONTIERS_IND),
+        Builtin::Index(&MZ_KAFKA_SOURCES_IND),
     ]);
 
     builtins.extend(notice::builtins());

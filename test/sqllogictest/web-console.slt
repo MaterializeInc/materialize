@@ -279,3 +279,17 @@ GROUP BY mdco.id, from_operator_id, from_operator_address, to_operator_id, to_op
 # Note(parkmycar): This suceeds on web, but fails because of pg_repr using binary encoding.
 statement error binary encoding of list types is not implemented
 SELECT id, address, name, parent_id, arrangement_records, elapsed_ns FROM all_ops WHERE export_id = 'does_not_exist';
+
+# Ensure indexes are used where expected.
+query T multiline
+EXPLAIN SELECT * FROM mz_internal.mz_kafka_sources
+----
+Explained Query (fast path):
+  ReadIndex on=mz_internal.mz_kafka_sources mz_kafka_sources_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_kafka_sources_ind (*** full scan ***)
+
+Target cluster: mz_introspection
+
+EOF
