@@ -1037,8 +1037,16 @@ fn humanize_sql_for_show_create(
                         }
                     });
                 }
-                CreateSourceConnection::Kafka { .. }
-                | CreateSourceConnection::LoadGenerator { .. } => {}
+
+                CreateSourceConnection::LoadGenerator { .. } => {
+                    // Multi-output load generator sources only support `FOR ALL
+                    // TABLES`.
+                    if !curr_references.is_empty() {
+                        curr_references.clear();
+                        stmt.referenced_subsources = Some(ReferencedSubsources::All);
+                    }
+                }
+                CreateSourceConnection::Kafka { .. } => {}
             }
 
             // If this source has any references, reconstruct them.
