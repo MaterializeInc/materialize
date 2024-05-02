@@ -2383,10 +2383,10 @@ impl Coordinator {
                     let duration = tokio::time::Duration::from_secs(30);
                     let timeout = tokio::time::timeout(duration, idle_tx.reserve()).await;
                     let Ok(maybe_permit) = timeout else {
-                        // Only log the error if we're newly stuck, to prevent logging repeatedly.
+                        // Only log if we're newly stuck, to prevent logging repeatedly.
                         if !coord_stuck {
                             let last_message = last_message_watchdog.lock().expect("poisoned");
-                            tracing::error!(
+                            tracing::warn!(
                                 last_message_kind = %last_message.kind,
                                 last_message_sql = %last_message.stmt_to_string(),
                                 "coordinator stuck for {duration:?}",
@@ -2569,7 +2569,7 @@ impl Coordinator {
                 // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
                 if duration > warn_threshold {
                     let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
-                    tracing::warn!(
+                    tracing::error!(
                         ?msg_kind,
                         ?trace_id,
                         ?duration,
