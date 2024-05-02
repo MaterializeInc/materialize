@@ -54,6 +54,20 @@ statement ok
 CREATE MATERIALIZED VIEW mv AS
 SELECT * FROM t WHERE a IS NOT NULL;
 
+statement ok
+CREATE MATERIALIZED VIEW non_empty_mv AS
+SELECT 1 as x, 2 as y;
+
+statement ok
+CREATE INDEX non_empty_mv_idx ON non_empty_mv(y + 7);
+
+statement ok
+CREATE MATERIALIZED VIEW empty_mv AS
+SELECT;
+
+statement ok
+CREATE INDEX empty_mv_idx ON empty_mv();
+
 mode cockroach
 
 # Test target cluster selection for mz_system tables without transactions.
@@ -133,6 +147,37 @@ Target cluster: mz_introspection
 
 EOF
 
+# Test fast path rendering on a non-trivial index.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+SELECT * FROM non_empty_mv where y + 7 = 9
+----
+Explained Query (fast path):
+  Project (#1{x}, #2{y})
+    ReadIndex on=materialize.public.non_empty_mv non_empty_mv_idx=[lookup value=(9)]
+
+Used Indexes:
+  - materialize.public.non_empty_mv_idx (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Test fast path rendering on an empty index on an empty relation.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+SELECT * FROM empty_mv
+----
+Explained Query (fast path):
+  ReadIndex on=materialize.public.empty_mv empty_mv_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.empty_mv_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
 # Test basic linear chains (fast path).
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
@@ -195,7 +240,7 @@ Explained Query:
   Threshold
     Union
       Distinct project=[#0{a}]
-        Project (#0)
+        Project (#0{a})
           ReadIndex on=t t_a_idx=[*** full scan ***]
       Negate
         Distinct project=[#0{b}]
@@ -217,7 +262,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
 Explained Query:
   Threshold
     Union
-      Project (#0)
+      Project (#0{a})
         ReadIndex on=t t_a_idx=[*** full scan ***]
       Negate
         Project (#1)
@@ -283,7 +328,7 @@ Explained Query:
   With
     cte l0 =
       Reduce aggregates=[min(#0{a}), max(#0{a})]
-        Project (#0)
+        Project (#0{a})
           ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -318,13 +363,13 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
 ----
 Explained Query:
   Return
-    Project (#0, #1)
+    Project (#0{a}, #1{b})
       Join on=(#1{b} = #2{b}) type=differential
         ArrangeBy keys=[[#1{b}]]
           Get l0
         ArrangeBy keys=[[#0{b}]]
           Distinct project=[#0{b}]
-            Project (#0)
+            Project (#0{b})
               Filter (#0{b} > #1{b})
                 CrossJoin type=differential
                   ArrangeBy keys=[[]]
@@ -336,21 +381,21 @@ Explained Query:
                       ReadStorage materialize.public.mv
   With
     cte l0 =
-      Project (#0, #1)
+      Project (#0{a}, #1{b})
         Join on=(#0{a} = #2{a}) type=differential
           ArrangeBy keys=[[#0{a}]]
             ReadIndex on=t t_a_idx=[differential join]
           ArrangeBy keys=[[#0{a}]]
             Distinct project=[#0{a}]
-              Project (#0)
+              Project (#0{a})
                 Filter (#0{a} < #1{a})
                   CrossJoin type=differential
                     ArrangeBy keys=[[]]
                       Distinct project=[#0{a}]
-                        Project (#0)
+                        Project (#0{a})
                           ReadIndex on=t t_a_idx=[*** full scan ***]
                     ArrangeBy keys=[[]]
-                      Project (#0)
+                      Project (#0{a})
                         ReadStorage materialize.public.mv
 
 Used Indexes:
@@ -377,7 +422,7 @@ Explained Query:
             Map (null)
               Union
                 Negate
-                  Project (#0)
+                  Project (#0{b})
                     Get l3
                 Get l1
         ArrangeBy keys=[[#0{b}]]
@@ -386,13 +431,13 @@ Explained Query:
             Map (null)
               Union
                 Negate
-                  Project (#0)
+                  Project (#0{b})
                     Get l4
                 Get l1
   With
     cte l4 =
       TopK group_by=[#0{b}] limit=1
-        Project (#0, #1)
+        Project (#0{b}, #1{a})
           Filter (#0{b}) IS NOT NULL
             Join on=(#0{b} = #2{b}) type=differential
               Get l2
@@ -401,7 +446,7 @@ Explained Query:
                   ReadStorage materialize.public.mv
     cte l3 =
       TopK group_by=[#0{b}] limit=1
-        Project (#0, #1)
+        Project (#0{b}, #1{a})
           Filter (#0{b}) IS NOT NULL
             Join on=(#0{b} = #2{b}) type=differential
               Get l2
@@ -453,11 +498,11 @@ Explained Query:
                       Get l2
           Project ()
             ReadIndex on=t t_a_idx=[*** full scan ***]
-      Project (#0, #2)
+      Project (#0{a}, #2)
         Get l2
   With
     cte l2 =
-      Project (#0..=#2)
+      Project (#0{a}..=#2{a})
         Join on=(#1{b} = #3{b} = #4{b}) type=delta
           Get l1
           Get l1
@@ -598,7 +643,7 @@ FROM
 ----
 Explained Query:
   Return
-    Project (#0..=#2, #4)
+    Project (#0{a}..=#2{max}, #4)
       Filter (#0{a} != #4{max})
         Join on=(#0{a} = #3{a}) type=differential
           ArrangeBy keys=[[#0{a}]]
@@ -608,12 +653,12 @@ Explained Query:
               CrossJoin type=differential
                 ArrangeBy keys=[[]]
                   Distinct project=[#0{a}]
-                    Project (#0)
+                    Project (#0{a})
                       Get l2
                 Get l1
   With
     cte l2 =
-      Project (#0, #1, #3)
+      Project (#0{a}, #1{b}, #3)
         Filter (#0{a} != #3{max})
           Join on=(#0{a} = #2{a}) type=differential
             ArrangeBy keys=[[#0{a}]]
@@ -629,7 +674,7 @@ Explained Query:
       ArrangeBy keys=[[]]
         Get l0
     cte l0 =
-      Project (#0)
+      Project (#0{a})
         ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -652,7 +697,7 @@ Explained Query:
   With
     cte l0 =
       ArrangeBy keys=[[]]
-        Project (#0)
+        Project (#0{a})
           ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -674,7 +719,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
 ----
 Explained Query:
   Return
-    Project (#0, #2)
+    Project (#0{a}, #2)
       Join on=(#1{b} = #3{b} = #4{b}) type=delta
         Get l1
         Get l1
@@ -715,7 +760,7 @@ FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
 Explained Query:
-  Project (#0, #1, #0, #3, #3, #1)
+  Project (#0{a}, #1{b}, #0{a}, #3{d}, #3{d}, #1{b})
     Filter (#0{a}) IS NOT NULL AND (#3{d}) IS NOT NULL
       Join on=(#0{a} = #2{c} AND #1{b} = #5{f} AND #3{d} = #4{e}) type=delta
         ArrangeBy keys=[[#0{a}], [#0{a}, #1{b}]]
@@ -745,7 +790,7 @@ FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
 Explained Query:
-  Project (#0, #1, #0, #3, #3, #1)
+  Project (#0{a}, #1{b}, #0{a}, #3{d}, #3{d}, #1{b})
     Filter (#0{a}) IS NOT NULL AND (#3{d}) IS NOT NULL
       Join on=(#0{a} = #2{c} AND #1{b} = #5{f} AND #3{d} = #4{e}) type=delta
         implementation
@@ -784,7 +829,7 @@ FROM t, u, v
 WHERE b = c and d = e
 ----
 Explained Query:
-  Project (#0, #1, #1, #3, #3, #5)
+  Project (#0{a}, #1{b}, #1{b}, #3{d}, #3{d}, #5{f})
     Filter (#1{b}) IS NOT NULL AND (#3{d}) IS NOT NULL
       Join on=(#1{b} = #2{c} AND #3{d} = #4{e}) type=delta
         ArrangeBy keys=[[#1{b}]]
@@ -845,7 +890,7 @@ WHERE a = 0
 GROUP BY a
 ----
 Explained Query:
-  Project (#1, #0)
+  Project (#1{max_b}, #0)
     Map (0)
       Reduce aggregates=[max(#0{b})]
         Project (#1)
@@ -1063,7 +1108,7 @@ FROM t, u
 WHERE t.b = u.c;
 ----
 Explained Query:
-  Project (#0, #1, #1, #3)
+  Project (#0{a}, #1{b}, #1{b}, #3{d})
     Filter (#1{b}) IS NOT NULL
       Join on=(#1{b} = #2{c}) type=differential
         ArrangeBy keys=[[#1{b}]]
@@ -1089,7 +1134,7 @@ FROM t, u
 WHERE t.b = u.d;
 ----
 Explained Query:
-  Project (#0..=#2, #1)
+  Project (#0{a}..=#2{c}, #1{b})
     Filter (#1{b}) IS NOT NULL
       Join on=(#1{b} = #3{d}) type=differential
         ArrangeBy keys=[[#1{b}]]
@@ -1126,7 +1171,7 @@ FROM t, u
 WHERE t.a = u.c
 ----
 Explained Query:
-  Project (#0, #1, #0, #3)
+  Project (#0{a}, #1{b}, #0{a}, #3{d})
     Filter (#0{a}) IS NOT NULL
       Join on=(#0{a} = #2{c}) type=differential
         ArrangeBy keys=[[#0{a}]]
@@ -1152,7 +1197,7 @@ WHERE t1.a = t2.a AND t2.a = t3.a;
 ----
 Explained Query:
   Return
-    Project (#0, #1, #0, #3, #0, #5)
+    Project (#0{a}, #1{b}, #0{a}, #3{b}, #0{a}, #5{b})
       Filter (#0{a}) IS NOT NULL
         Join on=(#0{a} = #2{a} = #4{a}) type=delta
           Get l0
@@ -1328,7 +1373,7 @@ Explained Query:
   Distinct project=[#0{a}, #1{b}]
     Union
       ReadIndex on=t t_a_idx_2=[*** full scan ***]
-      Project (#0, #1)
+      Project (#0{a}, #1{b})
         ReadIndex on=materialize.public.t t_a_idx_2=[lookup value=(5)]
 
 Used Indexes:
@@ -1358,13 +1403,13 @@ SELECT * FROM u WHERE d = 1;
 Explained Query:
   Union
     ReadIndex on=t t_b_idx=[*** full scan ***]
-    Project (#0, #1)
+    Project (#0{a}, #1{b})
       ReadIndex on=materialize.public.t t_b_idx=[lookup value=(7)]
-    Project (#0, #1)
+    Project (#0{a}, #1{b})
       ReadIndex on=materialize.public.t t_a_idx_2=[lookup value=(5)]
     Filter (#0{c} = 3)
       ReadIndex on=u u_d=[*** full scan ***]
-    Project (#0, #1)
+    Project (#0{c}, #1{d})
       ReadIndex on=materialize.public.u u_d=[lookup value=(1)]
 
 Used Indexes:
@@ -1463,7 +1508,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT * FROM t4;
 ----
 Explained Query (fast path):
-  Project (#1, #0, #2)
+  Project (#1{a}, #0{b}, #2{c})
     ReadIndex on=materialize.public.t4 t4_idx_b=[*** full scan ***]
 
 Used Indexes:

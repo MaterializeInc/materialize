@@ -35,9 +35,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::DisplayText;
-use mz_repr::explain::{
-    CompactScalars, IndexUsageType, Indices, PlanRenderingContext, UsedIndexes,
-};
+use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
 use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowCollection, RowIterator};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -161,34 +159,37 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
                 ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
 
-                let (map_cols, filter_cols) = if !ctx.config.humanized_exprs {
-                    (None, None)
+                let cols = if !ctx.config.humanized_exprs {
+                    None
                 } else if let Some(cols) = ctx.humanizer.column_names_for_id(*idx_id) {
-                    let map_cols = itertools::chain(
+                    // FIXME: account for thinning and permutation
+                    // See mz_expr::permutation_for_arrangement
+                    // See permute_oneshot_mfp_around_index
+                    let cols = itertools::chain(
                         cols.iter().cloned(),
                         std::iter::repeat(String::new()).take(map.len()),
                     )
-                    .collect::<Vec<_>>();
-                    let filter_cols = map_cols.clone();
-                    (Some(map_cols), Some(filter_cols))
+                    .collect();
+                    Some(cols)
                 } else {
-                    (None, None)
+                    None
                 };
 
                 if project.len() != mfp.input_arity + map.len()
                     || !project.iter().enumerate().all(|(i, o)| i == *o)
                 {
-                    let outputs = Indices(&project);
+                    let outputs = mode.seq(&project, cols.as_ref());
+                    let outputs = CompactScalars(outputs);
                     writeln!(f, "{}Project ({})", ctx.as_mut(), outputs)?;
                     *ctx.as_mut() += 1;
                 }
                 if !filter.is_empty() {
-                    let predicates = separated(" AND ", mode.seq(&filter, filter_cols.as_ref()));
+                    let predicates = separated(" AND ", mode.seq(&filter, cols.as_ref()));
                     writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;
                 }
                 if !map.is_empty() {
-                    let scalars = mode.seq(&map, map_cols.as_ref());
+                    let scalars = mode.seq(&map, cols.as_ref());
                     let scalars = CompactScalars(scalars);
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
@@ -209,34 +210,34 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
                 ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
 
-                let (map_cols, filter_cols) = if !ctx.config.humanized_exprs {
-                    (None, None)
+                let cols = if !ctx.config.humanized_exprs {
+                    None
                 } else if let Some(cols) = ctx.humanizer.column_names_for_id(*gid) {
-                    let map_cols = itertools::chain(
+                    let cols = itertools::chain(
                         cols.iter().cloned(),
                         std::iter::repeat(String::new()).take(map.len()),
                     )
                     .collect::<Vec<_>>();
-                    let filter_cols = map_cols.clone();
-                    (Some(map_cols), Some(filter_cols))
+                    Some(cols)
                 } else {
-                    (None, None)
+                    None
                 };
 
                 if project.len() != mfp.input_arity + map.len()
                     || !project.iter().enumerate().all(|(i, o)| i == *o)
                 {
-                    let outputs = Indices(&project);
+                    let outputs = mode.seq(&project, cols.as_ref());
+                    let outputs = CompactScalars(outputs);
                     writeln!(f, "{}Project ({})", ctx.as_mut(), outputs)?;
                     *ctx.as_mut() += 1;
                 }
                 if !filter.is_empty() {
-                    let predicates = separated(" AND ", mode.seq(&filter, filter_cols.as_ref()));
+                    let predicates = separated(" AND ", mode.seq(&filter, cols.as_ref()));
                     writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;
                 }
                 if !map.is_empty() {
-                    let scalars = mode.seq(&map, map_cols.as_ref());
+                    let scalars = mode.seq(&map, cols.as_ref());
                     let scalars = CompactScalars(scalars);
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;

@@ -442,7 +442,7 @@ SELECT messageYear, isComment, lengthCategory
 Explained Query:
   Finish order_by=[#0 desc nulls_first, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#6]
     Return // { arity: 7 }
-      Project (#0..=#2, #4, #7, #5, #8) // { arity: 7 }
+      Project (#0..=#2, #4, #7, #5{sum}, #8) // { arity: 7 }
         Map ((#5{sum} / bigint_to_numeric(case when (#6{count} = 0) then null else #6{count} end)), (bigint_to_numeric(#4{count}) / #3)) // { arity: 9 }
           Reduce group_by=[#1..=#4] aggregates=[count(*), sum(integer_to_bigint(#0{length})), count(integer_to_bigint(#0{length}))] // { arity: 7 }
             CrossJoin type=differential // { arity: 5 }
@@ -519,20 +519,20 @@ SELECT t.name AS "tag.name"
 Explained Query:
   Finish order_by=[#3 desc nulls_first, #0{name} asc nulls_last] limit=100 output=[#0..=#3]
     Return // { arity: 4 }
-      Project (#0, #3..=#5) // { arity: 4 }
+      Project (#0{name}, #3..=#5) // { arity: 4 }
         Map (coalesce(#1{count}, 0), coalesce(#2{count}, 0), abs((#3 - #4))) // { arity: 6 }
           Union // { arity: 3 }
             Map (null, null) // { arity: 3 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Project (#0) // { arity: 1 }
+                  Project (#0{name}) // { arity: 1 }
                     Get l2 // { arity: 3 }
                 Project (#1) // { arity: 1 }
                   Get l0 // { arity: 2 }
             Get l2 // { arity: 3 }
     With
       cte l2 =
-        Project (#1, #3, #4) // { arity: 3 }
+        Project (#1{count}, #3, #4) // { arity: 3 }
           Join on=(#0{id} = #2{id}) type=differential // { arity: 5 }
             implementation
               %1[#0]UKA » %0:l1[#0]K
@@ -540,7 +540,7 @@ Explained Query:
               Get l1 // { arity: 2 }
             ArrangeBy keys=[[#0{id}]] // { arity: 3 }
               Reduce group_by=[#0{id}] aggregates=[count(case when (#2{creationdate} < 2010-09-16 00:00:00 UTC) then #1{messageid} else null end), count(case when (#2{creationdate} >= 2010-09-16 00:00:00 UTC) then #1{messageid} else null end)] // { arity: 3 }
-                Project (#0, #2, #4) // { arity: 3 }
+                Project (#0{id}, #2{creationdate}, #4) // { arity: 3 }
                   Filter (#4{creationdate} < 2010-12-25 00:00:00 UTC) AND (#4{creationdate} >= 2010-06-08 00:00:00 UTC) // { arity: 17 }
                     Join on=(#0{id} = #3{tagid} AND #2{messageid} = #5{messageid}) type=delta // { arity: 17 }
                       implementation
@@ -548,7 +548,7 @@ Explained Query:
                         %1:message_hastag_tag » %2:message[#1]KAiif » %0:l1[#0]K
                         %2:message » %1:message_hastag_tag[#1]KA » %0:l1[#0]K
                       ArrangeBy keys=[[#0{id}]] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
+                        Project (#0{id}) // { arity: 1 }
                           Get l1 // { arity: 2 }
                       ArrangeBy keys=[[#1{messageid}], [#2{tagid}]] // { arity: 3 }
                         ReadIndex on=message_hastag_tag message_hastag_tag_messageid=[delta join lookup] message_hastag_tag_tagid=[delta join lookup] // { arity: 3 }
@@ -749,7 +749,7 @@ Explained Query:
           Map (null) // { arity: 5 }
             Union // { arity: 4 }
               Negate // { arity: 4 }
-                Project (#0..=#3) // { arity: 4 }
+                Project (#0{creationdate}..=#3{lastname}) // { arity: 4 }
                   Join on=(#1{id} = #4{id}) type=differential // { arity: 5 }
                     implementation
                       %1[#0]UKA » %0:l2[#1]K
@@ -762,7 +762,7 @@ Explained Query:
           Get l3 // { arity: 5 }
     With
       cte l3 =
-        Project (#0..=#3, #5) // { arity: 5 }
+        Project (#0{creationdate}..=#3{lastname}, #5) // { arity: 5 }
           Join on=(#1{id} = #13{creatorpersonid} AND #14{containerforumid} = #17{containerforumid} = #18{id}) type=delta // { arity: 19 }
             implementation
               %0:l2 » %1:message[#9]KA » %2[#0]UKA » %3[#0]UKA
@@ -784,7 +784,7 @@ Explained Query:
         ArrangeBy keys=[[#1{id}]] // { arity: 4 }
           Get l1 // { arity: 4 }
       cte l1 =
-        Project (#0..=#3) // { arity: 4 }
+        Project (#0{creationdate}..=#3{lastname}) // { arity: 4 }
           Join on=(#1{id} = #11{id} = #12{personid}) type=delta // { arity: 13 }
             implementation
               %0:person » %1[#0]UKA » %2[#0]UKA
@@ -808,9 +808,9 @@ Explained Query:
                     ArrangeBy keys=[[#1{forumid}]] // { arity: 3 }
                       ReadIndex on=forum_hasmember_person forum_hasmember_person_forumid=[differential join] // { arity: 3 }
       cte l0 =
-        Project (#0) // { arity: 1 }
+        Project (#0{id}) // { arity: 1 }
           TopK order_by=[#1{maxnumberofmembers} desc nulls_first, #0{id} asc nulls_last] limit=100 // { arity: 2 }
-            Project (#0, #2) // { arity: 2 }
+            Project (#0{id}, #2) // { arity: 2 }
               Filter (#1{creationdate} > 2010-02-12 00:00:00 UTC) // { arity: 3 }
                 ReadIndex on=top100popularforumsq04 top100popularforumsq04_id=[*** full scan ***] // { arity: 3 }
 
@@ -862,14 +862,14 @@ Explained Query:
     Return // { arity: 5 }
       Map (((bigint_to_numeric((1 * #3{count})) + (2 * #1{sum})) + (10 * #2{sum}))) // { arity: 5 }
         Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(coalesce(case when (#2) IS NULL then null else #1{count} end, 0)), sum(coalesce(case when (#4) IS NULL then null else #3{count} end, 0)), count(*)] // { arity: 4 }
-          Project (#1, #3, #4, #6, #7) // { arity: 5 }
+          Project (#1{count}, #3{count}, #4, #6, #7) // { arity: 5 }
             Join on=(#0{messageid} = #2{parentmessageid} = #5{messageid}) type=delta // { arity: 8 }
               implementation
                 %0:l0 » %1[#0]K » %2[#0]K
                 %1 » %0:l0[#0]Kef » %2[#0]K
                 %2 » %0:l0[#0]Kef » %1[#0]K
               ArrangeBy keys=[[#0{messageid}]] // { arity: 2 }
-                Project (#1, #2) // { arity: 2 }
+                Project (#1{creatorpersonid}, #2) // { arity: 2 }
                   Filter (#0{name} = "Sikh_Empire") // { arity: 3 }
                     Get l0 // { arity: 3 }
               ArrangeBy keys=[[#0{parentmessageid}]] // { arity: 3 }
@@ -880,7 +880,7 @@ Explained Query:
                     Threshold // { arity: 1 }
                       Union // { arity: 1 }
                         Negate // { arity: 1 }
-                          Project (#0) // { arity: 1 }
+                          Project (#0{parentmessageid}) // { arity: 1 }
                             Get l1 // { arity: 2 }
                         Get l3 // { arity: 1 }
               ArrangeBy keys=[[#0{messageid}]] // { arity: 3 }
@@ -891,7 +891,7 @@ Explained Query:
                     Threshold // { arity: 1 }
                       Union // { arity: 1 }
                         Negate // { arity: 1 }
-                          Project (#0) // { arity: 1 }
+                          Project (#0{messageid}) // { arity: 1 }
                             Get l2 // { arity: 2 }
                         Get l3 // { arity: 1 }
     With
@@ -909,7 +909,7 @@ Explained Query:
             Filter (#12{parentmessageid}) IS NOT NULL // { arity: 13 }
               ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
       cte l0 =
-        Project (#1, #5, #16) // { arity: 3 }
+        Project (#1{messageid}, #5, #16) // { arity: 3 }
           Filter (#0{id}) IS NOT NULL // { arity: 20 }
             Join on=(#0{id} = #6{tagid} AND #5{messageid} = #8{messageid}) type=delta // { arity: 20 }
               implementation
@@ -993,14 +993,14 @@ Explained Query:
           Map (null) // { arity: 2 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
-                Project (#0) // { arity: 1 }
+                Project (#0{creatorpersonid}) // { arity: 1 }
                   Get l4 // { arity: 2 }
-              Project (#0) // { arity: 1 }
+              Project (#0{creatorpersonid}) // { arity: 1 }
                 Get l3 // { arity: 2 }
           Get l4 // { arity: 2 }
     With
       cte l4 =
-        Project (#0, #3) // { arity: 2 }
+        Project (#0{creatorpersonid}, #3) // { arity: 2 }
           Join on=(#1{personid} = #2{person2id}) type=differential // { arity: 4 }
             implementation
               %1:popularityscoreq06[#0]UKA » %0:l3[#1]K
@@ -1022,14 +1022,14 @@ Explained Query:
                       Get l1 // { arity: 2 }
                       ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }
                         Distinct project=[#0{messageid}] // { arity: 1 }
-                          Project (#0) // { arity: 1 }
+                          Project (#0{messageid}) // { arity: 1 }
                             Get l2 // { arity: 3 }
                 Project (#1) // { arity: 1 }
                   Get l0 // { arity: 2 }
-            Project (#1, #2) // { arity: 2 }
+            Project (#1{personid}, #2) // { arity: 2 }
               Get l2 // { arity: 3 }
       cte l2 =
-        Project (#0, #1, #3) // { arity: 3 }
+        Project (#0{messageid}, #1{creatorpersonid}, #3) // { arity: 3 }
           Join on=(#0{messageid} = #4{messageid}) type=differential // { arity: 5 }
             implementation
               %1:person_likes_message[#2]KA » %0:l1[#0]K
@@ -1100,14 +1100,14 @@ Explained Query:
           Map (null) // { arity: 2 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
-                Project (#0) // { arity: 1 }
+                Project (#0{creatorpersonid}) // { arity: 1 }
                   Get l4 // { arity: 2 }
-              Project (#0) // { arity: 1 }
+              Project (#0{creatorpersonid}) // { arity: 1 }
                 Get l3 // { arity: 2 }
           Get l4 // { arity: 2 }
     With
       cte l4 =
-        Project (#0, #3) // { arity: 2 }
+        Project (#0{creatorpersonid}, #3) // { arity: 2 }
           Join on=(#1{personid} = #2{person2id}) type=differential // { arity: 4 }
             implementation
               %1:popularityscoreq06[#0]UKA » %0:l3[#1]K
@@ -1129,14 +1129,14 @@ Explained Query:
                       Get l1 // { arity: 2 }
                       ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }
                         Distinct project=[#0{messageid}] // { arity: 1 }
-                          Project (#0) // { arity: 1 }
+                          Project (#0{messageid}) // { arity: 1 }
                             Get l2 // { arity: 3 }
                 Project (#1) // { arity: 1 }
                   Get l0 // { arity: 2 }
-            Project (#1, #2) // { arity: 2 }
+            Project (#1{personid}, #2) // { arity: 2 }
               Get l2 // { arity: 3 }
       cte l2 =
-        Project (#0, #1, #3) // { arity: 3 }
+        Project (#0{messageid}, #1{creatorpersonid}, #3) // { arity: 3 }
           Join on=(#0{messageid} = #4{messageid}) type=differential // { arity: 5 }
             implementation
               %1:person_likes_message[#2]KA » %0:l1[#0]K
@@ -1208,14 +1208,14 @@ Explained Query:
           Map (null) // { arity: 2 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
-                Project (#0) // { arity: 1 }
+                Project (#0{creatorpersonid}) // { arity: 1 }
                   Get l4 // { arity: 2 }
-              Project (#0) // { arity: 1 }
+              Project (#0{creatorpersonid}) // { arity: 1 }
                 Get l3 // { arity: 2 }
           Get l4 // { arity: 2 }
     With
       cte l4 =
-        Project (#0, #3) // { arity: 2 }
+        Project (#0{creatorpersonid}, #3) // { arity: 2 }
           Join on=(#1{personid} = #2{person2id}) type=differential // { arity: 4 }
             implementation
               %1:popularityscoreq06[#0]UKA » %0:l3[#1]K
@@ -1235,7 +1235,7 @@ Explained Query:
                       implementation
                         %1[#0]UKA » %0:l2[#0]Kef
                       ArrangeBy keys=[[#0{messageid}]] // { arity: 2 }
-                        Project (#1, #2) // { arity: 2 }
+                        Project (#1{creatorpersonid}, #2) // { arity: 2 }
                           Get l2 // { arity: 3 }
                       ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }
                         Distinct project=[#0{messageid}] // { arity: 1 }
@@ -1250,7 +1250,7 @@ Explained Query:
         Filter (#0{name} = "Bob_Geldof") // { arity: 3 }
           Get l0 // { arity: 3 }
       cte l1 =
-        Project (#0..=#2, #4) // { arity: 4 }
+        Project (#0{name}..=#2{creatorpersonid}, #4) // { arity: 4 }
           Join on=(#1{messageid} = #5{messageid}) type=differential // { arity: 6 }
             implementation
               %1:person_likes_message[#2]KA » %0:l0[#1]K
@@ -1259,7 +1259,7 @@ Explained Query:
             ArrangeBy keys=[[#2{messageid}]] // { arity: 3 }
               ReadIndex on=person_likes_message person_likes_message_messageid=[differential join] // { arity: 3 }
       cte l0 =
-        Project (#1, #5, #16) // { arity: 3 }
+        Project (#1{messageid}, #5, #16) // { arity: 3 }
           Filter (#0{id}) IS NOT NULL // { arity: 20 }
             Join on=(#0{id} = #6{tagid} AND #5{messageid} = #8{messageid}) type=delta // { arity: 20 }
               implementation
@@ -1331,7 +1331,7 @@ Explained Query:
             ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Project (#0) // { arity: 1 }
+                  Project (#0{messageid}) // { arity: 1 }
                     Join on=(#0{messageid} = #1{messageid}) type=differential // { arity: 2 }
                       implementation
                         %0:l2[#0]UKA » %1[#0]UKA
@@ -1344,7 +1344,7 @@ Explained Query:
     With
       cte l2 =
         Distinct project=[#0{messageid}] // { arity: 1 }
-          Project (#0) // { arity: 1 }
+          Project (#0{messageid}) // { arity: 1 }
             Get l1 // { arity: 2 }
       cte l1 =
         Project (#2, #18) // { arity: 2 }
@@ -1454,7 +1454,7 @@ Explained Query:
                 Get l7 // { arity: 2 }
               ArrangeBy keys=[[#0{person1id}], [case when (#2) IS NULL then null else #1{person2id} end]] // { arity: 3 }
                 Union // { arity: 3 }
-                  Project (#1..=#3) // { arity: 3 }
+                  Project (#1{person2id}..=#3) // { arity: 3 }
                     Map (true) // { arity: 4 }
                       ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
                   Map (null, null) // { arity: 3 }
@@ -1492,11 +1492,11 @@ Explained Query:
         Project (#3, #4) // { arity: 2 }
           Map (coalesce(#0{id}, #1{creatorpersonid}), (integer_to_bigint(case when (#0{id}) IS NULL then 0 else 100 end) + coalesce(#2{count}, 0))) // { arity: 5 }
             Union // { arity: 3 }
-              Project (#2, #0, #1) // { arity: 3 }
+              Project (#2{count}, #0, #1{creatorpersonid}) // { arity: 3 }
                 Map (null) // { arity: 3 }
                   Union // { arity: 2 }
                     Negate // { arity: 2 }
-                      Project (#0, #1) // { arity: 2 }
+                      Project (#0{creatorpersonid}, #1{count}) // { arity: 2 }
                         Join on=(#0{creatorpersonid} = #2{id}) type=differential // { arity: 3 }
                           implementation
                             %0:l4[#0]UKA » %1[#0]UKA
@@ -1510,13 +1510,13 @@ Explained Query:
                   Negate // { arity: 1 }
                     Get l6 // { arity: 1 }
                   Get l2 // { arity: 1 }
-              Project (#0, #0, #1) // { arity: 3 }
+              Project (#0{id}, #0{id}, #1{id}) // { arity: 3 }
                 Get l5 // { arity: 2 }
       cte l6 =
-        Project (#0) // { arity: 1 }
+        Project (#0{id}) // { arity: 1 }
           Get l5 // { arity: 2 }
       cte l5 =
-        Project (#0, #2) // { arity: 2 }
+        Project (#0{id}, #2) // { arity: 2 }
           Join on=(#0{id} = #1{creatorpersonid}) type=differential // { arity: 3 }
             implementation
               %1:l4[#0]UKA » %0:l2[#0]K
@@ -1552,7 +1552,7 @@ Explained Query:
                 %2:l1 » %1:person_hasinterest_tag[#1]KA » %0:l0[#1]KA
               Get l0 // { arity: 11 }
               ArrangeBy keys=[[#0{personid}], [#1{tagid}]] // { arity: 2 }
-                Project (#1, #2) // { arity: 2 }
+                Project (#1{tagid}, #2) // { arity: 2 }
                   ReadIndex on=person_hasinterest_tag person_hasinterest_tag_tagid=[*** full scan ***] // { arity: 3 }
               Get l1 // { arity: 5 }
       cte l1 =
@@ -1604,7 +1604,7 @@ SELECT Person.id AS "person.id"
 Explained Query:
   Finish order_by=[#4{sum_count} desc nulls_first, #0{id} asc nulls_last] limit=100 output=[#0..=#4]
     Reduce group_by=[#0{id}..=#2{lastname}] aggregates=[count(*), sum(#3{count})] // { arity: 5 }
-      Project (#1..=#3, #25) // { arity: 4 }
+      Project (#1{firstname}..=#3{count}, #25) // { arity: 4 }
         Filter (#23{parentmessageid}) IS NULL AND (#11{creationdate} <= 2012-11-24 00:00:00 UTC) AND (#11{creationdate} >= 2012-08-29 00:00:00 UTC) AND (#1{id}) IS NOT NULL // { arity: 26 }
           Join on=(#1{id} = #20{creatorpersonid} AND #12{messageid} = #24{rootpostid}) type=delta // { arity: 26 }
             implementation
@@ -1715,7 +1715,7 @@ Explained Query:
   Finish order_by=[#2{count} desc nulls_first, #1{name} asc nulls_last, #0{person2id} asc nulls_last] limit=100 output=[#0..=#2]
     Return // { arity: 3 }
       Reduce group_by=[#0{person2id}, #1{name}] aggregates=[count(*)] // { arity: 3 }
-        Project (#0, #9) // { arity: 2 }
+        Project (#0{person2id}, #9) // { arity: 2 }
           Filter (#7{tagid}) IS NOT NULL // { arity: 12 }
             Join on=(#0{person2id} = #1{id} = #2{creatorpersonid} AND #3{messageid} = #4{messageid} = #6{messageid} AND #7{tagid} = #8{id}) type=delta // { arity: 12 }
               implementation
@@ -1760,7 +1760,7 @@ Explained Query:
                           ReadIndex on=country country_id=[delta join lookup] // { arity: 4 }
               ArrangeBy keys=[[#0{creatorpersonid}], [#1{messageid}]] // { arity: 2 }
                 Distinct project=[#1{creatorpersonid}, #0{messageid}] // { arity: 2 }
-                  Project (#1, #9) // { arity: 2 }
+                  Project (#1{creatorpersonid}, #9) // { arity: 2 }
                     ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
               ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }
                 Distinct project=[#0{messageid}] // { arity: 1 }
@@ -1884,7 +1884,7 @@ Explained Query:
       Filter (#0{id} < #1{person2id}) // { arity: 2 }
         Get l0 // { arity: 2 }
     cte l0 =
-      Project (#1, #21) // { arity: 2 }
+      Project (#1{person2id}, #21) // { arity: 2 }
         Filter (#16{name} = "India") AND (#19{creationdate} <= 2013-01-10 00:00:00 UTC) AND (2012-09-28 00:00:00 UTC <= #19{creationdate}) AND (#1{id}) IS NOT NULL AND (#8{locationcityid}) IS NOT NULL AND (#14{partofcountryid}) IS NOT NULL // { arity: 22 }
           Join on=(#1{id} = #20{person1id} AND #8{locationcityid} = #11{id} AND #14{partofcountryid} = #15{id}) type=delta // { arity: 22 }
             implementation
@@ -1966,14 +1966,14 @@ Explained Query:
                         Get l0 // { arity: 11 }
                         ArrangeBy keys=[[#0{id}]] // { arity: 1 }
                           Distinct project=[#0{id}] // { arity: 1 }
-                            Project (#0) // { arity: 1 }
+                            Project (#0{id}) // { arity: 1 }
                               Get l1 // { arity: 2 }
                   Project (#1) // { arity: 1 }
                     ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
               Get l1 // { arity: 2 }
     With
       cte l1 =
-        Project (#1, #12) // { arity: 2 }
+        Project (#1{messageid}, #12) // { arity: 2 }
           Filter (#19{length} < 120) AND (#11{creationdate} > 2012-06-03 00:00:00 UTC) AND (#1{id}) IS NOT NULL AND (#15{content}) IS NOT NULL // { arity: 25 }
             Join on=(#1{id} = #20{creatorpersonid}) type=differential // { arity: 25 }
               implementation
@@ -2024,7 +2024,7 @@ Explained Query:
         Project (#1) // { arity: 1 }
           Reduce group_by=[#0{id}] aggregates=[count(#1{messageid})] // { arity: 2 }
             Union // { arity: 2 }
-              Project (#1, #11) // { arity: 2 }
+              Project (#1{messageid}, #11) // { arity: 2 }
                 Get l1 // { arity: 12 }
               Project (#1, #22) // { arity: 2 }
                 Map (null) // { arity: 23 }
@@ -2035,7 +2035,7 @@ Explained Query:
                       Union // { arity: 11 }
                         Negate // { arity: 11 }
                           Distinct project=[#0{creationdate}..=#10{email}] // { arity: 11 }
-                            Project (#0..=#10) // { arity: 11 }
+                            Project (#0{creationdate}..=#10{email}) // { arity: 11 }
                               Get l1 // { arity: 12 }
                         Distinct project=[#0{creationdate}..=#10{email}] // { arity: 11 }
                           ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
@@ -2043,17 +2043,17 @@ Explained Query:
                       ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
     With
       cte l1 =
-        Project (#0..=#11) // { arity: 12 }
+        Project (#0{creationdate}..=#11{messageid}) // { arity: 12 }
           Join on=(#12{rootpostlanguage} = #13{rootpostlanguage}) type=differential // { arity: 14 }
             implementation
               %1[#0]UKA » %0:l0[#12]Kiif
             ArrangeBy keys=[[#12{rootpostlanguage}]] // { arity: 13 }
-              Project (#0..=#10, #12, #13) // { arity: 13 }
+              Project (#0{creationdate}..=#10{email}, #12{rootpostlanguage}, #13) // { arity: 13 }
                 Filter (#15{length} < 120) AND (#11{creationdate} > 2012-06-03 00:00:00 UTC) AND (#14{content}) IS NOT NULL AND (#1{id} = #16{creatorpersonid}) // { arity: 17 }
                   Get l0 // { arity: 17 }
             ArrangeBy keys=[[#0{rootpostlanguage}]] // { arity: 1 }
               Distinct project=[#0{rootpostlanguage}] // { arity: 1 }
-                Project (#0) // { arity: 1 }
+                Project (#0{rootpostlanguage}) // { arity: 1 }
                   Filter (#0{rootpostlanguage} = varchar_to_text(#1)) // { arity: 2 }
                     FlatMap unnest_array({"es", "ta", "pt"}) // { arity: 2 }
                       Distinct project=[#0{rootpostlanguage}] // { arity: 1 }
@@ -2066,7 +2066,7 @@ Explained Query:
           ArrangeBy keys=[[]] // { arity: 11 }
             ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
           ArrangeBy keys=[[]] // { arity: 6 }
-            Project (#0, #1, #3, #4, #8, #9) // { arity: 6 }
+            Project (#0{creationdate}, #1{messageid}, #3{content}, #4{length}, #8, #9) // { arity: 6 }
               ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
 
 Used Indexes:
@@ -2120,19 +2120,19 @@ SELECT Z.zombieid AS "zombie.id"
 Explained Query:
   Finish order_by=[#3 desc nulls_first, #0{id} asc nulls_last] limit=100 output=[#0..=#3]
     Return // { arity: 4 }
-      Project (#0, #3..=#5) // { arity: 4 }
+      Project (#0{id}, #3..=#5) // { arity: 4 }
         Map (coalesce(#2{sum}, 0), coalesce(#1{count}, 0), case when (#1{count} > 0) then (bigint_to_double(#2{sum}) / bigint_to_double(#1{count})) else 0 end) // { arity: 6 }
           Union // { arity: 3 }
             Map (null, null) // { arity: 3 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Project (#0) // { arity: 1 }
+                  Project (#0{id}) // { arity: 1 }
                     Get l8 // { arity: 3 }
                 Get l2 // { arity: 1 }
             Get l8 // { arity: 3 }
     With
       cte l8 =
-        Project (#0, #2, #3) // { arity: 3 }
+        Project (#0{id}, #2{sum}, #3) // { arity: 3 }
           Join on=(#0{id} = #1{creatorpersonid}) type=differential // { arity: 4 }
             implementation
               %1[#0]UKA » %0:l4[#0]K
@@ -2155,7 +2155,7 @@ Explained Query:
                               Get l7 // { arity: 1 }
                             Get l6 // { arity: 1 }
       cte l7 =
-        Project (#0) // { arity: 1 }
+        Project (#0{id}) // { arity: 1 }
           Join on=(#0{id} = #1{id}) type=differential // { arity: 2 }
             implementation
               %0:l6[#0]UKA » %1[#0]UKA
@@ -2166,10 +2166,10 @@ Explained Query:
                 Get l3 // { arity: 1 }
       cte l6 =
         Distinct project=[#0{id}] // { arity: 1 }
-          Project (#0) // { arity: 1 }
+          Project (#0{id}) // { arity: 1 }
             Get l5 // { arity: 2 }
       cte l5 =
-        Project (#1, #23) // { arity: 2 }
+        Project (#1{creatorpersonid}, #23) // { arity: 2 }
           Filter (#0{creationdate} < 2012-11-09 00:00:00 UTC) AND (#1{id}) IS NOT NULL // { arity: 28 }
             Join on=(#1{id} = #12{personid} AND #13{messageid} = #15{messageid} AND #23{creatorpersonid} = #27{id}) type=delta // { arity: 28 }
               implementation
@@ -2191,7 +2191,7 @@ Explained Query:
         Filter (#0{id}) IS NOT NULL // { arity: 1 }
           Get l2 // { arity: 1 }
       cte l2 =
-        Project (#0) // { arity: 1 }
+        Project (#0{id}) // { arity: 1 }
           Filter (bigint_to_numeric(#2{count_messageid}) < ((24155 - ((12 * extract_year_tstz(#1{creationdate})) + extract_month_tstz(#1{creationdate}))) + 1)) // { arity: 3 }
             Reduce group_by=[#1{id}, #0{creationdate}] aggregates=[count(#2{messageid})] // { arity: 3 }
               Union // { arity: 3 }
@@ -2206,7 +2206,7 @@ Explained Query:
                         Union // { arity: 16 }
                           Negate // { arity: 16 }
                             Distinct project=[#0{id}..=#15{email}] // { arity: 16 }
-                              Project (#0..=#15) // { arity: 16 }
+                              Project (#0{id}..=#15{email}) // { arity: 16 }
                                 Filter (#0{id} = #0{id}) AND (#3{id} = #3{id}) // { arity: 17 }
                                   Get l1 // { arity: 17 }
                           Distinct project=[#0{id}..=#15{email}] // { arity: 16 }
@@ -2215,7 +2215,7 @@ Explained Query:
                       ArrangeBy keys=[[#0{id}..=#15{email}]] // { arity: 16 }
                         Get l0 // { arity: 16 }
       cte l1 =
-        Project (#0..=#15, #17) // { arity: 17 }
+        Project (#0{id}..=#15{email}, #17) // { arity: 17 }
           Filter (#16{creationdate} <= 2012-11-09 00:00:00 UTC) AND (#16{creationdate} >= #6{creationdate}) // { arity: 29 }
             Join on=(#7{id} = #25{creatorpersonid}) type=differential // { arity: 29 }
               implementation
@@ -2226,7 +2226,7 @@ Explained Query:
               ArrangeBy keys=[[#9{creatorpersonid}]] // { arity: 13 }
                 ReadIndex on=message message_creatorpersonid=[differential join] // { arity: 13 }
       cte l0 =
-        Project (#0, #2..=#6, #8..=#15, #17, #18) // { arity: 16 }
+        Project (#0{id}, #2{partofcontinentid}..=#6{creationdate}, #8{firstname}..=#15{email}, #17, #18) // { arity: 16 }
           Filter (#1{name} = "India") AND (#8{creationdate} < 2012-11-09 00:00:00 UTC) AND (#0{id}) IS NOT NULL AND (#4{id}) IS NOT NULL // { arity: 19 }
             Join on=(#0{id} = #7{partofcountryid} AND #4{id} = #16{locationcityid}) type=delta // { arity: 19 }
               implementation
@@ -2324,21 +2324,21 @@ SELECT score_ranks.Person1Id AS "person1.id"
 Explained Query:
   Finish order_by=[#3{sum} desc nulls_first, #0{id} asc nulls_last, #1{person2id} asc nulls_last] limit=100 output=[#0..=#3]
     Return // { arity: 4 }
-      Project (#0, #1, #3, #4) // { arity: 4 }
+      Project (#0{id}, #1{person2id}, #3{sum}, #4) // { arity: 4 }
         TopK group_by=[#2{id}] order_by=[#4{sum} desc nulls_first, #0{id} asc nulls_last, #1{person2id} asc nulls_last] limit=1 // { arity: 5 }
           Union // { arity: 5 }
             Map (null) // { arity: 5 }
               Union // { arity: 4 }
                 Negate // { arity: 4 }
-                  Project (#2, #3, #0, #1) // { arity: 4 }
+                  Project (#2{id}, #3{name}, #0{id}, #1{person2id}) // { arity: 4 }
                     Get l11 // { arity: 5 }
-                Project (#2, #3, #0, #1) // { arity: 4 }
+                Project (#2{id}, #3{name}, #0{id}, #1{person2id}) // { arity: 4 }
                   Get l3 // { arity: 4 }
-            Project (#2, #3, #0, #1, #4) // { arity: 5 }
+            Project (#2{id}, #3{name}, #0{id}, #1{person2id}, #4{sum}) // { arity: 5 }
               Get l11 // { arity: 5 }
     With
       cte l11 =
-        Project (#0..=#3, #6) // { arity: 5 }
+        Project (#0{id}..=#3{person2id}, #6) // { arity: 5 }
           Join on=(#2{id} = #4 AND #3{person2id} = #5) type=differential // { arity: 7 }
             implementation
               %1[#0, #1]UKKA » %0:l3[#2, #3]KK
@@ -2362,7 +2362,7 @@ Explained Query:
                               Get l10 // { arity: 2 }
                             Get l9 // { arity: 2 }
       cte l10 =
-        Project (#0, #1) // { arity: 2 }
+        Project (#0{id}, #1{person2id}) // { arity: 2 }
           Join on=(#0{id} = #2{personid} AND #1{person2id} = #3{creatorpersonid}) type=differential // { arity: 4 }
             implementation
               %0:l9[#0, #1]UKKA » %1[#0, #1]UKKA
@@ -2379,10 +2379,10 @@ Explained Query:
                       ReadIndex on=person_likes_message person_likes_message_messageid=[differential join] // { arity: 3 }
       cte l9 =
         Distinct project=[#0{id}, #1{person2id}] // { arity: 2 }
-          Project (#0, #1) // { arity: 2 }
+          Project (#0{id}, #1{person2id}) // { arity: 2 }
             Get l8 // { arity: 6 }
       cte l8 =
-        Project (#0..=#4, #7) // { arity: 6 }
+        Project (#0{id}..=#4, #7) // { arity: 6 }
           Join on=(#0{id} = #5{id} AND #1{person2id} = #6{person2id}) type=differential // { arity: 8 }
             implementation
               %0:l4[#0, #1]KK » %1[#0, #1]KK
@@ -2398,7 +2398,7 @@ Explained Query:
                       Get l7 // { arity: 2 }
                     Get l5 // { arity: 2 }
       cte l7 =
-        Project (#0, #1) // { arity: 2 }
+        Project (#0{id}, #1{person2id}) // { arity: 2 }
           Join on=(#0{id} = #2{creatorpersonid} AND #1{person2id} = #3{creatorpersonid}) type=differential // { arity: 4 }
             implementation
               %0:l5[#0, #1]UKKA » %1[#0, #1]UKKA
@@ -2419,7 +2419,7 @@ Explained Query:
           ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
       cte l5 =
         Distinct project=[#0{id}, #1{person2id}] // { arity: 2 }
-          Project (#0, #1) // { arity: 2 }
+          Project (#0{id}, #1{person2id}) // { arity: 2 }
             Get l4 // { arity: 5 }
       cte l4 =
         Map (case when #2 then #1{person2id} else #0{id} end, case when #2 then #0{id} else #1{person2id} end) // { arity: 5 }
@@ -2543,12 +2543,12 @@ SELECT coalesce(w, -1) FROM results ORDER BY w ASC LIMIT 20
 Explained Query:
   Finish order_by=[#1{min} asc nulls_last] limit=20 output=[#2]
     Return // { arity: 3 }
-      Project (#1, #2, #2) // { arity: 3 }
+      Project (#1{min}, #2{min}, #2{min}) // { arity: 3 }
         Filter (#1{person2id} = 15393162796819) AND (#2{min} = #2{min}) // { arity: 3 }
           Get l4 // { arity: 3 }
     With Mutually Recursive
       cte l4 =
-        Project (#2, #0, #1) // { arity: 3 }
+        Project (#2{min}, #0, #1{person2id}) // { arity: 3 }
           Map (1450) // { arity: 3 }
             Reduce group_by=[#0{person2id}] aggregates=[min(#1)] // { arity: 2 }
               Distinct project=[#0{person2id}, #1] // { arity: 2 }
@@ -2562,13 +2562,13 @@ Explained Query:
                           Project (#1, #2) // { arity: 2 }
                             Get l4 // { arity: 3 }
                         ArrangeBy keys=[[#0{person1id}]] // { arity: 3 }
-                          Project (#0, #1, #3) // { arity: 3 }
+                          Project (#0{person1id}, #1{person2id}, #3) // { arity: 3 }
                             Map ((10 / bigint_to_double((coalesce(#2{sum}, 0) + 10)))) // { arity: 4 }
                               Union // { arity: 3 }
                                 Map (null) // { arity: 3 }
                                   Union // { arity: 2 }
                                     Negate // { arity: 2 }
-                                      Project (#0, #1) // { arity: 2 }
+                                      Project (#0{person1id}, #1{person2id}) // { arity: 2 }
                                         Join on=(#2 = least(#0{person1id}, #1{person2id}) AND #3 = greatest(#0{person1id}, #1{person2id})) type=differential // { arity: 4 }
                                           implementation
                                             %1[#1, #0]UKK » %0:l3[greatest(#0, #1), least(#0, #1)]KK
@@ -2576,26 +2576,26 @@ Explained Query:
                                             Get l3 // { arity: 2 }
                                           ArrangeBy keys=[[#1, #0]] // { arity: 2 }
                                             Distinct project=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] // { arity: 2 }
-                                              Project (#0, #1) // { arity: 2 }
+                                              Project (#0{person1id}, #1{person2id}) // { arity: 2 }
                                                 Get l2 // { arity: 3 }
                                     Get l3 // { arity: 2 }
                                 Get l2 // { arity: 3 }
                   Constant // { arity: 2 }
                     - (1450, 0)
       cte l3 =
-        Project (#1, #2) // { arity: 2 }
+        Project (#1{person2id}, #2) // { arity: 2 }
           ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
       cte l2 =
-        Project (#0, #1, #4) // { arity: 3 }
+        Project (#0{person1id}, #1{person2id}, #4) // { arity: 3 }
           Join on=(#2 = least(#0{person1id}, #1{person2id}) AND #3 = greatest(#0{person1id}, #1{person2id})) type=differential // { arity: 5 }
             implementation
               %1[#1, #0]UKK » %0:person_knows_person[greatest(#0, #1), least(#0, #1)]KK
             ArrangeBy keys=[[greatest(#0{person1id}, #1{person2id}), least(#0{person1id}, #1{person2id})]] // { arity: 2 }
-              Project (#1, #2) // { arity: 2 }
+              Project (#1{person2id}, #2) // { arity: 2 }
                 ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
             ArrangeBy keys=[[#1, #0]] // { arity: 3 }
               Reduce group_by=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] aggregates=[sum(case when (#2{parentmessageid}) IS NULL then 10 else 5 end)] // { arity: 3 }
-                Project (#0..=#2) // { arity: 3 }
+                Project (#0{person1id}..=#2{parentmessageid}) // { arity: 3 }
                   Join on=(#3{containerforumid} = #4{containerforumid} = #5{id}) type=delta // { arity: 6 }
                     implementation
                       %0:l1 » %1[#0]UKA » %2[#0]UKA
@@ -2614,7 +2614,7 @@ Explained Query:
                           Filter (#0{creationdate} <= 2012-11-10 00:00:00 UTC) AND (#0{creationdate} >= 2012-11-06 00:00:00 UTC) AND (#1{id}) IS NOT NULL // { arity: 4 }
                             ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
       cte l1 =
-        Project (#0, #1, #3, #4) // { arity: 4 }
+        Project (#0{person1id}, #1{person2id}, #3{containerforumid}, #4) // { arity: 4 }
           Join on=(#2{containerforumid} = #5{containerforumid} = #6{id}) type=delta // { arity: 7 }
             implementation
               %0:l0 » %1[#0]UKA » %2[#0]UKA
@@ -2633,7 +2633,7 @@ Explained Query:
                   Filter (#0{creationdate} <= 2012-11-10 00:00:00 UTC) AND (#0{creationdate} >= 2012-11-06 00:00:00 UTC) AND (#1{id}) IS NOT NULL // { arity: 4 }
                     ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
       cte l0 =
-        Project (#1, #2, #5, #6, #8) // { arity: 5 }
+        Project (#1{person2id}, #2{containerforumid}, #5, #6, #8) // { arity: 5 }
           Join on=(#1{person1id} = #4{creatorpersonid} AND #2{person2id} = #7{creatorpersonid} AND #3{messageid} = #9{parentmessageid}) type=delta // { arity: 10 }
             implementation
               %0:person_knows_person » %1:message[#1]KA » %2:message[#0, #2]KK
@@ -2642,7 +2642,7 @@ Explained Query:
             ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
               ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join 1st input (full scan)] // { arity: 3 }
             ArrangeBy keys=[[#0{messageid}, #1{creatorpersonid}], [#1{creatorpersonid}]] // { arity: 4 }
-              Project (#1, #9, #10, #12) // { arity: 4 }
+              Project (#1{creatorpersonid}, #9, #10, #12) // { arity: 4 }
                 ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
             ArrangeBy keys=[[#0{creatorpersonid}, #2{parentmessageid}]] // { arity: 3 }
               Project (#9, #10, #12) // { arity: 3 }
@@ -2789,11 +2789,11 @@ Explained Query:
                   implementation
                     %0:l17[#1]Kef » %1:l17[#1]Kef
                   ArrangeBy keys=[[#1{person2id}]] // { arity: 3 }
-                    Project (#1..=#3) // { arity: 3 }
+                    Project (#1{person2id}..=#3) // { arity: 3 }
                       Filter (#0 = false) // { arity: 4 }
                         Get l17 // { arity: 4 }
                   ArrangeBy keys=[[#1{person2id}]] // { arity: 3 }
-                    Project (#1..=#3) // { arity: 3 }
+                    Project (#1{person2id}..=#3) // { arity: 3 }
                       Filter (#0 = true) // { arity: 4 }
                         Get l17 // { arity: 4 }
       cte l17 =
@@ -2937,7 +2937,7 @@ Explained Query:
         Union // { arity: 2 }
           Distinct project=[#0{person2id}, #1] // { arity: 2 }
             Union // { arity: 2 }
-              Project (#1, #0) // { arity: 2 }
+              Project (#1, #0{person2id}) // { arity: 2 }
                 CrossJoin type=differential // { arity: 2 }
                   implementation
                     %0:l5[×] » %1[×]
@@ -2962,36 +2962,36 @@ Explained Query:
             implementation
               %0:l6[#0]Kf » %1:l6[#0]Kf
             ArrangeBy keys=[[#0{person2id}]] // { arity: 1 }
-              Project (#0) // { arity: 1 }
+              Project (#0{person2id}) // { arity: 1 }
                 Filter #1 // { arity: 2 }
                   Get l6 // { arity: 2 }
             ArrangeBy keys=[[#0{person2id}]] // { arity: 1 }
-              Project (#0) // { arity: 1 }
+              Project (#0{person2id}) // { arity: 1 }
                 Filter NOT(#1) // { arity: 2 }
                   Get l6 // { arity: 2 }
     cte l6 =
       Union // { arity: 2 }
-        Project (#1, #0) // { arity: 2 }
+        Project (#1, #0{person2id}) // { arity: 2 }
           Get l5 // { arity: 2 }
         Get l8 // { arity: 2 }
     cte l5 =
-      Project (#1, #3) // { arity: 2 }
+      Project (#1{person2id}, #3) // { arity: 2 }
         Join on=(#0 = #2{person1id}) type=differential // { arity: 4 }
           implementation
             %0:l8[#0]K » %1:l4[#0]K
           ArrangeBy keys=[[#0{person2id}]] // { arity: 2 }
             Get l8 // { arity: 2 }
           ArrangeBy keys=[[#0{person1id}]] // { arity: 2 }
-            Project (#0, #1) // { arity: 2 }
+            Project (#0{person1id}, #1{person2id}) // { arity: 2 }
               Get l4 // { arity: 3 }
     cte l4 =
-      Project (#0, #1, #3) // { arity: 3 }
+      Project (#0{person1id}, #1{person2id}, #3) // { arity: 3 }
         Map ((10 / bigint_to_double((coalesce(#2{sum}, 0) + 10)))) // { arity: 4 }
           Union // { arity: 3 }
             Map (null) // { arity: 3 }
               Union // { arity: 2 }
                 Negate // { arity: 2 }
-                  Project (#0, #1) // { arity: 2 }
+                  Project (#0{person1id}, #1{person2id}) // { arity: 2 }
                     Join on=(#2 = least(#0{person1id}, #1{person2id}) AND #3 = greatest(#0{person1id}, #1{person2id})) type=differential // { arity: 4 }
                       implementation
                         %1[#1, #0]UKK » %0:l3[greatest(#0, #1), least(#0, #1)]KK
@@ -2999,24 +2999,24 @@ Explained Query:
                         Get l3 // { arity: 2 }
                       ArrangeBy keys=[[#1, #0]] // { arity: 2 }
                         Distinct project=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] // { arity: 2 }
-                          Project (#0, #1) // { arity: 2 }
+                          Project (#0{person1id}, #1{person2id}) // { arity: 2 }
                             Get l2 // { arity: 3 }
                 Get l3 // { arity: 2 }
             Get l2 // { arity: 3 }
     cte l3 =
-      Project (#1, #2) // { arity: 2 }
+      Project (#1{person2id}, #2) // { arity: 2 }
         ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
     cte l2 =
-      Project (#0, #1, #4) // { arity: 3 }
+      Project (#0{person1id}, #1{person2id}, #4) // { arity: 3 }
         Join on=(#2 = least(#0{person1id}, #1{person2id}) AND #3 = greatest(#0{person1id}, #1{person2id})) type=differential // { arity: 5 }
           implementation
             %1[#1, #0]UKK » %0:person_knows_person[greatest(#0, #1), least(#0, #1)]KK
           ArrangeBy keys=[[greatest(#0{person1id}, #1{person2id}), least(#0{person1id}, #1{person2id})]] // { arity: 2 }
-            Project (#1, #2) // { arity: 2 }
+            Project (#1{person2id}, #2) // { arity: 2 }
               ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
           ArrangeBy keys=[[#1, #0]] // { arity: 3 }
             Reduce group_by=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] aggregates=[sum(case when (#2{parentmessageid}) IS NULL then 10 else 5 end)] // { arity: 3 }
-              Project (#0..=#2) // { arity: 3 }
+              Project (#0{person1id}..=#2{parentmessageid}) // { arity: 3 }
                 Join on=(#3{containerforumid} = #4{containerforumid} = #5{id}) type=delta // { arity: 6 }
                   implementation
                     %0:l1 » %1[#0]UKA » %2[#0]UKA
@@ -3035,7 +3035,7 @@ Explained Query:
                         Filter (#0{creationdate} <= 2012-11-10 00:00:00 UTC) AND (#0{creationdate} >= 2012-11-06 00:00:00 UTC) AND (#1{id}) IS NOT NULL // { arity: 4 }
                           ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
     cte l1 =
-      Project (#0, #1, #3, #4) // { arity: 4 }
+      Project (#0{person1id}, #1{person2id}, #3{containerforumid}, #4) // { arity: 4 }
         Join on=(#2{containerforumid} = #5{containerforumid} = #6{id}) type=delta // { arity: 7 }
           implementation
             %0:l0 » %1[#0]UKA » %2[#0]UKA
@@ -3054,7 +3054,7 @@ Explained Query:
                 Filter (#0{creationdate} <= 2012-11-10 00:00:00 UTC) AND (#0{creationdate} >= 2012-11-06 00:00:00 UTC) AND (#1{id}) IS NOT NULL // { arity: 4 }
                   ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
     cte l0 =
-      Project (#1, #2, #5, #6, #8) // { arity: 5 }
+      Project (#1{person2id}, #2{containerforumid}, #5, #6, #8) // { arity: 5 }
         Join on=(#1{person1id} = #4{creatorpersonid} AND #2{person2id} = #7{creatorpersonid} AND #3{messageid} = #9{parentmessageid}) type=delta // { arity: 10 }
           implementation
             %0:person_knows_person » %1:message[#1]KA » %2:message[#0, #2]KK
@@ -3063,7 +3063,7 @@ Explained Query:
           ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
             ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join 1st input (full scan)] // { arity: 3 }
           ArrangeBy keys=[[#0{messageid}, #1{creatorpersonid}], [#1{creatorpersonid}]] // { arity: 4 }
-            Project (#1, #9, #10, #12) // { arity: 4 }
+            Project (#1{creatorpersonid}, #9, #10, #12) // { arity: 4 }
               ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
           ArrangeBy keys=[[#0{creatorpersonid}, #2{parentmessageid}]] // { arity: 3 }
             Project (#9, #10, #12) // { arity: 3 }
@@ -3157,7 +3157,7 @@ LIMIT 20
 Explained Query:
   Finish order_by=[#6 desc nulls_first, #0{id} asc nulls_last] limit=20 output=[#0, #1, #4]
     Return // { arity: 7 }
-      Project (#0..=#2, #0, #4..=#6) // { arity: 7 }
+      Project (#0{id}..=#2{count_person2id}, #0{id}, #4{count_messageid}..=#6) // { arity: 7 }
         Filter (#2{count_person2id} <= 5) AND (#5{count_person2id} <= 5) // { arity: 7 }
           Map ((#1{count_messageid} + #4{count_messageid})) // { arity: 7 }
             Join on=(#0{id} = #3{id}) type=differential // { arity: 6 }
@@ -3171,7 +3171,7 @@ Explained Query:
                       Union // { arity: 2 }
                         Negate // { arity: 2 }
                           Distinct project=[#0{id}, #1{messageid}] // { arity: 2 }
-                            Project (#0, #1) // { arity: 2 }
+                            Project (#0{id}, #1{messageid}) // { arity: 2 }
                               Get l5 // { arity: 3 }
                         Get l3 // { arity: 2 }
               ArrangeBy keys=[[#0{id}]] // { arity: 3 }
@@ -3182,12 +3182,12 @@ Explained Query:
                       Union // { arity: 2 }
                         Negate // { arity: 2 }
                           Distinct project=[#0{id}, #1{messageid}] // { arity: 2 }
-                            Project (#0, #1) // { arity: 2 }
+                            Project (#0{id}, #1{messageid}) // { arity: 2 }
                               Get l7 // { arity: 3 }
                         Get l6 // { arity: 2 }
     With
       cte l7 =
-        Project (#0, #1, #4) // { arity: 3 }
+        Project (#0{id}, #1{messageid}, #4) // { arity: 3 }
           Join on=(#0{id} = #3{person1id} AND #4{person2id} = #5{id}) type=delta // { arity: 6 }
             implementation
               %0:l6 » %1:l4[#1]KA » %2[#0]UKA
@@ -3198,10 +3198,10 @@ Explained Query:
             Get l4 // { arity: 3 }
             ArrangeBy keys=[[#0{id}]] // { arity: 1 }
               Distinct project=[#0{id}] // { arity: 1 }
-                Project (#0) // { arity: 1 }
+                Project (#0{id}) // { arity: 1 }
                   Get l6 // { arity: 2 }
       cte l6 =
-        Project (#0, #2) // { arity: 2 }
+        Project (#0{id}, #2) // { arity: 2 }
           Join on=(#0{id} = #1{creatorpersonid} AND #2{messageid} = #3{messageid}) type=delta // { arity: 4 }
             implementation
               %0:l0 » %1[#0]K » %2[#0]UKA
@@ -3210,7 +3210,7 @@ Explained Query:
             Get l0 // { arity: 1 }
             ArrangeBy keys=[[#0{creatorpersonid}], [#1{messageid}]] // { arity: 2 }
               Distinct project=[#1{creatorpersonid}, #0{messageid}] // { arity: 2 }
-                Project (#1, #9) // { arity: 2 }
+                Project (#1{creatorpersonid}, #9) // { arity: 2 }
                   Filter (2012-12-14 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(#0{creationdate}))) // { arity: 13 }
                     ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
             ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }
@@ -3224,7 +3224,7 @@ Explained Query:
                       ArrangeBy keys=[[#0{id}]] // { arity: 5 }
                         ReadIndex on=materialize.public.tag tag_name=[lookup value=("Thailand_Noriega")] // { arity: 5 }
       cte l5 =
-        Project (#0, #1, #4) // { arity: 3 }
+        Project (#0{id}, #1{messageid}, #4) // { arity: 3 }
           Join on=(#0{id} = #3{person1id} AND #4{person2id} = #5{id}) type=delta // { arity: 6 }
             implementation
               %0:l3 » %1:l4[#1]KA » %2[#0]UKA
@@ -3235,13 +3235,13 @@ Explained Query:
             Get l4 // { arity: 3 }
             ArrangeBy keys=[[#0{id}]] // { arity: 1 }
               Distinct project=[#0{id}] // { arity: 1 }
-                Project (#0) // { arity: 1 }
+                Project (#0{id}) // { arity: 1 }
                   Get l3 // { arity: 2 }
       cte l4 =
         ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
           ReadIndex on=person_knows_person person_knows_person_person1id=[delta join lookup] person_knows_person_person2id=[delta join lookup] // { arity: 3 }
       cte l3 =
-        Project (#0, #2) // { arity: 2 }
+        Project (#0{id}, #2) // { arity: 2 }
           Join on=(#0{id} = #1{creatorpersonid} AND #2{messageid} = #3{messageid}) type=delta // { arity: 4 }
             implementation
               %0:l0 » %1[#0]K » %2[#0]UKA
@@ -3250,7 +3250,7 @@ Explained Query:
             Get l0 // { arity: 1 }
             ArrangeBy keys=[[#0{creatorpersonid}], [#1{messageid}]] // { arity: 2 }
               Distinct project=[#1{creatorpersonid}, #0{messageid}] // { arity: 2 }
-                Project (#1, #9) // { arity: 2 }
+                Project (#1{creatorpersonid}, #9) // { arity: 2 }
                   Filter (2012-10-07 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(#0{creationdate}))) // { arity: 13 }
                     ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
             ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }
@@ -3335,7 +3335,7 @@ Explained Query:
   Finish order_by=[#1{count_messageid} desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=10 output=[#0, #1]
     Return // { arity: 2 }
       Reduce group_by=[#0{creatorpersonid}] aggregates=[count(distinct #1{messageid})] // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
+        Project (#0{creatorpersonid}, #1{messageid}) // { arity: 2 }
           Join on=(#0{creatorpersonid} = #3{creatorpersonid} AND #2{containerforumid} = #4{containerforumid}) type=differential // { arity: 5 }
             implementation
               %0:l2[#0, #2]KK » %1[#0, #1]KK
@@ -3344,7 +3344,7 @@ Explained Query:
             ArrangeBy keys=[[#0{creatorpersonid}, #1{containerforumid}]] // { arity: 2 }
               Union // { arity: 2 }
                 Negate // { arity: 2 }
-                  Project (#0, #1) // { arity: 2 }
+                  Project (#0{creatorpersonid}, #1{containerforumid}) // { arity: 2 }
                     Join on=(#0{creatorpersonid} = #2{personid} AND #1{containerforumid} = #3{forumid}) type=differential // { arity: 4 }
                       implementation
                         %0:l3[#0, #1]UKKA » %1[#0, #1]UKKA
@@ -3352,16 +3352,16 @@ Explained Query:
                         Get l3 // { arity: 2 }
                       ArrangeBy keys=[[#0{personid}, #1{forumid}]] // { arity: 2 }
                         Distinct project=[#1{personid}, #0{forumid}] // { arity: 2 }
-                          Project (#1, #2) // { arity: 2 }
+                          Project (#1{personid}, #2) // { arity: 2 }
                             ReadIndex on=forum_hasmember_person forum_hasmember_person_forumid=[*** full scan ***] // { arity: 3 }
                 Get l3 // { arity: 2 }
     With
       cte l3 =
         Distinct project=[#0{creatorpersonid}, #1{containerforumid}] // { arity: 2 }
-          Project (#0, #2) // { arity: 2 }
+          Project (#0{creatorpersonid}, #2) // { arity: 2 }
             Get l2 // { arity: 3 }
       cte l2 =
-        Project (#1, #4, #6) // { arity: 3 }
+        Project (#1{messageid}, #4, #6) // { arity: 3 }
           Filter (#2{containerforumid} != #6{containerforumid}) AND (#5{creatorpersonid} != #7{creatorpersonid}) AND ((#0{creationdate} + 12:00:00) < #3{creationdate}) // { arity: 15 }
             Join on=(#2{containerforumid} = #10{forumid} = #13{forumid} AND #4{messageid} = #8{parentmessageid} AND #5{creatorpersonid} = #14{personid} AND #7{creatorpersonid} = #11{personid}) type=delta // { arity: 15 }
               implementation
@@ -3371,11 +3371,11 @@ Explained Query:
                 %3:l1 » %4:l1[#1]KA » %0:l0[#2]K » %1:l0[#2]K » %2:l0[#0, #1]KK
                 %4:l1 » %3:l1[#1]KA » %0:l0[#2]K » %1:l0[#2]K » %2:l0[#0, #1]KK
               ArrangeBy keys=[[#2{containerforumid}]] // { arity: 3 }
-                Project (#0, #2, #3) // { arity: 3 }
+                Project (#0{creationdate}, #2{containerforumid}, #3) // { arity: 3 }
                   Filter (#3{containerforumid}) IS NOT NULL // { arity: 5 }
                     Get l0 // { arity: 5 }
               ArrangeBy keys=[[#1{messageid}, #2{creatorpersonid}], [#2{creatorpersonid}]] // { arity: 4 }
-                Project (#0..=#3) // { arity: 4 }
+                Project (#0{creationdate}..=#3{containerforumid}) // { arity: 4 }
                   Get l0 // { arity: 5 }
               ArrangeBy keys=[[#0{creatorpersonid}, #1{parentmessageid}]] // { arity: 2 }
                 Project (#2, #4) // { arity: 2 }
@@ -3387,7 +3387,7 @@ Explained Query:
         ArrangeBy keys=[[#1{forumid}], [#2{personid}]] // { arity: 3 }
           ReadIndex on=forum_hasmember_person forum_hasmember_person_forumid=[delta join lookup] forum_hasmember_person_personid=[delta join lookup] // { arity: 3 }
       cte l0 =
-        Project (#0, #1, #9, #10, #12) // { arity: 5 }
+        Project (#0{creationdate}, #1{messageid}, #9, #10, #12) // { arity: 5 }
           Join on=(#1{messageid} = #13{messageid}) type=differential // { arity: 14 }
             implementation
               %1[#0]UKA » %0:message[#1]KA
@@ -3403,7 +3403,7 @@ Explained Query:
                       ReadIndex on=message_hastag_tag message_hastag_tag_tagid=[differential join] // { arity: 3 }
                     ArrangeBy keys=[[#0{id}]] // { arity: 1 }
                       Distinct project=[#0{id}] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
+                        Project (#0{id}) // { arity: 1 }
                           Filter (#0{id}) IS NOT NULL // { arity: 5 }
                             ReadIndex on=materialize.public.tag tag_name=[lookup value=("Cosmic_Egg")] // { arity: 5 }
 
@@ -3455,7 +3455,7 @@ Explained Query:
   Finish order_by=[#2{count} desc nulls_first, #0{personid} asc nulls_last, #1{personid} asc nulls_last] limit=20 output=[#0..=#2]
     Return // { arity: 3 }
       Reduce group_by=[#0{personid}, #1{personid}] aggregates=[count(*)] // { arity: 3 }
-        Project (#0, #1) // { arity: 2 }
+        Project (#0{personid}, #1{personid}) // { arity: 2 }
           Join on=(#0{personid} = #2{personid} AND #1{personid} = #3{personid}) type=differential // { arity: 4 }
             implementation
               %0:l1[#0, #1]KK » %1[#0, #1]KK
@@ -3464,7 +3464,7 @@ Explained Query:
             ArrangeBy keys=[[#0{personid}, #1{personid}]] // { arity: 2 }
               Union // { arity: 2 }
                 Negate // { arity: 2 }
-                  Project (#0, #1) // { arity: 2 }
+                  Project (#0{personid}, #1{personid}) // { arity: 2 }
                     Join on=(#0{personid} = #2{person2id} AND #1{personid} = #3{person1id}) type=differential // { arity: 4 }
                       implementation
                         %0:l2[#0, #1]UKKA » %1[#0, #1]UKKA
@@ -3472,7 +3472,7 @@ Explained Query:
                         Get l2 // { arity: 2 }
                       ArrangeBy keys=[[#0{person2id}, #1{person1id}]] // { arity: 2 }
                         Distinct project=[#1{person2id}, #0{person1id}] // { arity: 2 }
-                          Project (#1, #2) // { arity: 2 }
+                          Project (#1{person2id}, #2) // { arity: 2 }
                             ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
                 Get l2 // { arity: 2 }
     With
@@ -3480,7 +3480,7 @@ Explained Query:
         Distinct project=[#0{personid}, #1{personid}] // { arity: 2 }
           Get l1 // { arity: 2 }
       cte l1 =
-        Project (#0, #2) // { arity: 2 }
+        Project (#0{personid}, #2) // { arity: 2 }
           Filter (#0{personid} != #2{personid}) // { arity: 4 }
             Join on=(#1{person2id} = #3{person2id}) type=differential // { arity: 4 }
               implementation
@@ -3489,7 +3489,7 @@ Explained Query:
               Get l0 // { arity: 2 }
       cte l0 =
         ArrangeBy keys=[[#1{person2id}]] // { arity: 2 }
-          Project (#0, #9) // { arity: 2 }
+          Project (#0{personid}, #9) // { arity: 2 }
             Filter (#1{tagid}) IS NOT NULL // { arity: 10 }
               Join on=(#0{personid} = #8{person1id} AND #1{tagid} = #2{id}) type=delta // { arity: 10 }
                 implementation
@@ -3497,7 +3497,7 @@ Explained Query:
                   %1:tag » %0:person_hasinterest_tag[#1]KA » %2:person_knows_person[#1]KA
                   %2:person_knows_person » %0:person_hasinterest_tag[#0]K » %1:tag[#0]KAe
                 ArrangeBy keys=[[#0{personid}], [#1{tagid}]] // { arity: 2 }
-                  Project (#1, #2) // { arity: 2 }
+                  Project (#1{tagid}, #2) // { arity: 2 }
                     ReadIndex on=person_hasinterest_tag person_hasinterest_tag_tagid=[*** full scan ***] // { arity: 3 }
                 ArrangeBy keys=[[#0{id}]] // { arity: 5 }
                   ReadIndex on=materialize.public.tag tag_name=[lookup value=("Fyodor_Dostoyevsky")] // { arity: 5 }
@@ -3553,11 +3553,11 @@ materialize.public.pathq19:
   Return // { arity: 3 }
     Union // { arity: 3 }
       Get l0 // { arity: 3 }
-      Project (#1, #0, #2) // { arity: 3 }
+      Project (#1{person1id}, #0{person2id}, #2) // { arity: 3 }
         Get l0 // { arity: 3 }
   With
     cte l0 =
-      Project (#0, #1, #3) // { arity: 3 }
+      Project (#0{person1id}, #1{person2id}, #3) // { arity: 3 }
         Map (greatest(f64toi64(roundf64((40 - sqrtf64(bigint_to_double(#2{count}))))), 1)) // { arity: 4 }
           Reduce group_by=[#0{person1id}, #1{person2id}] aggregates=[count(*)] // { arity: 3 }
             Project (#16, #17) // { arity: 2 }
@@ -3651,7 +3651,7 @@ SELECT src, dst, w
 Explained Query:
   Return // { arity: 3 }
     Return // { arity: 3 }
-      Project (#0..=#2) // { arity: 3 }
+      Project (#0{id}..=#2{min}) // { arity: 3 }
         Join on=(#2{min} = #3{min_min}) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l1[#2]K
@@ -3665,7 +3665,7 @@ Explained Query:
                   Get l1 // { arity: 3 }
     With
       cte l1 =
-        Project (#0..=#2) // { arity: 3 }
+        Project (#0{id}..=#2{min}) // { arity: 3 }
           Join on=(#1{id} = #3{id} = #4{id}) type=delta // { arity: 5 }
             implementation
               %0:l0 » %1[#0]UKA » %2[#0]UKA
@@ -3688,7 +3688,7 @@ Explained Query:
       Reduce group_by=[#0{id}, #1{id}] aggregates=[min(#2)] // { arity: 3 }
         Distinct project=[#0{id}..=#2] // { arity: 3 }
           Union // { arity: 3 }
-            Project (#1, #1, #12) // { arity: 3 }
+            Project (#1{id}, #1{id}, #12) // { arity: 3 }
               Map (0) // { arity: 13 }
                 ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(655)] // { arity: 12 }
             Project (#0, #4, #6) // { arity: 3 }
@@ -3767,7 +3767,7 @@ WHERE w = (SELECT MIN(w) FROM paths)
 ----
 Explained Query:
   Return // { arity: 3 }
-    Project (#0..=#2) // { arity: 3 }
+    Project (#0{id}..=#2{min}) // { arity: 3 }
       Join on=(#2{min} = #3{min_min}) type=differential // { arity: 4 }
         implementation
           %1[#0]UK » %0:l2[#2]K
@@ -3796,7 +3796,7 @@ Explained Query:
           Get l2 // { arity: 3 }
     cte l2 =
       Reduce group_by=[#0{id}, #2{id}] aggregates=[min((#1 + #3))] // { arity: 3 }
-        Project (#0, #2, #3, #5) // { arity: 4 }
+        Project (#0{id}, #2{id}, #3, #5) // { arity: 4 }
           Join on=(#1{id} = #4{id}) type=differential // { arity: 6 }
             implementation
               %0:l0[#1]K » %1:l1[#1]K
@@ -3809,7 +3809,7 @@ Explained Query:
     cte l1 =
       TopK group_by=[#0{id}, #1{id}] order_by=[#2 asc nulls_last] limit=1 // { arity: 3 }
         Union // { arity: 3 }
-          Project (#1, #1, #12) // { arity: 3 }
+          Project (#1{id}, #1{id}, #12) // { arity: 3 }
             Map (0) // { arity: 13 }
               ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(1138)] // { arity: 12 }
           Project (#0, #5, #7) // { arity: 3 }
@@ -3840,7 +3840,7 @@ Explained Query:
     cte l0 =
       TopK group_by=[#0{id}, #1{id}] order_by=[#2 asc nulls_last] limit=1 // { arity: 3 }
         Union // { arity: 3 }
-          Project (#1, #1, #12) // { arity: 3 }
+          Project (#1{id}, #1{id}, #12) // { arity: 3 }
             Map (0) // { arity: 13 }
               ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(655)] // { arity: 12 }
           Project (#0, #5, #7) // { arity: 3 }
@@ -3934,7 +3934,7 @@ Explained Query:
   Finish order_by=[#0{id} asc nulls_last, #1{id} asc nulls_last] output=[#0..=#2]
     Return // { arity: 3 }
       Return // { arity: 3 }
-        Project (#0..=#2) // { arity: 3 }
+        Project (#0{id}..=#2{min}) // { arity: 3 }
           Join on=(#2{min} = #3{min_min}) type=differential // { arity: 4 }
             implementation
               %1[#0]UK » %0:l9[#2]K
@@ -3949,16 +3949,16 @@ Explained Query:
       With
         cte l9 =
           Reduce group_by=[#0{id}, #2{id}] aggregates=[min((#1 + #3))] // { arity: 3 }
-            Project (#0, #2, #3, #5) // { arity: 4 }
+            Project (#0{id}, #2{id}, #3, #5) // { arity: 4 }
               Join on=(#1{id} = #4{id}) type=differential // { arity: 6 }
                 implementation
                   %0:l8[#1]Kef » %1:l8[#1]Kef
                 ArrangeBy keys=[[#1{id}]] // { arity: 3 }
-                  Project (#1..=#3) // { arity: 3 }
+                  Project (#1{id}..=#3) // { arity: 3 }
                     Filter (#0 = false) // { arity: 4 }
                       Get l8 // { arity: 4 }
                 ArrangeBy keys=[[#1{id}]] // { arity: 3 }
-                  Project (#1..=#3) // { arity: 3 }
+                  Project (#1{id}..=#3) // { arity: 3 }
                     Filter (#0 = true) // { arity: 4 }
                       Get l8 // { arity: 4 }
         cte l8 =
@@ -3979,7 +3979,7 @@ Explained Query:
       cte l7 =
         Distinct project=[#0..=#5] // { arity: 6 }
           Union // { arity: 6 }
-            Project (#1, #0, #0, #2..=#4) // { arity: 6 }
+            Project (#1{id}, #0, #0, #2{id}..=#4) // { arity: 6 }
               Map (0, false, 0) // { arity: 5 }
                 Union // { arity: 2 }
                   Project (#1, #12) // { arity: 2 }
@@ -4167,7 +4167,7 @@ Explained Query:
   Finish order_by=[#0{dst} asc nulls_last] limit=20 output=[#0, #1]
     Return // { arity: 2 }
       Return // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
+        Project (#0{dst}, #1{min}) // { arity: 2 }
           Filter (#1{min} = #3{min_min}) // { arity: 4 }
             Join on=(#1{min} = #2{min}) type=differential // { arity: 4 }
               implementation
@@ -4189,12 +4189,12 @@ Explained Query:
           Project (#1) // { arity: 1 }
             Get l1 // { arity: 2 }
         cte l1 =
-          Project (#0, #1) // { arity: 2 }
+          Project (#0{dst}, #1{min}) // { arity: 2 }
             Join on=(#0{dst} = #2{personid}) type=differential // { arity: 3 }
               implementation
                 %1[#0]UKA » %0:l0[#0]UK
               ArrangeBy keys=[[#0{dst}]] // { arity: 2 }
-                Project (#1, #2) // { arity: 2 }
+                Project (#1{min}, #2) // { arity: 2 }
                   Get l0 // { arity: 3 }
               ArrangeBy keys=[[#0{personid}]] // { arity: 1 }
                 Distinct project=[#0{personid}] // { arity: 1 }
@@ -4209,7 +4209,7 @@ Explained Query:
                           ReadIndex on=company company_id=[differential join] // { arity: 4 }
     With Mutually Recursive
       cte l0 =
-        Project (#2, #0, #1) // { arity: 3 }
+        Project (#2{min}, #0, #1{dst}) // { arity: 3 }
           Map (10995116285979) // { arity: 3 }
             Reduce group_by=[#0{dst}] aggregates=[min(#1)] // { arity: 2 }
               Distinct project=[#0{dst}, #1] // { arity: 2 }
@@ -4220,7 +4220,7 @@ Explained Query:
                         implementation
                           %0:l0[#0]UK » %1:pathq20[#0]KA
                         ArrangeBy keys=[[#0{dst}]] // { arity: 2 }
-                          Project (#1, #2) // { arity: 2 }
+                          Project (#1{min}, #2) // { arity: 2 }
                             Get l0 // { arity: 3 }
                         ArrangeBy keys=[[#0{src}]] // { arity: 3 }
                           ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
@@ -4275,7 +4275,7 @@ Explained Query:
   Finish order_by=[#0{dst} asc nulls_last] limit=20 output=[#0, #1]
     Return // { arity: 2 }
       Return // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
+        Project (#0{dst}, #1{min}) // { arity: 2 }
           Filter (#1{min} = #3{min_min}) // { arity: 4 }
             Join on=(#1{min} = #2{min}) type=differential // { arity: 4 }
               implementation
@@ -4297,7 +4297,7 @@ Explained Query:
           Project (#1) // { arity: 1 }
             Get l1 // { arity: 2 }
         cte l1 =
-          Project (#0, #1) // { arity: 2 }
+          Project (#0{dst}, #1{min}) // { arity: 2 }
             Join on=(#0{dst} = #2{personid}) type=differential // { arity: 3 }
               implementation
                 %1[#0]UKA » %0:l0[#0]UK
@@ -4384,7 +4384,7 @@ Explained Query:
   Finish order_by=[#0{dst} asc nulls_last] limit=20 output=[#0..=#2]
     Return // { arity: 3 }
       Return // { arity: 3 }
-        Project (#0..=#2) // { arity: 3 }
+        Project (#0{dst}..=#2{min}) // { arity: 3 }
           Filter (#1{min} = #4{min_min}) // { arity: 5 }
             Join on=(#1{min} = #3{min}) type=differential // { arity: 5 }
               implementation
@@ -4406,12 +4406,12 @@ Explained Query:
           Project (#1) // { arity: 1 }
             Get l1 // { arity: 3 }
         cte l1 =
-          Project (#0..=#2) // { arity: 3 }
+          Project (#0{dst}..=#2{min}) // { arity: 3 }
             Join on=(#0{dst} = #3{personid}) type=differential // { arity: 4 }
               implementation
                 %1[#0]UKA » %0:l0[#0]K
               ArrangeBy keys=[[#0{dst}]] // { arity: 3 }
-                Project (#1..=#3) // { arity: 3 }
+                Project (#1{min}..=#3) // { arity: 3 }
                   Get l0 // { arity: 4 }
               ArrangeBy keys=[[#0{personid}]] // { arity: 1 }
                 Distinct project=[#0{personid}] // { arity: 1 }
@@ -4426,7 +4426,7 @@ Explained Query:
                           ReadIndex on=company company_id=[differential join] // { arity: 4 }
     With Mutually Recursive
       cte l0 =
-        Project (#3, #0..=#2) // { arity: 4 }
+        Project (#3{min}, #0..=#2{min}) // { arity: 4 }
           Map (10995116285979) // { arity: 4 }
             Reduce group_by=[#0{dst}, #2{min}] aggregates=[min(#1)] // { arity: 3 }
               Reduce group_by=[#0{dst}, #2] aggregates=[min(#1)] // { arity: 3 }
@@ -4438,7 +4438,7 @@ Explained Query:
                           implementation
                             %1:pathq20[#0]KA » %0:l0[#0]K
                           ArrangeBy keys=[[#0{dst}]] // { arity: 3 }
-                            Project (#1..=#3) // { arity: 3 }
+                            Project (#1{min}..=#3) // { arity: 3 }
                               Get l0 // { arity: 4 }
                           ArrangeBy keys=[[#0{src}]] // { arity: 3 }
                             ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
@@ -4535,7 +4535,7 @@ Explained Query:
   Finish order_by=[#0{personid} asc nulls_last] limit=20 output=[#0, #1]
     Return // { arity: 2 }
       Return // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
+        Project (#0{personid}, #1{min}) // { arity: 2 }
           Join on=(#1{min} = #2{min_min}) type=differential // { arity: 3 }
             implementation
               %1[#0]UK » %0:l11[#1]K
@@ -4549,18 +4549,18 @@ Explained Query:
                     Get l11 // { arity: 2 }
       With
         cte l11 =
-          Project (#1, #2) // { arity: 2 }
+          Project (#1{min}, #2) // { arity: 2 }
             Reduce group_by=[#0{personid}, #2{personid}] aggregates=[min((#1 + #3))] // { arity: 3 }
-              Project (#0, #2, #3, #5) // { arity: 4 }
+              Project (#0{personid}, #2{personid}, #3, #5) // { arity: 4 }
                 Join on=(#1{personid} = #4{personid}) type=differential // { arity: 6 }
                   implementation
                     %0:l10[#1]Kef » %1:l10[#1]Kef
                   ArrangeBy keys=[[#1{personid}]] // { arity: 3 }
-                    Project (#1..=#3) // { arity: 3 }
+                    Project (#1{personid}..=#3) // { arity: 3 }
                       Filter (#0 = false) // { arity: 4 }
                         Get l10 // { arity: 4 }
                   ArrangeBy keys=[[#1{personid}]] // { arity: 3 }
-                    Project (#1..=#3) // { arity: 3 }
+                    Project (#1{personid}..=#3) // { arity: 3 }
                       Filter (#0 = true) // { arity: 4 }
                         Get l10 // { arity: 4 }
         cte l10 =
@@ -4581,14 +4581,14 @@ Explained Query:
       cte l9 =
         Distinct project=[#0..=#5] // { arity: 6 }
           Union // { arity: 6 }
-            Project (#0..=#2, #4, #3, #5) // { arity: 6 }
+            Project (#0..=#2{personid}, #4, #3, #5) // { arity: 6 }
               Map (false, 0, 0) // { arity: 6 }
                 Distinct project=[#0..=#2{personid}] // { arity: 3 }
                   Union // { arity: 3 }
                     Project (#1, #0, #0) // { arity: 3 }
                       Map (10995116285979, false) // { arity: 2 }
                         Get l8 // { arity: 0 }
-                    Project (#1, #0, #0) // { arity: 3 }
+                    Project (#1{personid}, #0, #0) // { arity: 3 }
                       Map (true) // { arity: 2 }
                         CrossJoin type=differential // { arity: 1 }
                           implementation
