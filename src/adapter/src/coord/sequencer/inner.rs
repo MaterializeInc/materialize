@@ -3434,22 +3434,34 @@ impl Coordinator {
                     }
                 }
 
-                mz_ore::soft_assert_eq_or_log!(
-                    curr_tables_by_name.len(),
-                    curr_subsources_by_reference.len(),
-                    "PostgresSourcePublicationDetails must have entry for every reference"
-                );
+                if curr_tables_by_name.len() != curr_subsources_by_reference.len() {
+                    Err(AdapterError::internal(
+                        ALTER_SOURCE,
+                        "PostgresSourcePublicationDetails must have entry for every reference",
+                    ))?;
+                }
+
+                for (text_cols, var_name) in [
+                    (&curr_text_columns, "curr_text_columns"),
+                    (&new_text_columns, "new_text_columns"),
+                ] {
+                    if let Some(column) = text_cols.iter().find(|c| c.0.len() != 4) {
+                        Err(AdapterError::internal(
+                            ALTER_SOURCE,
+                            format!(
+                                "all TEXT COLUMNS values must be column-qualified references, but found {:?} in {}",
+                                column,
+                                var_name
+                            ),
+                        ))?;
+                    }
+                }
 
                 // Track the set of text columns.
                 let mut curr_text_columns_mapping: BTreeMap<u32, BTreeSet<u16>> = BTreeMap::new();
 
                 // Drop all text columns that are not currently referred to.
                 curr_text_columns.retain(|column_qualified_reference| {
-                    mz_ore::soft_assert_eq_or_log!(
-                        column_qualified_reference.0.len(),
-                        4,
-                        "all TEXT COLUMNS values must be column-qualified references"
-                    );
                     let mut table_name = column_qualified_reference.clone();
                     let col = table_name.0.pop().expect("non-zero");
                     match curr_tables_by_name.get(&table_name) {
@@ -3656,10 +3668,12 @@ impl Coordinator {
 
                 ops.extend(new_ops.into_iter());
 
-                assert!(
-                    if_not_exists_ids.is_empty(),
-                    "IF NOT EXISTS not supported for ALTER SOURCE...ADD SUBSOURCES"
-                );
+                if !if_not_exists_ids.is_empty() {
+                    Err(AdapterError::internal(
+                        ALTER_SOURCE,
+                        "IF NOT EXISTS not supported for ALTER SOURCE...ADD SUBSOURCES",
+                    ))?;
+                }
 
                 self.catalog_transact(Some(session), ops).await?;
 
