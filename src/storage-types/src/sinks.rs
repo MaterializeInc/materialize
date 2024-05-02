@@ -384,6 +384,8 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub relation_key_indices: Option<Vec<usize>>,
     /// The user-specified key for the sink.
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    /// The index of the column containing message headers value, if any.
+    pub headers_index: Option<usize>,
     pub value_desc: RelationDesc,
     pub topic: String,
     pub compression_type: KafkaSinkCompressionType,
@@ -473,6 +475,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             format,
             relation_key_indices,
             key_desc_and_indices,
+            headers_index,
             value_desc,
             topic,
             compression_type,
@@ -495,6 +498,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
                 key_desc_and_indices == &other.key_desc_and_indices,
                 "key_desc_and_indices",
             ),
+            (headers_index == &other.headers_index, "headers_index"),
             (value_desc == &other.value_desc, "value_desc"),
             (topic == &other.topic, "topic"),
             (
@@ -536,6 +540,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             format,
             relation_key_indices,
             key_desc_and_indices,
+            headers_index,
             value_desc,
             topic,
             compression_type,
@@ -548,6 +553,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             format: format.into_inline_connection(r),
             relation_key_indices,
             key_desc_and_indices,
+            headers_index,
             value_desc,
             topic,
             compression_type,
@@ -602,6 +608,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             format: Some(self.format.into_proto()),
             key_desc_and_indices: self.key_desc_and_indices.into_proto(),
             relation_key_indices: self.relation_key_indices.into_proto(),
+            headers_index: self.headers_index.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
             topic: self.topic.clone(),
             compression_type: Some(match self.compression_type {
@@ -630,6 +637,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::format")?,
             key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
             relation_key_indices: proto.relation_key_indices.into_rust()?,
+            headers_index: proto.headers_index.into_rust()?,
             value_desc: proto
                 .value_desc
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::value_desc")?,
