@@ -1395,20 +1395,54 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
-        self.state
-            .entry_by_id
-            .get(&id)
-            .try_map(|entry| {
-                Ok::<_, SqlCatalogError>(
-                    entry
-                        .desc(&self.resolve_full_name(entry.name()))?
-                        .iter_names()
-                        .cloned()
-                        .map(|col_name| col_name.to_string())
-                        .collect(),
-                )
-            })
-            .unwrap_or(None)
+        let Some(entry) = self.state.entry_by_id.get(&id) else {
+            return None;
+        };
+
+        match entry.index() {
+            Some(index) => {
+                let Some(on_entry) = self.state.entry_by_id.get(&index.on) else {
+                    return None;
+                };
+                let Ok(on_desc) = on_entry.desc(&self.resolve_full_name(on_entry.name())) else {
+                    return None;
+                };
+
+                let mut on_names = on_desc
+                    .iter_names()
+                    .map(|col_name| col_name.to_string())
+                    .collect::<Vec<_>>();
+
+                let (p, _) = mz_expr::permutation_for_arrangement(&index.keys, on_desc.arity());
+
+                // Init ix_names with unknown column names. Unknown columns are
+                // represented as an empty String and rendered as `#c` by the
+                // Display::fmt implementation for HumanizedExpr<'a, usize, M>.
+                let ix_arity = p.values().cloned().max().map(|m| m + 1).unwrap_or(0);
+                let mut ix_names = vec![String::new(); ix_arity];
+
+                // Apply the permutation by swapping on_names with ix_names.
+                for (on_pos, ix_pos) in p.into_iter() {
+                    let on_name = on_names.get_mut(on_pos).expect("on_name");
+                    let ix_name = ix_names.get_mut(ix_pos).expect("ix_name");
+                    std::mem::swap(on_name, ix_name);
+                }
+
+                Some(ix_names) // Return the updated ix_names vector.
+            }
+            None => {
+                let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name())) else {
+                    return None;
+                };
+
+                let column_names = desc
+                    .iter_names()
+                    .map(|col_name| col_name.to_string())
+                    .collect();
+
+                Some(column_names)
+            }
+        }
     }
 
     fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {

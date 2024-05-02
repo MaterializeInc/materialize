@@ -163,7 +163,7 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
 
                 let (map_cols, filter_cols) = if !ctx.config.humanized_exprs {
                     (None, None)
-                } else if let Some(cols) = ctx.humanizer.column_names_for_id(*coll_id) {
+                } else if let Some(cols) = ctx.humanizer.column_names_for_id(*idx_id) {
                     let map_cols = itertools::chain(
                         cols.iter().cloned(),
                         std::iter::repeat(String::new()).take(map.len()),

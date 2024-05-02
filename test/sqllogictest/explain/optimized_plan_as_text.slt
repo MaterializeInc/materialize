@@ -140,8 +140,8 @@ SELECT 1, a + b as c FROM iv WHERE b = 5 and a < 0 and a + b > 0
 ----
 Explained Query (fast path):
   Project (#4, #3)
-    Filter (#1{b} < 0) AND ((#1{b} + #0{a}) > 0)
-      Map ((#1{b} + 5), 1)
+    Filter (#1{a} < 0) AND ((#1{a} + #0{b}) > 0)
+      Map ((#1{a} + 5), 1)
         ReadIndex on=materialize.public.iv iv_b_idx_2=[lookup value=(5)]
 
 Used Indexes:
