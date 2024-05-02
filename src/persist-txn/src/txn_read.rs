@@ -41,7 +41,7 @@ use crate::TxnsCodecDefault;
 ///
 /// - Invariant: `latest_write <= as_of < empty_to`
 /// - Invariant: `(latest_write, empty_to)` and `(as_of, empty_to)` have no
-///   committed writes (which means we can do an empty CaA of those times if we
+///   unapplied writes (which means we can do an empty CaA of those times if we
 ///   like).
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
@@ -53,7 +53,7 @@ pub struct DataSnapshot<T> {
     pub(crate) latest_write: Option<T>,
     /// The as_of asked for.
     pub(crate) as_of: T,
-    /// An upper bound on the times known to be empty of writes via txns.
+    /// An upper bound on the times known to be empty of unapplied writes via txns.
     pub(crate) empty_to: T,
 }
 
