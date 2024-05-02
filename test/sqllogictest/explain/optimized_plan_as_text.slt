@@ -94,7 +94,7 @@ ROLLBACK
 
 # Test constant error.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT 1 / 0
 ----
 Explained Query (fast path):
@@ -106,7 +106,7 @@ EOF
 
 # Test constant with two elements.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
 Explained Query (fast path):
@@ -135,17 +135,17 @@ EOF
 
 # Test basic linear chains (fast path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
-SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+SELECT 1, a + b as c FROM iv WHERE b = 5 and a < 0 and a + b > 0
 ----
 Explained Query (fast path):
-  Project (#3, #2)
-    Filter (#0 > 0) AND (#1 < 0) AND (#2 > 0)
-      Map ((#0 + #1), 1)
-        ReadIndex on=materialize.public.t t_a_idx=[*** full scan ***]
+  Project (#4, #3)
+    Filter (#1{b} < 0) AND ((#1{b} + #0{a}) > 0)
+      Map ((#1{b} + 5), 1)
+        ReadIndex on=materialize.public.iv iv_b_idx_2=[lookup value=(5)]
 
 Used Indexes:
-  - materialize.public.t_a_idx (*** full scan ***)
+  - materialize.public.iv_b_idx_2 (lookup)
 
 Target cluster: quickstart
 
@@ -153,17 +153,17 @@ EOF
 
 # Test basic linear chains (slow path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
 ----
 Explained Query:
   Project (#3, #2)
-    Filter (#1 < 0) AND (#0 > 0) AND (#2 > 0)
-      Map ((#0 + #1), 1)
+    Filter (#1{b} < 0) AND (#0{a} > 0) AND (#2 > 0)
+      Map ((#0{a} + #1{b}), 1)
         ReadStorage materialize.public.mv
 
 Source materialize.public.mv
-  filter=((#0 > 0) AND (#1 < 0) AND ((#0 + #1) > 0))
+  filter=((#0{a} > 0) AND (#1{b} < 0) AND ((#0{a} + #1{b}) > 0))
 
 Target cluster: quickstart
 
@@ -171,12 +171,12 @@ EOF
 
 # Test table functions in the select clause (FlatMap).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT generate_series(a, b) from t
 ----
 Explained Query:
   Project (#2)
-    FlatMap generate_series(#0, #1, 1)
+    FlatMap generate_series(#0{a}, #1{b}, 1)
       ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -188,17 +188,17 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
 Explained Query:
   Threshold
     Union
-      Distinct project=[#0]
+      Distinct project=[#0{a}]
         Project (#0)
           ReadIndex on=t t_a_idx=[*** full scan ***]
       Negate
-        Distinct project=[#0]
+        Distinct project=[#0{b}]
           Project (#1)
             ReadStorage materialize.public.mv
 
@@ -211,7 +211,7 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT a FROM t EXCEPT ALL SELECT b FROM mv
 ----
 Explained Query:
@@ -232,11 +232,11 @@ EOF
 
 # Test TopK.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT * FROM ov
 ----
 Explained Query:
-  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
+  TopK order_by=[#1{b} asc nulls_last, #0{a} desc nulls_first] limit=5
     ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -248,7 +248,7 @@ EOF
 
 # Test Finish.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
 Explained Query (fast path):
@@ -264,7 +264,7 @@ EOF
 
 # Test Reduce (global).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
 Explained Query:
@@ -282,7 +282,7 @@ Explained Query:
                 - ()
   With
     cte l0 =
-      Reduce aggregates=[min(#0), max(#0)]
+      Reduce aggregates=[min(#0{a}), max(#0{a})]
         Project (#0)
           ReadIndex on=t t_a_idx=[*** full scan ***]
 
@@ -295,13 +295,13 @@ EOF
 
 # Test Reduce (local).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
 Explained Query:
   Project (#3)
     Map (abs((#1 - #2)))
-      Reduce group_by=[#1] aggregates=[min(#0), max(#0)]
+      Reduce group_by=[#1{b}] aggregates=[min(#0{a}), max(#0{a})]
         ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -313,22 +313,22 @@ EOF
 
 # Test EXISTS subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
 Explained Query:
   Return
     Project (#0, #1)
-      Join on=(#1 = #2) type=differential
-        ArrangeBy keys=[[#1]]
+      Join on=(#1{b} = #2{b}) type=differential
+        ArrangeBy keys=[[#1{b}]]
           Get l0
-        ArrangeBy keys=[[#0]]
-          Distinct project=[#0]
+        ArrangeBy keys=[[#0{b}]]
+          Distinct project=[#0{b}]
             Project (#0)
-              Filter (#0 > #1)
+              Filter (#0{b} > #1{b})
                 CrossJoin type=differential
                   ArrangeBy keys=[[]]
-                    Distinct project=[#0]
+                    Distinct project=[#0{b}]
                       Project (#1)
                         Get l0
                   ArrangeBy keys=[[]]
@@ -337,16 +337,16 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #1)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
+        Join on=(#0{a} = #2{a}) type=differential
+          ArrangeBy keys=[[#0{a}]]
             ReadIndex on=t t_a_idx=[differential join]
-          ArrangeBy keys=[[#0]]
-            Distinct project=[#0]
+          ArrangeBy keys=[[#0{a}]]
+            Distinct project=[#0{a}]
               Project (#0)
-                Filter (#0 < #1)
+                Filter (#0{a} < #1{a})
                   CrossJoin type=differential
                     ArrangeBy keys=[[]]
-                      Distinct project=[#0]
+                      Distinct project=[#0{a}]
                         Project (#0)
                           ReadIndex on=t t_a_idx=[*** full scan ***]
                     ArrangeBy keys=[[]]
@@ -362,16 +362,16 @@ EOF
 
 # Test SELECT subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 Explained Query:
   Return
     Project (#2, #4)
-      Join on=(#0 = #1 = #3) type=delta
-        ArrangeBy keys=[[#0]]
+      Join on=(#0{b} = #1{b} = #3{b}) type=delta
+        ArrangeBy keys=[[#0{b}]]
           Get l0
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{b}]]
           Union
             Get l3
             Map (null)
@@ -380,7 +380,7 @@ Explained Query:
                   Project (#0)
                     Get l3
                 Get l1
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{b}]]
           Union
             Get l4
             Map (null)
@@ -391,34 +391,34 @@ Explained Query:
                 Get l1
   With
     cte l4 =
-      TopK group_by=[#0] limit=1
+      TopK group_by=[#0{b}] limit=1
         Project (#0, #1)
-          Filter (#0) IS NOT NULL
-            Join on=(#0 = #2) type=differential
+          Filter (#0{b}) IS NOT NULL
+            Join on=(#0{b} = #2{b}) type=differential
               Get l2
-              ArrangeBy keys=[[#1]]
-                Filter (#1) IS NOT NULL
+              ArrangeBy keys=[[#1{b}]]
+                Filter (#1{b}) IS NOT NULL
                   ReadStorage materialize.public.mv
     cte l3 =
-      TopK group_by=[#0] limit=1
+      TopK group_by=[#0{b}] limit=1
         Project (#0, #1)
-          Filter (#0) IS NOT NULL
-            Join on=(#0 = #2) type=differential
+          Filter (#0{b}) IS NOT NULL
+            Join on=(#0{b} = #2{b}) type=differential
               Get l2
-              ArrangeBy keys=[[#1]]
+              ArrangeBy keys=[[#1{b}]]
                 ReadIndex on=iv iv_b_idx=[differential join]
     cte l2 =
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{b}]]
         Get l1
     cte l1 =
-      Distinct project=[#0]
+      Distinct project=[#0{b}]
         Get l0
     cte l0 =
       Project (#1)
         ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Source materialize.public.mv
-  filter=((#1) IS NOT NULL)
+  filter=((#1{b}) IS NOT NULL)
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -430,7 +430,7 @@ EOF
 
 # Test outer joins (ON syntax).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT t1.a, t2.a
 FROM t as t1
 LEFT JOIN t as t2 ON t1.b = t2.b
@@ -443,12 +443,12 @@ Explained Query:
         Union
           Negate
             Project ()
-              Join on=(#0 = #1) type=differential
-                ArrangeBy keys=[[#0]]
+              Join on=(#0{b} = #1{b}) type=differential
+                ArrangeBy keys=[[#0{b}]]
                   Project (#1)
                     ReadIndex on=t t_a_idx=[*** full scan ***]
-                ArrangeBy keys=[[#0]]
-                  Distinct project=[#0]
+                ArrangeBy keys=[[#0{b}]]
+                  Distinct project=[#0{b}]
                     Project (#1)
                       Get l2
           Project ()
@@ -458,17 +458,17 @@ Explained Query:
   With
     cte l2 =
       Project (#0..=#2)
-        Join on=(#1 = #3 = #4) type=delta
+        Join on=(#1{b} = #3{b} = #4{b}) type=delta
           Get l1
           Get l1
-          ArrangeBy keys=[[#0]]
+          ArrangeBy keys=[[#0{b}]]
             Project (#1)
               Get l0
     cte l1 =
-      ArrangeBy keys=[[#1]]
+      ArrangeBy keys=[[#1{b}]]
         Get l0
     cte l0 =
-      Filter (#1) IS NOT NULL
+      Filter (#1{b}) IS NOT NULL
         ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -480,7 +480,7 @@ EOF
 
 # Test a single CTE.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
 ----
 Explained Query:
@@ -494,7 +494,7 @@ Explained Query:
     cte l0 =
       ArrangeBy keys=[[]]
         Project (#2)
-          Map ((#0 * #1))
+          Map ((#0{a} * #1{b}))
             ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -506,11 +506,11 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed source
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 INDEX t_a_idx
 ----
 materialize.public.t_a_idx:
-  ArrangeBy keys=[[#0]]
+  ArrangeBy keys=[[#0{a}]]
     ReadStorage materialize.public.t
 
 Target cluster: quickstart
@@ -519,15 +519,15 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed view (first index)
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 INDEX iv_a_idx;
 ----
 materialize.public.iv_a_idx:
-  ArrangeBy keys=[[#0]]
+  ArrangeBy keys=[[#0{a}]]
     ReadGlobalFromSameDataflow materialize.public.iv
 
 materialize.public.iv:
-  Filter (#0) IS NOT NULL
+  Filter (#0{a}) IS NOT NULL
     ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -539,11 +539,11 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed view (based on a prior index)
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 INDEX iv_b_idx;
 ----
 materialize.public.iv_b_idx:
-  ArrangeBy keys=[[#1]]
+  ArrangeBy keys=[[#1{b}]]
     ReadIndex on=iv iv_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -555,11 +555,11 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed view where the index is exactly the same as a prior index.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 INDEX iv_b_idx_2;
 ----
 materialize.public.iv_b_idx_2:
-  ArrangeBy keys=[[#1]]
+  ArrangeBy keys=[[#1{b}]]
     ReadIndex on=iv iv_b_idx=[plan root (no new arrangement)]
 
 Used Indexes:
@@ -576,7 +576,7 @@ EOF
 # Test multiple CTEs: a case where we cannot pull the let statement up through
 # the join because the local l0 is correlated against the lhs of the enclosing join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT
   *
 FROM
@@ -599,30 +599,30 @@ FROM
 Explained Query:
   Return
     Project (#0..=#2, #4)
-      Filter (#0 != #4)
-        Join on=(#0 = #3) type=differential
-          ArrangeBy keys=[[#0]]
+      Filter (#0{a} != #4)
+        Join on=(#0{a} = #3{a}) type=differential
+          ArrangeBy keys=[[#0{a}]]
             Get l2
-          ArrangeBy keys=[[#0]]
-            Reduce group_by=[#0] aggregates=[max((#0 * #1))]
+          ArrangeBy keys=[[#0{a}]]
+            Reduce group_by=[#0{a}] aggregates=[max((#0{a} * #1{a}))]
               CrossJoin type=differential
                 ArrangeBy keys=[[]]
-                  Distinct project=[#0]
+                  Distinct project=[#0{a}]
                     Project (#0)
                       Get l2
                 Get l1
   With
     cte l2 =
       Project (#0, #1, #3)
-        Filter (#0 != #3)
-          Join on=(#0 = #2) type=differential
-            ArrangeBy keys=[[#0]]
+        Filter (#0{a} != #3)
+          Join on=(#0{a} = #2{a}) type=differential
+            ArrangeBy keys=[[#0{a}]]
               ReadIndex on=t t_a_idx=[differential join]
-            ArrangeBy keys=[[#0]]
-              Reduce group_by=[#0] aggregates=[max((#0 * #1))]
+            ArrangeBy keys=[[#0{a}]]
+              Reduce group_by=[#0{a}] aggregates=[max((#0{a} * #1{a}))]
                 CrossJoin type=differential
                   ArrangeBy keys=[[]]
-                    Distinct project=[#0]
+                    Distinct project=[#0{a}]
                       Get l0
                   Get l1
     cte l1 =
@@ -641,7 +641,7 @@ EOF
 
 # Test cross join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT t1.a, t2.a FROM t as t1, t as t2
 ----
 Explained Query:
@@ -664,7 +664,7 @@ EOF
 
 # Test cyclic join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT t1.a, t2.a
 FROM
   t as t1,
@@ -675,18 +675,18 @@ WHERE t1.b = t2.b AND t2.b = t3.b
 Explained Query:
   Return
     Project (#0, #2)
-      Join on=(#1 = #3 = #4) type=delta
+      Join on=(#1{b} = #3{b} = #4{b}) type=delta
         Get l1
         Get l1
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{b}]]
           Project (#1)
             Get l0
   With
     cte l1 =
-      ArrangeBy keys=[[#1]]
+      ArrangeBy keys=[[#1{b}]]
         Get l0
     cte l0 =
-      Filter (#1) IS NOT NULL
+      Filter (#1{b}) IS NOT NULL
         ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -709,22 +709,22 @@ CREATE INDEX v_e_idx ON V(e);
 
 # Test a differential join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #3, #1)
-    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL
-      Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=delta
-        ArrangeBy keys=[[#0], [#0, #1]]
-          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+    Filter (#0{a}) IS NOT NULL AND (#3{d}) IS NOT NULL
+      Join on=(#0{a} = #2{c} AND #1{b} = #5{f} AND #3{d} = #4{e}) type=delta
+        ArrangeBy keys=[[#0{a}], [#0{a}, #1{b}]]
+          Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
             ReadIndex on=t t_a_idx=[*** full scan ***]
-        ArrangeBy keys=[[#0], [#1]]
+        ArrangeBy keys=[[#0{c}], [#1{d}]]
           ReadIndex on=u u_c_idx=[delta join lookup] u_d_idx=[delta join lookup]
-        ArrangeBy keys=[[#0, #1]]
-          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+        ArrangeBy keys=[[#0{e}, #1{f}]]
+          Filter (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
             ReadIndex on=v v_e_idx=[*** full scan ***]
 
 Used Indexes:
@@ -739,26 +739,26 @@ EOF
 
 # Test a differential join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, join implementations) AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #3, #1)
-    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL
-      Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=delta
+    Filter (#0{a}) IS NOT NULL AND (#3{d}) IS NOT NULL
+      Join on=(#0{a} = #2{c} AND #1{b} = #5{f} AND #3{d} = #4{e}) type=delta
         implementation
           %0:t » %1:u[#0]KA » %2:v[#0, #1]KK
           %1:u » %0:t[#0]KA » %2:v[#0, #1]KK
           %2:v » %1:u[#1]KA » %0:t[#0, #1]KK
-        ArrangeBy keys=[[#0], [#0, #1]]
-          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+        ArrangeBy keys=[[#0{a}], [#0{a}, #1{b}]]
+          Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
             ReadIndex on=t t_a_idx=[*** full scan ***]
-        ArrangeBy keys=[[#0], [#1]]
+        ArrangeBy keys=[[#0{c}], [#1{d}]]
           ReadIndex on=u u_c_idx=[delta join lookup] u_d_idx=[delta join lookup]
-        ArrangeBy keys=[[#0, #1]]
-          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+        ArrangeBy keys=[[#0{e}, #1{f}]]
+          Filter (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
             ReadIndex on=v v_e_idx=[*** full scan ***]
 
 Used Indexes:
@@ -778,20 +778,20 @@ CREATE INDEX t_b_idx ON T(b);
 
 # Test a delta join without WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE b = c and d = e
 ----
 Explained Query:
   Project (#0, #1, #1, #3, #3, #5)
-    Filter (#1) IS NOT NULL AND (#3) IS NOT NULL
-      Join on=(#1 = #2 AND #3 = #4) type=delta
-        ArrangeBy keys=[[#1]]
+    Filter (#1{b}) IS NOT NULL AND (#3{d}) IS NOT NULL
+      Join on=(#1{b} = #2{c} AND #3{d} = #4{e}) type=delta
+        ArrangeBy keys=[[#1{b}]]
           ReadIndex on=t t_b_idx=[delta join 1st input (full scan)]
-        ArrangeBy keys=[[#0], [#1]]
+        ArrangeBy keys=[[#0{c}], [#1{d}]]
           ReadIndex on=u u_c_idx=[delta join lookup] u_d_idx=[delta join lookup]
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{e}]]
           ReadIndex on=v v_e_idx=[delta join lookup]
 
 Used Indexes:
@@ -838,7 +838,7 @@ EOF
 
 # Test an IndexedFilter join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE a = 0
@@ -847,7 +847,7 @@ GROUP BY a
 Explained Query:
   Project (#1, #0)
     Map (0)
-      Reduce aggregates=[max(#0)]
+      Reduce aggregates=[max(#0{b})]
         Project (#1)
           ReadIndex on=materialize.public.t t_a_idx=[lookup value=(0)]
 
@@ -1003,7 +1003,7 @@ statement ok
 EXPLAIN SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT lag(x, 3, 'default') IGNORE NULLS OVER (ORDER BY x || x)
 FROM t1;
 ----
@@ -1011,7 +1011,7 @@ Explained Query:
   Project (#2)
     Map (record_get[0](#1))
       FlatMap unnest_list(#0)
-        Reduce aggregates=[lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0, 3, "default")), (#0 || #0)))]
+        Reduce aggregates=[lag[ignore_nulls=true, order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}), row(#0{x}, 3, "default")), (#0{x} || #0{x})))]
           ReadStorage materialize.public.t1
 
 Target cluster: quickstart
@@ -1019,7 +1019,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT first_value(x) OVER (ORDER BY x || x ROWS BETWEEN 5 preceding AND CURRENT ROW)
 FROM t1;
 ----
@@ -1027,7 +1027,7 @@ Explained Query:
   Project (#2)
     Map (record_get[0](#1))
       FlatMap unnest_list(#0)
-        Reduce aggregates=[first_value[order_by=[#0 asc nulls_last] rows between 5 preceding and current row](row(row(row(#0), #0), (#0 || #0)))]
+        Reduce aggregates=[first_value[order_by=[#0{x} asc nulls_last] rows between 5 preceding and current row](row(row(row(#0{x}), #0{x}), (#0{x} || #0{x})))]
           ReadStorage materialize.public.t1
 
 Target cluster: quickstart
@@ -1057,23 +1057,23 @@ statement ok
 CREATE INDEX u_d ON u(d);
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT *
 FROM t, u
 WHERE t.b = u.c;
 ----
 Explained Query:
   Project (#0, #1, #1, #3)
-    Filter (#1) IS NOT NULL
-      Join on=(#1 = #2) type=differential
-        ArrangeBy keys=[[#1]]
-          Filter (#1) IS NOT NULL
+    Filter (#1{b}) IS NOT NULL
+      Join on=(#1{b} = #2{c}) type=differential
+        ArrangeBy keys=[[#1{b}]]
+          Filter (#1{b}) IS NOT NULL
             ReadStorage materialize.public.t
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{c}]]
           ReadIndex on=u u_c=[differential join]
 
 Source materialize.public.t
-  filter=((#1) IS NOT NULL)
+  filter=((#1{b}) IS NOT NULL)
 
 Used Indexes:
   - materialize.public.u_c (differential join)
@@ -1083,23 +1083,23 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT *
 FROM t, u
 WHERE t.b = u.d;
 ----
 Explained Query:
   Project (#0..=#2, #1)
-    Filter (#1) IS NOT NULL
-      Join on=(#1 = #3) type=differential
-        ArrangeBy keys=[[#1]]
-          Filter (#1) IS NOT NULL
+    Filter (#1{b}) IS NOT NULL
+      Join on=(#1{b} = #3{d}) type=differential
+        ArrangeBy keys=[[#1{b}]]
+          Filter (#1{b}) IS NOT NULL
             ReadStorage materialize.public.t
-        ArrangeBy keys=[[#1]]
+        ArrangeBy keys=[[#1{d}]]
           ReadIndex on=u u_d=[differential join]
 
 Source materialize.public.t
-  filter=((#1) IS NOT NULL)
+  filter=((#1{b}) IS NOT NULL)
 
 Used Indexes:
   - materialize.public.u_d (differential join)
@@ -1120,19 +1120,19 @@ statement ok
 CREATE INDEX t_a_idx_2 ON t(a);
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT *
 FROM t, u
 WHERE t.a = u.c
 ----
 Explained Query:
   Project (#0, #1, #0, #3)
-    Filter (#0) IS NOT NULL
-      Join on=(#0 = #2) type=differential
-        ArrangeBy keys=[[#0]]
+    Filter (#0{a}) IS NOT NULL
+      Join on=(#0{a} = #2{c}) type=differential
+        ArrangeBy keys=[[#0{a}]]
           ReadIndex on=t t_a_idx_1=[differential join]
-        ArrangeBy keys=[[#0]]
-          Filter (#0) IS NOT NULL
+        ArrangeBy keys=[[#0{c}]]
+          Filter (#0{c}) IS NOT NULL
             ReadIndex on=u u_d=[*** full scan ***]
 
 Used Indexes:
@@ -1145,7 +1145,7 @@ EOF
 
 # An index is used two times by the same (self) join. We should show a 1st input and a non-1st input usage.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT *
 FROM t AS t1, t AS t2, t AS t3
 WHERE t1.a = t2.a AND t2.a = t3.a;
@@ -1153,14 +1153,14 @@ WHERE t1.a = t2.a AND t2.a = t3.a;
 Explained Query:
   Return
     Project (#0, #1, #0, #3, #0, #5)
-      Filter (#0) IS NOT NULL
-        Join on=(#0 = #2 = #4) type=delta
+      Filter (#0{a}) IS NOT NULL
+        Join on=(#0{a} = #2{a} = #4{a}) type=delta
           Get l0
           Get l0
           Get l0
   With
     cte l0 =
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{a}]]
         ReadIndex on=t t_a_idx_1=[delta join lookup, delta join 1st input (full scan)]
 
 Used Indexes:
@@ -1172,7 +1172,7 @@ EOF
 
 # An index is used in both a join and a full scan.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t AS t1, t AS t2
  WHERE t1.a = t2.a)
@@ -1183,19 +1183,19 @@ UNION
 ----
 Explained Query:
   Return
-    Distinct project=[#0, #1]
+    Distinct project=[#0{a}, #1{b}]
       Union
         Project (#4, #5)
-          Filter (#0) IS NOT NULL
-            Map ((#0 + #0), (#1 + #3))
-              Join on=(#0 = #2) type=differential
+          Filter (#0{a}) IS NOT NULL
+            Map ((#0{a} + #0{a}), (#1{b} + #3{b}))
+              Join on=(#0{a} = #2{a}) type=differential
                 Get l0
                 Get l0
-        Filter (#1 > 5)
+        Filter (#1{b} > 5)
           ReadIndex on=t t_a_idx_1=[*** full scan ***]
   With
     cte l0 =
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{a}]]
         ReadIndex on=t t_a_idx_1=[differential join]
 
 Used Indexes:
@@ -1207,7 +1207,7 @@ EOF
 
 # An index exists that can't be used for the join because of having the wrong key.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t AS t1, t AS t2
  WHERE t1.b = t2.b)
@@ -1218,19 +1218,19 @@ UNION
 ----
 Explained Query:
   Return
-    Distinct project=[#0, #1]
+    Distinct project=[#0{a}, #1{b}]
       Union
         Project (#4, #5)
-          Map ((#0 + #2), (#1 + #1))
-            Join on=(#1 = #3) type=differential
+          Map ((#0{a} + #2{a}), (#1{b} + #1{b}))
+            Join on=(#1{b} = #3{b}) type=differential
               Get l0
               Get l0
-        Filter (#1 > 5)
+        Filter (#1{b} > 5)
           ReadIndex on=t t_a_idx_1=[*** full scan ***]
   With
     cte l0 =
-      ArrangeBy keys=[[#1]]
-        Filter (#1) IS NOT NULL
+      ArrangeBy keys=[[#1{b}]]
+        Filter (#1{b}) IS NOT NULL
           ReadIndex on=t t_a_idx_1=[*** full scan ***]
 
 Used Indexes:
@@ -1253,7 +1253,7 @@ statement ok
 CREATE INDEX t_non_null_a_idx ON t_non_null(a);
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t_non_null AS t1, t_non_null AS t2
  WHERE t1.b = t2.b)
@@ -1264,18 +1264,18 @@ UNION
 ----
 Explained Query:
   Return
-    Distinct project=[#0, #1]
+    Distinct project=[#0{a}, #1{b}]
       Union
         Project (#4, #5)
-          Map ((#0 + #2), (#1 + #1))
-            Join on=(#1 = #3) type=differential
+          Map ((#0{a} + #2{a}), (#1{b} + #1{b}))
+            Join on=(#1{b} = #3{b}) type=differential
               Get l0
               Get l0
-        Filter (#1 > 5)
+        Filter (#1{b} > 5)
           ReadIndex on=t_non_null t_non_null_a_idx=[*** full scan ***]
   With
     cte l0 =
-      ArrangeBy keys=[[#1]]
+      ArrangeBy keys=[[#1{b}]]
         ReadIndex on=t_non_null t_non_null_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -1288,7 +1288,7 @@ EOF
 # This has 1 more full scan than the previous test, because the join needs 2 different arrangements.
 # (But we print only one full scan due to deduplication.)
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t_non_null AS t1, t_non_null AS t2
  WHERE t1.b = t2.b + 1)
@@ -1298,16 +1298,16 @@ UNION
  WHERE b > 5)
 ----
 Explained Query:
-  Distinct project=[#0, #1]
+  Distinct project=[#0{a}, #1{b}]
     Union
       Project (#4, #5)
-        Map ((#0 + #2), (#1 + #3))
-          Join on=(#1 = (#3 + 1)) type=differential
-            ArrangeBy keys=[[#1]]
+        Map ((#0{a} + #2{a}), (#1{b} + #3{b}))
+          Join on=(#1{b} = (#3{b} + 1)) type=differential
+            ArrangeBy keys=[[#1{b}]]
               ReadIndex on=t_non_null t_non_null_a_idx=[*** full scan ***]
-            ArrangeBy keys=[[(#1 + 1)]]
+            ArrangeBy keys=[[(#1{b} + 1)]]
               ReadIndex on=t_non_null t_non_null_a_idx=[*** full scan ***]
-      Filter (#1 > 5)
+      Filter (#1{b} > 5)
         ReadIndex on=t_non_null t_non_null_a_idx=[*** full scan ***]
 
 Used Indexes:
@@ -1319,13 +1319,13 @@ EOF
 
 # An index is used in both a lookup and a full scan.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT * FROM t
 UNION
 SELECT * FROM t WHERE a = 5;
 ----
 Explained Query:
-  Distinct project=[#0, #1]
+  Distinct project=[#0{a}, #1{b}]
     Union
       ReadIndex on=t t_a_idx_2=[*** full scan ***]
       Project (#0, #1)
@@ -1344,7 +1344,7 @@ statement ok
 CREATE INDEX t_b_idx ON t(b);
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT * FROM t
 UNION ALL
 SELECT * FROM t WHERE b = 7
@@ -1362,7 +1362,7 @@ Explained Query:
       ReadIndex on=materialize.public.t t_b_idx=[lookup value=(7)]
     Project (#0, #1)
       ReadIndex on=materialize.public.t t_a_idx_2=[lookup value=(5)]
-    Filter (#0 = 3)
+    Filter (#0{c} = 3)
       ReadIndex on=u u_d=[*** full scan ***]
     Project (#0, #1)
       ReadIndex on=materialize.public.u u_d=[lookup value=(1)]
@@ -1378,7 +1378,7 @@ EOF
 
 # Fast path with a LIMIT and no ORDER BY. This is not a full scan.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT a+b as x
 FROM t
 WHERE a < 7
@@ -1387,8 +1387,8 @@ LIMIT 3;
 Explained Query (fast path):
   Finish limit=3 output=[#0]
     Project (#2)
-      Filter (#0 < 7)
-        Map ((#0 + #1))
+      Filter (#0{a} < 7)
+        Map ((#0{a} + #1{b}))
           ReadIndex on=materialize.public.t t_a_idx_1=[*** full scan ***]
 
 Used Indexes:
@@ -1400,15 +1400,15 @@ EOF
 
 # Same query without a LIMIT, so full scan
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT a+b as x
 FROM t
 WHERE a < 7;
 ----
 Explained Query (fast path):
   Project (#2)
-    Filter (#0 < 7)
-      Map ((#0 + #1))
+    Filter (#0{a} < 7)
+      Map ((#0{a} + #1{b}))
         ReadIndex on=materialize.public.t t_a_idx_1=[*** full scan ***]
 
 Used Indexes:
@@ -1420,7 +1420,7 @@ EOF
 
 # Same query with a LIMIT + ORDER BY, so full scan
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT a+b as x
 FROM t
 WHERE a < 7
@@ -1430,8 +1430,8 @@ LIMIT 3;
 Explained Query (fast path):
   Finish order_by=[#0 asc nulls_last] limit=3 output=[#0]
     Project (#2)
-      Filter (#0 < 7)
-        Map ((#0 + #1))
+      Filter (#0{a} < 7)
+        Map ((#0{a} + #1{b}))
           ReadIndex on=materialize.public.t t_a_idx_1=[*** full scan ***]
 
 Used Indexes:
@@ -1459,7 +1459,7 @@ statement ok
 CREATE INDEX t4_idx_c ON t4(c);
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
 SELECT * FROM t4;
 ----
 Explained Query (fast path):
