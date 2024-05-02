@@ -198,7 +198,7 @@ materialize.public.q01_primary_idx:
 
 materialize.public.q01:
   Project (#0..=#5, #9..=#11, #6) // { arity: 10 }
-    Map (bigint_to_numeric(case when (#6 = 0) then null else #6 end), (#2 / #8), (#3 / #8), (#7 / #8)) // { arity: 12 }
+    Map (bigint_to_numeric(case when (#6{count} = 0) then null else #6{count} end), (#2{sum_l_quantity} / #8), (#3{sum_l_extendedprice} / #8), (#7{sum_l_discount} / #8)) // { arity: 12 }
       Reduce group_by=[#4{l_returnflag}, #5{l_linestatus}] aggregates=[sum(#0{l_quantity}), sum(#1{l_extendedprice}), sum((#1{l_extendedprice} * (1 - #2{l_discount}))), sum(((#1{l_extendedprice} * (1 - #2{l_discount})) * (1 + #3{l_tax}))), count(*), sum(#2{l_discount})] // { arity: 8 }
         Project (#4..=#9) // { arity: 6 }
           Filter (date_to_timestamp(#10{l_shipdate}) <= 1998-10-02 00:00:00) // { arity: 16 }
@@ -269,12 +269,12 @@ materialize.public.q02_primary_idx:
 materialize.public.q02:
   Return // { arity: 8 }
     Project (#5, #2, #8, #0, #1, #3, #4, #6) // { arity: 8 }
-      Join on=(#0{p_partkey} = #9{p_partkey} AND #7{ps_supplycost} = #10) type=differential // { arity: 11 }
+      Join on=(#0{p_partkey} = #9{p_partkey} AND #7{ps_supplycost} = #10{min_ps_supplycost}) type=differential // { arity: 11 }
         implementation
           %1[#0, #1]UKK » %0:l4[#0, #7]KK
         ArrangeBy keys=[[#0{p_partkey}, #7{ps_supplycost}]] // { arity: 9 }
           Get l4 // { arity: 9 }
-        ArrangeBy keys=[[#0{p_partkey}, #1]] // { arity: 2 }
+        ArrangeBy keys=[[#0{p_partkey}, #1{min_ps_supplycost}]] // { arity: 2 }
           Reduce group_by=[#0{p_partkey}] aggregates=[min(#1{ps_supplycost})] // { arity: 2 }
             Project (#0, #4) // { arity: 2 }
               Filter (#18{r_name} = "EUROPE") AND (#2{ps_suppkey}) IS NOT NULL AND (#9{s_nationkey}) IS NOT NULL AND (#15{n_regionkey}) IS NOT NULL // { arity: 20 }
@@ -750,7 +750,7 @@ materialize.public.q08_primary_idx:
 
 materialize.public.q08:
   Project (#0, #3) // { arity: 2 }
-    Map ((#1 / #2)) // { arity: 4 }
+    Map ((#1{sum} / #2{sum})) // { arity: 4 }
       Reduce group_by=[extract_year_d(#2{o_orderdate})] aggregates=[sum(case when (#3{n_name} = "BRAZIL") then (#0{l_extendedprice} * (1 - #1{l_discount})) else 0 end), sum((#0{l_extendedprice} * (1 - #1{l_discount})))] // { arity: 3 }
         Project (#21, #22, #36, #54) // { arity: 4 }
           Filter (#58{r_name} = "AMERICA") AND (#36{o_orderdate} <= 1996-12-31) AND (#36{o_orderdate} >= 1995-01-01) AND (#0{p_partkey}) IS NOT NULL AND (#9{s_suppkey}) IS NOT NULL AND (#12{s_nationkey}) IS NOT NULL AND (#16{l_orderkey}) IS NOT NULL AND (#33{o_custkey}) IS NOT NULL AND (#44{c_nationkey}) IS NOT NULL AND (#51{n_regionkey}) IS NOT NULL AND ("ECONOMY ANODIZED STEEL" = varchar_to_text(#4{p_type})) // { arity: 60 }
@@ -1012,7 +1012,7 @@ materialize.public.q11_primary_idx:
 materialize.public.q11:
   Return // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
-      Filter (#1 > (#2 * 0.0001)) // { arity: 3 }
+      Filter (#1{sum} > (#2{sum} * 0.0001)) // { arity: 3 }
         CrossJoin type=differential // { arity: 3 }
           implementation
             %1[×]UA » %0[×]
@@ -1149,7 +1149,7 @@ materialize.public.q13_primary_idx:
 
 materialize.public.q13:
   Return // { arity: 2 }
-    Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+    Reduce group_by=[#0{count_o_orderkey}] aggregates=[count(*)] // { arity: 2 }
       Project (#1) // { arity: 1 }
         Reduce group_by=[#0{c_custkey}] aggregates=[count(#1{o_orderkey})] // { arity: 2 }
           Union // { arity: 2 }
@@ -1221,7 +1221,7 @@ materialize.public.q14_primary_idx:
 materialize.public.q14:
   Return // { arity: 1 }
     Project (#2) // { arity: 1 }
-      Map (((100 * #0) / #1)) // { arity: 3 }
+      Map (((100 * #0{sum}) / #1{sum})) // { arity: 3 }
         Union // { arity: 2 }
           Get l0 // { arity: 2 }
           Map (null, null) // { arity: 2 }
@@ -1303,17 +1303,17 @@ materialize.public.q15:
   Return // { arity: 5 }
     Project (#0..=#2, #4, #8) // { arity: 5 }
       Filter (#0{s_suppkey}) IS NOT NULL // { arity: 10 }
-        Join on=(#0{s_suppkey} = #7{l_suppkey} AND #8 = #9) type=delta // { arity: 10 }
+        Join on=(#0{s_suppkey} = #7{l_suppkey} AND #8{sum} = #9{max_sum}) type=delta // { arity: 10 }
           implementation
             %0:supplier » %1:l0[#0]UKA » %2[#0]UK
             %1:l0 » %2[#0]UK » %0:supplier[#0]KA
             %2 » %1:l0[#1]K » %0:supplier[#0]KA
           ArrangeBy keys=[[#0{s_suppkey}]] // { arity: 7 }
             ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] // { arity: 7 }
-          ArrangeBy keys=[[#0{l_suppkey}], [#1]] // { arity: 2 }
+          ArrangeBy keys=[[#0{l_suppkey}], [#1{sum}]] // { arity: 2 }
             Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Reduce aggregates=[max(#0)] // { arity: 1 }
+          ArrangeBy keys=[[#0{max_sum}]] // { arity: 1 }
+            Reduce aggregates=[max(#0{sum})] // { arity: 1 }
               Project (#1) // { arity: 1 }
                 Get l0 // { arity: 2 }
   With
@@ -1461,7 +1461,7 @@ materialize.public.q17_primary_idx:
 materialize.public.q17:
   Return // { arity: 1 }
     Project (#1) // { arity: 1 }
-      Map ((#0 / 7)) // { arity: 2 }
+      Map ((#0{sum_l_extendedprice} / 7)) // { arity: 2 }
         Union // { arity: 1 }
           Get l2 // { arity: 1 }
           Map (null) // { arity: 1 }
@@ -1475,7 +1475,7 @@ materialize.public.q17:
     cte l2 =
       Reduce aggregates=[sum(#0{l_extendedprice})] // { arity: 1 }
         Project (#2) // { arity: 1 }
-          Filter (#1{l_quantity} < (0.2 * (#4 / bigint_to_numeric(case when (#5 = 0) then null else #5 end)))) // { arity: 6 }
+          Filter (#1{l_quantity} < (0.2 * (#4{sum_l_quantity} / bigint_to_numeric(case when (#5{count} = 0) then null else #5{count} end)))) // { arity: 6 }
             Join on=(#0{l_partkey} = #3{l_partkey}) type=differential // { arity: 6 }
               implementation
                 %1[#0]UKA » %0:l1[#0]K
@@ -1564,7 +1564,7 @@ materialize.public.q18:
   Return // { arity: 6 }
     Reduce group_by=[#1{c_name}, #0{c_custkey}, #2{o_orderkey}, #4{o_orderdate}, #3{o_totalprice}] aggregates=[sum(#5{l_quantity})] // { arity: 6 }
       Project (#0..=#5) // { arity: 6 }
-        Filter (#7 > 300) // { arity: 8 }
+        Filter (#7{sum_l_quantity} > 300) // { arity: 8 }
           Join on=(#2{o_orderkey} = #6{o_orderkey}) type=differential // { arity: 8 }
             implementation
               %1[#0]UKAif » %0:l1[#2]Kif
@@ -1765,7 +1765,7 @@ materialize.public.q20:
                         Get l1 // { arity: 4 }
                   ArrangeBy keys=[[#1{ps_suppkey}, #0{ps_partkey}]] // { arity: 3 }
                     Project (#0, #1, #3) // { arity: 3 }
-                      Map ((0.5 * #2)) // { arity: 4 }
+                      Map ((0.5 * #2{sum_l_quantity})) // { arity: 4 }
                         Reduce group_by=[#0{ps_partkey}, #1{ps_suppkey}] aggregates=[sum(#2{l_quantity})] // { arity: 3 }
                           Project (#0, #1, #6) // { arity: 3 }
                             Filter (#12{l_shipdate} >= 1995-01-01) AND (date_to_timestamp(#12{l_shipdate}) < 1996-01-01 00:00:00) // { arity: 18 }
@@ -2046,7 +2046,7 @@ materialize.public.q22:
           Get l1 // { arity: 3 }
     cte l1 =
       Project (#0..=#2) // { arity: 3 }
-        Filter (#2{c_acctbal} > (#3 / bigint_to_numeric(case when (#4 = 0) then null else #4 end))) // { arity: 5 }
+        Filter (#2{c_acctbal} > (#3{sum_c_acctbal} / bigint_to_numeric(case when (#4{count} = 0) then null else #4{count} end))) // { arity: 5 }
           CrossJoin type=differential // { arity: 5 }
             implementation
               %1[×]UA » %0:l0[×]ef

@@ -272,7 +272,7 @@ Explained Query:
           Get l1 // { arity: 2 }
           Map (error("more than one record produced in subquery")) // { arity: 2 }
             Project (#0) // { arity: 1 }
-              Filter (#1 > 1) // { arity: 2 }
+              Filter (#1{count} > 1) // { arity: 2 }
                 Reduce group_by=[#0{state}] aggregates=[count(*)] // { arity: 2 }
                   Project (#0) // { arity: 1 }
                     Get l1 // { arity: 2 }

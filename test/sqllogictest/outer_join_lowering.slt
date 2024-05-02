@@ -696,7 +696,7 @@ Return // { arity: 6 }
 With
   cte l8 =
     Project (#0..=#16) // { arity: 17 }
-      Filter ((((#3{dim01_k01} + #0{x}) = (#11{dim01_k01} + #1{y})) AND (#7{facts_d02} = 42)) AND #17) // { arity: 18 }
+      Filter ((((#3{dim01_k01} + #0{x}) = (#11{dim01_k01} + #1{y})) AND (#7{facts_d02} = 42)) AND #17{any}) // { arity: 18 }
         Project (#0..=#16, #18) // { arity: 18 }
           Join on=(#12{dim01_d01} = #17{dim01_d01}) // { arity: 19 }
             Get l3 // { arity: 17 }
@@ -719,7 +719,7 @@ With
       Get l6 // { arity: 2 }
       Map (error("more than one record produced in subquery")) // { arity: 2 }
         Project (#0) // { arity: 1 }
-          Filter (#1 > 1) // { arity: 2 }
+          Filter (#1{count} > 1) // { arity: 2 }
             Reduce group_by=[#0{dim01_d01}] aggregates=[count(*)] // { arity: 2 }
               Get l6 // { arity: 2 }
   cte l6 =

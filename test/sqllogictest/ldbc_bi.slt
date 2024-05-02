@@ -443,7 +443,7 @@ Explained Query:
   Finish order_by=[#0 desc nulls_first, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#6]
     Return // { arity: 7 }
       Project (#0..=#2, #4, #7, #5, #8) // { arity: 7 }
-        Map ((#5 / bigint_to_numeric(case when (#6 = 0) then null else #6 end)), (bigint_to_numeric(#4) / #3)) // { arity: 9 }
+        Map ((#5{sum} / bigint_to_numeric(case when (#6{count} = 0) then null else #6{count} end)), (bigint_to_numeric(#4{count}) / #3)) // { arity: 9 }
           Reduce group_by=[#1..=#4] aggregates=[count(*), sum(integer_to_bigint(#0{length})), count(integer_to_bigint(#0{length}))] // { arity: 7 }
             CrossJoin type=differential // { arity: 5 }
               implementation
@@ -455,7 +455,7 @@ Explained Query:
                       ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
               ArrangeBy keys=[[]] // { arity: 1 }
                 Project (#1) // { arity: 1 }
-                  Map ((0 + bigint_to_numeric(#0))) // { arity: 2 }
+                  Map ((0 + bigint_to_numeric(#0{count}))) // { arity: 2 }
                     Union // { arity: 1 }
                       Get l0 // { arity: 1 }
                       Map (0) // { arity: 1 }
@@ -520,7 +520,7 @@ Explained Query:
   Finish order_by=[#3 desc nulls_first, #0{name} asc nulls_last] limit=100 output=[#0..=#3]
     Return // { arity: 4 }
       Project (#0, #3..=#5) // { arity: 4 }
-        Map (coalesce(#1, 0), coalesce(#2, 0), abs((#3 - #4))) // { arity: 6 }
+        Map (coalesce(#1{count}, 0), coalesce(#2{count}, 0), abs((#3 - #4))) // { arity: 6 }
           Union // { arity: 3 }
             Map (null, null) // { arity: 3 }
               Union // { arity: 1 }
@@ -615,7 +615,7 @@ ORDER BY messageCount DESC, Forum.id
 LIMIT 20
 ----
 Explained Query:
-  Finish order_by=[#4 desc nulls_first, #0{containerforumid} asc nulls_last] limit=20 output=[#0..=#4]
+  Finish order_by=[#4{count} desc nulls_first, #0{containerforumid} asc nulls_last] limit=20 output=[#0..=#4]
     Reduce group_by=[#0{containerforumid}, #2{title}, #1{creationdate}, #3{moderatorpersonid}] aggregates=[count(*)] // { arity: 5 }
       Project (#10, #13, #15, #16) // { arity: 4 }
         Filter (#33{name} = "China") AND (#10{containerforumid}) IS NOT NULL AND (#16{moderatorpersonid}) IS NOT NULL AND (#25{locationcityid}) IS NOT NULL AND (#31{partofcountryid}) IS NOT NULL // { arity: 37 }
@@ -742,7 +742,7 @@ ORDER BY messageCount DESC, au.id
 LIMIT 100
 ----
 Explained Query:
-  Finish order_by=[#4 desc nulls_first, #0{id} asc nulls_last] limit=100 output=[#0..=#4]
+  Finish order_by=[#4{count_messageid} desc nulls_first, #0{id} asc nulls_last] limit=100 output=[#0..=#4]
     Return // { arity: 5 }
       Reduce group_by=[#1{id}..=#3{lastname}, #0{creationdate}] aggregates=[count(#4{messageid})] // { arity: 5 }
         Union // { arity: 5 }
@@ -860,8 +860,8 @@ SELECT CreatorPersonId AS "person.id"
 Explained Query:
   Finish order_by=[#4 desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=100 output=[#0..=#4]
     Return // { arity: 5 }
-      Map (((bigint_to_numeric((1 * #3)) + (2 * #1)) + (10 * #2))) // { arity: 5 }
-        Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(coalesce(case when (#2) IS NULL then null else #1 end, 0)), sum(coalesce(case when (#4) IS NULL then null else #3 end, 0)), count(*)] // { arity: 4 }
+      Map (((bigint_to_numeric((1 * #3{count})) + (2 * #1{sum})) + (10 * #2{sum}))) // { arity: 5 }
+        Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(coalesce(case when (#2) IS NULL then null else #1{count} end, 0)), sum(coalesce(case when (#4) IS NULL then null else #3{count} end, 0)), count(*)] // { arity: 4 }
           Project (#1, #3, #4, #6, #7) // { arity: 5 }
             Join on=(#0{messageid} = #2{parentmessageid} = #5{messageid}) type=delta // { arity: 8 }
               implementation
@@ -986,7 +986,7 @@ LIMIT 100
 ;
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=100 output=[#0, #1]
+  Finish order_by=[#1{sum} desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=100 output=[#0, #1]
     Return // { arity: 2 }
       Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(coalesce(#1{popularityscore}, 0))] // { arity: 2 }
         Union // { arity: 2 }
@@ -1093,7 +1093,7 @@ ORDER BY authorityScore DESC, pl.person1id ASC
 LIMIT 100
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=100 output=[#0, #1]
+  Finish order_by=[#1{sum} desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=100 output=[#0, #1]
     Return // { arity: 2 }
       Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(coalesce(#1{popularityscore}, 0))] // { arity: 2 }
         Union // { arity: 2 }
@@ -1201,7 +1201,7 @@ ORDER BY authorityScore DESC, pl.person1id ASC
 LIMIT 100
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=100 output=[#0, #1]
+  Finish order_by=[#1{sum} desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=100 output=[#0, #1]
     Return // { arity: 2 }
       Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(coalesce(#1{popularityscore}, 0))] // { arity: 2 }
         Union // { arity: 2 }
@@ -1319,7 +1319,7 @@ SELECT RelatedTag.name AS "relatedTag.name"
  LIMIT 100
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #0{name} asc nulls_last] limit=100 output=[#0, #1]
+  Finish order_by=[#1{count} desc nulls_first, #0{name} asc nulls_last] limit=100 output=[#0, #1]
     Return // { arity: 2 }
       Reduce group_by=[#0{name}] aggregates=[count(*)] // { arity: 2 }
         Project (#1) // { arity: 1 }
@@ -1442,7 +1442,7 @@ SELECT p.PersonId AS "person.id"
 Explained Query:
   Finish order_by=[#4 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0, #1, #3]
     Return // { arity: 5 }
-      Map (coalesce(#2, 0), (bigint_to_numeric(#1) + #3)) // { arity: 5 }
+      Map (coalesce(#2{sum}, 0), (bigint_to_numeric(#1) + #3)) // { arity: 5 }
         Reduce group_by=[#0, #1] aggregates=[sum(case when (#3) IS NULL then null else #2 end)] // { arity: 3 }
           Project (#0, #1, #6, #7) // { arity: 4 }
             Join on=(#0 = #2{person1id} AND #5{person2id} = case when (#4) IS NULL then null else #3{person2id} end) type=delta // { arity: 8 }
@@ -1490,7 +1490,7 @@ Explained Query:
     With
       cte l7 =
         Project (#3, #4) // { arity: 2 }
-          Map (coalesce(#0{id}, #1{creatorpersonid}), (integer_to_bigint(case when (#0{id}) IS NULL then 0 else 100 end) + coalesce(#2, 0))) // { arity: 5 }
+          Map (coalesce(#0{id}, #1{creatorpersonid}), (integer_to_bigint(case when (#0{id}) IS NULL then 0 else 100 end) + coalesce(#2{count}, 0))) // { arity: 5 }
             Union // { arity: 3 }
               Project (#2, #0, #1) // { arity: 3 }
                 Map (null) // { arity: 3 }
@@ -1602,8 +1602,8 @@ SELECT Person.id AS "person.id"
  LIMIT 100
 ----
 Explained Query:
-  Finish order_by=[#4 desc nulls_first, #0{id} asc nulls_last] limit=100 output=[#0..=#4]
-    Reduce group_by=[#0{id}..=#2{lastname}] aggregates=[count(*), sum(#3)] // { arity: 5 }
+  Finish order_by=[#4{sum_count} desc nulls_first, #0{id} asc nulls_last] limit=100 output=[#0..=#4]
+    Reduce group_by=[#0{id}..=#2{lastname}] aggregates=[count(*), sum(#3{count})] // { arity: 5 }
       Project (#1..=#3, #25) // { arity: 4 }
         Filter (#23{parentmessageid}) IS NULL AND (#11{creationdate} <= 2012-11-24 00:00:00 UTC) AND (#11{creationdate} >= 2012-08-29 00:00:00 UTC) AND (#1{id}) IS NOT NULL // { arity: 26 }
           Join on=(#1{id} = #20{creatorpersonid} AND #12{messageid} = #24{rootpostid}) type=delta // { arity: 26 }
@@ -1712,7 +1712,7 @@ SELECT m.friendId AS "person.id"
  LIMIT 100
 ----
 Explained Query:
-  Finish order_by=[#2 desc nulls_first, #1{name} asc nulls_last, #0{person2id} asc nulls_last] limit=100 output=[#0..=#2]
+  Finish order_by=[#2{count} desc nulls_first, #1{name} asc nulls_last, #0{person2id} asc nulls_last] limit=100 output=[#0..=#2]
     Return // { arity: 3 }
       Reduce group_by=[#0{person2id}, #1{name}] aggregates=[count(*)] // { arity: 3 }
         Project (#0, #9) // { arity: 2 }
@@ -1950,9 +1950,9 @@ SELECT *
 ORDER BY personCount DESC, messageCount DESC
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #0 desc nulls_first] output=[#0, #1]
+  Finish order_by=[#1{count} desc nulls_first, #0{count_messageid} desc nulls_first] output=[#0, #1]
     Return // { arity: 2 }
-      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+      Reduce group_by=[#0{count_messageid}] aggregates=[count(*)] // { arity: 2 }
         Project (#1) // { arity: 1 }
           Reduce group_by=[#0{id}] aggregates=[count(#1{messageid})] // { arity: 2 }
             Union // { arity: 2 }
@@ -2018,9 +2018,9 @@ SELECT *
 ORDER BY personCount DESC, messageCount DESC
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #0 desc nulls_first] output=[#0, #1]
+  Finish order_by=[#1{count} desc nulls_first, #0{count_messageid} desc nulls_first] output=[#0, #1]
     Return // { arity: 2 }
-      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+      Reduce group_by=[#0{count_messageid}] aggregates=[count(*)] // { arity: 2 }
         Project (#1) // { arity: 1 }
           Reduce group_by=[#0{id}] aggregates=[count(#1{messageid})] // { arity: 2 }
             Union // { arity: 2 }
@@ -2121,7 +2121,7 @@ Explained Query:
   Finish order_by=[#3 desc nulls_first, #0{id} asc nulls_last] limit=100 output=[#0..=#3]
     Return // { arity: 4 }
       Project (#0, #3..=#5) // { arity: 4 }
-        Map (coalesce(#2, 0), coalesce(#1, 0), case when (#1 > 0) then (bigint_to_double(#2) / bigint_to_double(#1)) else 0 end) // { arity: 6 }
+        Map (coalesce(#2{sum}, 0), coalesce(#1{count}, 0), case when (#1{count} > 0) then (bigint_to_double(#2{sum}) / bigint_to_double(#1{count})) else 0 end) // { arity: 6 }
           Union // { arity: 3 }
             Map (null, null) // { arity: 3 }
               Union // { arity: 1 }
@@ -2192,7 +2192,7 @@ Explained Query:
           Get l2 // { arity: 1 }
       cte l2 =
         Project (#0) // { arity: 1 }
-          Filter (bigint_to_numeric(#2) < ((24155 - ((12 * extract_year_tstz(#1{creationdate})) + extract_month_tstz(#1{creationdate}))) + 1)) // { arity: 3 }
+          Filter (bigint_to_numeric(#2{count_messageid}) < ((24155 - ((12 * extract_year_tstz(#1{creationdate})) + extract_month_tstz(#1{creationdate}))) + 1)) // { arity: 3 }
             Reduce group_by=[#1{id}, #0{creationdate}] aggregates=[count(#2{messageid})] // { arity: 3 }
               Union // { arity: 3 }
                 Project (#6, #7, #16) // { arity: 3 }
@@ -2322,10 +2322,10 @@ SELECT score_ranks.Person1Id AS "person1.id"
  LIMIT 100
 ----
 Explained Query:
-  Finish order_by=[#3 desc nulls_first, #0{id} asc nulls_last, #1{person2id} asc nulls_last] limit=100 output=[#0..=#3]
+  Finish order_by=[#3{sum} desc nulls_first, #0{id} asc nulls_last, #1{person2id} asc nulls_last] limit=100 output=[#0..=#3]
     Return // { arity: 4 }
       Project (#0, #1, #3, #4) // { arity: 4 }
-        TopK group_by=[#2{id}] order_by=[#4 desc nulls_first, #0{id} asc nulls_last, #1{person2id} asc nulls_last] limit=1 // { arity: 5 }
+        TopK group_by=[#2{id}] order_by=[#4{sum} desc nulls_first, #0{id} asc nulls_last, #1{person2id} asc nulls_last] limit=1 // { arity: 5 }
           Union // { arity: 5 }
             Map (null) // { arity: 5 }
               Union // { arity: 4 }
@@ -2541,10 +2541,10 @@ EXPLAIN WITH(humanized expressions, arity, join implementations) WITH
 SELECT coalesce(w, -1) FROM results ORDER BY w ASC LIMIT 20
 ----
 Explained Query:
-  Finish order_by=[#1 asc nulls_last] limit=20 output=[#2]
+  Finish order_by=[#1{min} asc nulls_last] limit=20 output=[#2]
     Return // { arity: 3 }
       Project (#1, #2, #2) // { arity: 3 }
-        Filter (#1{person2id} = 15393162796819) AND (#2 = #2) // { arity: 3 }
+        Filter (#1{person2id} = 15393162796819) AND (#2{min} = #2{min}) // { arity: 3 }
           Get l4 // { arity: 3 }
     With Mutually Recursive
       cte l4 =
@@ -2563,7 +2563,7 @@ Explained Query:
                             Get l4 // { arity: 3 }
                         ArrangeBy keys=[[#0{person1id}]] // { arity: 3 }
                           Project (#0, #1, #3) // { arity: 3 }
-                            Map ((10 / bigint_to_double((coalesce(#2, 0) + 10)))) // { arity: 4 }
+                            Map ((10 / bigint_to_double((coalesce(#2{sum}, 0) + 10)))) // { arity: 4 }
                               Union // { arity: 3 }
                                 Map (null) // { arity: 3 }
                                   Union // { arity: 2 }
@@ -2769,7 +2769,7 @@ Explained Query:
   Return // { arity: 1 }
     Return // { arity: 1 }
       Project (#1) // { arity: 1 }
-        Map (coalesce(#0, -1)) // { arity: 2 }
+        Map (coalesce(#0{min_min}, -1)) // { arity: 2 }
           Union // { arity: 1 }
             Get l18 // { arity: 1 }
             Map (null) // { arity: 1 }
@@ -2781,7 +2781,7 @@ Explained Query:
                   - ()
     With
       cte l18 =
-        Reduce aggregates=[min(#0)] // { arity: 1 }
+        Reduce aggregates=[min(#0{min})] // { arity: 1 }
           Project (#2) // { arity: 1 }
             Reduce group_by=[#0, #2] aggregates=[min((#1 + #3))] // { arity: 3 }
               Project (#0, #2, #3, #5) // { arity: 4 }
@@ -2798,15 +2798,15 @@ Explained Query:
                         Get l17 // { arity: 4 }
       cte l17 =
         Project (#0..=#3) // { arity: 4 }
-          Join on=(#4 = #5) type=differential // { arity: 6 }
+          Join on=(#4 = #5{max}) type=differential // { arity: 6 }
             implementation
               %1[#0]UK » %0:l16[#4]K
             ArrangeBy keys=[[#4]] // { arity: 5 }
               Project (#0..=#3, #5) // { arity: 5 }
                 Filter (#5) IS NOT NULL // { arity: 6 }
                   Get l16 // { arity: 6 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
+            ArrangeBy keys=[[#0{max}]] // { arity: 1 }
+              Filter (#0{max}) IS NOT NULL // { arity: 1 }
                 Reduce aggregates=[max(#0)] // { arity: 1 }
                   Project (#5) // { arity: 1 }
                     Get l16 // { arity: 6 }
@@ -2851,7 +2851,7 @@ Explained Query:
             Get l8 // { arity: 2 }
     cte l14 =
       Project (#1) // { arity: 1 }
-        Map ((#0 / 2)) // { arity: 2 }
+        Map ((#0{min} / 2)) // { arity: 2 }
           Union // { arity: 1 }
             Get l13 // { arity: 1 }
             Map (null) // { arity: 1 }
@@ -2986,7 +2986,7 @@ Explained Query:
               Get l4 // { arity: 3 }
     cte l4 =
       Project (#0, #1, #3) // { arity: 3 }
-        Map ((10 / bigint_to_double((coalesce(#2, 0) + 10)))) // { arity: 4 }
+        Map ((10 / bigint_to_double((coalesce(#2{sum}, 0) + 10)))) // { arity: 4 }
           Union // { arity: 3 }
             Map (null) // { arity: 3 }
               Union // { arity: 2 }
@@ -3158,8 +3158,8 @@ Explained Query:
   Finish order_by=[#6 desc nulls_first, #0{id} asc nulls_last] limit=20 output=[#0, #1, #4]
     Return // { arity: 7 }
       Project (#0..=#2, #0, #4..=#6) // { arity: 7 }
-        Filter (#2 <= 5) AND (#5 <= 5) // { arity: 7 }
-          Map ((#1 + #4)) // { arity: 7 }
+        Filter (#2{count_person2id} <= 5) AND (#5{count_person2id} <= 5) // { arity: 7 }
+          Map ((#1{count_messageid} + #4{count_messageid})) // { arity: 7 }
             Join on=(#0{id} = #3{id}) type=differential // { arity: 6 }
               implementation
                 %0[#0]UKAif » %1[#0]UKAiif
@@ -3332,7 +3332,7 @@ ORDER BY messageCount DESC, Message1.CreatorPersonId ASC
 LIMIT 10
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=10 output=[#0, #1]
+  Finish order_by=[#1{count_messageid} desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=10 output=[#0, #1]
     Return // { arity: 2 }
       Reduce group_by=[#0{creatorpersonid}] aggregates=[count(distinct #1{messageid})] // { arity: 2 }
         Project (#0, #1) // { arity: 2 }
@@ -3452,7 +3452,7 @@ ORDER BY mutualFriendCount DESC, k1.InterestedId ASC, k2.InterestedId ASC
 LIMIT 20
 ----
 Explained Query:
-  Finish order_by=[#2 desc nulls_first, #0{personid} asc nulls_last, #1{personid} asc nulls_last] limit=20 output=[#0..=#2]
+  Finish order_by=[#2{count} desc nulls_first, #0{personid} asc nulls_last, #1{personid} asc nulls_last] limit=20 output=[#0..=#2]
     Return // { arity: 3 }
       Reduce group_by=[#0{personid}, #1{personid}] aggregates=[count(*)] // { arity: 3 }
         Project (#0, #1) // { arity: 2 }
@@ -3558,7 +3558,7 @@ materialize.public.pathq19:
   With
     cte l0 =
       Project (#0, #1, #3) // { arity: 3 }
-        Map (greatest(f64toi64(roundf64((40 - sqrtf64(bigint_to_double(#2))))), 1)) // { arity: 4 }
+        Map (greatest(f64toi64(roundf64((40 - sqrtf64(bigint_to_double(#2{count}))))), 1)) // { arity: 4 }
           Reduce group_by=[#0{person1id}, #1{person2id}] aggregates=[count(*)] // { arity: 3 }
             Project (#16, #17) // { arity: 2 }
               Filter (#0{creatorpersonid} != #11{creatorpersonid}) AND (#16{person1id} < #17{person2id}) // { arity: 18 }
@@ -3652,15 +3652,15 @@ Explained Query:
   Return // { arity: 3 }
     Return // { arity: 3 }
       Project (#0..=#2) // { arity: 3 }
-        Join on=(#2 = #3) type=differential // { arity: 4 }
+        Join on=(#2{min} = #3{min_min}) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l1[#2]K
-          ArrangeBy keys=[[#2]] // { arity: 3 }
-            Filter (#2) IS NOT NULL // { arity: 3 }
+          ArrangeBy keys=[[#2{min}]] // { arity: 3 }
+            Filter (#2{min}) IS NOT NULL // { arity: 3 }
               Get l1 // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Filter (#0) IS NOT NULL // { arity: 1 }
-              Reduce aggregates=[min(#0)] // { arity: 1 }
+          ArrangeBy keys=[[#0{min_min}]] // { arity: 1 }
+            Filter (#0{min_min}) IS NOT NULL // { arity: 1 }
+              Reduce aggregates=[min(#0{min})] // { arity: 1 }
                 Project (#2) // { arity: 1 }
                   Get l1 // { arity: 3 }
     With
@@ -3768,15 +3768,15 @@ WHERE w = (SELECT MIN(w) FROM paths)
 Explained Query:
   Return // { arity: 3 }
     Project (#0..=#2) // { arity: 3 }
-      Join on=(#2 = #3) type=differential // { arity: 4 }
+      Join on=(#2{min} = #3{min_min}) type=differential // { arity: 4 }
         implementation
           %1[#0]UK » %0:l2[#2]K
-        ArrangeBy keys=[[#2]] // { arity: 3 }
-          Filter (#2) IS NOT NULL // { arity: 3 }
+        ArrangeBy keys=[[#2{min}]] // { arity: 3 }
+          Filter (#2{min}) IS NOT NULL // { arity: 3 }
             Get l2 // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 1 }
-          Filter (#0) IS NOT NULL // { arity: 1 }
-            Reduce aggregates=[min(#0)] // { arity: 1 }
+        ArrangeBy keys=[[#0{min_min}]] // { arity: 1 }
+          Filter (#0{min_min}) IS NOT NULL // { arity: 1 }
+            Reduce aggregates=[min(#0{min})] // { arity: 1 }
               Project (#2) // { arity: 1 }
                 Get l2 // { arity: 3 }
   With Mutually Recursive
@@ -3791,7 +3791,7 @@ Explained Query:
             Constant // { arity: 0 }
               - ()
     cte l3 =
-      Reduce aggregates=[min(#0)] // { arity: 1 }
+      Reduce aggregates=[min(#0{min})] // { arity: 1 }
         Project (#2) // { arity: 1 }
           Get l2 // { arity: 3 }
     cte l2 =
@@ -3935,15 +3935,15 @@ Explained Query:
     Return // { arity: 3 }
       Return // { arity: 3 }
         Project (#0..=#2) // { arity: 3 }
-          Join on=(#2 = #3) type=differential // { arity: 4 }
+          Join on=(#2{min} = #3{min_min}) type=differential // { arity: 4 }
             implementation
               %1[#0]UK » %0:l9[#2]K
-            ArrangeBy keys=[[#2]] // { arity: 3 }
-              Filter (#2) IS NOT NULL // { arity: 3 }
+            ArrangeBy keys=[[#2{min}]] // { arity: 3 }
+              Filter (#2{min}) IS NOT NULL // { arity: 3 }
                 Get l9 // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                Reduce aggregates=[min(#0)] // { arity: 1 }
+            ArrangeBy keys=[[#0{min_min}]] // { arity: 1 }
+              Filter (#0{min_min}) IS NOT NULL // { arity: 1 }
+                Reduce aggregates=[min(#0{min})] // { arity: 1 }
                   Project (#2) // { arity: 1 }
                     Get l9 // { arity: 3 }
       With
@@ -3963,15 +3963,15 @@ Explained Query:
                       Get l8 // { arity: 4 }
         cte l8 =
           Project (#0..=#3) // { arity: 4 }
-            Join on=(#4 = #5) type=differential // { arity: 6 }
+            Join on=(#4 = #5{max}) type=differential // { arity: 6 }
               implementation
                 %1[#0]UK » %0:l7[#4]K
               ArrangeBy keys=[[#4]] // { arity: 5 }
                 Project (#0..=#3, #5) // { arity: 5 }
                   Filter (#2{id}) IS NOT NULL AND (#5) IS NOT NULL // { arity: 6 }
                     Get l7 // { arity: 6 }
-              ArrangeBy keys=[[#0]] // { arity: 1 }
-                Filter (#0) IS NOT NULL // { arity: 1 }
+              ArrangeBy keys=[[#0{max}]] // { arity: 1 }
+                Filter (#0{max}) IS NOT NULL // { arity: 1 }
                   Reduce aggregates=[max(#0)] // { arity: 1 }
                     Project (#5) // { arity: 1 }
                       Get l7 // { arity: 6 }
@@ -4016,7 +4016,7 @@ Explained Query:
           ReadIndex on=person person_locationcityid=[lookup] // { arity: 11 }
       cte l5 =
         Project (#1) // { arity: 1 }
-          Map ((#0 / 2)) // { arity: 2 }
+          Map ((#0{min} / 2)) // { arity: 2 }
             Union // { arity: 1 }
               Get l4 // { arity: 1 }
               Map (null) // { arity: 1 }
@@ -4168,19 +4168,19 @@ Explained Query:
     Return // { arity: 2 }
       Return // { arity: 2 }
         Project (#0, #1) // { arity: 2 }
-          Filter (#1 = #3) // { arity: 4 }
-            Join on=(#1 = #2) type=differential // { arity: 4 }
+          Filter (#1{min} = #3{min_min}) // { arity: 4 }
+            Join on=(#1{min} = #2{min}) type=differential // { arity: 4 }
               implementation
                 %1[#0]UKAf » %0:l1[#1]Kf
-              ArrangeBy keys=[[#1]] // { arity: 2 }
+              ArrangeBy keys=[[#1{min}]] // { arity: 2 }
                 Get l1 // { arity: 2 }
-              ArrangeBy keys=[[#0]] // { arity: 2 }
-                Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+              ArrangeBy keys=[[#0{min}]] // { arity: 2 }
+                Reduce group_by=[#0{min}] aggregates=[min(#1{min})] // { arity: 2 }
                   CrossJoin type=differential // { arity: 2 }
                     implementation
                       %0[×] » %1:l2[×]
                     ArrangeBy keys=[[]] // { arity: 1 }
-                      Distinct project=[#0] // { arity: 1 }
+                      Distinct project=[#0{min}] // { arity: 1 }
                         Get l2 // { arity: 1 }
                     ArrangeBy keys=[[]] // { arity: 1 }
                       Get l2 // { arity: 1 }
@@ -4276,19 +4276,19 @@ Explained Query:
     Return // { arity: 2 }
       Return // { arity: 2 }
         Project (#0, #1) // { arity: 2 }
-          Filter (#1 = #3) // { arity: 4 }
-            Join on=(#1 = #2) type=differential // { arity: 4 }
+          Filter (#1{min} = #3{min_min}) // { arity: 4 }
+            Join on=(#1{min} = #2{min}) type=differential // { arity: 4 }
               implementation
                 %1[#0]UKAf » %0:l1[#1]Kf
-              ArrangeBy keys=[[#1]] // { arity: 2 }
+              ArrangeBy keys=[[#1{min}]] // { arity: 2 }
                 Get l1 // { arity: 2 }
-              ArrangeBy keys=[[#0]] // { arity: 2 }
-                Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+              ArrangeBy keys=[[#0{min}]] // { arity: 2 }
+                Reduce group_by=[#0{min}] aggregates=[min(#1{min})] // { arity: 2 }
                   CrossJoin type=differential // { arity: 2 }
                     implementation
                       %0[×] » %1:l2[×]
                     ArrangeBy keys=[[]] // { arity: 1 }
-                      Distinct project=[#0] // { arity: 1 }
+                      Distinct project=[#0{min}] // { arity: 1 }
                         Get l2 // { arity: 1 }
                     ArrangeBy keys=[[]] // { arity: 1 }
                       Get l2 // { arity: 1 }
@@ -4385,19 +4385,19 @@ Explained Query:
     Return // { arity: 3 }
       Return // { arity: 3 }
         Project (#0..=#2) // { arity: 3 }
-          Filter (#1 = #4) // { arity: 5 }
-            Join on=(#1 = #3) type=differential // { arity: 5 }
+          Filter (#1{min} = #4{min_min}) // { arity: 5 }
+            Join on=(#1{min} = #3{min}) type=differential // { arity: 5 }
               implementation
                 %1[#0]UKAf » %0:l1[#1]Kf
-              ArrangeBy keys=[[#1]] // { arity: 3 }
+              ArrangeBy keys=[[#1{min}]] // { arity: 3 }
                 Get l1 // { arity: 3 }
-              ArrangeBy keys=[[#0]] // { arity: 2 }
-                Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+              ArrangeBy keys=[[#0{min}]] // { arity: 2 }
+                Reduce group_by=[#0{min}] aggregates=[min(#1{min})] // { arity: 2 }
                   CrossJoin type=differential // { arity: 2 }
                     implementation
                       %0[×] » %1:l2[×]
                     ArrangeBy keys=[[]] // { arity: 1 }
-                      Distinct project=[#0] // { arity: 1 }
+                      Distinct project=[#0{min}] // { arity: 1 }
                         Get l2 // { arity: 1 }
                     ArrangeBy keys=[[]] // { arity: 1 }
                       Get l2 // { arity: 1 }
@@ -4428,7 +4428,7 @@ Explained Query:
       cte l0 =
         Project (#3, #0..=#2) // { arity: 4 }
           Map (10995116285979) // { arity: 4 }
-            Reduce group_by=[#0{dst}, #2] aggregates=[min(#1)] // { arity: 3 }
+            Reduce group_by=[#0{dst}, #2{min}] aggregates=[min(#1)] // { arity: 3 }
               Reduce group_by=[#0{dst}, #2] aggregates=[min(#1)] // { arity: 3 }
                 Distinct project=[#0{dst}..=#2] // { arity: 3 }
                   Union // { arity: 3 }
@@ -4536,15 +4536,15 @@ Explained Query:
     Return // { arity: 2 }
       Return // { arity: 2 }
         Project (#0, #1) // { arity: 2 }
-          Join on=(#1 = #2) type=differential // { arity: 3 }
+          Join on=(#1{min} = #2{min_min}) type=differential // { arity: 3 }
             implementation
               %1[#0]UK » %0:l11[#1]K
-            ArrangeBy keys=[[#1]] // { arity: 2 }
-              Filter (#1) IS NOT NULL // { arity: 2 }
+            ArrangeBy keys=[[#1{min}]] // { arity: 2 }
+              Filter (#1{min}) IS NOT NULL // { arity: 2 }
                 Get l11 // { arity: 2 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                Reduce aggregates=[min(#0)] // { arity: 1 }
+            ArrangeBy keys=[[#0{min_min}]] // { arity: 1 }
+              Filter (#0{min_min}) IS NOT NULL // { arity: 1 }
+                Reduce aggregates=[min(#0{min})] // { arity: 1 }
                   Project (#1) // { arity: 1 }
                     Get l11 // { arity: 2 }
       With
@@ -4565,15 +4565,15 @@ Explained Query:
                         Get l10 // { arity: 4 }
         cte l10 =
           Project (#0..=#3) // { arity: 4 }
-            Join on=(#4 = #5) type=differential // { arity: 6 }
+            Join on=(#4 = #5{max}) type=differential // { arity: 6 }
               implementation
                 %1[#0]UK » %0:l9[#4]K
               ArrangeBy keys=[[#4]] // { arity: 5 }
                 Project (#0..=#3, #5) // { arity: 5 }
                   Filter (#5) IS NOT NULL // { arity: 6 }
                     Get l9 // { arity: 6 }
-              ArrangeBy keys=[[#0]] // { arity: 1 }
-                Filter (#0) IS NOT NULL // { arity: 1 }
+              ArrangeBy keys=[[#0{max}]] // { arity: 1 }
+                Filter (#0{max}) IS NOT NULL // { arity: 1 }
                   Reduce aggregates=[max(#0)] // { arity: 1 }
                     Project (#5) // { arity: 1 }
                       Get l9 // { arity: 6 }
@@ -4632,7 +4632,7 @@ Explained Query:
                 Get l0 // { arity: 1 }
       cte l7 =
         Project (#1) // { arity: 1 }
-          Map ((#0 / 2)) // { arity: 2 }
+          Map ((#0{min} / 2)) // { arity: 2 }
             Union // { arity: 1 }
               Get l6 // { arity: 1 }
               Map (null) // { arity: 1 }

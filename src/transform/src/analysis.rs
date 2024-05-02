@@ -799,7 +799,8 @@ mod column_names {
     use std::ops::Range;
 
     use super::Analysis;
-    use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
+    use mz_repr::explain::ExprHumanizer;
     use mz_repr::GlobalId;
 
     /// An abstract type denoting an inferred column name.
@@ -807,13 +808,34 @@ mod column_names {
     pub enum ColumnName {
         /// A column with name inferred to be equal to a GlobalId schema column.
         Global(GlobalId, usize),
+        /// An anonymous expression named after the top-level function name.
+        Aggregate(AggregateFunc, Box<ColumnName>),
         /// An column with an unknown name.
         Unknown,
     }
 
     impl ColumnName {
-        fn is_known(&self) -> bool {
-            matches!(self, ColumnName::Global(..))
+        /// Return `true` iff this the variant is not unknown.
+        pub fn is_known(&self) -> bool {
+            matches!(self, Self::Global(..) | Self::Aggregate(..))
+        }
+
+        /// Humanize the column to a [`String`], returns an empty [`String`] for
+        /// unknown columns.
+        pub fn humanize(&self, humanizer: &dyn ExprHumanizer) -> String {
+            match self {
+                Self::Global(id, c) => humanizer.humanize_column(*id, *c).unwrap_or_default(),
+                Self::Aggregate(func, expr) => {
+                    let func = func.name();
+                    let expr = expr.humanize(humanizer);
+                    if expr.is_empty() {
+                        String::from(func)
+                    } else {
+                        format!("{func}_{expr}")
+                    }
+                }
+                Self::Unknown => String::new(),
+            }
         }
     }
 
@@ -966,9 +988,17 @@ mod column_names {
                     // Infer the group key part.
                     Self::extend_with_scalars(&mut column_names, group_key);
                     // Infer the aggregates part.
-                    let aggs_start = group_key.len();
-                    let aggs_end = group_key.len() + aggregates.len();
-                    column_names.extend(Self::anonymous(aggs_start..aggs_end));
+                    for aggregate in aggregates.iter() {
+                        // The inferred name will consist of (1) the aggregate
+                        // function name and (2) the aggregate expression (iff
+                        // it is a simple column reference).
+                        let func = aggregate.func.clone();
+                        let expr = match aggregate.expr.as_column() {
+                            Some(c) => column_names.get(c).unwrap_or(&ColumnName::Unknown).clone(),
+                            None => ColumnName::Unknown,
+                        };
+                        column_names.push(ColumnName::Aggregate(func, Box::new(expr)));
+                    }
                     // Remove the prefix associated with the input
                     column_names.drain(0..input_arity);
 
@@ -1160,13 +1190,7 @@ mod explain {
                     let attrs = annotations.entry(expr).or_default();
                     let value = column_names
                         .iter()
-                        .map(|column_name| match column_name {
-                            super::ColumnName::Global(id, c) => context
-                                .humanizer
-                                .humanize_column(*id, *c)
-                                .unwrap_or_default(),
-                            super::ColumnName::Unknown => String::new(),
-                        })
+                        .map(|column_name| column_name.humanize(context.humanizer))
                         .collect();
                     attrs.column_names = Some(value);
                 }

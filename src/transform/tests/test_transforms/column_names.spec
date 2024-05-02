@@ -107,7 +107,7 @@ explain with=column_names
 Reduce group_by=[#0] aggregates=[min(#1), max(#1)]
   Get t0
 ----
-Reduce group_by=[#0] aggregates=[min(#1), max(#1)] // { column_names: "(c0, #1, #2)" }
+Reduce group_by=[#0] aggregates=[min(#1), max(#1)] // { column_names: "(c0, min_c1, max_c1)" }
   Get t0 // { column_names: "(c0, c1)" }
 
 # TopK
