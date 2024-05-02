@@ -57,6 +57,9 @@ INSERT INTO table_a VALUES (3, 'three', 'd');
 2 two
 3 three
 
+> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
+"\"postgres\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\""
+
 # New schema, same name
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 contains:catalog item 'table_a' already exists
@@ -72,6 +75,10 @@ contains:catalog item 'table_a' already exists
 1 one
 2 two
 3 three
+
+# Now only shows `table_a_3` in `SHOW CREATE SOURCE`
+> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
+"\"postgres\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a_3\""
 
 # Multiple new columns
 
@@ -97,6 +104,10 @@ INSERT INTO table_a VALUES (4, 'four', 'e', 1);
 2 two
 3 three
 4 four
+
+# Now only shows `table_a_4` in `SHOW CREATE SOURCE`
+> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
+"\"postgres\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a_4\""
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress

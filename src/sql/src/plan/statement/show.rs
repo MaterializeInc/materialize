@@ -924,29 +924,31 @@ fn humanize_sql_for_show_create(
         // source is altered.
         Statement::CreateSource(stmt) => {
             // Collect all current subsource references.
-            //
-            // TODO(#24843): this structure will need to change because we will
-            // have multiple references to the same upstream table.
-            let mut curr_references: BTreeMap<_, _> = catalog
-                .get_item(&id)
-                .used_by()
-                .into_iter()
-                .filter_map(|subsource| {
-                    let item = catalog.get_item(subsource);
-                    item.subsource_details().map(|(_id, reference)| {
-                        let name = item.name();
-                        (
-                            reference.clone(),
-                            ResolvedItemName::Item {
-                                id: item.id(),
-                                qualifiers: name.qualifiers.clone(),
-                                full_name: catalog.resolve_full_name(name),
-                                print_id: false,
-                            },
-                        )
+            let mut curr_references = BTreeMap::new();
+            for dependent in catalog.get_item(&id).used_by().into_iter() {
+                let item = catalog.get_item(dependent);
+                let reference = match item.subsource_details() {
+                    // Any item that uses this source and has subsource details
+                    // should be one of its subsources; however, if it's not,
+                    // this is low-stakes to just skip past it.
+                    Some((primary_source_id, reference)) if primary_source_id == id => reference,
+                    // Not a subsource of this source.
+                    _ => continue,
+                };
+
+                curr_references
+                    .entry(reference.clone())
+                    .and_modify(|(id, name)| {
+                        // Keep the entry with the maximum ID; from a
+                        // perspective of subsource demuxing this must be the
+                        // "widest" and latest version of the subsource.
+                        if *id < *dependent {
+                            *id = *dependent;
+                            *name = item.name();
+                        }
                     })
-                })
-                .collect();
+                    .or_insert((*dependent, item.name()));
+            }
 
             match &mut stmt.connection {
                 CreateSourceConnection::Postgres { options, .. } => {
@@ -1043,9 +1045,18 @@ fn humanize_sql_for_show_create(
             if !curr_references.is_empty() {
                 let mut subsources: Vec<_> = curr_references
                     .into_iter()
-                    .map(|(reference, name)| CreateSourceSubsource {
-                        reference,
-                        subsource: Some(DeferredItemName::Named(name)),
+                    .map(|(reference, (id, name))| {
+                        let name = ResolvedItemName::Item {
+                            id,
+                            qualifiers: name.qualifiers.clone(),
+                            full_name: catalog.resolve_full_name(name),
+                            print_id: false,
+                        };
+
+                        CreateSourceSubsource {
+                            reference,
+                            subsource: Some(DeferredItemName::Named(name)),
+                        }
                     })
                     .collect();
                 subsources.sort();
