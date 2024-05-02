@@ -9,7 +9,7 @@
 
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
@@ -879,9 +879,10 @@ impl GenericSourceConnection {
                 )
                 .await
             }
-            _ => Err(StorageError::RtrUnavailable(BTreeSet::from_iter(
-                [id].into_iter(),
-            ))),
+            s @ GenericSourceConnection::LoadGenerator(_) => unreachable!(
+                "do not try to determine RTR timestamp on {} source",
+                s.name()
+            ),
         }
     }
 

@@ -359,7 +359,6 @@ impl<T> ShouldHalt for StorageError<T> {
             | StorageError::InvalidAlter { .. }
             | StorageError::ShuttingDown(_)
             | StorageError::MissingSubsourceReference { .. }
-            | StorageError::RtrUnavailable(_)
             | StorageError::RtrTimeout(_)
             | StorageError::RtrDropFailure(_) => false,
         }

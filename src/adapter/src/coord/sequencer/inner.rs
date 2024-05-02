@@ -1990,7 +1990,8 @@ impl Coordinator {
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError> {
+    ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
+    {
         let vars = session.vars();
 
         // Ideally this logic belongs inside of
@@ -2023,24 +2024,7 @@ impl Coordinator {
             let r = self
                 .controller
                 .recent_timestamp(visited, *vars.statement_timeout())
-                .await;
-            let r = match r {
-                Ok(r) => r,
-                Err(StorageError::RtrUnavailable(ids)) => {
-                    let conn_catalog = self.catalog().for_session(session);
-                    let names = ids
-                        .into_iter()
-                        .map(|id| {
-                            conn_catalog
-                                .minimal_qualification(conn_catalog.get_item(&id).name())
-                                .to_string()
-                        })
-                        .collect();
-
-                    return Err(AdapterError::RtrUnavailable(names));
-                }
-                Err(e) => return Err(e.into()),
-            };
+                .await?;
 
             Some(r)
         } else {
