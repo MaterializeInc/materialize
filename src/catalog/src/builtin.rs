@@ -3162,6 +3162,18 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_HISTORY_RETENTION_STRATEGIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_history_retention_strategies",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_HISTORY_RETENTION_STRATEGIES_OID,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("strategy", ScalarType::String.nullable(false))
+        .with_column("value", ScalarType::Jsonb.nullable(false)),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -7007,6 +7019,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
         Builtin::Table(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
+        Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),

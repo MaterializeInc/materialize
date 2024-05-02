@@ -21,6 +21,9 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 /// The default is set to a second to track the default timestamp frequency for sources.
 const DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS: u64 = 1000;
 
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION: Duration =
+    Duration::from_millis(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
+
 /// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp.
 const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: Timestamp =
     Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);

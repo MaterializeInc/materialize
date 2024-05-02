@@ -12,20 +12,21 @@ mod notice;
 use std::net::Ipv4Addr;
 
 use bytesize::ByteSize;
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
     MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES,
     MZ_CLUSTER_SCHEDULES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES,
-    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS,
-    MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES,
-    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-    MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES,
-    MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS,
-    MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES,
-    MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS,
+    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
+    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
+    MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES, MZ_ROLES,
+    MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
+    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -571,7 +572,41 @@ impl CatalogState {
             }
         }
 
+        // Use initial lcw so that we can tell apart default from non-existent windows.
+        if let Some(cw) = entry.item().initial_logical_compaction_window() {
+            updates.push(self.pack_history_retention_strategy_update(id, cw, diff));
+            // Propagate subsource changes.
+            for (cw, mut ids) in self.source_compaction_windows([id]) {
+                // Id already accounted for above.
+                ids.remove(&id);
+                for sub_id in ids {
+                    updates.push(self.pack_history_retention_strategy_update(sub_id, cw, diff));
+                }
+            }
+        }
+
         updates
+    }
+
+    fn pack_history_retention_strategy_update(
+        &self,
+        id: GlobalId,
+        cw: CompactionWindow,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let cw: u64 = cw.comparable_timestamp().into();
+        let cw = Jsonb::from_serde_json(serde_json::Value::Number(serde_json::Number::from(cw)))
+            .expect("must serialize");
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_HISTORY_RETENTION_STRATEGIES),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                // FOR is the only strategy at the moment. We may introduce FROM or others later.
+                Datum::String("FOR"),
+                cw.into_row().into_element(),
+            ]),
+            diff,
+        }
     }
 
     fn pack_table_update(
