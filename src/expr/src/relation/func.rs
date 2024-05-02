@@ -2292,105 +2292,109 @@ fn unnest_map<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
         .map(move |(k, v)| (Row::pack_slice(&[Datum::from(k), v]), 1))
 }
 
+impl AggregateFunc {
+    /// The base function name without the `~[...]` suffix used when rendering
+    /// variants that represent a parameterized function family.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::MaxNumeric => "max",
+            Self::MaxInt16 => "max",
+            Self::MaxInt32 => "max",
+            Self::MaxInt64 => "max",
+            Self::MaxUInt16 => "max",
+            Self::MaxUInt32 => "max",
+            Self::MaxUInt64 => "max",
+            Self::MaxMzTimestamp => "max",
+            Self::MaxFloat32 => "max",
+            Self::MaxFloat64 => "max",
+            Self::MaxBool => "max",
+            Self::MaxString => "max",
+            Self::MaxDate => "max",
+            Self::MaxTimestamp => "max",
+            Self::MaxTimestampTz => "max",
+            Self::MaxInterval => "max",
+            Self::MaxTime => "max",
+            Self::MinNumeric => "min",
+            Self::MinInt16 => "min",
+            Self::MinInt32 => "min",
+            Self::MinInt64 => "min",
+            Self::MinUInt16 => "min",
+            Self::MinUInt32 => "min",
+            Self::MinUInt64 => "min",
+            Self::MinMzTimestamp => "min",
+            Self::MinFloat32 => "min",
+            Self::MinFloat64 => "min",
+            Self::MinBool => "min",
+            Self::MinString => "min",
+            Self::MinDate => "min",
+            Self::MinTimestamp => "min",
+            Self::MinTimestampTz => "min",
+            Self::MinInterval => "min",
+            Self::MinTime => "min",
+            Self::SumInt16 => "sum",
+            Self::SumInt32 => "sum",
+            Self::SumInt64 => "sum",
+            Self::SumUInt16 => "sum",
+            Self::SumUInt32 => "sum",
+            Self::SumUInt64 => "sum",
+            Self::SumFloat32 => "sum",
+            Self::SumFloat64 => "sum",
+            Self::SumNumeric => "sum",
+            Self::Count => "count",
+            Self::Any => "any",
+            Self::All => "all",
+            Self::JsonbAgg { .. } => "jsonb_agg",
+            Self::JsonbObjectAgg { .. } => "jsonb_object_agg",
+            Self::MapAgg { .. } => "map_agg",
+            Self::ArrayConcat { .. } => "array_agg",
+            Self::ListConcat { .. } => "list_agg",
+            Self::StringAgg { .. } => "string_agg",
+            Self::RowNumber { .. } => "row_number",
+            Self::Rank { .. } => "rank",
+            Self::DenseRank { .. } => "dense_rank",
+            Self::LagLead {
+                lag_lead: LagLeadType::Lag,
+                ..
+            } => "lag",
+            Self::LagLead {
+                lag_lead: LagLeadType::Lead,
+                ..
+            } => "lead",
+            Self::FirstValue { .. } => "first_value",
+            Self::LastValue { .. } => "last_value",
+            Self::WindowAggregate { .. } => "window_agg",
+            Self::Dummy => "dummy",
+        }
+    }
+}
+
 impl<'a, M> fmt::Display for HumanizedExpr<'a, AggregateFunc, M>
 where
     M: HumanizerMode,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use AggregateFunc::*;
+        let name = self.expr.name();
         match self.expr {
-            AggregateFunc::MaxNumeric => f.write_str("max"),
-            AggregateFunc::MaxInt16 => f.write_str("max"),
-            AggregateFunc::MaxInt32 => f.write_str("max"),
-            AggregateFunc::MaxInt64 => f.write_str("max"),
-            AggregateFunc::MaxUInt16 => f.write_str("max"),
-            AggregateFunc::MaxUInt32 => f.write_str("max"),
-            AggregateFunc::MaxUInt64 => f.write_str("max"),
-            AggregateFunc::MaxMzTimestamp => f.write_str("max"),
-            AggregateFunc::MaxFloat32 => f.write_str("max"),
-            AggregateFunc::MaxFloat64 => f.write_str("max"),
-            AggregateFunc::MaxBool => f.write_str("max"),
-            AggregateFunc::MaxString => f.write_str("max"),
-            AggregateFunc::MaxDate => f.write_str("max"),
-            AggregateFunc::MaxTimestamp => f.write_str("max"),
-            AggregateFunc::MaxTimestampTz => f.write_str("max"),
-            AggregateFunc::MaxInterval => f.write_str("max"),
-            AggregateFunc::MaxTime => f.write_str("max"),
-            AggregateFunc::MinNumeric => f.write_str("min"),
-            AggregateFunc::MinInt16 => f.write_str("min"),
-            AggregateFunc::MinInt32 => f.write_str("min"),
-            AggregateFunc::MinInt64 => f.write_str("min"),
-            AggregateFunc::MinUInt16 => f.write_str("min"),
-            AggregateFunc::MinUInt32 => f.write_str("min"),
-            AggregateFunc::MinUInt64 => f.write_str("min"),
-            AggregateFunc::MinMzTimestamp => f.write_str("min"),
-            AggregateFunc::MinFloat32 => f.write_str("min"),
-            AggregateFunc::MinFloat64 => f.write_str("min"),
-            AggregateFunc::MinBool => f.write_str("min"),
-            AggregateFunc::MinString => f.write_str("min"),
-            AggregateFunc::MinDate => f.write_str("min"),
-            AggregateFunc::MinTimestamp => f.write_str("min"),
-            AggregateFunc::MinTimestampTz => f.write_str("min"),
-            AggregateFunc::MinInterval => f.write_str("min"),
-            AggregateFunc::MinTime => f.write_str("min"),
-            AggregateFunc::SumInt16 => f.write_str("sum"),
-            AggregateFunc::SumInt32 => f.write_str("sum"),
-            AggregateFunc::SumInt64 => f.write_str("sum"),
-            AggregateFunc::SumUInt16 => f.write_str("sum"),
-            AggregateFunc::SumUInt32 => f.write_str("sum"),
-            AggregateFunc::SumUInt64 => f.write_str("sum"),
-            AggregateFunc::SumFloat32 => f.write_str("sum"),
-            AggregateFunc::SumFloat64 => f.write_str("sum"),
-            AggregateFunc::SumNumeric => f.write_str("sum"),
-            AggregateFunc::Count => f.write_str("count"),
-            AggregateFunc::Any => f.write_str("any"),
-            AggregateFunc::All => f.write_str("all"),
-            AggregateFunc::JsonbAgg { order_by } => {
+            JsonbAgg { order_by }
+            | JsonbObjectAgg { order_by }
+            | MapAgg { order_by, .. }
+            | ArrayConcat { order_by }
+            | ListConcat { order_by }
+            | StringAgg { order_by }
+            | RowNumber { order_by }
+            | Rank { order_by }
+            | DenseRank { order_by } => {
                 let order_by = order_by.iter().map(|col| self.child(col));
-                write!(f, "jsonb_agg[order_by=[{}]]", separated(", ", order_by))
+                write!(f, "{}[order_by=[{}]]", name, separated(", ", order_by))
             }
-            AggregateFunc::JsonbObjectAgg { order_by } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
-                write!(
-                    f,
-                    "jsonb_object_agg[order_by=[{}]]",
-                    separated(", ", order_by)
-                )
-            }
-            AggregateFunc::MapAgg { order_by, .. } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
-                write!(f, "map_agg[order_by=[{}]]", separated(", ", order_by))
-            }
-            AggregateFunc::ArrayConcat { order_by } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
-                write!(f, "array_agg[order_by=[{}]]", separated(", ", order_by))
-            }
-            AggregateFunc::ListConcat { order_by } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
-                write!(f, "list_agg[order_by=[{}]]", separated(", ", order_by))
-            }
-            AggregateFunc::StringAgg { order_by } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
-                write!(f, "string_agg[order_by=[{}]]", separated(", ", order_by))
-            }
-            AggregateFunc::RowNumber { order_by } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
-                write!(f, "row_number[order_by=[{}]]", separated(", ", order_by))
-            }
-            AggregateFunc::Rank { order_by } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
-                write!(f, "rank[order_by=[{}]]", separated(", ", order_by))
-            }
-            AggregateFunc::DenseRank { order_by } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
-                write!(f, "dense_rank[order_by=[{}]]", separated(", ", order_by))
-            }
-            AggregateFunc::LagLead {
-                lag_lead: LagLeadType::Lag,
+            LagLead {
+                lag_lead: _,
                 ignore_nulls,
                 order_by,
             } => {
                 let order_by = order_by.iter().map(|col| self.child(col));
-                f.write_str("lag")?;
+                f.write_str(name)?;
                 f.write_str("[")?;
                 if *ignore_nulls {
                     f.write_str("ignore_nulls=true, ")?;
@@ -2398,26 +2402,12 @@ where
                 write!(f, "order_by=[{}]", separated(", ", order_by))?;
                 f.write_str("]")
             }
-            AggregateFunc::LagLead {
-                lag_lead: LagLeadType::Lead,
-                ignore_nulls,
-                order_by,
-            } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
-                f.write_str("lag")?;
-                f.write_str("[")?;
-                if *ignore_nulls {
-                    f.write_str("ignore_nulls=true, ")?;
-                }
-                write!(f, "order_by=[{}]", separated(", ", order_by))?;
-                f.write_str("]")
-            }
-            AggregateFunc::FirstValue {
+            FirstValue {
                 order_by,
                 window_frame,
             } => {
                 let order_by = order_by.iter().map(|col| self.child(col));
-                f.write_str("first_value")?;
+                f.write_str(name)?;
                 f.write_str("[")?;
                 write!(f, "order_by=[{}]", separated(", ", order_by))?;
                 if *window_frame != WindowFrame::default() {
@@ -2425,12 +2415,12 @@ where
                 }
                 f.write_str("]")
             }
-            AggregateFunc::LastValue {
+            LastValue {
                 order_by,
                 window_frame,
             } => {
                 let order_by = order_by.iter().map(|col| self.child(col));
-                f.write_str("last_value")?;
+                f.write_str(name)?;
                 f.write_str("[")?;
                 write!(f, "order_by=[{}]", separated(", ", order_by))?;
                 if *window_frame != WindowFrame::default() {
@@ -2438,14 +2428,14 @@ where
                 }
                 f.write_str("]")
             }
-            AggregateFunc::WindowAggregate {
+            WindowAggregate {
                 wrapped_aggregate,
                 order_by,
                 window_frame,
             } => {
                 let order_by = order_by.iter().map(|col| self.child(col));
                 let wrapped_aggregate = self.child(wrapped_aggregate.deref());
-                f.write_str("window_agg")?;
+                f.write_str(name)?;
                 f.write_str("[")?;
                 write!(f, "{} ", wrapped_aggregate)?;
                 write!(f, "order_by=[{}]", separated(", ", order_by))?;
@@ -2454,7 +2444,7 @@ where
                 }
                 f.write_str("]")
             }
-            AggregateFunc::Dummy => f.write_str("dummy"),
+            _ => f.write_str(name),
         }
     }
 }
