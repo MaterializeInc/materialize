@@ -1192,10 +1192,11 @@ impl Deref for PartDeletes {
 #[cfg(test)]
 mod tests {
     use mz_dyncfg::ConfigUpdates;
+    use timely::order::Product;
 
     use crate::cache::PersistClientCache;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
-    use crate::tests::{all_ok, new_test_client, CodecProduct};
+    use crate::tests::{all_ok, new_test_client};
     use crate::PersistLocation;
 
     use super::*;
@@ -1345,25 +1346,17 @@ mod tests {
             .expect("client construction failed");
         let shard_id = ShardId::new();
         let (mut write, _) = client
-            .expect_open::<String, String, CodecProduct, i64>(shard_id)
+            .expect_open::<String, String, Product<u32, u32>, i64>(shard_id)
             .await;
 
         let batch = write
             .batch(
                 &[
-                    (
-                        ("1".to_owned(), "one".to_owned()),
-                        CodecProduct::new(0, 10),
-                        1,
-                    ),
-                    (
-                        ("2".to_owned(), "two".to_owned()),
-                        CodecProduct::new(10, 0),
-                        1,
-                    ),
+                    (("1".to_owned(), "one".to_owned()), Product::new(0, 10), 1),
+                    (("2".to_owned(), "two".to_owned()), Product::new(10, 0), 1),
                 ],
-                Antichain::from_elem(CodecProduct::new(0, 0)),
-                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 1)]),
+                Antichain::from_elem(Product::new(0, 0)),
+                Antichain::from_iter([Product::new(0, 11), Product::new(10, 1)]),
             )
             .await
             .expect("invalid usage");
