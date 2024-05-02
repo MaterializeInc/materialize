@@ -6697,6 +6697,15 @@ ON mz_internal.mz_kafka_sources (id)",
     is_retained_metrics_object: true,
 };
 
+pub const MZ_WEBHOOK_SOURCES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_webhook_sources_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_WEBHOOK_SOURCES_IND_OID,
+    sql: "IN CLUSTER mz_introspection
+ON mz_internal.mz_webhook_sources (id)",
+    is_retained_metrics_object: true,
+};
+
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -7196,6 +7205,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_FRONTIERS_IND),
         Builtin::Index(&MZ_KAFKA_SOURCES_IND),
+        Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
     ]);
 
     builtins.extend(notice::builtins());

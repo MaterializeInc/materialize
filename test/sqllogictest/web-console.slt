@@ -293,3 +293,16 @@ Used Indexes:
 Target cluster: mz_introspection
 
 EOF
+
+query T multiline
+EXPLAIN SELECT * FROM mz_internal.mz_webhook_sources
+----
+Explained Query (fast path):
+  ReadIndex on=mz_internal.mz_webhook_sources mz_webhook_sources_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_webhook_sources_ind (*** full scan ***)
+
+Target cluster: mz_introspection
+
+EOF
