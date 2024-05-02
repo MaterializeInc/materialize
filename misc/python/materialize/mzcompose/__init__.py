@@ -42,6 +42,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # -----
     # Unsafe functions
     "enable_unsafe_functions": "true",
+    "enable_dangerous_functions": "true",  # former name of 'enable_unsafe_functions'
     # -----
     # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
     "persist_next_listen_batch_retryer_clamp": "16s",
@@ -58,6 +59,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "compute_hydration_concurrency": 2,
     "disk_cluster_replicas_default": "true",
     "enable_alter_swap": "true",
+    "enable_assert_not_null": "true",
     "enable_aws_connection": "true",
     "enable_columnation_lgalloc": "true",
     "enable_comment": "true",
@@ -75,6 +77,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_reduce_mfp_fusion": "true",
     "enable_refresh_every_mvs": "true",
     "enable_cluster_schedule_refresh": "true",
+    "enable_sink_doc_on_option": "true",
     "enable_statement_lifecycle_logging": "true",
     "enable_table_keys": "true",
     "enable_variadic_left_join_lowering": "true",
@@ -93,6 +96,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "statement_logging_max_sample_rate": "0.01",
     "storage_persist_sink_minimum_batch_updates": "100",
     "storage_source_decode_fuel": "100000",
+    "timestamp_oracle": "postgres",
     "wait_catalog_consolidation_on_startup": "true",
 }
 
