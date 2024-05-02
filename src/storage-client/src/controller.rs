@@ -33,12 +33,15 @@ use mz_persist_types::{Codec64, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceData, SourceDesc};
+use mz_storage_types::sources::{
+    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc,
+};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -381,25 +384,29 @@ pub trait StorageController: Debug {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Check that the ingestion associated with each `id` can use the
-    /// correlated [`SourceDesc`].
+    /// Check that the ingestion associated with `id` can use the provided
+    /// [`SourceDesc`].
     ///
     /// Note that this check is optimistic and its return of `Ok(())` does not
     /// guarantee that subsequent calls to `alter_ingestion_source_desc` are
     /// guaranteed to succeed.
-    ///
-    /// # Panics
-    /// - If `id` is not correlated to a collection with an
-    ///   [`IngestionDescription`].
     fn check_alter_ingestion_source_desc(
         &mut self,
-        collections: &BTreeMap<GlobalId, SourceDesc>,
+        ingestion_id: GlobalId,
+        source_desc: &SourceDesc,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Alters each identified collection to use the correlated [`SourceDesc`].
+    /// Alters the identified collection to use the provided [`SourceDesc`].
     async fn alter_ingestion_source_desc(
         &mut self,
-        collections: BTreeMap<GlobalId, SourceDesc>,
+        ingestion_id: GlobalId,
+        source_desc: SourceDesc,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Alters each identified collection to use the correlated [`GenericSourceConnection`].
+    async fn alter_ingestion_connections(
+        &mut self,
+        source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -420,8 +427,8 @@ pub trait StorageController: Debug {
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// For each identified export, update its `StorageSinkConnection`.
-    async fn update_export_connection(
+    /// For each identified export, alter its [`StorageSinkConnection`].
+    async fn alter_export_connections(
         &mut self,
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
     ) -> Result<(), StorageError<Self::Timestamp>>;

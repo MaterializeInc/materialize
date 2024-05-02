@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use maplit::{btreemap, btreeset};
+use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -3234,8 +3234,8 @@ impl Coordinator {
         let mut connections = VecDeque::new();
         connections.push_front(entry.id());
 
-        let mut source_descs = BTreeMap::new();
-        let mut sinks = BTreeMap::new();
+        let mut source_connections = BTreeMap::new();
+        let mut sink_connections = BTreeMap::new();
 
         while let Some(id) = connections.pop_front() {
             for id in self.catalog.get_entry(&id).used_by() {
@@ -3251,11 +3251,11 @@ impl Coordinator {
                             _ => unreachable!("only ingestions reference connections"),
                         };
 
-                        source_descs.insert(*id, desc);
+                        source_connections.insert(*id, desc.connection);
                     }
                     CatalogItemType::Sink => {
                         let export = entry.sink().expect("known to be sink");
-                        sinks.insert(
+                        sink_connections.insert(
                             *id,
                             export
                                 .connection
@@ -3268,20 +3268,18 @@ impl Coordinator {
             }
         }
 
-        if !source_descs.is_empty() {
-            // TODO(#26767): provide an API to modify the connection without
-            // modifying the entire source desc, just like we offer for sinks.
+        if !source_connections.is_empty() {
             self.controller
                 .storage
-                .alter_ingestion_source_desc(source_descs)
+                .alter_ingestion_connections(source_connections)
                 .await
                 .unwrap_or_terminate("cannot fail to alter source desc");
         }
 
-        if !sinks.is_empty() {
+        if !sink_connections.is_empty() {
             self.controller
                 .storage
-                .update_export_connection(sinks)
+                .alter_export_connections(sink_connections)
                 .await
                 .unwrap_or_terminate("altering exports after txn must succeed");
         }
@@ -3524,11 +3522,9 @@ impl Coordinator {
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
-                let descs = btreemap! {id => desc};
-
                 self.controller
                     .storage
-                    .check_alter_ingestion_source_desc(&descs)
+                    .check_alter_ingestion_source_desc(id, &desc)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 // Redefine source. This must be done before we create any new
@@ -3558,7 +3554,7 @@ impl Coordinator {
 
                 self.controller
                     .storage
-                    .alter_ingestion_source_desc(descs)
+                    .alter_ingestion_source_desc(id, desc)
                     .await
                     .unwrap_or_terminate("cannot fail to alter source desc");
 
