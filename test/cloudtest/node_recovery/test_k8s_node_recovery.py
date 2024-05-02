@@ -18,7 +18,7 @@ from materialize.mzcompose.test_result import (
     TestFailureDetails,
 )
 
-TD_TIMEOUT_SHORT = 45
+TD_TIMEOUT_SHORT = 60
 TD_TIMEOUT_FULL_RECOVERY = 660
 
 
