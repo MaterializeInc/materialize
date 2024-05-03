@@ -19,8 +19,14 @@ load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 # All of the clang related tools are provided under the `@llvm_toolchain_llvm`
 # repo. To see what's available run `bazel query @llvm_toolchain_llvm//...`.
 
+# Version of the "toolchains_llvm" rule set, _not_ the version of clang/llvm.
 TOOLCHAINS_LLVM_VERSION = "1.0.0"
 TOOLCHAINS_LLVM_SHA256 = "e91c4361f99011a54814e1afbe5c436e0d329871146a3cd58c23a2b4afb50737"
+
+# Version of clang/llvm we use.
+#
+# At the moment this is newest version that is pre-compiled for all of the platforms we support.
+LLVM_VERSION = "16.0.0"
 
 http_archive(
     name = "toolchains_llvm",
@@ -36,7 +42,7 @@ bazel_toolchain_dependencies()
 load("@toolchains_llvm//toolchain:rules.bzl", "llvm_toolchain")
 llvm_toolchain(
     name = "llvm_toolchain",
-    llvm_version = "16.0.0",
+    llvm_version = LLVM_VERSION,
 )
 
 load("@llvm_toolchain//:toolchains.bzl", "llvm_register_toolchains")
@@ -47,30 +53,31 @@ llvm_register_toolchains()
 # Rules for building C/C++ projects that use foreign build systems, e.g. Make. One case that we use
 # this for is building `openssl`.
 #
-# TODO(parkmycar): We currently maintain a fork for a few reasons:
+# TODO(parkmycar): We maintain a fork with the following fixes applied to the `mz-fixes` branch:
 #
-# 1. Bootstrapping pkg_config fails.
-# 2. Versions of `make` >4.3 are buggy and have a segfault, we hit this segfault when building jemalloc.
+# 1. Versions of `make` >4.3 are buggy and have a segfault, we hit this segfault when building jemalloc.
 #    See: <https://github.com/bazelbuild/rules_foreign_cc/issues/898>
-# 3. Some libraries, e.g. jemalloc, preprocess and compile code in two separate steps, so we need
+#    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/8e28ba0bbbf7e73d70333b625bfec4a65114d8be>
+#
+# 2. Some libraries, e.g. jemalloc, preprocess and compile code in two separate steps, so we need
 #    to make sure the sysroot is provided in CPPFLAGS, if it's set in CFLAGS.
 #    See: <https://github.com/bazelbuild/rules_foreign_cc/pull/1023>
+#    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/2199b1c304140fa959c3703b0b7e9cbf7d39c4c2>
 #
 
-RULES_FOREIGN_CC_VERSION = "a51d26c1822bec82a62a6bc0f1484ab1e0b1a3eb"
-RULES_FOREIGN_CC_INTEGRITY = "sha256-8NPGMB4Vn1W/JmAvdRaOm29GUv8uxXLxRKdJb5GQKww="
+RULES_FOREIGN_CC_VERSION = "2199b1c304140fa959c3703b0b7e9cbf7d39c4c2"
+RULES_FOREIGN_CC_INTEGRITY = "sha256-Prb2q/bhVCocjT427OPVpzHuEnJmqcf1WPK4Ev7KlEI="
 
 maybe(
     http_archive,
     name = "rules_foreign_cc",
     integrity = RULES_FOREIGN_CC_INTEGRITY,
     strip_prefix = "rules_foreign_cc-{0}".format(RULES_FOREIGN_CC_VERSION),
-    url = "https://github.com/ParkMyCar/rules_foreign_cc/archive/{0}.tar.gz".format(RULES_FOREIGN_CC_VERSION),
+    url = "https://github.com/MaterializeInc/rules_foreign_cc/archive/{0}.tar.gz".format(RULES_FOREIGN_CC_VERSION),
 )
 load("@rules_foreign_cc//foreign_cc:repositories.bzl", "rules_foreign_cc_dependencies")
 
 rules_foreign_cc_dependencies(make_version = "4.2")
-
 # `bazel-lib`
 #
 # Provides generic rules for Bazel to help make things fit together.
@@ -92,14 +99,10 @@ http_archive(
     strip_prefix = "bazel-lib-{0}".format(ASPECT_BAZEL_LIB_VERSION),
     url = "https://github.com/aspect-build/bazel-lib/releases/download/v{0}/bazel-lib-v{0}.tar.gz".format(ASPECT_BAZEL_LIB_VERSION),
 )
-
 load("@aspect_bazel_lib//lib:repositories.bzl", "aspect_bazel_lib_dependencies", "aspect_bazel_lib_register_toolchains")
 
 # Required bazel-lib dependencies
 aspect_bazel_lib_dependencies()
-
-# Register bazel-lib toolchains
-aspect_bazel_lib_register_toolchains()
 
 # `openssl`
 #

@@ -39,6 +39,8 @@ filegroup(
 # Copied from `openssl-src-rs`
 #
 # See https://github.com/alexcrichton/openssl-src-rs/blob/599f48490e62bcd03ba02d8c9357c9a1fed1c255/src/lib.rs#L179
+#
+# TODO(parkmycar): Lint that these options are the same ones enabled by `openssl-src`.
 CONFIGURE_OPTIONS = [
     # No shared objects, only static libraries.
     "no-dso",
@@ -93,6 +95,7 @@ configure_make(
     visibility = ["//visibility:public"],
 )
 
+# Captures all of the outputs of the "openssl" rule into a single group.
 filegroup(
     name = "out_dir",
     srcs = [":openssl"],
@@ -106,6 +109,8 @@ filegroup(
 #    group everything together.
 # 2. `rustc` (or the linker?) can't find the static libs through a symlink, so
 #    we explicitly copy the files into the aforementioned directory.
+#    `copy_file` + `copy_to_directory` forces bazel to produce real files in
+#    the right place, not just symlinks.
 #
 select_file(
     name = "libssl",
