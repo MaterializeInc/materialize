@@ -81,7 +81,7 @@ impl UseArrowRsLibrary {
 
 pub(crate) const USE_ARROW_RS_LIBRARY: Config<&str> = Config::new(
     "persist_use_arrow_rs_library",
-    UseArrowRsLibrary::Off.to_str(),
+    UseArrowRsLibrary::Read.to_str(),
     "'off' by default, providing 'read' will use the newer arrow-rs library for reads, 'read_and_write' will use it for both reads and writes.",
 );
 

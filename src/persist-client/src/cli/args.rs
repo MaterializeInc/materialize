@@ -22,7 +22,8 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
+    Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, Tasked,
+    VersionedData,
 };
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -137,6 +138,7 @@ pub(super) async fn make_consensus(
         Arc::new(ReadOnly::new(consensus))
     };
     let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&metrics)));
+    let consensus = Arc::new(Tasked(consensus));
     Ok(consensus)
 }
 
@@ -160,6 +162,7 @@ pub(super) async fn make_blob(
         Arc::new(ReadOnly::new(blob))
     };
     let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&metrics)));
+    let blob = Arc::new(Tasked(blob));
     Ok(blob)
 }
 

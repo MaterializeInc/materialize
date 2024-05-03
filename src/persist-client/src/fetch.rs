@@ -525,7 +525,7 @@ impl<T> Drop for LeasedBatchPart<T> {
 pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
     read_metrics: ReadMetrics,
-    buf: FetchedBlobBuf<T>,
+    pub(crate) buf: FetchedBlobBuf<T>,
     registered_desc: Description<T>,
     schemas: Schemas<K, V>,
     filter: FetchBatchFilter<T>,
@@ -535,7 +535,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
 }
 
 #[derive(Debug, Clone)]
-enum FetchedBlobBuf<T> {
+pub(crate) enum FetchedBlobBuf<T> {
     Hollow {
         buf: SegmentedBytes,
         part: HollowBatchPart<T>,

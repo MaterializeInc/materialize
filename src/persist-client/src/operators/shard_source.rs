@@ -19,7 +19,7 @@ use std::hash::{Hash, Hasher};
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -34,7 +34,7 @@ use mz_timely_util::builder_async::{
 };
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
+use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave, Map};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
@@ -156,10 +156,18 @@ where
         None => descs,
     };
 
-    let (parts, completed_fetches_stream, fetch_token) =
-        shard_source_fetch(&descs, name, client(), shard_id, key_schema, val_schema);
+    let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch(
+        &descs,
+        name,
+        client(),
+        shard_id,
+        key_schema,
+        val_schema,
+        Instant::now(),
+    );
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
     tokens.push(fetch_token);
+    let parts = parts.map(|(x, _)| x);
 
     (parts, tokens)
 }
@@ -487,8 +495,9 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     shard_id: ShardId,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
+    start: Instant,
 ) -> (
-    Stream<G, FetchedBlob<K, V, T, D>>,
+    Stream<G, (FetchedBlob<K, V, T, D>, Duration)>,
     Stream<G, Infallible>,
     PressOnDropButton,
 )
@@ -538,13 +547,14 @@ where
                         .fetch_leased_part(&leased_part)
                         .await
                         .expect("shard_id should match across all workers");
+                    let elapsed = start.elapsed();
                     {
                         // Do very fine-grained output activation/session
                         // creation to ensure that we don't hold activated
                         // outputs or sessions across await points, which
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
-                        fetched_output.give(&fetched_cap, fetched).await;
+                        fetched_output.give(&fetched_cap, (fetched, elapsed)).await;
                     }
                 }
             }
