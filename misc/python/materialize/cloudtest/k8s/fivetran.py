@@ -11,6 +11,7 @@ from kubernetes.client import (
     V1Container,
     V1Deployment,
     V1DeploymentSpec,
+    V1HostPathVolumeSource,
     V1LabelSelector,
     V1ObjectMeta,
     V1PodSpec,
@@ -18,6 +19,7 @@ from kubernetes.client import (
     V1Service,
     V1ServicePort,
     V1ServiceSpec,
+    V1Volume,
     V1VolumeMount,
 )
 
@@ -55,7 +57,6 @@ class FivetranDestinationDeployment(K8sDeployment):
     def __init__(self, namespace: str, apply_node_selectors: bool) -> None:
         super().__init__(namespace)
 
-        # TODO: not working and likely not needed
         volume_mounts = [
             V1VolumeMount(name="data", mount_path="/data"),
         ]
@@ -72,11 +73,24 @@ class FivetranDestinationDeployment(K8sDeployment):
         if apply_node_selectors:
             node_selector = {"supporting-services": "true"}
 
+        volumes = [
+            V1Volume(
+                name="data",
+                host_path=V1HostPathVolumeSource(
+                    path="/data", type="DirectoryOrCreate"
+                ),
+            )
+        ]
+
+        pod_spec = V1PodSpec(
+            containers=[container], volumes=volumes, node_selector=node_selector
+        )
+
         template = V1PodTemplateSpec(
             metadata=V1ObjectMeta(
                 namespace=namespace, labels={"app": "fivetran-destination"}
             ),
-            spec=V1PodSpec(containers=[container], node_selector=node_selector),
+            spec=pod_spec,
         )
 
         selector = V1LabelSelector(match_labels={"app": "fivetran-destination"})
