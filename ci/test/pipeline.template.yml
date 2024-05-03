@@ -388,6 +388,17 @@ steps:
         agents:
           queue: linux-aarch64-small
 
+      - id: pg-rtr
+        label: Postgres RTR tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-rtr]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-rtr
+        agents:
+          queue: linux-aarch64-small
+
   - group: "Connection tests"
     key: connection-tests
     steps:
@@ -459,6 +470,17 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-exactly-once
+        agents:
+          queue: linux-aarch64-small
+
+      - id: kafka-rtr
+        label: Kafka RTR tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/kafka-rtr]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-rtr
         agents:
           queue: linux-aarch64-small
 
