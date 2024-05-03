@@ -973,7 +973,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
-    pub referenced_subsources: Option<ReferencedSubsources<T>>,
+    pub referenced_subsources: Option<ReferencedSubsources>,
     pub progress_subsource: Option<DeferredItemName<T>>,
 }
 
@@ -1037,12 +1037,12 @@ impl_display_t!(CreateSourceStatement);
 
 /// A selected subsource in a FOR TABLES (..) statement
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct CreateSourceSubsource<T: AstInfo> {
+pub struct CreateSourceSubsource {
     pub reference: UnresolvedItemName,
-    pub subsource: Option<DeferredItemName<T>>,
+    pub subsource: Option<UnresolvedItemName>,
 }
 
-impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
+impl AstDisplay for CreateSourceSubsource {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.reference);
         if let Some(subsource) = &self.subsource {
@@ -1051,19 +1051,19 @@ impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
         }
     }
 }
-impl_display_t!(CreateSourceSubsource);
+impl_display!(CreateSourceSubsource);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ReferencedSubsources<T: AstInfo> {
+pub enum ReferencedSubsources {
     /// A subset defined with FOR TABLES (...)
-    SubsetTables(Vec<CreateSourceSubsource<T>>),
+    SubsetTables(Vec<CreateSourceSubsource>),
     /// A subset defined with FOR SCHEMAS (...)
     SubsetSchemas(Vec<Ident>),
     /// FOR ALL TABLES
     All,
 }
 
-impl<T: AstInfo> AstDisplay for ReferencedSubsources<T> {
+impl AstDisplay for ReferencedSubsources {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::SubsetTables(subsources) => {
@@ -1080,13 +1080,12 @@ impl<T: AstInfo> AstDisplay for ReferencedSubsources<T> {
         }
     }
 }
-impl_display_t!(ReferencedSubsources);
+impl_display!(ReferencedSubsources);
 
 /// An option in a `CREATE SUBSOURCE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateSubsourceOptionName {
     Progress,
-    References,
     // Tracks which item this subsource references in the primary source.
     ExternalReference,
 }
@@ -1096,9 +1095,6 @@ impl AstDisplay for CreateSubsourceOptionName {
         match self {
             CreateSubsourceOptionName::Progress => {
                 f.write_str("PROGRESS");
-            }
-            CreateSubsourceOptionName::References => {
-                f.write_str("REFERENCES");
             }
             CreateSubsourceOptionName::ExternalReference => {
                 f.write_str("EXTERNAL REFERENCE");
@@ -1115,9 +1111,9 @@ impl WithOptionName for CreateSubsourceOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            CreateSubsourceOptionName::Progress
-            | CreateSubsourceOptionName::References
-            | CreateSubsourceOptionName::ExternalReference => false,
+            CreateSubsourceOptionName::Progress | CreateSubsourceOptionName::ExternalReference => {
+                false
+            }
         }
     }
 }
@@ -2339,7 +2335,7 @@ pub enum AlterSourceAction<T: AstInfo> {
     SetOptions(Vec<CreateSourceOption<T>>),
     ResetOptions(Vec<CreateSourceOptionName>),
     AddSubsources {
-        subsources: Vec<CreateSourceSubsource<T>>,
+        subsources: Vec<CreateSourceSubsource>,
         options: Vec<AlterSourceAddSubsourceOption<T>>,
     },
     DropSubsources {

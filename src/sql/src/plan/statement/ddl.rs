@@ -64,9 +64,9 @@ use mz_sql_parser::ast::{
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
     LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
     MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
-    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
-    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
+    PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
     TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName,
     UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
@@ -614,6 +614,11 @@ pub fn plan_create_source(
         progress_subsource,
     } = &stmt;
 
+    mz_ore::soft_assert_or_log!(
+        referenced_subsources.is_none(),
+        "referenced subsources must be cleared in purification"
+    );
+
     let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
 
     let allowed_with_options = vec![
@@ -650,7 +655,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connection, available_subsources) = match connection {
+    let external_connection = match connection {
         CreateSourceConnection::Kafka {
             connection: connection_name,
             options,
@@ -765,9 +770,7 @@ pub fn plan_create_source(
                 metadata_columns,
             };
 
-            let connection = GenericSourceConnection::Kafka(connection);
-
-            (connection, None)
+            GenericSourceConnection::Kafka(connection)
         }
         CreateSourceConnection::Postgres {
             connection,
@@ -836,9 +839,6 @@ pub fn plan_create_source(
                     .or_default()
                     .insert(col);
             }
-
-            // Register the available subsources
-            let mut available_subsources = BTreeMap::new();
 
             // Here we will generate the cast expressions required to convert the text encoded
             // columns into the appropriate target types, creating a Vec<MirScalarExpr> per table.
@@ -995,17 +995,6 @@ pub fn plan_create_source(
                 }
                 let r = table_casts.insert(i + 1, column_casts);
                 assert!(r.is_none(), "cannot have table defined multiple times");
-
-                let name = FullItemName {
-                    database: RawDatabaseSpecifier::Name(connection.database.clone()),
-                    schema: table.namespace.clone(),
-                    item: table.name.clone(),
-                };
-
-                // The zero-th output is the main output
-                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                // to handle the main source and the subsources uniformly
-                available_subsources.insert(name, i + 1);
             }
 
             let publication_details = PostgresSourcePublicationDetails::from_proto(details)
@@ -1020,7 +1009,7 @@ pub fn plan_create_source(
                     publication_details,
                 });
 
-            (connection, Some(available_subsources))
+            connection
         }
         CreateSourceConnection::MySql {
             connection,
@@ -1049,25 +1038,6 @@ pub fn plan_create_source(
                 ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
             let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
 
-            let mut available_subsources = BTreeMap::new();
-
-            for (index, table) in details.tables.iter().enumerate() {
-                let name = FullItemName {
-                    // In MySQL we use 'mysql' as the default database name
-                    // since there is no concept of a 'database' in MySQL
-                    // (schemas and databases are the same thing)
-                    //
-                    //TODO(#26764, #26772): remove this.
-                    database: RawDatabaseSpecifier::Name("mysql".to_string()),
-                    schema: table.schema_name.clone(),
-                    item: table.name.clone(),
-                };
-                // The zero-th output is the main output
-                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                // to handle the main source and the subsources uniformly
-                available_subsources.insert(name, index + 1);
-            }
-
             let text_columns = text_columns
                 .into_iter()
                 .map(|name| name.try_into().map_err(|e| sql_err!("{}", e)))
@@ -1086,13 +1056,11 @@ pub fn plan_create_source(
                     ignore_columns,
                 });
 
-            (connection, Some(available_subsources))
+            connection
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            let (load_generator, available_subsources) =
+            let (load_generator, _available_subsources) =
                 load_generator_ast_to_generator(scx, generator, options, include_metadata)?;
-            let available_subsources = available_subsources
-                .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
 
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
@@ -1105,78 +1073,9 @@ pub fn plan_create_source(
                 tick_micros,
             });
 
-            (connection, available_subsources)
+            connection
         }
     };
-
-    // TODO(#26764): enable this assert
-    //
-    // mz_ore::soft_assert_or_log!( referenced_subsources.is_none(), "referenced
-    //     subsources must be cleared in purification" );
-    //
-    // TODO(#26764): remove available_subsources, requested_subsources--this
-    // will be handled in purification only.
-    let (available_subsources, requested_subsources) = match (available_subsources, referenced_subsources) {
-            (Some(available_subsources), Some(ReferencedSubsources::SubsetTables(subsources))) => {
-                let mut requested_subsources = vec![];
-                for subsource in subsources {
-                    let name = subsource.reference.clone();
-
-                    let target = match &subsource.subsource {
-                        // migration: this only needs to be supported for one
-                        // version to allow booting old-style subsources.
-                        None => continue,
-                        Some(DeferredItemName::Named(target)) => target.clone(),
-                        _ => {
-                            sql_bail!(
-                                "[internal error] subsources must be named during purification"
-                            )
-                        }
-                    };
-
-                    requested_subsources.push((name, target));
-                }
-                (available_subsources, requested_subsources)
-            }
-            // Some(_), None indicates that this is a new-style source that
-            // doesn't track its subsources directly.
-            (Some(_), None)
-            // `(None, None)` indicates that this a non-subsource bearing
-            // source.
-            | (None, None) => (BTreeMap::new(), vec![]),
-            (None, Some(_))
-            | (Some(_), Some(ReferencedSubsources::All | ReferencedSubsources::SubsetSchemas(_))) =>
-            {
-                sql_bail!("[internal error] subsources should be resolved during purification")
-            }
-        };
-
-    // TODO(#26764): remove this code; subsource exports will no longer be
-    // tracked by planning.
-    let mut subsource_exports = BTreeMap::new();
-    for (name, target) in requested_subsources {
-        let name = normalize::full_name(name)?;
-        let idx = match available_subsources.get(&name) {
-            Some(idx) => idx,
-            None => sql_bail!("Requested non-existent subtable: {name}"),
-        };
-
-        let target_id = match target {
-            ResolvedItemName::Item { id, .. } => id,
-            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
-                sql_bail!("[internal error] invalid target id")
-            }
-        };
-
-        // TODO(petrosagg): This is the point where we would normally look into the catalog for the
-        // item with ID `target` and verify that its RelationDesc is identical to the type of the
-        // dataflow output. We can't do that here however because the subsources are created in the
-        // same transaction as this source and they are not yet in the catalog. In the future, when
-        // provisional catalogs are made available to the planner we could do the check. For now
-        // we don't allow users to manually target subsources and rely on purification generating
-        // correct definitions.
-        subsource_exports.insert(target_id, *idx);
-    }
 
     let CreateSourceOptionExtracted {
         timeline,
@@ -1474,7 +1373,6 @@ pub fn plan_create_source(
         create_sql,
         data_source: DataSourceDesc::Ingestion(Ingestion {
             desc: source_desc,
-            subsource_exports,
             progress_subsource,
         }),
         desc,
@@ -1493,7 +1391,6 @@ pub fn plan_create_source(
 generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
-    (References, bool, Default(false)),
     (ExternalReference, UnresolvedItemName)
 );
 
@@ -1512,7 +1409,6 @@ pub fn plan_create_subsource(
 
     let CreateSubsourceOptionExtracted {
         progress,
-        references,
         external_reference,
         ..
     } = with_options.clone().try_into()?;
@@ -1522,7 +1418,7 @@ pub fn plan_create_subsource(
     // statements, so this would fire in integration testing if we failed to
     // uphold it.
     assert!(
-        (progress ^ references) ^ (external_reference.is_some() && of_source.is_some()),
+        progress ^ (external_reference.is_some() && of_source.is_some()),
         "CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option"
     );
 
@@ -1636,9 +1532,6 @@ pub fn plan_create_subsource(
         }
     } else if progress {
         DataSourceDesc::Progress
-    } else if references {
-        // This is a legacy subsource with the inverted dependency structure.
-        DataSourceDesc::Source
     } else {
         panic!("subsources must specify one of `external_reference`, `progress`, or `references`")
     };

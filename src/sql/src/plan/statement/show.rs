@@ -20,9 +20,9 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    CreateSourceSubsource, DeferredItemName, Ident, ObjectType, ReferencedSubsources,
-    ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
-    SystemObjectType, WithOptionValue,
+    CreateSourceSubsource, ObjectType, ReferencedSubsources, ShowCreateConnectionStatement,
+    ShowCreateMaterializedViewStatement, ShowObjectType, SystemObjectType, UnresolvedItemName,
+    WithOptionValue,
 };
 use query::QueryContext;
 
@@ -927,7 +927,7 @@ fn humanize_sql_for_show_create(
             //
             // TODO(#24843): this structure will need to change because we will
             // have multiple references to the same upstream table.
-            let mut curr_references: BTreeMap<_, _> = catalog
+            let curr_references: BTreeMap<_, _> = catalog
                 .get_item(&id)
                 .used_by()
                 .into_iter()
@@ -935,15 +935,9 @@ fn humanize_sql_for_show_create(
                     let item = catalog.get_item(subsource);
                     item.subsource_details().map(|(_id, reference)| {
                         let name = item.name();
-                        (
-                            reference.clone(),
-                            ResolvedItemName::Item {
-                                id: item.id(),
-                                qualifiers: name.qualifiers.clone(),
-                                full_name: catalog.resolve_full_name(name),
-                                print_id: false,
-                            },
-                        )
+                        let subsource_name = catalog.resolve_full_name(name);
+                        let subsource_name = UnresolvedItemName::from(subsource_name);
+                        (reference.clone(), subsource_name)
                     })
                 })
                 .collect();
@@ -985,21 +979,6 @@ fn humanize_sql_for_show_create(
                     });
                 }
                 CreateSourceConnection::MySql { options, .. } => {
-                    // We have to reformat MySQL references to not contain the
-                    // unncessary database name.
-                    curr_references = curr_references
-                        .into_iter()
-                        .map(|(mut reference, name)| {
-                            // TODO(#26772): this shouldn't be necessary.
-                            let mysql_database = reference.0.remove(0);
-                            mz_ore::soft_assert_eq_or_log!(
-                                mysql_database,
-                                Ident::new_unchecked("mysql")
-                            );
-                            (reference, name)
-                        })
-                        .collect();
-
                     options.retain_mut(|o| {
                         match o.name {
                             // Dropping a subsource does not remove any `TEXT
@@ -1045,7 +1024,7 @@ fn humanize_sql_for_show_create(
                     .into_iter()
                     .map(|(reference, name)| CreateSourceSubsource {
                         reference,
-                        subsource: Some(DeferredItemName::Named(name)),
+                        subsource: Some(name),
                     })
                     .collect();
                 subsources.sort();

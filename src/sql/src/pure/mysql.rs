@@ -29,13 +29,12 @@ use super::RequestedSubsource;
 /// The name of the fake database that we use for MySQL sources
 /// to fit our model of a 3-layer catalog. MySQL doesn't have a concept
 /// of databases AND schemas, it treats both as the same thing.
-static MYSQL_DATABASE_FAKE_NAME: &str = "mysql";
+pub(crate) static MYSQL_DATABASE_FAKE_NAME: &str = "mysql";
 
 pub(super) fn mysql_upstream_name(
     table: &MySqlTableDesc,
 ) -> Result<UnresolvedItemName, IdentError> {
     Ok(UnresolvedItemName::qualified(&[
-        Ident::new(MYSQL_DATABASE_FAKE_NAME)?,
         Ident::new(&table.schema_name)?,
         Ident::new(&table.name)?,
     ]))
@@ -45,15 +44,12 @@ pub(super) fn mysql_upstream_name(
 fn upstream_name_to_table(
     name: &UnresolvedItemName,
 ) -> Result<QualifiedTableRef, MySqlSourcePurificationError> {
-    if name.0.len() != 3 {
-        Err(MySqlSourcePurificationError::InvalidTableReference(name.to_string()).into())?
-    }
-    if name.0.get(0).map(|s| s.as_str()) != Some(MYSQL_DATABASE_FAKE_NAME) {
+    if name.0.len() != 2 {
         Err(MySqlSourcePurificationError::InvalidTableReference(name.to_string()).into())?
     }
     Ok(QualifiedTableRef {
-        schema_name: name.0[1].as_str(),
-        table_name: name.0[2].as_str(),
+        schema_name: name.0[0].as_str(),
+        table_name: name.0[1].as_str(),
     })
 }
 
@@ -193,6 +189,8 @@ pub(super) fn normalize_column_refs<'a>(
     let (seq, unknown): (Vec<_>, Vec<_>) = cols.into_iter().partition(|name| {
         let (column_name, qual) = name.0.split_last().expect("non-empty");
         match catalog.resolve(UnresolvedItemName::qualified(qual)) {
+            // TODO: this needs to also introduce the maximum qualification on
+            // the columns, i.e. ensure they have the schema name.
             Ok((_, desc)) => desc.columns.iter().any(|n| &n.name == column_name.as_str()),
             Err(_) => false,
         }

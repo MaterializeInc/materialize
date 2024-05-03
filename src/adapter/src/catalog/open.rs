@@ -148,13 +148,12 @@ impl CatalogItemRebuilder {
         match self {
             Self::SystemSource(item) => item,
             Self::Object {
-                id,
+                id: _,
                 sql,
                 is_retained_metrics_object,
                 custom_logical_compaction_window,
             } => state
                 .parse_item(
-                    id,
                     &sql,
                     None,
                     is_retained_metrics_object,
@@ -490,7 +489,7 @@ impl Catalog {
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
-                            let res = task_state.parse_item(id, &create_sql, None, false, None);
+                            let res = task_state.parse_item(&create_sql, None, false, None);
                             (id, res)
                         }
                         .instrument(span),

@@ -651,15 +651,15 @@ CREATE DATABASE IF NOT EXISTS db
 CreateDatabase(CreateDatabaseStatement { name: UnresolvedDatabaseName(Ident("db")), if_not_exists: true })
 
 parse-statement
-CREATE SUBSOURCE IF NOT EXISTS source.sub (a int, b text) WITH (PROGRESS, REFERENCES)
+CREATE SUBSOURCE IF NOT EXISTS source.sub (a int, b text) WITH (PROGRESS)
 ----
-CREATE SUBSOURCE IF NOT EXISTS source.sub (a int4, b text) WITH (PROGRESS, REFERENCES)
+CREATE SUBSOURCE IF NOT EXISTS source.sub (a int4, b text) WITH (PROGRESS)
 =>
-CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("source"), Ident("sub")]), columns: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }], of_source: None, constraints: [], if_not_exists: true, with_options: [CreateSubsourceOption { name: Progress, value: None }, CreateSubsourceOption { name: References, value: None }] })
+CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("source"), Ident("sub")]), columns: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }], of_source: None, constraints: [], if_not_exists: true, with_options: [CreateSubsourceOption { name: Progress, value: None }] })
 
 parse-statement
-CREATE SUBSOURCE IF NOT EXISTS source.sub (a int, b text) OF SOURCE primary WITH (PROGRESS, REFERENCES, EXTERNAL REFERENCE = "a"."b"."c")
+CREATE SUBSOURCE IF NOT EXISTS source.sub (a int, b text) OF SOURCE primary WITH (PROGRESS, EXTERNAL REFERENCE = "a"."b"."c")
 ----
-CREATE SUBSOURCE IF NOT EXISTS source.sub (a int4, b text) OF SOURCE primary WITH (PROGRESS, REFERENCES, EXTERNAL REFERENCE = a.b.c)
+CREATE SUBSOURCE IF NOT EXISTS source.sub (a int4, b text) OF SOURCE primary WITH (PROGRESS, EXTERNAL REFERENCE = a.b.c)
 =>
-CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("source"), Ident("sub")]), columns: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }], of_source: Some(Name(UnresolvedItemName([Ident("primary")]))), constraints: [], if_not_exists: true, with_options: [CreateSubsourceOption { name: Progress, value: None }, CreateSubsourceOption { name: References, value: None }, CreateSubsourceOption { name: ExternalReference, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]))) }] })
+CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("source"), Ident("sub")]), columns: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }], of_source: Some(Name(UnresolvedItemName([Ident("primary")]))), constraints: [], if_not_exists: true, with_options: [CreateSubsourceOption { name: Progress, value: None }, CreateSubsourceOption { name: ExternalReference, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]))) }] })

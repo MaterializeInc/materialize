@@ -76,6 +76,7 @@ use self::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
     LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
 };
+use self::mysql::MYSQL_DATABASE_FAKE_NAME;
 
 pub(crate) mod error;
 mod mysql;
@@ -88,7 +89,7 @@ pub(crate) struct RequestedSubsource<'a, T> {
 }
 
 fn subsource_gen<'a, T>(
-    selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
+    selected_subsources: &mut Vec<CreateSourceSubsource>,
     catalog: &SubsourceCatalog<&'a T>,
     source_name: &UnresolvedItemName,
 ) -> Result<Vec<RequestedSubsource<'a, T>>, PlanError> {
@@ -96,20 +97,15 @@ fn subsource_gen<'a, T>(
 
     for subsource in selected_subsources {
         let subsource_name = match &subsource.subsource {
-            Some(name) => match name {
-                DeferredItemName::Deferred(name) => {
-                    let partial = normalize::unresolved_item_name(name.clone())?;
-                    match partial.schema {
-                        Some(_) => name.clone(),
-                        // In cases when a prefix is not provided for the deferred name
-                        // fallback to using the schema of the source with the given name
-                        None => subsource_name_gen(source_name, &partial.item)?,
-                    }
+            Some(name) => {
+                let partial = normalize::unresolved_item_name(name.clone())?;
+                match partial.schema {
+                    Some(_) => name.clone(),
+                    // In cases when a prefix is not provided for the deferred name
+                    // fallback to using the schema of the source with the given name
+                    None => subsource_name_gen(source_name, &partial.item)?,
                 }
-                DeferredItemName::Named(..) => {
-                    unreachable!("already errored on this condition")
-                }
-            },
+            }
             None => {
                 // Use the entered name as the upstream reference, and then use
                 // the item as the subsource name to ensure it's created in the
@@ -132,16 +128,6 @@ fn subsource_gen<'a, T>(
     }
 
     Ok(validated_requested_subsources)
-}
-
-// Convenience function to ensure subsources are not named.
-fn named_subsource_err(name: &Option<DeferredItemName<Aug>>) -> Result<(), PlanError> {
-    match name {
-        Some(DeferredItemName::Named(_)) => {
-            sql_bail!("Cannot manually ID qualify subsources")
-        }
-        _ => Ok(()),
-    }
 }
 
 /// Generates a subsource name by prepending source schema name if present
@@ -512,17 +498,8 @@ async fn purify_create_source(
         ..
     } = &mut create_source_stmt;
 
-    // Disallow manually targetting subsources, this syntax is reserved for purification only
-    named_subsource_err(progress_subsource)?;
-
-    if let Some(ReferencedSubsources::SubsetTables(subsources)) = referenced_subsources {
-        for CreateSourceSubsource {
-            subsource,
-            reference: _,
-        } in subsources
-        {
-            named_subsource_err(subsource)?;
-        }
+    if let Some(DeferredItemName::Named(_)) = progress_subsource {
+        sql_bail!("Cannot manually ID qualify progress subsource")
     }
 
     let mut create_subsource_stmts = vec![];
@@ -1099,11 +1076,22 @@ async fn purify_create_source(
                 ReferencedSubsources::SubsetTables(subsources) => {
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
-                    validated_requested_subsources.extend(subsource_gen(
-                        subsources,
-                        &mysql_catalog,
-                        source_name,
-                    )?);
+                    validated_requested_subsources =
+                        subsource_gen(subsources, &mysql_catalog, source_name)?;
+
+                    // subsource_gen automatically inserts the "fully qualified
+                    // name," which for MySQL sources includes the fake database
+                    // name.
+                    for requested_subsource in validated_requested_subsources.iter_mut() {
+                        let fake_database_name = requested_subsource.upstream_name.0.remove(0);
+                        if fake_database_name.as_str() != MYSQL_DATABASE_FAKE_NAME {
+                            sql_bail!(
+                                    "[internal error]: expected first element of upstream reference to be {}, but is {}",
+                                    MYSQL_DATABASE_FAKE_NAME,
+                                    fake_database_name.as_str()
+                                );
+                        }
+                    }
                 }
             }
 
@@ -1367,14 +1355,6 @@ async fn purify_alter_source(
         ..
     } = options.clone().try_into()?;
     assert!(details.is_none(), "details cannot be explicitly set");
-
-    for CreateSourceSubsource {
-        subsource,
-        reference: _,
-    } in targeted_subsources.iter()
-    {
-        named_subsource_err(subsource)?;
-    }
 
     // Get PostgresConnection for generating subsources.
     let pg_connection = &pg_source_connection.connection;

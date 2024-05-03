@@ -10,9 +10,8 @@
 //! Logic related to applying updates from a [`mz_catalog::durable::DurableCatalogState`] to a
 //! [`CatalogState`].
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use std::str::FromStr;
 
 use mz_catalog::builtin::{Builtin, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -33,9 +32,9 @@ use mz_sql::names::{
     ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
     SchemaSpecifier,
 };
+use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{VarError, VarInput};
-use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
 use once_cell::sync::Lazy;
@@ -47,8 +46,6 @@ use crate::AdapterError;
 
 enum ApplyUpdateError {
     Error(Error),
-    AwaitingIdDependency((GlobalId, mz_catalog::durable::Item, Diff)),
-    AwaitingNameDependency((String, mz_catalog::durable::Item, Diff)),
 }
 
 impl CatalogState {
@@ -69,126 +66,13 @@ impl CatalogState {
         &mut self,
         updates: Vec<StateUpdate>,
     ) -> Result<(), Error> {
-        // TODO(#26764): we can refactor this to assume that items are
-        // topologically sorted by their `GlobalId`.
-        let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
-        let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
-        let mut updates: VecDeque<_> = updates.into_iter().collect();
-        while let Some(StateUpdate { kind, diff }) = updates.pop_front() {
+        for StateUpdate { kind, diff } in updates {
             assert_eq!(
                 diff, 1,
                 "initial catalog updates should be consolidated: ({kind:?}, {diff:?})"
             );
-            match self.apply_update(kind, diff) {
-                Ok(None) => {}
-                Ok(Some(id)) => {
-                    // Enqueue any items waiting on this dependency.
-                    let mut resolved_dependent_items = Vec::new();
-                    if let Some(dependent_items) = awaiting_id_dependencies.remove(&id) {
-                        resolved_dependent_items.extend(dependent_items);
-                    }
-                    let entry = self.get_entry(&id);
-                    let full_name = self.resolve_full_name(entry.name(), None);
-                    if let Some(dependent_items) =
-                        awaiting_name_dependencies.remove(&full_name.to_string())
-                    {
-                        resolved_dependent_items.extend(dependent_items);
-                    }
-                    let resolved_dependent_items =
-                        resolved_dependent_items
-                            .into_iter()
-                            .map(|(item, diff)| StateUpdate {
-                                kind: StateUpdateKind::Item(item),
-                                diff,
-                            });
-                    updates.extend(resolved_dependent_items);
-                }
-                Err(ApplyUpdateError::Error(err)) => return Err(err),
-                Err(ApplyUpdateError::AwaitingIdDependency((id, item, diff))) => {
-                    awaiting_id_dependencies
-                        .entry(id)
-                        .or_default()
-                        .push((item, diff));
-                }
-                Err(ApplyUpdateError::AwaitingNameDependency((name, item, diff))) => {
-                    awaiting_name_dependencies
-                        .entry(name)
-                        .or_default()
-                        .push((item, diff));
-                }
-            }
-        }
-
-        // Error on any unsatisfied dependencies.
-        if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
-            let (
-                mz_catalog::durable::Item {
-                    id,
-                    oid: _,
-                    schema_id,
-                    name,
-                    create_sql: _,
-                    owner_id: _,
-                    privileges: _,
-                },
-                diff,
-            ) = dependents.remove(0);
-            let schema = self.find_non_temp_schema(&schema_id);
-            let name = QualifiedItemName {
-                qualifiers: ItemQualifiers {
-                    database_spec: schema.database().clone(),
-                    schema_spec: schema.id().clone(),
-                },
-                item: name,
-            };
-            let name = self.resolve_full_name(&name, None);
-            let action = if diff == 1 { "deserialize" } else { "remove" };
-
-            return Err(Error::new(ErrorKind::Corruption {
-                detail: format!(
-                    "failed to {} item {} ({}): {}",
-                    action,
-                    id,
-                    name,
-                    plan::PlanError::InvalidId(missing_dep)
-                ),
-            }));
-        }
-
-        if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
-            let (
-                mz_catalog::durable::Item {
-                    id,
-                    oid: _,
-                    schema_id,
-                    name,
-                    create_sql: _,
-                    owner_id: _,
-                    privileges: _,
-                },
-                diff,
-            ) = dependents.remove(0);
-            let schema = self.find_non_temp_schema(&schema_id);
-            let name = QualifiedItemName {
-                qualifiers: ItemQualifiers {
-                    database_spec: schema.database().clone(),
-                    schema_spec: schema.id().clone(),
-                },
-                item: name,
-            };
-            let name = self.resolve_full_name(&name, None);
-            let action = if diff == 1 { "deserialize" } else { "remove" };
-            return Err(Error::new(ErrorKind::Corruption {
-                detail: format!(
-                    "failed to {} item {} ({}): {}",
-                    action,
-                    id,
-                    name,
-                    Error {
-                        kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(missing_dep))
-                    }
-                ),
-            }));
+            self.apply_update(kind, diff)
+                .map_err(|ApplyUpdateError::Error(err)| err)?;
         }
 
         Ok(())
@@ -603,7 +487,6 @@ impl CatalogState {
             Builtin::Index(index) => {
                 let mut item = self
                     .parse_item(
-                        id,
                         &index.create_sql(),
                         None,
                         index.is_retained_metrics_object,
@@ -732,18 +615,12 @@ impl CatalogState {
     /// Applies an item update to `self`.
     ///
     /// Returns a `GlobalId` on success, if the applied update added a new `GlobalID` to `self`.
-    /// Returns a dependency on failure, if the update could not be applied due to a missing
-    /// dependency.
     #[instrument(level = "debug")]
     fn apply_item_update(
         &mut self,
         item: mz_catalog::durable::Item,
         diff: Diff,
     ) -> Result<Option<GlobalId>, ApplyUpdateError> {
-        // If we knew beforehand that the items were being applied in dependency
-        // order, then we could fully delegate to `self.insert_item(...)` and`self.drop_item(...)`.
-        // However, we don't know that items are applied in dependency order, so we must handle the
-        // case that the item is valid, but we haven't applied all of its dependencies yet.
         match diff {
             1 => {
                 // TODO(benesch): a better way of detecting when a view has depended
@@ -753,7 +630,7 @@ impl CatalogState {
                 static LOGGING_ERROR: Lazy<Regex> =
                     Lazy::new(|| Regex::new("mz_catalog.[^']*").expect("valid regex"));
 
-                let catalog_item = match self.deserialize_item(item.id, &item.create_sql) {
+                let catalog_item = match self.deserialize_item(&item.create_sql) {
                     Ok(item) => item,
                     Err(AdapterError::Catalog(Error {
                         kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(name)),
@@ -763,27 +640,6 @@ impl CatalogState {
                                 depender_name: name,
                             },
                         )));
-                    }
-                    // If we were missing a dependency, wait for it to be added.
-                    Err(AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))) => {
-                        return Err(ApplyUpdateError::AwaitingIdDependency((
-                            missing_dep,
-                            item,
-                            diff,
-                        )));
-                    }
-                    // If we were missing a dependency, wait for it to be added.
-                    Err(AdapterError::PlanError(plan::PlanError::Catalog(
-                        SqlCatalogError::UnknownItem(missing_dep),
-                    ))) => {
-                        return match GlobalId::from_str(&missing_dep) {
-                            Ok(id) => Err(ApplyUpdateError::AwaitingIdDependency((id, item, diff))),
-                            Err(_) => Err(ApplyUpdateError::AwaitingNameDependency((
-                                missing_dep,
-                                item,
-                                diff,
-                            ))),
-                        }
                     }
                     Err(e) => {
                         let schema = self.find_non_temp_schema(&item.schema_id);
@@ -822,13 +678,6 @@ impl CatalogState {
                 Ok(Some(item.id))
             }
             -1 => {
-                let entry = self.get_entry(&item.id);
-                if let Some(id) = entry.referenced_by().first() {
-                    return Err(ApplyUpdateError::AwaitingIdDependency((*id, item, diff)));
-                }
-                if let Some(id) = entry.used_by().first() {
-                    return Err(ApplyUpdateError::AwaitingIdDependency((*id, item, diff)));
-                }
                 self.drop_item(item.id);
                 Ok(None)
             }

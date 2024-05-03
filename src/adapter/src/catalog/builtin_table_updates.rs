@@ -446,15 +446,17 @@ impl CatalogState {
                     );
 
                     updates.extend(match &source.data_source {
-                        DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.connection {
-                            GenericSourceConnection::Postgres(postgres) => {
-                                self.pack_postgres_source_update(id, postgres, diff)
+                        DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                            match &ingestion_desc.desc.connection {
+                                GenericSourceConnection::Postgres(postgres) => {
+                                    self.pack_postgres_source_update(id, postgres, diff)
+                                }
+                                GenericSourceConnection::Kafka(kafka) => {
+                                    self.pack_kafka_source_update(id, kafka, diff)
+                                }
+                                _ => vec![],
                             }
-                            GenericSourceConnection::Kafka(kafka) => {
-                                self.pack_kafka_source_update(id, kafka, diff)
-                            }
-                            _ => vec![],
-                        },
+                        }
                         DataSourceDesc::IngestionExport {
                             ingestion_id,
                             external_reference: UnresolvedItemName(external_reference),
@@ -484,13 +486,9 @@ impl CatalogState {
                                     )
                                 }
                                 "mysql" => {
-                                    mz_ore::soft_assert_eq_no_log!(external_reference.len(), 3);
-                                    // The left-most qualification of MySQL
-                                    // tables is contrived to be "mysql", but
-                                    // has no correlation to the actual
-                                    // database.
-                                    let schema_name = external_reference[1].to_ast_string();
-                                    let table_name = external_reference[2].to_ast_string();
+                                    mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
+                                    let schema_name = external_reference[0].to_ast_string();
+                                    let table_name = external_reference[1].to_ast_string();
 
                                     self.pack_mysql_source_tables_update(
                                         id,

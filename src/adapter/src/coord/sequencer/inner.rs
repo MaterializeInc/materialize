@@ -244,7 +244,7 @@ impl Coordinator {
                 }
             }
 
-            let source = Source::new(source_id, plan, resolved_ids, None, false);
+            let source = Source::new(plan, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 name,
@@ -434,9 +434,21 @@ impl Coordinator {
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {
-                        DataSourceDesc::Ingestion(ingestion) => {
-                            let ingestion =
-                                ingestion.into_inline_connection(coord.catalog().state());
+                        DataSourceDesc::Ingestion {
+                            ingestion_desc:
+                                mz_sql::plan::Ingestion {
+                                    desc,
+                                    progress_subsource,
+                                },
+                            cluster_id,
+                        } => {
+                            let desc = desc.into_inline_connection(coord.catalog().state());
+                            let ingestion = mz_storage_types::sources::IngestionDescription::new(
+                                desc,
+                                cluster_id,
+                                progress_subsource,
+                            );
+
                             (
                                 DataSource::Ingestion(ingestion),
                                 source_status_collection_id,
@@ -452,9 +464,6 @@ impl Coordinator {
                             },
                             source_status_collection_id,
                         ),
-                        DataSourceDesc::Source => {
-                            unreachable!("cannot render legacy-style sources")
-                        }
                         DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
@@ -3244,7 +3253,7 @@ impl Coordinator {
                     CatalogItemType::Connection => connections.push_back(*id),
                     CatalogItemType::Source => {
                         let desc = match &entry.source().expect("known to be source").data_source {
-                            DataSourceDesc::Ingestion(ingestion) => ingestion
+                            DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
                                 .desc
                                 .clone()
                                 .into_inline_connection(self.catalog().state()),
@@ -3504,7 +3513,6 @@ impl Coordinator {
                 // here requires mocking out objects in the catalog, which is a
                 // large task for an operation we have to cover in tests anyway.
                 let source = Source::new(
-                    id,
                     plan,
                     resolved_ids,
                     cur_source.custom_logical_compaction_window,
@@ -3515,7 +3523,7 @@ impl Coordinator {
 
                 // Get new ingestion description for storage.
                 let desc = match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => ingestion
+                    DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
                         .desc
                         .clone()
                         .into_inline_connection(self.catalog().state()),

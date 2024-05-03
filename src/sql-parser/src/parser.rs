@@ -2618,23 +2618,22 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// Parse the name of a CREATE SINK optional parameter
+    /// Parse the name of a CREATE SUBSOURCE optional parameter
     fn parse_create_subsource_option_name(
         &mut self,
     ) -> Result<CreateSubsourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[EXTERNAL, PROGRESS, REFERENCES])? {
+        let name = match self.expect_one_of_keywords(&[EXTERNAL, PROGRESS])? {
             EXTERNAL => {
                 self.expect_keyword(REFERENCE)?;
                 CreateSubsourceOptionName::ExternalReference
             }
             PROGRESS => CreateSubsourceOptionName::Progress,
-            REFERENCES => CreateSubsourceOptionName::References,
             _ => unreachable!(),
         };
         Ok(name)
     }
 
-    /// Parse a NAME = VALUE parameter for CREATE SINK
+    /// Parse a NAME = VALUE parameter for CREATE SUBSOURCE
     fn parse_create_subsource_option(&mut self) -> Result<CreateSubsourceOption<Raw>, ParserError> {
         Ok(CreateSubsourceOption {
             name: self.parse_create_subsource_option_name()?,
@@ -2726,10 +2725,10 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_subsource_references(&mut self) -> Result<CreateSourceSubsource<Raw>, ParserError> {
+    fn parse_subsource_references(&mut self) -> Result<CreateSourceSubsource, ParserError> {
         let reference = self.parse_item_name()?;
         let subsource = if self.parse_one_of_keywords(&[AS, INTO]).is_some() {
-            Some(self.parse_deferred_item_name()?)
+            Some(self.parse_item_name()?)
         } else {
             None
         };

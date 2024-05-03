@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use futures::future::BoxFuture;
@@ -18,10 +18,11 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::VisitMut;
-use mz_sql::ast::{CreateSubsourceOption, CreateSubsourceOptionName, Ident};
+use mz_sql::ast::{CreateSubsourceOption, CreateSubsourceOptionName, UnresolvedItemName};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sources::GenericSourceConnection;
 use semver::Version;
 use tracing::info;
 
@@ -82,7 +83,7 @@ where
 pub(crate) async fn migrate(
     state: &CatalogState,
     tx: &mut Transaction<'_>,
-    now: NowFn,
+    _now: NowFn,
     _boot_ts: Timestamp,
     _connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
@@ -156,247 +157,13 @@ pub(crate) async fn migrate(
     //
     // Each migration should be a function that takes `tx` and `conn_cat` as
     // input and stages arbitrary transformations to the catalog on `tx`.
-    subsource_rewrite_v0_98(tx, &conn_cat, now)?;
+    mysql_subsources_remove_unnecessary_db_name(tx, &conn_cat)?;
 
     info!(
         "migration from catalog version {:?} complete",
         catalog_version
     );
     Ok(())
-}
-
-/// Inverts the dependency structure of subsources.
-///
-/// In previous versions of MZ, a primary source depended on its subsources.
-/// This migration inverts that relationship so that subsources depend on their
-/// primary source.
-///
-/// This function also adjusts items' `GlobalId`s such that the dependency graph
-/// can be inferred using the ordering of `GlobalId`s, i.e. all of an item's
-/// dependents have `GlobalId`s greater than its own.
-fn subsource_rewrite_v0_98(
-    tx: &mut Transaction<'_>,
-    conn_catalog: &ConnCatalog,
-    now: NowFn,
-) -> Result<(), anyhow::Error> {
-    use mz_sql::ast::UnresolvedItemName;
-    use mz_sql::catalog::CatalogItemType;
-    use mz_sql_parser::ast::RawItemName;
-    use mz_storage_types::connections::Connection;
-    use mz_storage_types::sources::GenericSourceConnection;
-
-    // A vector in the _new_ dependency order. Because the `vec` doesn't have
-    // any built-in de-duplication, we will need to deduplicate these values
-    // elsewhere.
-    let mut needs_new_id = vec![];
-
-    // The IDs of the sources whose subsources we are updating. We need to
-    // ensure we keep their IDs static.
-    let mut source_ids_of_updated_subsources = BTreeSet::new();
-
-    // Collect all items that we need to update in the txn; do this en masse
-    // because individually updating items can perform poorly.
-    let mut updated_items = BTreeMap::new();
-
-    // Get all sources in this TXN.
-    let mut source_map: BTreeMap<_, _> = tx
-        .get_items()
-        .into_iter()
-        .filter(|item| conn_catalog.get_item(&item.id).item_type() == CatalogItemType::Source)
-        .map(|item| (item.id, item))
-        .collect();
-
-    // Iterate over all sources in the catalog.
-    for source in conn_catalog
-        .get_items()
-        .iter()
-        .filter(|item| item.item_type() == CatalogItemType::Source)
-    {
-        // Get all of the source exports.
-        let mut exports = source.source_exports();
-
-        // Drop the self-referencing export.
-        exports.retain(|id, _| *id != source.id());
-
-        // If no exports, this is not a multi-output source.
-        if exports.is_empty() {
-            continue;
-        }
-
-        let desc = source
-            .source_desc()
-            .expect("item is source with desc")
-            .expect("item is source with desc");
-
-        // The new `IngestionExport` structure uses `UnresolvedItemName`s to
-        // refer to items in the publication, so collect those for all
-        // mult-output sources.
-        let external_reference_tables: Vec<_> = match &desc.connection {
-            GenericSourceConnection::Postgres(pg) => {
-                let connection = conn_catalog.get_item(&pg.connection_id);
-                let conn = connection
-                    .connection()
-                    .expect("generic source connection has connection details");
-                let database = match conn {
-                    Connection::Postgres(p) => p.database.clone(),
-                    _ => unreachable!("PG sources must have PG connections"),
-                };
-
-                pg.publication_details
-                    .tables
-                    .iter()
-                    .map(|t| {
-                        UnresolvedItemName(vec![
-                            Ident::new_unchecked(database.clone()),
-                            Ident::new_unchecked(t.namespace.clone()),
-                            Ident::new_unchecked(t.name.clone()),
-                        ])
-                    })
-                    .collect()
-            }
-            GenericSourceConnection::MySql(mysql) => mysql
-                .details
-                .tables
-                .iter()
-                .map(|t| {
-                    UnresolvedItemName(vec![
-                        Ident::new_unchecked("mysql"),
-                        Ident::new_unchecked(t.schema_name.clone()),
-                        Ident::new_unchecked(t.name.clone()),
-                    ])
-                })
-                .collect(),
-            GenericSourceConnection::LoadGenerator(load_generator) => {
-                let prefix = UnresolvedItemName(vec![
-                    Ident::new_unchecked(
-                        mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME,
-                    ),
-                    Ident::new_unchecked(load_generator.load_generator.schema_name()),
-                ]);
-
-                load_generator
-                    .load_generator
-                    .views()
-                    .into_iter()
-                    .map(|(view_name, _desc)| {
-                        let mut name = prefix.clone();
-                        name.0.push(Ident::new_unchecked(view_name.to_string()));
-                        name
-                    })
-                    .collect()
-            }
-            GenericSourceConnection::Kafka(_) => {
-                unreachable!("Kafka sources have non-self source exports")
-            }
-        };
-
-        let primary_source_full_name = conn_catalog.resolve_full_name(source.name());
-        let primary_source_name = mz_sql::normalize::unresolve(primary_source_full_name);
-
-        for (export_id, output_idx) in exports {
-            let subsource_item = conn_catalog.get_item(&export_id);
-            let mut subsource_stmt =
-                mz_sql_parser::parser::parse_statements(subsource_item.create_sql())
-                    .expect("parsing persisted create_sql must succeed")
-                    .into_element()
-                    .ast;
-
-            match &mut subsource_stmt {
-                Statement::CreateSubsource(create_subsource_stmt) => {
-                    create_subsource_stmt.of_source =
-                        Some(RawItemName::Name(primary_source_name.clone()));
-
-                    create_subsource_stmt
-                        .with_options
-                        .retain(|o| o.name != CreateSubsourceOptionName::References);
-
-                    create_subsource_stmt
-                        .with_options
-                        .push(CreateSubsourceOption {
-                            name: CreateSubsourceOptionName::ExternalReference,
-                            value: Some(mz_sql::ast::WithOptionValue::UnresolvedItemName(
-                                // output indices are 1 greater than their table
-                                // index to account for the idiom of using 0 for
-                                // the primary source output.
-                                external_reference_tables[output_idx - 1].clone(),
-                            )),
-                        })
-                }
-                _ => unreachable!("subsource items must correlate to subsources"),
-            }
-
-            let mut subsource_item = source_map.remove(&export_id).expect("item exists");
-            subsource_item.create_sql = subsource_stmt.to_ast_string_stable();
-
-            let present = updated_items.insert(export_id, subsource_item);
-            assert_eq!(present, None, "each export only updated a single time");
-
-            if export_id < source.id() {
-                tracing::info!(
-                    "subsource {} has a GlobalId less than its primary source ({})",
-                    export_id,
-                    source.id()
-                );
-                needs_new_id.push(export_id);
-                source_ids_of_updated_subsources.insert(source.id());
-            }
-        }
-
-        // Update source definition to no longer include list of referenced
-        // subsources.
-        let primary_source_id = source.id();
-        let mut primary_source_item = source_map
-            .remove(&primary_source_id)
-            .expect("source exists");
-        let mut primary_source_stmt =
-            mz_sql_parser::parser::parse_statements(&primary_source_item.create_sql)
-                .expect("parsing persisted create_sql must succeed")
-                .into_element()
-                .ast;
-
-        match &mut primary_source_stmt {
-            Statement::CreateSource(create_source_stmt) => {
-                create_source_stmt.referenced_subsources = None;
-            }
-            _ => unreachable!("subsource items must correlate to subsources"),
-        }
-
-        primary_source_item.create_sql = primary_source_stmt.to_ast_string_stable();
-        let present = updated_items.insert(primary_source_id, primary_source_item);
-        assert_eq!(present, None, "each source only updated a single time");
-    }
-
-    tx.update_items(updated_items)?;
-
-    let mut remaining_updates = VecDeque::from_iter(needs_new_id.drain(..));
-
-    // If this item's ID must be moved forward, so too must every item that
-    // depends on it except for its primary source ID.
-    while let Some(id) = remaining_updates.pop_front() {
-        needs_new_id.push(id);
-        remaining_updates.extend(
-            conn_catalog
-                .state()
-                .get_entry(&id)
-                .used_by()
-                .iter()
-                .filter(|id| !source_ids_of_updated_subsources.contains(id))
-                .cloned(),
-        );
-    }
-
-    // Ensure that each ID is present only once and that it is in the greatest
-    // position.
-    let mut id_dedup = BTreeSet::new();
-    needs_new_id = needs_new_id
-        .into_iter()
-        .rev()
-        .filter(|id| id_dedup.insert(*id))
-        // Flip this back around in the right order.
-        .rev()
-        .collect();
-
-    assign_new_user_global_ids(tx, conn_catalog, now, needs_new_id)
 }
 
 /// Assigns new `GlobalId`s to the items in `needs_new_id`.
@@ -411,7 +178,7 @@ fn subsource_rewrite_v0_98(
 ///   `GlobalId`s they wish to reassign to `needs_new_id`.
 /// - Assumes all items in `needs_new_id` are present in `conn_catalog` and that
 ///   their types do not change.
-fn assign_new_user_global_ids(
+fn _assign_new_user_global_ids(
     tx: &mut Transaction<'_>,
     conn_catalog: &ConnCatalog,
     now: NowFn,
@@ -423,6 +190,11 @@ fn assign_new_user_global_ids(
     use mz_sql::names::CommentObjectId;
     use mz_sql_parser::ast::RawItemName;
     use mz_storage_client::controller::StorageTxn;
+
+    // !WARNING!
+    //
+    // double-check that using this fn doesn't interfer with any other
+    // migrations
 
     // Convert the IDs we need into a set with constant-time lookup.
     let news_new_id_set: BTreeSet<_> = needs_new_id
@@ -488,7 +260,7 @@ fn assign_new_user_global_ids(
 
         let object_type = entry.item_type().into();
 
-        add_to_audit_log(
+        _add_to_audit_log(
             tx,
             mz_audit_log::EventType::Create,
             object_type,
@@ -499,7 +271,7 @@ fn assign_new_user_global_ids(
             occurred_at,
         )?;
 
-        add_to_audit_log(
+        _add_to_audit_log(
             tx,
             mz_audit_log::EventType::Drop,
             object_type,
@@ -644,7 +416,7 @@ fn assign_new_user_global_ids(
 // Please include the adapter team on any code reviews that add or edit
 // migrations.
 
-fn add_to_audit_log(
+fn _add_to_audit_log(
     tx: &mut Transaction,
     event_type: mz_audit_log::EventType,
     object_type: mz_audit_log::ObjectType,
@@ -781,6 +553,95 @@ fn ast_rewrite_create_source_pg_database_details(
     }
 
     Rewriter { cat }.visit_statement_mut(stmt);
+
+    Ok(())
+}
+
+fn mysql_subsources_remove_unnecessary_db_name(
+    tx: &mut Transaction<'_>,
+    conn_catalog: &ConnCatalog,
+) -> Result<(), anyhow::Error> {
+    let items = conn_catalog.get_items();
+    let mysql_subsources_to_update: Vec<_> = items
+        .into_iter()
+        .filter_map(|item| match item.subsource_details() {
+            Some((ingestion_id, external_reference)) => {
+                match conn_catalog
+                    .state()
+                    .get_entry(&ingestion_id)
+                    .source_desc()
+                    .expect("exports refer to ingestions")
+                    .expect("exports refer to ingestions")
+                    .connection
+                {
+                    GenericSourceConnection::MySql(_) => {
+                        let mut updated_reference = external_reference.0.clone();
+                        if updated_reference.len() == 3 {
+                            let fake_database_name = updated_reference.remove(0);
+                            if fake_database_name.as_str() != "mysql" {
+                                return Some(Err(anyhow::anyhow!("MySQL subsource's left-most qualification should have been 'mysql' but was {}", fake_database_name)));
+                            }
+
+                            Some(Ok((item, updated_reference)))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            None => None,
+        }).collect::<Result<Vec<_>, _>>()?;
+
+    let mut updated_items = BTreeMap::new();
+    for (item, updated_reference) in mysql_subsources_to_update {
+        let mut subsource_stmt = mz_sql_parser::parser::parse_statements(item.create_sql())
+            .expect("parsing persisted create_sql must succeed")
+            .into_element()
+            .ast;
+
+        match &mut subsource_stmt {
+            Statement::CreateSubsource(create_subsource_stmt) => {
+                create_subsource_stmt
+                    .with_options
+                    .retain(|o| o.name != CreateSubsourceOptionName::ExternalReference);
+
+                create_subsource_stmt
+                    .with_options
+                    .push(CreateSubsourceOption {
+                        name: CreateSubsourceOptionName::ExternalReference,
+                        value: Some(mz_sql::ast::WithOptionValue::UnresolvedItemName(
+                            UnresolvedItemName(updated_reference),
+                        )),
+                    });
+            }
+            _ => unreachable!("must be subsource"),
+        }
+
+        updated_items.insert(item.id(), subsource_stmt.to_ast_string_stable());
+    }
+
+    let updated_items: BTreeMap<_, _> = tx
+        .get_items()
+        .filter_map(|item| {
+            updated_items.remove(&item.id).map(|new_create_sql| {
+                (
+                    item.id,
+                    Item {
+                        id: item.id,
+                        oid: item.oid,
+                        schema_id: item.schema_id,
+                        name: item.name,
+                        create_sql: new_create_sql,
+                        owner_id: item.owner_id,
+                        privileges: item.privileges,
+                    },
+                )
+            })
+        })
+        .collect();
+
+    tx.update_items(updated_items)?;
 
     Ok(())
 }
