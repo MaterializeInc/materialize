@@ -7,12 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::str::FromStr;
-
 use criterion::{criterion_group, criterion_main, Criterion};
 use mz_adapter::catalog::{Catalog, Op};
 use mz_ore::now::SYSTEM_TIME;
-use mz_ore::task::spawn;
 use mz_persist_client::PersistClient;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use tokio::runtime::Runtime;
