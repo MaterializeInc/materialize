@@ -14,6 +14,7 @@ use mz_persist_types::stats::PartStatsMetrics;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
+use tokio::sync::{OnceCell, OwnedSemaphorePermit, Semaphore};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -23,9 +24,9 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::instrument;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    raw, ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
-    DeleteOnDropGauge, GaugeVecExt, IntCounter, MakeCollector, MetricsRegistry, UIntGauge,
-    UIntGaugeVec,
+    raw, ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, CounterVecExt,
+    DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounter, MakeCollector,
+    MetricsRegistry, UIntGauge, UIntGaugeVec,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -40,8 +41,9 @@ use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
-use tracing::error;
+use tracing::{debug, error, info, info_span, Instrument};
 
+use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
 
@@ -98,6 +100,8 @@ pub struct Metrics {
     pub columnar: ColumnarMetrics,
     /// Metrics for inline writes.
     pub inline: InlineMetrics,
+    /// Semaphore to limit memory/disk use by fetches.
+    pub(crate) semaphore: SemaphoreMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -160,6 +164,7 @@ impl Metrics {
             tasks: TasksMetrics::new(registry),
             columnar,
             inline: InlineMetrics::new(registry),
+            semaphore: SemaphoreMetrics::new(cfg.clone(), registry.clone()),
             sink: SinkMetrics::new(registry),
             s3_blob,
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
@@ -2418,6 +2423,177 @@ impl BlobMemCache {
 }
 
 #[derive(Debug)]
+pub struct SemaphoreMetrics {
+    cfg: PersistConfig,
+    registry: MetricsRegistry,
+    fetch: OnceCell<MetricsSemaphore>,
+}
+
+impl SemaphoreMetrics {
+    fn new(cfg: PersistConfig, registry: MetricsRegistry) -> Self {
+        SemaphoreMetrics {
+            cfg,
+            registry,
+            fetch: OnceCell::new(),
+        }
+    }
+
+    /// We can't easily change the number of permits, and the dyncfgs are all
+    /// set to defaults on process start, so make sure we only initialize the
+    /// semaphore once we've synced dyncfgs at least once.
+    async fn fetch(&self) -> &MetricsSemaphore {
+        if let Some(x) = self.fetch.get() {
+            // Common case of already initialized avoids the cloning below.
+            return x;
+        }
+        let cfg = self.cfg.clone();
+        let registry = self.registry.clone();
+        let init = async move {
+            let total_permits = match cfg.announce_memory_limit {
+                // Non-cc replicas have the old physical flow control mechanism,
+                // so only apply this one on cc replicas.
+                Some(mem) if cfg.is_cc_active => {
+                    // We can't easily adjust the number of permits later, so
+                    // make sure we've synced dyncfg values at least once.
+                    info!("fetch semaphore awaiting first dyncfg values");
+                    let () = cfg.configs_synced_once().await;
+                    let total_permits = usize::cast_lossy(
+                        f64::cast_lossy(mem) * FETCH_SEMAPHORE_PERMIT_ADJUSTMENT.get(&cfg),
+                    );
+                    info!("fetch_semaphore got first dyncfg values");
+                    total_permits
+                }
+                Some(_) | None => Semaphore::MAX_PERMITS,
+            };
+            MetricsSemaphore::new(&registry, "fetch", total_permits)
+        };
+        self.fetch.get_or_init(|| init).await
+    }
+
+    pub(crate) async fn acquire_fetch_permits(&self, encoded_size_bytes: usize) -> MetricsPermits {
+        // Adjust the requested permits to account for the difference between
+        // encoded_size_bytes and the decoded size in lgalloc.
+        let requested_permits = f64::cast_lossy(encoded_size_bytes);
+        let requested_permits = requested_permits * FETCH_SEMAPHORE_COST_ADJUSTMENT.get(&self.cfg);
+        let requested_permits = usize::cast_lossy(requested_permits);
+        self.fetch().await.acquire_permits(requested_permits).await
+    }
+}
+
+#[derive(Debug)]
+pub struct MetricsSemaphore {
+    name: &'static str,
+    semaphore: Arc<Semaphore>,
+    total_permits: usize,
+    acquire_count: IntCounter,
+    blocking_count: IntCounter,
+    blocking_seconds: Counter,
+    acquired_permits: IntCounter,
+    released_permits: IntCounter,
+    _available_permits: ComputedUIntGauge,
+}
+
+impl MetricsSemaphore {
+    pub fn new(registry: &MetricsRegistry, name: &'static str, total_permits: usize) -> Self {
+        let total_permits = std::cmp::min(total_permits, Semaphore::MAX_PERMITS);
+        // TODO: Sadly, tokio::sync::Semaphore makes it difficult to have a
+        // dynamic total_permits count.
+        let semaphore = Arc::new(Semaphore::new(total_permits));
+        MetricsSemaphore {
+            name,
+            total_permits,
+            acquire_count: registry.register(metric!(
+                name: "mz_persist_semaphore_acquire_count",
+                help: "count of acquire calls (not acquired permits count)",
+                const_labels: {"name" => name},
+            )),
+            blocking_count: registry.register(metric!(
+                name: "mz_persist_semaphore_blocking_count",
+                help: "count of acquire calls that had to block",
+                const_labels: {"name" => name},
+            )),
+            blocking_seconds: registry.register(metric!(
+                name: "mz_persist_semaphore_blocking_seconds",
+                help: "total time spent blocking on permit acquisition",
+                const_labels: {"name" => name},
+            )),
+            acquired_permits: registry.register(metric!(
+                name: "mz_persist_semaphore_acquired_permits",
+                help: "total sum of acquired permits",
+                const_labels: {"name" => name},
+            )),
+            released_permits: registry.register(metric!(
+                name: "mz_persist_semaphore_released_permits",
+                help: "total sum of released permits",
+                const_labels: {"name" => name},
+            )),
+            _available_permits: registry.register_computed_gauge(
+                metric!(
+                    name: "mz_persist_semaphore_available_permits",
+                    help: "currently available permits according to the semaphore",
+                ),
+                {
+                    let semaphore = Arc::clone(&semaphore);
+                    move || u64::cast_from(semaphore.available_permits())
+                },
+            ),
+            semaphore,
+        }
+    }
+
+    pub async fn acquire_permits(&self, requested_permits: usize) -> MetricsPermits {
+        // HACK: Cap the request at the total permit count. This prevents
+        // deadlock, even if the cfg gets set to some small value.
+        let total_permits = u32::try_from(self.total_permits).unwrap_or(u32::MAX);
+        let requested_permits = u32::try_from(requested_permits).unwrap_or(u32::MAX);
+        let requested_permits = std::cmp::min(requested_permits, total_permits);
+        let wrap = |_permit| {
+            self.acquired_permits.inc_by(u64::from(requested_permits));
+            MetricsPermits {
+                _permit,
+                released_metric: self.released_permits.clone(),
+                count: requested_permits,
+            }
+        };
+
+        // Special-case non-blocking happy path.
+        self.acquire_count.inc();
+        match Arc::clone(&self.semaphore).try_acquire_many_owned(requested_permits) {
+            Ok(x) => return wrap(x),
+            Err(_) => {}
+        };
+
+        // Sad path, gotta block.
+        self.blocking_count.inc();
+        let start = Instant::now();
+        let ret = Arc::clone(&self.semaphore)
+            .acquire_many_owned(requested_permits)
+            .instrument(info_span!("acquire_permits"))
+            .await;
+        let elapsed = start.elapsed();
+        self.blocking_seconds.inc_by(elapsed.as_secs_f64());
+        debug!(
+            "acquisition of {} {} permits blocked for {:?}",
+            self.name, requested_permits, elapsed
+        );
+        wrap(ret.expect("semaphore is never closed"))
+    }
+}
+
+#[derive(Debug)]
+pub struct MetricsPermits {
+    _permit: OwnedSemaphorePermit,
+    released_metric: IntCounter,
+    count: u32,
+}
+
+impl Drop for MetricsPermits {
+    fn drop(&mut self) {
+        self.released_metric.inc_by(u64::from(self.count))
+    }
+}
+
+#[derive(Debug)]
 pub struct ExternalOpMetrics {
     started: IntCounter,
     succeeded: IntCounter,
@@ -2808,7 +2984,7 @@ impl TaskMetrics {
     /// Instrument the provided future. The expectation is that the result will be executed
     /// as a task. (See [TaskMonitor::instrument] for more context.)
     pub fn instrument_task<F>(&self, task: F) -> tokio_metrics::Instrumented<F> {
-        self.monitor.instrument(task)
+        TaskMonitor::instrument(&self.monitor, task)
     }
 }
 

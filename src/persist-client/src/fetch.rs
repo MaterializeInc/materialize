@@ -18,7 +18,7 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -39,12 +39,33 @@ use crate::batch::{
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
+use crate::internal::metrics::{Metrics, MetricsPermits, ReadMetrics, ShardMetrics};
 use crate::internal::paths::BlobKey;
 use crate::internal::state::{BatchPart, HollowBatchPart};
 use crate::project::ProjectionPushdown;
 use crate::read::LeasedReaderId;
 use crate::ShardId;
+
+pub(crate) const FETCH_SEMAPHORE_COST_ADJUSTMENT: Config<f64> = Config::new(
+    "persist_fetch_semaphore_cost_adjustment",
+    // We use `encoded_size_bytes` as the number of permits, but the parsed size
+    // is larger than the encoded one, so adjust it. This default value is from
+    // eyeballing graphs in experiments that were run on tpch loadgen data.
+    1.2,
+    "\
+    An adjustment multiplied by encoded_size_bytes to approximate an upper \
+    bound on the size in lgalloc, which includes the decoded version.",
+);
+
+pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
+    "persist_fetch_semaphore_permit_adjustment",
+    1.0,
+    "\
+    A limit on the number of outstanding persist bytes being fetched and \
+    parsed, expressed as a multiplier of the process's memory limit. This data \
+    all spills to lgalloc, so values > 1.0 are safe. Only applied to cc \
+    replicas.",
+);
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
 #[derive(Debug)]
@@ -95,8 +116,13 @@ where
             });
         }
 
-        let buf = match &part.part {
+        let (buf, fetch_permit) = match &part.part {
             BatchPart::Hollow(x) => {
+                let fetch_permit = self
+                    .metrics
+                    .semaphore
+                    .acquire_fetch_permits(x.encoded_size_bytes)
+                    .await;
                 let buf = fetch_batch_part_blob(
                     &part.shard_id,
                     self.blob.as_ref(),
@@ -117,19 +143,23 @@ where
                     // process.
                     panic!("batch fetcher could not fetch batch part: {}", blob_key)
                 });
-                FetchedBlobBuf::Hollow {
+                let buf = FetchedBlobBuf::Hollow {
                     buf,
                     part: x.clone(),
-                }
+                };
+                (buf, Some(Arc::new(fetch_permit)))
             }
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
-            } => FetchedBlobBuf::Inline {
-                desc: part.desc.clone(),
-                updates: updates.clone(),
-                ts_rewrite: ts_rewrite.clone(),
-            },
+            } => {
+                let buf = FetchedBlobBuf::Inline {
+                    desc: part.desc.clone(),
+                    updates: updates.clone(),
+                    ts_rewrite: ts_rewrite.clone(),
+                };
+                (buf, None)
+            }
         };
         let fetched_blob = FetchedBlob {
             metrics: Arc::clone(&self.metrics),
@@ -139,6 +169,7 @@ where
             schemas: self.schemas.clone(),
             filter: part.filter.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
+            fetch_permit,
             _phantom: PhantomData,
         };
         Ok(fetched_blob)
@@ -499,6 +530,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     schemas: Schemas<K, V>,
     filter: FetchBatchFilter<T>,
     filter_pushdown_audit: bool,
+    fetch_permit: Option<Arc<MetricsPermits>>,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -525,14 +557,48 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             schemas: self.schemas.clone(),
             filter: self.filter.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
+            fetch_permit: self.fetch_permit.clone(),
             _phantom: self._phantom.clone(),
         }
     }
 }
 
+/// [FetchedPart] but with an accompanying permit from the fetch mem/disk
+/// semaphore.
+pub struct ShardSourcePart<K: Codec, V: Codec, T, D> {
+    /// The underlying [FetchedPart].
+    pub part: FetchedPart<K, V, T, D>,
+    fetch_permit: Option<Arc<MetricsPermits>>,
+}
+
+impl<K: Codec, V: Codec, T: Clone, D> Clone for ShardSourcePart<K, V, T, D> {
+    fn clone(&self) -> Self {
+        Self {
+            part: self.part.clone(),
+            fetch_permit: self.fetch_permit.clone(),
+        }
+    }
+}
+
+impl<K, V, T: Debug, D: Debug> Debug for ShardSourcePart<K, V, T, D>
+where
+    K: Codec + Debug,
+    <K as Codec>::Storage: Debug,
+    V: Codec + Debug,
+    <V as Codec>::Storage: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ShardSourcePart { part, fetch_permit } = self;
+        f.debug_struct("ShardSourcePart")
+            .field("part", part)
+            .field("fetch_permit", fetch_permit)
+            .finish()
+    }
+}
+
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, T, D> {
     /// Partially decodes this blob into a [FetchedPart].
-    pub fn parse(&self) -> FetchedPart<K, V, T, D> {
+    pub fn parse(&self) -> ShardSourcePart<K, V, T, D> {
         let (part, stats) = match &self.buf {
             FetchedBlobBuf::Hollow { buf, part } => {
                 let parsed = decode_batch_part_blob(
@@ -559,14 +625,18 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                 (parsed, None)
             }
         };
-        FetchedPart::new(
+        let part = FetchedPart::new(
             Arc::clone(&self.metrics),
             part,
             self.schemas.clone(),
             self.filter.clone(),
             self.filter_pushdown_audit,
             stats,
-        )
+        );
+        ShardSourcePart {
+            part,
+            fetch_permit: self.fetch_permit.clone(),
+        }
     }
 
     /// Decodes and returns the pushdown stats for this part, if known.
