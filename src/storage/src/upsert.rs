@@ -309,16 +309,17 @@ where
                     rocksdb::RocksDB::new(
                         mz_rocksdb::RocksDBInstance::new(
                             &rocksdb_dir,
-                            mz_rocksdb::InstanceOptions::defaults_with_env(
+                            mz_rocksdb::InstanceOptions::new(
                                 env,
                                 rocksdb_cleanup_tries,
+                                None,
+                                // For now, just use the same config as the one used for
+                                // merging snapshots.
+                                upsert_bincode_opts(),
                             ),
                             tuning,
                             rocksdb_shared_metrics,
                             rocksdb_instance_metrics,
-                            // For now, just use the same config as the one used for
-                            // merging snapshots.
-                            upsert_bincode_opts(),
                         )
                         .await
                         .unwrap(),

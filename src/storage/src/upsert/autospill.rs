@@ -80,11 +80,15 @@ where
         RocksDB::new(
             mz_rocksdb::RocksDBInstance::new(
                 instance_path,
-                mz_rocksdb::InstanceOptions::defaults_with_env(env.clone(), *cleanup_tries),
+                mz_rocksdb::InstanceOptions::new(
+                    env.clone(),
+                    *cleanup_tries,
+                    None,
+                    upsert_bincode_opts(),
+                ),
                 tuning_config.clone(),
                 Arc::clone(shared_metrics),
                 Arc::clone(instance_metrics),
-                upsert_bincode_opts(),
             )
             .await
             .unwrap(),

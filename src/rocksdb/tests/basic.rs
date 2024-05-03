@@ -10,7 +10,8 @@
 use mz_ore::metrics::{CounterVecExt, HistogramVecExt};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_rocksdb::{
-    InstanceOptions, RocksDBConfig, RocksDBInstance, RocksDBInstanceMetrics, RocksDBSharedMetrics,
+    InstanceOptions, KeyUpdate, RocksDBConfig, RocksDBInstance, RocksDBInstanceMetrics,
+    RocksDBSharedMetrics, ValueIterator,
 };
 use mz_rocksdb_types::RocksDBTuningParameters;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts};
@@ -50,11 +51,15 @@ async fn basic() -> Result<(), anyhow::Error> {
 
     let mut instance = RocksDBInstance::<String, String>::new(
         t.path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
+        InstanceOptions::new(
+            rocksdb::Env::new()?,
+            2,
+            None,
+            bincode::DefaultOptions::new(),
+        ),
         RocksDBConfig::new(Default::default(), None),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
-        bincode::DefaultOptions::new(),
     )
     .await?;
 
@@ -71,10 +76,10 @@ async fn basic() -> Result<(), anyhow::Error> {
     );
 
     instance
-        .multi_put(vec![
-            ("one".to_string(), Some("onev".to_string())),
+        .multi_update(vec![
+            ("one".to_string(), KeyUpdate::Put("onev".to_string())),
             // Deleting a non-existent key shouldn't do anything
-            ("two".to_string(), None),
+            ("two".to_string(), KeyUpdate::Delete),
         ])
         .await?;
 
@@ -95,10 +100,10 @@ async fn basic() -> Result<(), anyhow::Error> {
     );
 
     instance
-        .multi_put(vec![
+        .multi_update(vec![
             // Double-writing a key should keep the last one.
-            ("two".to_string(), Some("twov1".to_string())),
-            ("two".to_string(), Some("twov2".to_string())),
+            ("two".to_string(), KeyUpdate::Put("twov1".to_string())),
+            ("two".to_string(), KeyUpdate::Put("twov2".to_string())),
         ])
         .await?;
 
@@ -125,6 +130,79 @@ async fn basic() -> Result<(), anyhow::Error> {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
+async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
+    // If the test aborts, this may not be cleaned up.
+    let t = tempfile::tempdir()?;
+
+    // A simple merge operator that adds all merge values to the existing key
+    // value, if any.
+    fn merge(
+        _key: &[u8],
+        existing_value: Option<u32>,
+        operands: ValueIterator<bincode::DefaultOptions, u32>,
+    ) -> Option<u32> {
+        let mut val = existing_value.unwrap_or(0);
+
+        for op in operands {
+            val += op;
+        }
+        Some(val)
+    }
+
+    let static_options = InstanceOptions::new(
+        rocksdb::Env::new()?,
+        2,
+        Some(("test".to_string(), merge)),
+        bincode::DefaultOptions::new(),
+    );
+
+    let mut instance = RocksDBInstance::<String, u32>::new(
+        t.path(),
+        static_options,
+        RocksDBConfig::new(Default::default(), None),
+        shared_metrics_for_tests()?,
+        instance_metrics_for_tests()?,
+    )
+    .await?;
+
+    let mut rolling_sum = 50;
+    let key = "a".to_string();
+    instance
+        .multi_update(vec![(key.clone(), KeyUpdate::Put(rolling_sum))])
+        .await?;
+
+    for _ in 10..100 {
+        let merges = vec![5u32, 5_000_000];
+        rolling_sum += merges.iter().sum::<u32>();
+
+        instance
+            .multi_update(
+                merges
+                    .into_iter()
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v))),
+            )
+            .await?;
+    }
+
+    let mut ret = vec![Default::default(); 1];
+    instance
+        .multi_get(vec![key.clone()], ret.iter_mut(), |value| value)
+        .await?;
+
+    assert_eq!(
+        ret.into_iter()
+            .map(|v| v.map(|v| v.value))
+            .collect::<Vec<_>>(),
+        vec![Some(rolling_sum)]
+    );
+
+    instance.close().await?;
+
+    Ok(())
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
 async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
     // If the test aborts, this may not be cleaned up.
     let t = tempfile::tempdir()?;
@@ -141,11 +219,15 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance1 = RocksDBInstance::<String, String>::new(
         t.path().join("1").as_path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
+        InstanceOptions::new(
+            rocksdb::Env::new()?,
+            2,
+            None,
+            bincode::DefaultOptions::new(),
+        ),
         rocksdb_config.clone(),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
-        bincode::DefaultOptions::new(),
     )
     .await?;
 
@@ -163,11 +245,15 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance2 = RocksDBInstance::<String, String>::new(
         t.path().join("2").as_path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
+        InstanceOptions::new(
+            rocksdb::Env::new()?,
+            2,
+            None,
+            bincode::DefaultOptions::new(),
+        ),
         rocksdb_config.clone(),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
-        bincode::DefaultOptions::new(),
     )
     .await?;
 
@@ -188,11 +274,15 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance3 = RocksDBInstance::<String, String>::new(
         t.path().join("3").as_path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
+        InstanceOptions::new(
+            rocksdb::Env::new()?,
+            2,
+            None,
+            bincode::DefaultOptions::new(),
+        ),
         rocksdb_config,
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
-        bincode::DefaultOptions::new(),
     )
     .await?;
 
