@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Test the HEADER option for Kafka sinks, which allows attaching user-specified
 # headers to each Kafka message emitted by the sink.
 
@@ -21,6 +23,7 @@ ALTER SYSTEM SET enable_kafka_sink_headers = true
 > CREATE TABLE wrong_name_tbl (k int);
 
 ! CREATE SINK snk
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM wrong_name_tbl
   INTO KAFKA CONNECTION k (TOPIC 'testdrive-bad-${testdrive.seed}')
   KEY (k) NOT ENFORCED
@@ -33,6 +36,7 @@ contains:HEADERS column (h) is unknown
 > CREATE TABLE wrong_type_tbl (k int, h1 int, h2 map[text => int]);
 
 ! CREATE SINK snk
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM wrong_type_tbl
   INTO KAFKA CONNECTION k (TOPIC 'testdrive-bad-${testdrive.seed}')
   KEY (k) NOT ENFORCED
@@ -41,6 +45,7 @@ contains:HEADERS column (h) is unknown
 contains:HEADERS column must have type map[text => text] or map[text => bytea]
 
 ! CREATE SINK snk
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM wrong_type_tbl
   INTO KAFKA CONNECTION k (TOPIC 'testdrive-bad-${testdrive.seed}')
   KEY (k) NOT ENFORCED
@@ -59,6 +64,7 @@ contains:HEADERS column must have type map[text => text] or map[text => bytea]
     (5, '{"a" => "b", "c" => "d"}')
 
 > CREATE SINK text_snk
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM text_tbl
   INTO KAFKA CONNECTION k (TOPIC 'testdrive-text-${testdrive.seed}')
   KEY (k) NOT ENFORCED
@@ -88,6 +94,7 @@ b         <null>    {"k": 6, "h": {"a": "b", "c": null}}
     (5, '{"a" => "b", "c" => "d"}')
 
 > CREATE SINK bytea_snk
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM bytea_tbl
   INTO KAFKA CONNECTION k (TOPIC 'testdrive-bytea-${testdrive.seed}')
   KEY (k) NOT ENFORCED
