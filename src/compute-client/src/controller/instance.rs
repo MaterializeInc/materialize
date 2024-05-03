@@ -32,6 +32,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_types::read_holds::ReadHoldError;
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
@@ -86,6 +87,15 @@ impl From<CollectionMissing> for DataflowCreationError {
     }
 }
 
+impl From<ReadHoldError> for DataflowCreationError {
+    fn from(error: ReadHoldError) -> Self {
+        match error {
+            ReadHoldError::CollectionMissing(id) => DataflowCreationError::CollectionMissing(id),
+            ReadHoldError::SinceViolation(id) => DataflowCreationError::SinceViolation(id),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub(super) enum PeekError {
     #[error("collection does not exist: {0}")]
@@ -99,6 +109,15 @@ pub(super) enum PeekError {
 impl From<CollectionMissing> for PeekError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<ReadHoldError> for PeekError {
+    fn from(error: ReadHoldError) -> Self {
+        match error {
+            ReadHoldError::CollectionMissing(id) => PeekError::CollectionMissing(id),
+            ReadHoldError::SinceViolation(id) => PeekError::SinceViolation(id),
+        }
     }
 }
 
@@ -999,29 +1018,25 @@ where
         let mut storage_dependencies = Vec::new();
         let mut compute_dependencies = Vec::new();
 
+        // Any potentially acquired STORAGE read holds. We acquire them and
+        // check whether our as_of is valid. They are dropped once we installed
+        // read capabilities manually.
+        //
+        // TODO: Instead of acquiring these and then dropping later, we should
+        // instead store them and don't "manually" acquire read holds using
+        // `update_read_capabilities`.
+        let mut storage_read_holds = Vec::new();
+
         // Validate sources have `since.less_equal(as_of)`.
         for source_id in dataflow.source_imports.keys() {
-            // NOTE: This provides only some level of protection. If the
-            // caller has not acquired read holds the since might move on
-            // concurrently.
-            //
-            // TODO: We are comparing against the implied capability here, which
-            // is being held back because adapter acquired read holds via
-            // controlling the policy. Once we add support for Storage
-            // ReadHolds, we should acquire read holds from storage here and
-            // assert that they are good for the as_of that we're planning to
-            // install our dataflow with.
-            let (since, _upper) = self
+            let storage_read_hold = self
                 .storage_controller
-                .collection_frontiers(*source_id)
-                .map_err(|_| DataflowCreationError::CollectionMissing(*source_id))?;
-
-            if !(timely::order::PartialOrder::less_equal(&since, as_of)) {
-                Err(DataflowCreationError::SinceViolation(*source_id))?;
-            }
+                .acquire_read_hold_at_time(*source_id, as_of.clone())?;
 
             storage_dependencies.push(*source_id);
-            replica_input_frontier.join_assign(&since.to_owned());
+            replica_input_frontier.join_assign(storage_read_hold.since());
+
+            storage_read_holds.push(storage_read_hold);
         }
 
         // Validate indexes have `since.less_equal(as_of)`.
@@ -1065,6 +1080,10 @@ where
             .collect();
         self.storage_controller
             .update_read_capabilities(&mut storage_read_updates);
+        // Drop the acquired read holds after we installed our old-style, manual
+        // read capabilities.
+        drop(storage_read_holds);
+
         // Update compute read capabilities for inputs.
         let compute_read_updates = compute_dependencies
             .iter()
@@ -1336,24 +1355,24 @@ where
         target_replica: Option<ReplicaId>,
         peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
-        let owned_since;
-        let since = match &peek_target {
-            PeekTarget::Index { .. } => self.compute.collection(id)?.read_capabilities.frontier(),
-            PeekTarget::Persist { .. } => {
-                // NOTE: This provides only some level of protection. If the
-                // caller has not acquired read holds the since might move on
-                // concurrently.
-                let (since, _upper) = self
-                    .storage_controller
-                    .collection_frontiers(id)
-                    .map_err(|_| PeekError::CollectionMissing(id))?;
-
-                owned_since = since;
-                owned_since.borrow()
+        // When querying persist directly, we acquire read holds and verify that
+        // we can actually acquire them at the right time.
+        let mut maybe_storage_read_hold = None;
+        match &peek_target {
+            PeekTarget::Index { .. } => {
+                let since = self.compute.collection(id)?.read_capabilities.frontier();
+                if !since.less_equal(&timestamp) {
+                    return Err(PeekError::SinceViolation(id));
+                }
             }
-        };
-        if !since.less_equal(&timestamp) {
-            return Err(PeekError::SinceViolation(id));
+
+            PeekTarget::Persist { .. } => {
+                let storage_read_hold = self
+                    .storage_controller
+                    .acquire_read_hold_at_time(id, Antichain::from_elem(timestamp.clone()))?;
+
+                maybe_storage_read_hold = Some(storage_read_hold);
+            }
         }
 
         if let Some(target) = target_replica {
@@ -1371,6 +1390,10 @@ where
                 .storage_controller
                 .update_read_capabilities(&mut updates),
         };
+
+        // Drop the acquired read hold after we installed our old-style, manual
+        // read capabilities.
+        drop(maybe_storage_read_hold);
 
         let otel_ctx = OpenTelemetryContext::obtain();
         self.compute.peeks.insert(

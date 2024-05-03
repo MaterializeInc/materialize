@@ -70,6 +70,7 @@ use mz_storage_types::controller::{
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
+use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
@@ -238,6 +239,14 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Note: This is used for finalizing shards of webhook sources, once webhook sources are
     /// installed on a `clusterd` this can likely be refactored away.
     internal_response_sender: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+
+    /// Channel for sending changes to [ReadHolds](ReadHold) back to us, the
+    /// issuer, sending side.
+    read_holds_tx: tokio::sync::mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+
+    /// Channel for sending changes to [ReadHolds](ReadHold) back to us, the
+    /// issuer, receiving side.
+    read_holds_rx: tokio::sync::mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
 
     /// `(read, write)` frontiers that have been recorded in the `Frontiers` collection, kept to be
     /// able to retract old rows.
@@ -1782,6 +1791,54 @@ where
         }
     }
 
+    fn acquire_read_holds(
+        &mut self,
+        desired_holds: Vec<GlobalId>,
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
+        let mut holds = Vec::new();
+        // NOTE: We acquire read holds at the earliest possible time rather than
+        // at the implied capability. This is so that, for example, adapter can
+        // acquire a read hold to hold back the frontier, giving the COMPUTE
+        // controller a chance to also acquire a read hold at that early
+        // frontier. If/when we change the interplay between adapter and COMPUTE
+        // to pass around ReadHold tokens, we might tighten this up and instead
+        // acquire read holds at the implied capability.
+        //
+        // Context: the read capabilities include the implied capability, in
+        // addition to all outstanding read holds. This means the frontier of
+        // read capabilities will always be less_equal compared to the implied
+        // capability, and it can never be true that the implied capability is
+        // less_than the frontier of read capabilities.
+        for id in desired_holds.iter() {
+            let collection = self
+                .collections
+                .get(id)
+                .ok_or(ReadHoldError::CollectionMissing(*id))?;
+            let desired_hold = collection.read_capabilities.frontier().to_owned();
+            holds.push((*id, desired_hold));
+        }
+
+        let mut updates = holds
+            .iter()
+            .map(|(id, hold)| {
+                let mut changes = ChangeBatch::new();
+                changes.extend(hold.iter().map(|time| (time.clone(), 1)));
+                (*id, changes)
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        self.update_read_capabilities(&mut updates);
+
+        let acquired_holds = holds
+            .into_iter()
+            .map(|(id, since)| ReadHold::new(id, since, self.read_holds_tx.clone()))
+            .collect_vec();
+
+        tracing::debug!(?desired_holds, ?acquired_holds, "acquire_read_holds");
+
+        Ok(acquired_holds)
+    }
+
     #[instrument(level = "debug", fields(updates))]
     fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<Self::Timestamp>)]) {
         let mut read_capability_changes = BTreeMap::default();
@@ -1980,6 +2037,21 @@ where
             .enumerate()
             .collect::<StreamMap<_, _>>();
 
+        // We cannot check the channel without reading, so try and read, but
+        // then put it back, so that `process()` can work it off.
+        if let Ok(response) = self.read_holds_rx.try_recv() {
+            // IMPORTANT: The consuming side makes sure to always read off all
+            // updates in the channel, combining updates for the same ID, before
+            // working them off. Without this we might get into bad situations
+            // where we retract things to early or incorrectly.
+            self.read_holds_tx
+                .send(response)
+                .expect("cannot fail to re-enqueue");
+
+            // Return, to signal readyness for processing!
+            return;
+        }
+
         use tokio_stream::StreamExt;
         let msg = tokio::select! {
             // Order matters here. We want to process internal commands
@@ -2066,6 +2138,26 @@ where
             Some(StorageResponse::StatusUpdates(updates)) => {
                 self.record_status_updates(updates).await;
             }
+        }
+
+        if let Ok((id, read_hold_change)) = self.read_holds_rx.try_recv() {
+            let mut read_hold_changes = BTreeMap::new();
+            read_hold_changes.insert(id, read_hold_change);
+
+            // IMPORTANT: We read off all changes, combine them, and then
+            // process as a whole. We need this for correctness because of the
+            // "stunt" we're pulling in `ready()` where we `try_recv()` and then
+            // re-enqueue for determining whether there's any updates to be
+            // worked off.
+            while let Ok((id, read_hold_change)) = self.read_holds_rx.try_recv() {
+                read_hold_changes
+                    .entry(id)
+                    .or_default()
+                    .extend(read_hold_change.into_inner().into_iter());
+            }
+
+            tracing::debug!(?read_hold_changes, "changes to storage read holds");
+            self.update_read_capabilities(&mut read_hold_changes);
         }
 
         // IDs of sources that were dropped whose statuses should be updated.
@@ -2740,6 +2832,8 @@ where
         let (pending_table_handle_drops_tx, pending_table_handle_drops_rx) =
             tokio::sync::mpsc::unbounded_channel();
 
+        let (read_holds_tx, read_holds_rx) = tokio::sync::mpsc::unbounded_channel();
+
         Self {
             build_info,
             finalizable_shards: BTreeSet::new(),
@@ -2774,6 +2868,8 @@ where
             config: StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs()),
             internal_response_sender: tx,
             internal_response_queue: rx,
+            read_holds_tx,
+            read_holds_rx,
             persist_location,
             persist: persist_clients,
             metrics: StorageControllerMetrics::new(metrics_registry),

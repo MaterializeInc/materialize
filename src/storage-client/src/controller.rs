@@ -27,6 +27,7 @@ use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
+use mz_ore::collections::CollectionExt;
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_types::{Codec64, ShardId};
@@ -37,6 +38,7 @@ use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
+use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
@@ -559,6 +561,40 @@ pub trait StorageController: Debug {
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
     fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>);
+
+    /// Acquires and returns the desired read holds, advancing them to the since
+    /// frontier when necessary.
+    fn acquire_read_holds(
+        &mut self,
+        desired_holds: Vec<GlobalId>,
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
+
+    /// Acquires and returns the earliest legal read hold.
+    fn acquire_read_hold(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<ReadHold<Self::Timestamp>, ReadHoldError> {
+        let hold = self.acquire_read_holds(vec![id])?.into_element();
+
+        Ok(hold)
+    }
+
+    /// Acquires and returns a read hold at `desired_time`. Returns
+    /// [ReadHoldError::SinceViolation] when that is not possible.
+    fn acquire_read_hold_at_time(
+        &mut self,
+        id: GlobalId,
+        desired_hold: Antichain<Self::Timestamp>,
+    ) -> Result<ReadHold<Self::Timestamp>, ReadHoldError> {
+        let mut hold = self.acquire_read_holds(vec![id])?.into_element();
+
+        let res = match hold.try_downgrade(desired_hold) {
+            Ok(()) => Ok(hold),
+            Err(_e) => Err(ReadHoldError::SinceViolation(id)),
+        };
+
+        res
+    }
 
     /// Ingests write frontier updates for collections that this controller
     /// maintains and potentially generates updates to read capabilities, which
