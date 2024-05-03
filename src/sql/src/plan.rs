@@ -1260,7 +1260,6 @@ pub struct Source {
     pub compaction_window: Option<CompactionWindow>,
 }
 
-// TODO(#26768): do we need all of these `DataSourceDesc`s?
 #[derive(Debug, Clone)]
 pub enum DataSourceDesc {
     /// Receives data from an external system.

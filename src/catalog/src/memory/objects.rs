@@ -404,7 +404,6 @@ pub struct Ingestion {
     pub remap_collection_id: GlobalId,
 }
 
-// TODO(#26768): do we need all of these `DataSourceDesc`s?
 #[derive(Debug, Clone, Serialize)]
 pub enum DataSourceDesc {
     /// Receives data from an external system
