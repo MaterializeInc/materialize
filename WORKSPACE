@@ -103,6 +103,8 @@ load("@aspect_bazel_lib//lib:repositories.bzl", "aspect_bazel_lib_dependencies",
 
 # Required bazel-lib dependencies
 aspect_bazel_lib_dependencies()
+# Register bazel-lib toolchains
+aspect_bazel_lib_register_toolchains()
 
 # `openssl`
 #
