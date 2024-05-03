@@ -18,6 +18,7 @@ from kubernetes.client import (
     V1Service,
     V1ServicePort,
     V1ServiceSpec,
+    V1VolumeMount,
 )
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
@@ -55,16 +56,16 @@ class FivetranDestinationDeployment(K8sDeployment):
         super().__init__(namespace)
 
         # TODO: not working and likely not needed
-        #         volume_mounts = [
-        #             V1VolumeMount(name="data", mount_path="/data"),
-        #         ]
+        volume_mounts = [
+            V1VolumeMount(name="data", mount_path="/data"),
+        ]
 
         container = V1Container(
             name="fivetran-destination",
             image=self.image(
                 "fivetran-destination", tag="mzbuild-LFLUC5COYYJAXIEEG7QIV2OFTVTUH5Y4"
             ),
-            #             volume_mounts=volume_mounts,
+            volume_mounts=volume_mounts,
         )
 
         node_selector = None
