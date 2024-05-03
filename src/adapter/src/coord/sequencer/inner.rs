@@ -3563,7 +3563,7 @@ impl Coordinator {
                                 column_name
                                     .0
                                     .push(Ident::new_unchecked(curr_col.name.clone()));
-                                let subsource = curr_subsources_by_reference[&name].clone();
+                                let subsource = curr_subsources_by_reference[&table_name].clone();
                                 return Err(AdapterError::SubsourceSchemaTextColumnsMismatch {
                                     column_name,
                                     subsource,
