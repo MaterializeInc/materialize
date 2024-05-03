@@ -218,7 +218,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
