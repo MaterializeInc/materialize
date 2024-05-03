@@ -49,3 +49,8 @@ flake.lock
 /misc/python/materialize/build/
 /misc/python/materialize/*.egg-info/
 /misc/python/materialize/dist/
+
+/bazel-bin
+/bazel-materialize
+/bazel-out
+/bazel-testlogs
