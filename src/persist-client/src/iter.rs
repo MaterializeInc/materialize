@@ -107,7 +107,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     }
 
     async fn fetch(self) -> anyhow::Result<EncodedPart<T>> {
-        match self {
+        let mut ret = match self {
             FetchData::Unleased {
                 shard_id,
                 blob,
@@ -152,7 +152,13 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 fetched
             }
             FetchData::AlreadyFetched => Err(anyhow!("attempt to fetch an already-fetched part")),
+        };
+        // WIP seems like it'd be easy to deadlock if compaction holds on to
+        // fetch permits until things are entirely decoded.
+        if let Ok(ret) = ret.as_mut() {
+            ret.release_fetch_permit();
         }
+        ret
     }
 }
 
@@ -178,10 +184,12 @@ pub(crate) enum ConsolidationPart<T, D> {
 
 impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> ConsolidationPart<T, D> {
     pub(crate) fn from_encoded(
-        part: EncodedPart<T>,
+        mut part: EncodedPart<T>,
         filter: &'a FetchBatchFilter<T>,
         maybe_unconsolidated: bool,
     ) -> Self {
+        // WIP probably redundant
+        part.release_fetch_permit();
         let mut cursor = Cursor::default();
         if part.maybe_unconsolidated() || maybe_unconsolidated {
             Self::from_iter(ConsolidationPartIter::encoded(&part, &mut cursor, filter))
@@ -596,6 +604,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                     let span = debug_span!("compaction::prefetch");
                     let handle = mz_ore::task::spawn(
                         || "persist::compaction::prefetch",
+                        // WIP NB fetch_permit already released by `fetch()`
                         data.fetch().instrument(span),
                     );
                     *c_part = ConsolidationPart::Prefetched {

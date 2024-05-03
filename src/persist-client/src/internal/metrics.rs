@@ -14,6 +14,7 @@ use mz_persist_types::stats::PartStatsMetrics;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -42,6 +43,7 @@ use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
 use tracing::error;
 
+use crate::fetch::FETCH_SEMAPHORE_PERMITS;
 use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
 
@@ -106,6 +108,12 @@ pub struct Metrics {
     pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresClientMetrics,
+
+    /// WIP
+    pub(crate) fetch_semaphore_acquire_count: IntCounter,
+    pub(crate) fetch_semaphore_blocking_acquire_count: IntCounter,
+    pub(crate) fetch_semaphore_blocking_seconds: Counter,
+    pub(crate) fetch_semaphore: Arc<Semaphore>,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -133,6 +141,9 @@ impl Metrics {
         let s3_blob = S3BlobMetrics::new(registry);
         let columnar =
             ColumnarMetrics::new(&s3_blob.lgbytes, cfg.configs.clone(), cfg.is_cc_active);
+        // WIP figure out how to make this dynamic
+        let fetch_semaphore = Arc::new(Semaphore::new(FETCH_SEMAPHORE_PERMITS.get(&cfg)));
+
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -159,6 +170,19 @@ impl Metrics {
             sink: SinkMetrics::new(registry),
             s3_blob,
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
+            fetch_semaphore,
+            fetch_semaphore_acquire_count: registry.register(metric!(
+                name: "mz_persist_fetch_semaphore_acquire_count",
+                help: "WIP",
+            )),
+            fetch_semaphore_blocking_acquire_count: registry.register(metric!(
+                name: "mz_persist_fetch_semaphore_blocking_acquire_count",
+                help: "WIP",
+            )),
+            fetch_semaphore_blocking_seconds: registry.register(metric!(
+                name: "mz_persist_fetch_semaphore_blocking_seconds",
+                help: "WIP",
+            )),
             _vecs: vecs,
             _uptime: uptime,
         }

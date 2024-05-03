@@ -353,6 +353,7 @@ pub async fn blob_batch_part(
         &key.0,
         None,
         parsed,
+        None,
     );
     let mut out = BatchPartOutput {
         desc,

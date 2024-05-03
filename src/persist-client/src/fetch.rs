@@ -18,6 +18,7 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_dyncfg::Config;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -29,7 +30,8 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug_span, trace_span, Instrument};
+use tokio::sync::OwnedSemaphorePermit;
+use tracing::{debug_span, info_span, trace_span, Instrument};
 
 use crate::batch::{
     proto_fetch_batch_filter, ProtoFetchBatchFilter, ProtoFetchBatchFilterListen, ProtoLease,
@@ -43,6 +45,9 @@ use crate::internal::paths::BlobKey;
 use crate::internal::state::{BatchPart, HollowBatchPart};
 use crate::read::LeasedReaderId;
 use crate::ShardId;
+
+pub(crate) const FETCH_SEMAPHORE_PERMITS: Config<usize> =
+    Config::new("persist_fetch_semaphore_permits", 1, "WIP");
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
 #[derive(Debug)]
@@ -93,8 +98,9 @@ where
             });
         }
 
-        let buf = match &part.part {
+        let (buf, fetch_permit) = match &part.part {
             BatchPart::Hollow(x) => {
+                let fetch_permit = self.metrics.acquire_fetch_permit().await;
                 let buf = fetch_batch_part_blob(
                     &part.shard_id,
                     self.blob.as_ref(),
@@ -102,6 +108,7 @@ where
                     &self.shard_metrics,
                     &self.metrics.read.batch_fetcher,
                     x,
+                    &fetch_permit,
                 )
                 .await
                 .unwrap_or_else(|blob_key| {
@@ -115,19 +122,23 @@ where
                     // process.
                     panic!("batch fetcher could not fetch batch part: {}", blob_key)
                 });
-                FetchedBlobBuf::Hollow {
+                let buf = FetchedBlobBuf::Hollow {
                     buf,
                     part: x.clone(),
-                }
+                };
+                (buf, Some(Arc::new(fetch_permit)))
             }
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
-            } => FetchedBlobBuf::Inline {
-                desc: part.desc.clone(),
-                updates: updates.clone(),
-                ts_rewrite: ts_rewrite.clone(),
-            },
+            } => {
+                let buf = FetchedBlobBuf::Inline {
+                    desc: part.desc.clone(),
+                    updates: updates.clone(),
+                    ts_rewrite: ts_rewrite.clone(),
+                };
+                (buf, None)
+            }
         };
         let fetched_blob = FetchedBlob {
             metrics: Arc::clone(&self.metrics),
@@ -137,9 +148,32 @@ where
             schemas: self.schemas.clone(),
             filter: part.filter.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
+            fetch_permit,
             _phantom: PhantomData,
         };
         Ok(fetched_blob)
+    }
+}
+
+impl Metrics {
+    async fn acquire_fetch_permit(&self) -> OwnedSemaphorePermit {
+        self.fetch_semaphore_acquire_count.inc();
+        // WIP adjust total number of permits here to reflect dyncfg?
+        match Arc::clone(&self.fetch_semaphore).try_acquire_owned() {
+            Ok(x) => return x,
+            Err(_) => {}
+        };
+        let start = Instant::now();
+        let ret = Arc::clone(&self.fetch_semaphore)
+            .acquire_owned()
+            .instrument(info_span!("acquire_fetch_permit"))
+            .await;
+        let elapsed = start.elapsed();
+        self.fetch_semaphore_blocking_acquire_count.inc();
+        self.fetch_semaphore_blocking_seconds
+            .inc_by(elapsed.as_secs_f64());
+        // WIP tracing::info!("acquire_fetch_permit took {:?}", elapsed);
+        ret.expect("fetch semaphore is never closed")
     }
 }
 
@@ -287,6 +321,7 @@ pub(crate) async fn fetch_batch_part_blob<T>(
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     part: &HollowBatchPart<T>,
+    _fetch_permit: &OwnedSemaphorePermit,
 ) -> Result<SegmentedBytes, BlobKey> {
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
@@ -314,6 +349,7 @@ pub(crate) fn decode_batch_part_blob<T>(
     registered_desc: Description<T>,
     part: &HollowBatchPart<T>,
     buf: &SegmentedBytes,
+    fetch_permit: Option<Arc<OwnedSemaphorePermit>>,
 ) -> EncodedPart<T>
 where
     T: Timestamp + Lattice + Codec64,
@@ -332,7 +368,13 @@ where
         read_metrics.part_goodbytes.inc_by(u64::cast_from(
             parsed.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
         ));
-        EncodedPart::from_hollow(read_metrics.clone(), registered_desc, part, parsed)
+        EncodedPart::from_hollow(
+            read_metrics.clone(),
+            registered_desc,
+            part,
+            parsed,
+            fetch_permit,
+        )
     })
 }
 
@@ -348,9 +390,25 @@ pub(crate) async fn fetch_batch_part<T>(
 where
     T: Timestamp + Lattice + Codec64,
 {
-    let buf =
-        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
-    let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
+    let fetch_permit = metrics.acquire_fetch_permit().await;
+    let buf = fetch_batch_part_blob(
+        shard_id,
+        blob,
+        metrics,
+        shard_metrics,
+        read_metrics,
+        part,
+        &fetch_permit,
+    )
+    .await?;
+    let part = decode_batch_part_blob(
+        metrics,
+        read_metrics,
+        registered_desc.clone(),
+        part,
+        &buf,
+        Some(Arc::new(fetch_permit)),
+    );
     Ok(part)
 }
 
@@ -474,6 +532,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     schemas: Schemas<K, V>,
     filter: FetchBatchFilter<T>,
     filter_pushdown_audit: bool,
+    fetch_permit: Option<Arc<OwnedSemaphorePermit>>,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -500,6 +559,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             schemas: self.schemas.clone(),
             filter: self.filter.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
+            fetch_permit: self.fetch_permit.clone(),
             _phantom: self._phantom.clone(),
         }
     }
@@ -516,6 +576,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                     self.registered_desc.clone(),
                     part,
                     buf,
+                    self.fetch_permit.clone(),
                 );
                 (parsed, part.stats.as_ref())
             }
@@ -625,6 +686,7 @@ pub(crate) struct EncodedPart<T> {
     part: Arc<BlobTraceBatchPart<T>>,
     needs_truncation: bool,
     ts_rewrite: Option<Antichain<T>>,
+    fetch_permit: Option<Arc<OwnedSemaphorePermit>>,
 }
 
 impl<K, V, T, D> FetchedPart<K, V, T, D>
@@ -759,7 +821,7 @@ where
         ts_rewrite: Option<&Antichain<T>>,
     ) -> Self {
         let parsed = x.decode(&metrics.columnar).expect("valid inline part");
-        Self::new(read_metrics, desc, "inline", ts_rewrite, parsed)
+        Self::new(read_metrics, desc, "inline", ts_rewrite, parsed, None)
     }
 
     pub(crate) fn from_hollow(
@@ -767,6 +829,7 @@ where
         registered_desc: Description<T>,
         part: &HollowBatchPart<T>,
         parsed: BlobTraceBatchPart<T>,
+        fetch_permit: Option<Arc<OwnedSemaphorePermit>>,
     ) -> Self {
         Self::new(
             metrics,
@@ -774,6 +837,7 @@ where
             &part.key.0,
             part.ts_rewrite.as_ref(),
             parsed,
+            fetch_permit,
         )
     }
 
@@ -783,6 +847,7 @@ where
         printable_name: &str,
         ts_rewrite: Option<&Antichain<T>>,
         parsed: BlobTraceBatchPart<T>,
+        fetch_permit: Option<Arc<OwnedSemaphorePermit>>,
     ) -> Self {
         // There are two types of batches in persist:
         // - Batches written by a persist user (either directly or indirectly
@@ -845,7 +910,12 @@ where
             part: Arc::new(parsed),
             needs_truncation,
             ts_rewrite: ts_rewrite.cloned(),
+            fetch_permit,
         }
+    }
+
+    pub(crate) fn release_fetch_permit(&mut self) -> bool {
+        self.fetch_permit.take().is_some()
     }
 
     pub(crate) fn maybe_unconsolidated(&self) -> bool {

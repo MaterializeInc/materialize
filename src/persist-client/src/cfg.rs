@@ -319,6 +319,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
         .add(&crate::cfg::CRDB_TCP_USER_TIMEOUT)
         .add(&crate::cfg::TXN_USE_CRITICAL_SINCE)
+        .add(&crate::fetch::FETCH_SEMAPHORE_PERMITS)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_CLAMP)
