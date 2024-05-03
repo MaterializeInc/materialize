@@ -10,6 +10,7 @@
 use anyhow::{bail, Context};
 use mz_ore::option::OptionExt;
 use tokio::process::Command;
+use tracing::info;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
@@ -20,6 +21,7 @@ pub async fn run_execute(
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let command = cmd.args.string("command")?;
+    let connection = cmd.args.opt_string("connection");
     cmd.args.done()?;
 
     let expected_output = cmd.input.join("\n");
@@ -32,10 +34,10 @@ pub async fn run_execute(
             "footer=off",
             "--command",
             &command,
-            &format!(
+            &connection.unwrap_or(format!(
                 "postgres://{}@{}",
-                state.materialize_user, state.materialize_sql_addr
-            ),
+                state.materialize_user, state.materialize_sql_addr,
+            )),
         ])
         .output()
         .await

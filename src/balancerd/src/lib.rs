@@ -60,7 +60,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
@@ -326,6 +326,8 @@ struct ServerMetricsConfig {
     tenant_connections: IntGaugeVec,
     tenant_connection_rx: IntCounterVec,
     tenant_connection_tx: IntCounterVec,
+    pgwire_with_sni_count: IntCounter,
+    pgwire_without_sni_count: IntCounter,
 }
 
 impl ServerMetricsConfig {
@@ -355,12 +357,22 @@ impl ServerMetricsConfig {
             help: "Number of bytes sent to a client for a tenent.",
             var_labels: ["source", "tenant"],
         ));
+        let pgwire_with_sni_count = registry.register(metric!(
+            name: "mz_balancer_pgwire_with_sni_count",
+            help: "Count of pgwire connections opened with SNI.",
+        ));
+        let pgwire_without_sni_count = registry.register(metric!(
+            name: "mz_balancer_pgwire_without_sni_count",
+            help: "Count of pgwire connections opened without SNI.",
+        ));
         Self {
             connection_status,
             active_connections,
             tenant_connections,
             tenant_connection_rx,
             tenant_connection_tx,
+            pgwire_with_sni_count,
+            pgwire_without_sni_count,
         }
     }
 }
@@ -467,7 +479,7 @@ impl PgwireBalancer {
             return conn.send(err).await;
         }
 
-        let resolved = match resolver.resolve(conn, user).await {
+        let resolved = match resolver.resolve(conn, user, metrics).await {
             Ok(v) => v,
             Err(err) => {
                 return conn
@@ -792,6 +804,85 @@ struct HttpsBalancer {
     metrics: Arc<ServerMetrics>,
 }
 
+async fn resolve_tenant_from_sni(
+    resolver: &StubResolver,
+    resolve_template: &str,
+    servername: Option<&str>,
+) -> (String, Option<String>) {
+    let addr = match &servername {
+        Some(servername) => resolve_template.replace("{}", servername),
+        None => resolve_template.to_string(),
+    };
+    debug!("address from sni: {addr}");
+
+    // When we lookup the address using SNI, we get a hostname (`3dl07g8zmj91pntk4eo9cfvwe` for
+    // example), which you convert into a different form for looking up the environment address
+    // `blncr-3dl07g8zmj91pntk4eo9cfvwe`. When you do a DNS lookup in kubernetes for
+    // `blncr-3dl07g8zmj91pntk4eo9cfvwe`, you get a CNAME response pointing at environmentd
+    // `environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local`. This
+    // is of the form `<service>.<namespace>.svc.cluster.local`. That `<namespace>` is the same
+    // as the environment name, and is based on the tenant ID. `environment-<tenant_id>-<index>`
+    // We currently only support a single environment per tenant in a region, so `<index>` is
+    // always 0. Do not rely on this ending in `-0` so in the future multiple envds are
+    // supported.
+
+    // Attempt to get a tenant.
+    let tenant = tenant(resolver, &addr).await;
+    (addr, tenant)
+}
+
+/// Finds the tenant of a DNS address. Errors or lack of cname resolution here are ok, because
+/// this is only used for metrics.
+async fn tenant(resolver: &StubResolver, addr: &str) -> Option<String> {
+    let Ok(dname) = Dname::<Vec<_>>::from_str(addr) else {
+        return None;
+    };
+    // Lookup the CNAME. If there's a CNAME, find the tenant.
+    let lookup = resolver.query((dname, Rtype::Cname)).await;
+    if let Ok(lookup) = lookup {
+        if let Ok(answer) = lookup.answer() {
+            let res = answer.limit_to::<AllRecordData<_, _>>();
+            for record in res {
+                let Ok(record) = record else {
+                    continue;
+                };
+                if record.rtype() != Rtype::Cname {
+                    continue;
+                }
+                let cname = record.data();
+                let cname = cname.to_string();
+                debug!("cname: {cname}");
+                return extract_tenant_from_cname(&cname);
+            }
+        }
+    }
+    None
+}
+
+/// Extracts the tenant from a CNAME.
+fn extract_tenant_from_cname(cname: &str) -> Option<String> {
+    let mut parts = cname.split('.');
+    let _service = parts.next();
+    let Some(namespace) = parts.next() else {
+        return None;
+    };
+    // Trim off the starting `environmentd-`.
+    let Some((_, namespace)) = namespace.split_once('-') else {
+        return None;
+    };
+    // Trim off the ending `-0` (or some other number).
+    let Some((tenant, _)) = namespace.rsplit_once('-') else {
+        return None;
+    };
+    // Convert to a Uuid so that this tenant matches the frontegg resolver exactly, because it
+    // also uses Uuid::to_string.
+    let Ok(tenant) = Uuid::parse_str(tenant) else {
+        error!("cname tenant not a uuid: {tenant}");
+        return None;
+    };
+    Some(tenant.to_string())
+}
+
 impl HttpsBalancer {
     async fn resolve(
         resolver: &StubResolver,
@@ -799,25 +890,7 @@ impl HttpsBalancer {
         port: u16,
         servername: Option<&str>,
     ) -> Result<ResolvedAddr, anyhow::Error> {
-        let addr = match &servername {
-            Some(servername) => resolve_template.replace("{}", servername),
-            None => resolve_template.to_string(),
-        };
-        debug!("https address: {addr}");
-
-        // When we lookup the address using SNI, we get a hostname (`3dl07g8zmj91pntk4eo9cfvwe` for
-        // example), which you convert into a different form for looking up the environment address
-        // `blncr-3dl07g8zmj91pntk4eo9cfvwe`. When you do a DNS lookup in kubernetes for
-        // `blncr-3dl07g8zmj91pntk4eo9cfvwe`, you get a CNAME response pointing at environmentd
-        // `environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local`. This
-        // is of the form `<service>.<namespace>.svc.cluster.local`. That `<namespace>` is the same
-        // as the environment name, and is based on the tenant ID. `environment-<tenant_id>-<index>`
-        // We currently only support a single environment per tenant in a region, so `<index>` is
-        // always 0. Do not rely on this ending in `-0` so in the future multiple envds are
-        // supported.
-
-        // Attempt to get a tenant.
-        let tenant = Self::tenant(resolver, &addr).await;
+        let (addr, tenant) = resolve_tenant_from_sni(resolver, resolve_template, servername).await;
 
         // Now do the regular ip lookup, regardless of if there was a CNAME.
         let envd_addr = lookup(&format!("{addr}:{port}")).await?;
@@ -827,58 +900,6 @@ impl HttpsBalancer {
             password: None,
             tenant,
         })
-    }
-
-    /// Finds the tenant of a DNS address. Errors or lack of cname resolution here are ok, because
-    /// this is only used for metrics.
-    async fn tenant(resolver: &StubResolver, addr: &str) -> Option<String> {
-        let Ok(dname) = Dname::<Vec<_>>::from_str(addr) else {
-            return None;
-        };
-        // Lookup the CNAME. If there's a CNAME, find the tenant.
-        let lookup = resolver.query((dname, Rtype::Cname)).await;
-        if let Ok(lookup) = lookup {
-            if let Ok(answer) = lookup.answer() {
-                let res = answer.limit_to::<AllRecordData<_, _>>();
-                for record in res {
-                    let Ok(record) = record else {
-                        continue;
-                    };
-                    if record.rtype() != Rtype::Cname {
-                        continue;
-                    }
-                    let cname = record.data();
-                    let cname = cname.to_string();
-                    debug!("cname: {cname}");
-                    return Self::extract_tenant_from_cname(&cname);
-                }
-            }
-        }
-        None
-    }
-
-    /// Extracts the tenant from a CNAME.
-    fn extract_tenant_from_cname(cname: &str) -> Option<String> {
-        let mut parts = cname.split('.');
-        let _service = parts.next();
-        let Some(namespace) = parts.next() else {
-            return None;
-        };
-        // Trim off the starting `environmentd-`.
-        let Some((_, namespace)) = namespace.split_once('-') else {
-            return None;
-        };
-        // Trim off the ending `-0` (or some other number).
-        let Some((tenant, _)) = namespace.rsplit_once('-') else {
-            return None;
-        };
-        // Convert to a Uuid so that this tenant matches the frontegg resolver exactly, because it
-        // also uses Uuid::to_string.
-        let Ok(tenant) = Uuid::parse_str(tenant) else {
-            error!("cname tenant not a uuid: {tenant}");
-            return None;
-        };
-        Some(tenant.to_string())
     }
 }
 
@@ -969,15 +990,62 @@ impl Resolver {
         &self,
         conn: &mut FramedConn<A>,
         user: &str,
+        metrics: &ServerMetrics,
     ) -> Result<ResolvedAddr, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin,
     {
         match self {
+            // WIP: this might need to be renamed, since it's not just about Frontegg at this point
             Resolver::Frontegg(FronteggResolver {
                 auth,
                 addr_template,
             }) => {
+                let servername = match conn.inner() {
+                    Conn::Unencrypted(_) => None,
+                    Conn::Ssl(conn) => conn.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                        // WIP: dedupe this logic
+                        match sn.split_once('.') {
+                            Some((left, _right)) => left,
+                            None => sn,
+                        }
+                        .into()
+                    }),
+                };
+                debug!("pgwire servername: {:?}", servername);
+
+                // Fast path: we have SNI available on the pgwire connection
+                // so we can resolve the environment directly through DNS
+                if let Some(servername) = servername {
+                    metrics.inner.pgwire_with_sni_count.inc();
+
+                    let (addr, tenant) = resolve_tenant_from_sni(
+                        // TODO: create the stub resolver only once
+                        &StubResolver::new(),
+                        addr_template,
+                        Some(servername),
+                    )
+                    .await;
+
+                    debug!("Used postgres SNI to get {:?}, {:?}", addr, tenant);
+                    let envd_addr = lookup(&addr).await?;
+                    debug!(
+                        "Used postgres SNI to resolve: {} from {} / servername {}",
+                        envd_addr, addr, servername
+                    );
+
+                    return Ok(ResolvedAddr {
+                        addr: envd_addr,
+                        password: None,
+                        tenant,
+                    });
+                }
+
+                // Slow path: the client didn't send along SNI, which means
+                // we now must resolve the environment via Frontegg.
+                info!("No SNI, falling back to Frontegg resolution");
+                metrics.inner.pgwire_without_sni_count.inc();
+
                 conn.send(BackendMessage::AuthenticationCleartextPassword)
                     .await?;
                 conn.flush().await?;
