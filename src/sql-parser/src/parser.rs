@@ -2618,7 +2618,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// Parse the name of a CREATE SINK optional parameter
+    /// Parse the name of a CREATE SUBSOURCE optional parameter
     fn parse_create_subsource_option_name(
         &mut self,
     ) -> Result<CreateSubsourceOptionName, ParserError> {
@@ -2633,7 +2633,7 @@ impl<'a> Parser<'a> {
         Ok(name)
     }
 
-    /// Parse a NAME = VALUE parameter for CREATE SINK
+    /// Parse a NAME = VALUE parameter for CREATE SUBSOURCE
     fn parse_create_subsource_option(&mut self) -> Result<CreateSubsourceOption<Raw>, ParserError> {
         Ok(CreateSubsourceOption {
             name: self.parse_create_subsource_option_name()?,
