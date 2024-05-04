@@ -562,6 +562,10 @@ impl<T: AstInfo> Expr<T> {
         self.binop(Op::bare("="), right)
     }
 
+    pub fn not_equals(self, right: Expr<T>) -> Expr<T> {
+        self.binop(Op::bare("<>"), right)
+    }
+
     pub fn minus(self, right: Expr<T>) -> Expr<T> {
         self.binop(Op::bare("-"), right)
     }

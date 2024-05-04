@@ -483,8 +483,10 @@ SELECT coalesce(row(1, 2), row(3), row(4, 5));
 statement ok
 CREATE TYPE custom_composite AS (i int);
 
-query error coalesce types record
+query T
 SELECT coalesce(row(1), row(1)::custom_composite)
+----
+(1)
 
 statement ok
 CREATE VIEW v AS SELECT 1 AS a
@@ -565,10 +567,12 @@ SELECT greatest(row(row(2, 4), 5), row(row(0, 10), 10), row(row(4, 3), 4));
 query error greatest could not convert type record
 SELECT greatest(row(1, 2), row(3), row(4, 5));
 
-query error greatest types record
+query T
 SELECT greatest(row(1), row(1)::custom_composite)
+----
+(1)
 
-query error greatest does not support casting from text to record
+query error greatest could not convert type record\(f1: integer,f2: integer\) to text
 SELECT greatest(row(1, 2), 'hello');
 
 query error greatest types integer and text cannot be matched
@@ -624,11 +628,13 @@ SELECT least(row(row(2, 4), 5), row(row(0, 10), 10), row(row(4, 3), 4));
 query error least could not convert type record
 SELECT least(row(1, 2), row(3), row(4, 5));
 
-query error least does not support casting from text to record
+query error least could not convert type record\(f1: integer,f2: integer\) to text
 SELECT least(row(1, 2), 'hello');
 
-query error least types record
+query T
 SELECT least(row(1), row(1)::custom_composite)
+----
+(1)
 
 query error least types integer and text cannot be matched
 SELECT least(1::int, 2::text)

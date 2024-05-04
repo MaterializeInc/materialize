@@ -78,9 +78,9 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, AggregateWindowExpr,
-    BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef, Hir, HirRelationExpr, HirScalarExpr,
-    JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, ValueWindowFunc,
-    VariadicFunc, WindowExpr, WindowExprType,
+    BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder, ColumnRef, Hir,
+    HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc,
+    ValueWindowExpr, ValueWindowFunc, VariadicFunc, WindowExpr, WindowExprType,
 };
 use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
@@ -1659,8 +1659,8 @@ fn plan_set_expr(
                 .enumerate()
             {
                 let types = &[
-                    Some(left_type.scalar_type.clone()),
-                    Some(right_type.scalar_type.clone()),
+                    CoercibleScalarType::Coerced(left_type.scalar_type.clone()),
+                    CoercibleScalarType::Coerced(right_type.scalar_type.clone()),
                 ];
                 let target =
                     typeconv::guess_best_common_type(&left_ecx.with_name(&op.to_string()), types)?;
@@ -4129,7 +4129,7 @@ fn plan_like(
     let ecx = ecx.with_name("LIKE argument");
     let expr = plan_expr(&ecx, expr)?;
     let haystack = match ecx.scalar_type(&expr) {
-        Some(ref ty @ ScalarType::Char { length }) => expr
+        CoercibleScalarType::Coerced(ref ty @ ScalarType::Char { length }) => expr
             .type_as(&ecx, ty)?
             .call_unary(UnaryFunc::PadChar(expr_func::PadChar { length })),
         _ => expr.cast_to(&ecx, Implicit, &ScalarType::String)?,
@@ -4534,9 +4534,12 @@ fn plan_array(
         // evidence that any of the array elements are themselves arrays, we
         // want to coerce to the array type, not the element type.
         Some(ScalarType::Array(elem_type)) => {
-            let multidimensional = out
-                .iter()
-                .any(|e| matches!(ecx.scalar_type(e), Some(ScalarType::Array(_))));
+            let multidimensional = out.iter().any(|e| {
+                matches!(
+                    ecx.scalar_type(e),
+                    CoercibleScalarType::Coerced(ScalarType::Array(_))
+                )
+            });
             if multidimensional {
                 type_hint
             } else {
@@ -5233,8 +5236,9 @@ pub fn resolve_func(
     let arg_types: Vec<_> = cexprs
         .into_iter()
         .map(|ty| match ecx.scalar_type(&ty) {
-            Some(ty) => ecx.humanize_scalar_type(&ty),
-            None => "unknown".to_string(),
+            CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty),
+            CoercibleScalarType::Record(_) => "record".to_string(),
+            CoercibleScalarType::Uncoerced => "unknown".to_string(),
         })
         .collect();
 
