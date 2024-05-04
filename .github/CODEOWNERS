@@ -11,6 +11,7 @@
 /.cargo                             @benesch
 /.config                            @benesch
 /.github                            @benesch
+/bazel                              @parkmycar @guswynn @maddyblue
 /bin
 /bin/lint-versions                  @MaterializeInc/testing
 /ci                                 @MaterializeInc/testing
@@ -127,3 +128,5 @@
 /src/walkabout                      @benesch
 /src/workspace-hack                 @benesch
 /test
+/MODULE.bazel                       @parkmycar @guswynn @maddyblue
+/WORKSPACE                          @parkmycar @guswynn @maddyblue
