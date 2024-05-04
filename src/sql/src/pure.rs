@@ -803,10 +803,15 @@ async fn purify_create_source(
 
             validate_subsource_names(&validated_requested_subsources)?;
 
+            let table_oids: Vec<_> = validated_requested_subsources
+                .iter()
+                .map(|r| r.table.oid)
+                .collect();
+
             postgres::validate_requested_subsources_privileges(
                 &config,
-                &validated_requested_subsources,
                 &storage_configuration.connection_context.ssh_tunnel_manager,
+                &table_oids,
             )
             .await?;
 
@@ -1406,10 +1411,15 @@ async fn purify_alter_source(
 
     validate_subsource_names(&validated_requested_subsources)?;
 
+    let table_oids: Vec<_> = validated_requested_subsources
+        .iter()
+        .map(|r| r.table.oid)
+        .collect();
+
     postgres::validate_requested_subsources_privileges(
         &config,
-        &validated_requested_subsources,
         &storage_configuration.connection_context.ssh_tunnel_manager,
+        &table_oids,
     )
     .await?;
 
