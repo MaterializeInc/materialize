@@ -1,0 +1,13 @@
+# Required for remote caching to be effective.
+#
+# Otherwise Bazel will passthrough the current system's PATH in the execution
+# environment, which differs between systems and thus breaks remote caching.
+build --incompatible_strict_action_env
+
+# We specify a minimum version of macOS to prevent different point releases on
+# developer machines from breaking the remote cache.
+common:macos --copt=-mmacosx-version-min=13.0
+common:macos --linkopt=-mmacosx-version-min=13.0
+
+# Config for building protobuf.
+build --copt=-Wno-error=deprecated-declarations
