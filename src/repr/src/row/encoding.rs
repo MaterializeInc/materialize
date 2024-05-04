@@ -810,7 +810,7 @@ impl Schema<Row> for RelationDesc {
             .iter()
             .map(|(name, typ)| {
                 let (data_type, stats_fn) = typ.to_persist(ToPersist);
-                (name.0.clone(), data_type, stats_fn)
+                (name.as_str().to_owned(), data_type, stats_fn)
             })
             .collect::<Vec<_>>();
         DynStructCfg::from(cols)
@@ -1110,6 +1110,7 @@ impl RustType<ProtoRow> for Row {
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
     use mz_persist_types::Codec;
+    use mz_sql_parser::ident;
     use proptest::prelude::*;
     use uuid::Uuid;
 
@@ -1216,35 +1217,35 @@ mod tests {
         ]);
         let schema = RelationDesc::from_names_and_types(vec![
             (
-                "a",
+                ident!("a"),
                 ColumnType {
                     nullable: false,
                     scalar_type: ScalarType::Bool,
                 },
             ),
             (
-                "b",
+                ident!("b"),
                 ColumnType {
                     nullable: false,
                     scalar_type: ScalarType::Bool,
                 },
             ),
             (
-                "c",
+                ident!("c"),
                 ColumnType {
                     nullable: true,
                     scalar_type: ScalarType::Bool,
                 },
             ),
             (
-                "d",
+                ident!("d"),
                 ColumnType {
                     nullable: true,
                     scalar_type: ScalarType::Bool,
                 },
             ),
             (
-                "e",
+                ident!("e"),
                 ColumnType {
                     nullable: true,
                     scalar_type: ScalarType::Bool,
@@ -1280,13 +1281,14 @@ mod tests {
         }
 
         // Non-nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
+        let schema =
+            RelationDesc::empty().with_column(ident!("col"), scalar_type.clone().nullable(false));
         for row in rows.iter() {
             assert_eq!(validate_roundtrip(&schema, row), Ok(()));
         }
 
         // Nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
+        let schema = RelationDesc::empty().with_column(ident!("col"), scalar_type.nullable(true));
         rows.push(Row::pack(std::iter::once(Datum::Null)));
         for row in rows.iter() {
             assert_eq!(validate_roundtrip(&schema, row), Ok(()));

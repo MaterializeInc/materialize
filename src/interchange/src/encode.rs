@@ -40,18 +40,19 @@ pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType
 
     // Deduplicate names.
     let mut seen = BTreeSet::new();
-    for (name, _ty) in &mut columns {
-        let stem_len = name.as_str().len();
+    for (orig_name, _ty) in &mut columns {
         let mut i = 1;
-        while seen.contains(name) {
-            name.as_mut_str().truncate(stem_len);
-            if name.as_str().ends_with(|c: char| c.is_ascii_digit()) {
-                name.as_mut_str().push('_');
+        let mut candidate_name = orig_name.clone();
+        while seen.contains(&candidate_name) {
+            let mut raw_name = orig_name.as_str().to_owned();
+            if raw_name.ends_with(|c: char| c.is_ascii_digit()) {
+                raw_name.push('_');
             }
-            name.as_mut_str().push_str(&i.to_string());
+            raw_name.push_str(&i.to_string());
             i += 1;
+            candidate_name = ColumnName::from(raw_name); // .expect("De-duplicated name '{}' violates column name invariant.",raw_name,);
         }
-        seen.insert(name);
+        seen.insert(candidate_name);
     }
     columns
 }

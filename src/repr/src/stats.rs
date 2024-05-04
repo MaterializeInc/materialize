@@ -175,6 +175,7 @@ mod tests {
         ColumnStats, DynStats, ProtoStructStats, StructStats, TrimStats,
     };
     use mz_proto::RustType;
+    use mz_sql_parser::ident;
     use proptest::prelude::*;
 
     use crate::{Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena, ScalarType};
@@ -229,14 +230,15 @@ mod tests {
         }
 
         // Non-nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
+        let schema =
+            RelationDesc::empty().with_column(ident!("col"), scalar_type.clone().nullable(false));
         for row in rows.iter() {
             datum_stats_roundtrip_trim(&schema, [row]);
         }
         datum_stats_roundtrip_trim(&schema, &rows[..]);
 
         // Nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
+        let schema = RelationDesc::empty().with_column(ident!("col"), scalar_type.nullable(true));
         rows.push(Row::pack(std::iter::once(Datum::Null)));
         for row in rows.iter() {
             datum_stats_roundtrip_trim(&schema, [row]);
