@@ -282,7 +282,7 @@ contains: CREATE SOURCE specifies DETAILS option
     "pk_table"
   );
 contains:referenced items not tables with REPLICA IDENTITY FULL
-detail:referenced items: no_replica_identity
+detail:referenced items: public.no_replica_identity
 
 #
 # Establish direct replication
