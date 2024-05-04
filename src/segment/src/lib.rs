@@ -18,11 +18,13 @@
 
 use std::fmt;
 
+use chrono::{DateTime, Utc};
 use segment::message::{Batch, BatchMessage, Group, Message, Track, User};
 use segment::{Batcher, Client as _, HttpClient};
+use time::OffsetDateTime;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tracing::warn;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 /// The maximum number of undelivered events. Once this limit is reached,
@@ -77,9 +79,22 @@ impl Client {
         event: S,
         properties: serde_json::Value,
         context: Option<serde_json::Value>,
+        timestamp: Option<DateTime<Utc>>,
     ) where
         S: Into<String>,
     {
+        let timestamp = match timestamp {
+            None => None,
+            Some(t) => match OffsetDateTime::from_unix_timestamp(t.timestamp())
+                .and_then(|odt| odt.replace_nanosecond(t.timestamp_subsec_nanos()))
+            {
+                Ok(timestamp) => Some(timestamp),
+                Err(e) => {
+                    error!(%e, "failed to convert timestamp for Segment event");
+                    return;
+                }
+            },
+        };
         self.send(BatchMessage::Track(Track {
             user: User::UserId {
                 user_id: user_id.to_string(),
@@ -87,6 +102,7 @@ impl Client {
             event: event.into(),
             properties,
             context,
+            timestamp,
             ..Default::default()
         }));
     }

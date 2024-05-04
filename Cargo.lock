@@ -5909,9 +5909,11 @@ dependencies = [
 name = "mz-segment"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "mz-ore",
  "segment",
  "serde_json",
+ "time",
  "tokio",
  "tracing",
  "uuid",
