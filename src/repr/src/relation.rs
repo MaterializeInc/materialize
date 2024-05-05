@@ -284,13 +284,11 @@ impl From<Ident> for ColumnName {
     }
 }
 
-/*
-impl From<String> for ColumnName {
-    fn from(s: String) -> ColumnName {
-        ColumnName(Ident::new(s).unwrap()) // TODO: Should use try from?
+impl From<&ColumnName> for ColumnName {
+    fn from(n: &ColumnName) -> ColumnName {
+        n.clone()
     }
 }
-*/
 
 impl TryFrom<String> for ColumnName {
     type Error = IdentError;
@@ -299,24 +297,10 @@ impl TryFrom<String> for ColumnName {
     }
 }
 
-/*
-impl From<&str> for ColumnName {
-    fn from(s: &str) -> ColumnName {
-        ColumnName(Ident::new(s).unwrap()) // TODO: Should use try from?
-    }
-}
-*/
-
 impl TryFrom<&str> for ColumnName {
     type Error = IdentError;
     fn try_from(s: &str) -> Result<ColumnName, Self::Error> {
         Ident::new(s).map(|ident| ColumnName(ident))
-    }
-}
-
-impl From<&ColumnName> for ColumnName {
-    fn from(n: &ColumnName) -> ColumnName {
-        n.clone()
     }
 }
 
@@ -328,16 +312,18 @@ impl RustType<ProtoColumnName> for ColumnName {
     }
 
     fn from_proto(proto: ProtoColumnName) -> Result<Self, TryFromProtoError> {
-        Ok(ColumnName::try_from(
+        ColumnName::try_from(
             proto
                 .value
                 .ok_or_else(|| TryFromProtoError::missing_field("ProtoColumnName::value"))?,
         )
-        .unwrap()) // TODO: map error
+        .map_err(|err| {
+            TryFromProtoError::invalid_identifier(format!("Invalid identifier: {:?}", err))
+        })
     }
 }
 
-impl From<ColumnName> for mz_sql_parser::ast::Ident {
+impl From<ColumnName> for Ident {
     fn from(value: ColumnName) -> Self {
         value.0.clone()
     }
