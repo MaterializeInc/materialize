@@ -92,7 +92,7 @@ pub trait SourceRender {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct SourceMessage {
     /// The message key
     pub key: Row,
@@ -131,7 +131,7 @@ pub struct DecodeResult<FromTime> {
 }
 
 /// A structured error for `SourceReader::get_next_message` implementors.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct SourceReaderError {
     pub inner: SourceErrorDetails,
 }
