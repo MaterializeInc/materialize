@@ -2614,7 +2614,7 @@ impl AggregateExpr {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![
                                 ColumnName::from(column_name),
-                                ColumnName::from(ident!("(.*)")),
+                                ColumnName::from(ident!("?record?")),
                             ],
                         },
                         exprs: vec![null_offset_check, original_row],
@@ -2659,8 +2659,8 @@ impl AggregateExpr {
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![
-                                ColumnName::from(ident!("(.*)")),
-                                ColumnName::from(ident!("(.*)")),
+                                ColumnName::from(ident!("?first_value?")),
+                                ColumnName::from(ident!("?record?")),
                             ],
                         },
                         exprs: vec![value, original_row],
@@ -2705,8 +2705,8 @@ impl AggregateExpr {
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![
-                                ColumnName::from(ident!("(.*)")),
-                                ColumnName::from(ident!("(.*)")),
+                                ColumnName::from(ident!("?last_value?")),
+                                ColumnName::from(ident!("?record?")),
                             ],
                         },
                         exprs: vec![value, original_row],
@@ -2764,8 +2764,8 @@ impl AggregateExpr {
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![
-                                ColumnName::from(ident!("(.*)")),
-                                ColumnName::from(ident!("(.*)")),
+                                ColumnName::from(ident!("?window_agg?")),
+                                ColumnName::from(ident!("?record?")),
                             ],
                         },
                         exprs: vec![value, original_row],
@@ -2850,7 +2850,7 @@ impl AggregateExpr {
                 func: VariadicFunc::RecordCreate {
                     field_names: vec![
                         ColumnName::try_from(col_name).unwrap(),
-                        ColumnName::from(ident!("(.*)")),
+                        ColumnName::from(ident!("?record?")),
                     ],
                 },
                 exprs: vec![

@@ -3102,7 +3102,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 };
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from(ident!("(.*)"))],
+                        field_names: vec![ColumnName::from(ident!("key")), ColumnName::from(ident!("val"))],
                     },
                     exprs: vec![key, val],
                 };
@@ -3113,7 +3113,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String) => Operation::binary_ordered(|_ecx, value, sep, order_by| {
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from(ident!("(.*)"))],
+                        field_names: vec![ColumnName::from(ident!("value")), ColumnName::from(ident!("sep"))],
                     },
                     exprs: vec![value, sep],
                 };
@@ -3156,7 +3156,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from(ident!("(.*)"))]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
                 };
@@ -3166,7 +3166,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from(ident!("(.*)"))]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
                 };
@@ -3175,7 +3175,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from(ident!("(.*)"))]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs,
                 };
@@ -3188,7 +3188,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from(ident!("(.*)"))]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
                 };
@@ -3198,7 +3198,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from(ident!("(.*)"))]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
                 };
@@ -3207,7 +3207,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from(ident!("(.*)"))]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs,
                 };
@@ -3685,7 +3685,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
 
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from(ident!("(.*)"))],
+                        field_names: vec![ColumnName::from(ident!("key")), ColumnName::from(ident!("val"))],
                     },
                     exprs: vec![key, val],
                 };

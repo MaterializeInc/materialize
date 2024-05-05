@@ -917,7 +917,7 @@ where
                                 .await;
 
                             let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
-                                .get_by_name(&ColumnName::from(ident!("(.*)")))
+                                .get_by_name(&ColumnName::from(ident!("status")))
                                 .expect("schema has not changed")
                                 .0;
 
@@ -944,7 +944,7 @@ where
                                 .await;
 
                             let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
-                                .get_by_name(&ColumnName::from(ident!("(.*)")))
+                                .get_by_name(&ColumnName::from(ident!("status")))
                                 .expect("schema has not changed")
                                 .0;
 
@@ -3178,22 +3178,22 @@ where
             IntrospectionType::SourceStatusHistory => (
                 self.config.parameters.keep_n_source_status_history_entries,
                 collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from(ident!("(.*)")))
+                    .get_by_name(&ColumnName::from(ident!("occurred_at")))
                     .expect("schema has not changed")
                     .0,
                 collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from(ident!("(.*)")))
+                    .get_by_name(&ColumnName::from(ident!("source_id")))
                     .expect("schema has not changed")
                     .0,
             ),
             IntrospectionType::SinkStatusHistory => (
                 self.config.parameters.keep_n_sink_status_history_entries,
                 collection_status::MZ_SINK_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from(ident!("(.*)")))
+                    .get_by_name(&ColumnName::from(ident!("occurred_at")))
                     .expect("schema has not changed")
                     .0,
                 collection_status::MZ_SINK_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from(ident!("(.*)")))
+                    .get_by_name(&ColumnName::from(ident!("sink_id")))
                     .expect("schema has not changed")
                     .0,
             ),
@@ -3202,11 +3202,11 @@ where
                     .parameters
                     .keep_n_privatelink_status_history_entries,
                 collection_status::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from(ident!("(.*)")))
+                    .get_by_name(&ColumnName::from(ident!("occurred_at")))
                     .expect("schema has not changed")
                     .0,
                 collection_status::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from(ident!("(.*)")))
+                    .get_by_name(&ColumnName::from(ident!("connection_id")))
                     .expect("schema has not changed")
                     .0,
             ),

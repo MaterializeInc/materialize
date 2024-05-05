@@ -1950,7 +1950,7 @@ impl AggregateFunc {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
                             (ColumnName::from(ident!("?first_value?")), value_type),
-                            (ColumnName::from(ident!("(.*)")), original_row_type),
+                            (ColumnName::from(ident!("?record?")), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -1970,8 +1970,8 @@ impl AggregateFunc {
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
-                            (ColumnName::from(ident!("(.*)")), value_type),
-                            (ColumnName::from(ident!("(.*)")), original_row_type),
+                            (ColumnName::from(ident!("?last_value?")), value_type),
+                            (ColumnName::from(ident!("?record?")), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -1994,8 +1994,11 @@ impl AggregateFunc {
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
-                            (ColumnName::from(ident!("(.*)")), wrapped_aggr_out_type),
-                            (ColumnName::from(ident!("(.*)")), original_row_type),
+                            (
+                                ColumnName::from(ident!("?window_agg?")),
+                                wrapped_aggr_out_type,
+                            ),
+                            (ColumnName::from(ident!("?record?")), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -2036,7 +2039,7 @@ impl AggregateFunc {
                             ColumnName::try_from(col_name).unwrap(),
                             ScalarType::Int64.nullable(false),
                         ),
-                        (ColumnName::from(ident!("(.*)")), {
+                        (ColumnName::from(ident!("?record?")), {
                             let inner = match &fields[0].1.scalar_type {
                                 ScalarType::List { element_type, .. } => element_type.clone(),
                                 _ => unreachable!(),

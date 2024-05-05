@@ -4356,7 +4356,7 @@ where
                 func: aggregate_concat(aggregation_order_by),
                 expr: Box::new(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: iter::repeat(ColumnName::from(ident!("(.*)")))
+                        field_names: iter::repeat(ColumnName::from(ident!("")))
                             .take(aggregation_exprs.len())
                             .collect(),
                     },
@@ -4715,7 +4715,7 @@ fn plan_aggregate_common(
     // If a function supports ORDER BY (even if there was no ORDER BY specified),
     // map the needed expressions into the aggregate datum.
     if func.is_order_sensitive() {
-        let field_names = iter::repeat(ColumnName::from(ident!("(.*)")))
+        let field_names = iter::repeat(ColumnName::from(ident!("")))
             .take(1 + order_by_exprs.len())
             .collect();
         let mut exprs = vec![expr];

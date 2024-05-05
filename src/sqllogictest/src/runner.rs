@@ -2567,7 +2567,7 @@ fn test_generate_view_sql() {
             r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
-        (("SELECT a, b, c FROM t1, t2", Some(3), Some(vec![ColumnName::from(ident!("(.*)"))])),
+        (("SELECT a, b, c FROM t1, t2", Some(3), Some(vec![ColumnName::from(ident!("a")), ColumnName::from(ident!("b")), ColumnName::from(ident!("c"))])),
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
             r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c")"#.to_string(),
@@ -2590,7 +2590,7 @@ fn test_generate_view_sql() {
             r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
-        (("SELECT a, b, b + d AS c, a + b AS d FROM t1, t2 ORDER BY a, c, a + b", Some(4), Some(vec![ColumnName::from(ident!("(.*)"))])),
+        (("SELECT a, b, b + d AS c, a + b AS d FROM t1, t2 ORDER BY a, c, a + b", Some(4), Some(vec![ColumnName::from(ident!("a")), ColumnName::from(ident!("b")), ColumnName::from(ident!("c")), ColumnName::from(ident!("d"))])),
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d") AS SELECT "a", "b", "b" + "d" AS "c", "a" + "b" AS "d" FROM "t1", "t2" ORDER BY "a", "c", "a" + "b""#.to_string(),
             r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d")"#.to_string(),
