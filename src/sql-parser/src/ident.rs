@@ -43,6 +43,18 @@
 /// let _id = ident!(TOO_LONG);
 /// ```
 ///
+/// ```compile_fail
+/// use mz_sql_parser::ident;
+/// const FORBIDDEN: &str = ".";
+/// ident!(FORBIDDEN);
+/// ```
+///
+/// ```compile_fail
+/// use mz_sql_parser::ident;
+/// const FORBIDDEN: &str = "..";
+/// ident!(FORBIDDEN);
+/// ```
+///
 /// [`Ident`]: crate::ast::Ident
 ///
 #[macro_export]
@@ -64,8 +76,32 @@ macro_rules! ident {
             }
         }
 
+        #[allow(dead_code)]
+        const fn check_value(val: &str) {
+            if equal(val, ".") || equal(val, "..") {
+                panic!(stringify!(provided string literal, $val, is an invalid identifier));
+            }
+        }
+
+        const fn equal(lhs: &str, rhs: &str) -> bool {
+            let lhs = lhs.as_bytes();
+            let rhs = rhs.as_bytes();
+            if lhs.len() != rhs.len() {
+                return false;
+            }
+            let mut i = 0;
+            while i < lhs.len() {
+                if lhs[i] != rhs[i] {
+                    return false;
+                }
+                i += 1;
+            }
+            true
+        }
+
         const _X_VAL: &str = $val;
         const _X_LEN: usize = _X_VAL.len();
-        const _X_CHECK: () = check_len::<$max_len, _X_LEN>();
+        const _X_CHECK_LEN: () = check_len::<$max_len, _X_LEN>();
+        const _X_CHECK_VALUE: () = check_value(_X_VAL);
     }}
 }
