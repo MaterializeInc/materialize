@@ -338,7 +338,8 @@ impl Arbitrary for ColumnName {
         // characters" is a superset of valid identifiers, because their size
         // limit is measure in terms of byte length (not number of characters),
         // and certain identifiers like "." and ".." are forbidden. Using a
-        // naïve rejection sampling to prune the strategy to valid identifiers.
+        // naïve rejection sampling to prune the strategy to valid identifiers
+        // should be fine, given the rejection rate is low.
         "\\PC{0,255}"
             .prop_filter_map("Filter to valid identifiers", |s| {
                 ColumnName::try_from(s).ok()
