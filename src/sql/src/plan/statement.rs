@@ -48,7 +48,7 @@ mod tcl;
 mod validate;
 
 use crate::session::vars;
-pub(crate) use ddl::PgConfigOptionExtracted;
+pub(crate) use ddl::source::PgConfigOptionExtracted;
 use mz_controller_types::ClusterId;
 use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_USER_OID};
 use mz_repr::role_id::RoleId;
@@ -144,8 +144,8 @@ pub fn describe(
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
         Statement::CreateWebhookSource(stmt) => ddl::describe_create_webhook_source(&scx, stmt)?,
-        Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
-        Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
+        Statement::CreateSource(stmt) => ddl::source::describe_create_source(&scx, stmt)?,
+        Statement::CreateSubsource(stmt) => ddl::source::describe_create_subsource(&scx, stmt)?,
         Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
         Statement::CreateType(stmt) => ddl::describe_create_type(&scx, stmt)?,
         Statement::CreateView(stmt) => ddl::describe_create_view(&scx, stmt)?,
@@ -324,8 +324,8 @@ pub fn plan(
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
         Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
-        Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
-        Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
+        Statement::CreateSource(stmt) => ddl::source::plan_create_source(scx, stmt),
+        Statement::CreateSubsource(stmt) => ddl::source::plan_create_subsource(scx, stmt),
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),

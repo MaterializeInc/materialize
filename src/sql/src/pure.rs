@@ -68,7 +68,7 @@ use crate::names::{
     ResolvedItemName,
 };
 use crate::plan::error::PlanError;
-use crate::plan::statement::ddl::load_generator_ast_to_generator;
+use crate::plan::statement::ddl::source::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
 use crate::{kafka_util, normalize};
 
@@ -882,7 +882,7 @@ async fn purify_create_source(
                     scx.catalog.resolve_full_name(connection_item.name()),
                 ))?,
             };
-            let crate::plan::statement::ddl::MySqlConfigOptionExtracted {
+            let crate::plan::statement::ddl::source::MySqlConfigOptionExtracted {
                 details,
                 text_columns,
                 ignore_columns,
