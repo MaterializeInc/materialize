@@ -836,7 +836,7 @@ impl AbstractExpr for CoercibleScalarExpr {
                 let mut fields = vec![];
                 for (i, scalar) in scalars.iter().enumerate() {
                     fields.push((
-                        format!("f{}", i + 1).into(),
+                        format!("f{}", i + 1).try_into().unwrap(),
                         scalar.typ(outers, inner, params)?,
                     ));
                 }

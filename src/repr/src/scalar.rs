@@ -19,7 +19,6 @@ use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_sql_parser::ident;
 use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -4049,6 +4048,7 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
 
 #[mz_ore::test]
 fn verify_base_eq_record_nullability() {
+    use mz_sql_parser::ident;
     let s1 = ScalarType::Record {
         fields: vec![(
             ident!("c").into(),

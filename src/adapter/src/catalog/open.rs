@@ -1363,6 +1363,7 @@ mod builtin_migration_tests {
     use mz_sql::names::{
         ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     };
+    use mz_sql::normalize::ident;
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
@@ -1398,7 +1399,7 @@ mod builtin_migration_tests {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
                     create_sql: Some("CREATE TABLE t ()".to_string()),
                     desc: RelationDesc::empty()
-                        .with_column("a", ScalarType::Int32.nullable(true))
+                        .with_column(ident!("a"), ScalarType::Int32.nullable(true))
                         .with_key(vec![0]),
                     defaults: vec![Expr::null(); 1],
                     conn_id: None,
@@ -1428,7 +1429,7 @@ mod builtin_migration_tests {
                             },
                         }),
                         desc: RelationDesc::empty()
-                            .with_column("a", ScalarType::Int32.nullable(true))
+                            .with_column(ident!("a"), ScalarType::Int32.nullable(true))
                             .with_key(vec![0]),
                         resolved_ids: ResolvedIds(resolved_ids),
                         cluster_id: ClusterId::User(1),

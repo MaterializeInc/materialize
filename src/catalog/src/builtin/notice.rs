@@ -11,6 +11,7 @@ use mz_pgrepr::oid;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::NameReference;
+use mz_sql_parser::ident;
 use once_cell::sync::Lazy;
 
 use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, MONITOR_SELECT};
@@ -25,18 +26,18 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::TABLE_MZ_OPTIMIZER_NOTICES_OID,
         desc: RelationDesc::empty()
-            .with_column("id", String.nullable(false))
-            .with_column("notice_type", String.nullable(false))
-            .with_column("message", String.nullable(false))
-            .with_column("hint", String.nullable(false))
-            .with_column("action", String.nullable(true))
-            .with_column("redacted_message", String.nullable(true))
-            .with_column("redacted_hint", String.nullable(true))
-            .with_column("redacted_action", String.nullable(true))
-            .with_column("action_type", String.nullable(true))
-            .with_column("object_id", String.nullable(true))
+            .with_column(ident!("id"), String.nullable(false))
+            .with_column(ident!("notice_type"), String.nullable(false))
+            .with_column(ident!("message"), String.nullable(false))
+            .with_column(ident!("hint"), String.nullable(false))
+            .with_column(ident!("action"), String.nullable(true))
+            .with_column(ident!("redacted_message"), String.nullable(true))
+            .with_column(ident!("redacted_hint"), String.nullable(true))
+            .with_column(ident!("redacted_action"), String.nullable(true))
+            .with_column(ident!("action_type"), String.nullable(true))
+            .with_column(ident!("object_id"), String.nullable(true))
             .with_column(
-                "dependency_ids",
+                ident!("dependency_ids"),
                 List {
                     element_type: Box::new(String),
                     custom_id: None,
@@ -44,7 +45,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
                 .nullable(false),
             )
             .with_column(
-                "created_at",
+                ident!("created_at"),
                 TimestampTz { precision: None }.nullable(false),
             )
             .with_key(vec![0]),

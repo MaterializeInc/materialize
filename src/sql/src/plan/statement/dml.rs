@@ -26,7 +26,7 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
-use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, Datum, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     CteBlock, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
     ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
@@ -260,33 +260,33 @@ pub fn describe_explain_plan(
 
     match stage {
         ExplainStage::RawPlan => {
-            let name = "Raw Plan";
+            let name = ident!("Raw Plan");
             relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::DecorrelatedPlan => {
-            let name = "Decorrelated Plan";
+            let name = ident!("Decorrelated Plan");
             relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::LocalPlan => {
-            let name = "Locally Optimized Plan";
+            let name = ident!("Locally Optimized Plan");
             relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::GlobalPlan => {
-            let name = "Optimized Plan";
+            let name = ident!("Optimized Plan");
             relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::PhysicalPlan => {
-            let name = "Physical Plan";
+            let name = ident!("Physical Plan");
             relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::Trace => {
             relation_desc = relation_desc
-                .with_column("Time", ScalarType::UInt64.nullable(false))
-                .with_column("Path", ScalarType::String.nullable(false))
-                .with_column("Plan", ScalarType::String.nullable(false));
+                .with_column(ident!("Time"), ScalarType::UInt64.nullable(false))
+                .with_column(ident!("Path"), ScalarType::String.nullable(false))
+                .with_column(ident!("Plan"), ScalarType::String.nullable(false));
         }
         ExplainStage::PlanInsights => {
-            let name = "Plan Insights";
+            let name = ident!("Plan Insights");
             relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
     };
@@ -304,11 +304,11 @@ pub fn describe_explain_pushdown(
     statement: ExplainPushdownStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let relation_desc = RelationDesc::empty()
-        .with_column("Source", ScalarType::String.nullable(false))
-        .with_column("Total Bytes", ScalarType::UInt64.nullable(false))
-        .with_column("Selected Bytes", ScalarType::UInt64.nullable(false))
-        .with_column("Total Parts", ScalarType::UInt64.nullable(false))
-        .with_column("Selected Parts", ScalarType::UInt64.nullable(false));
+        .with_column(ident!("Source"), ScalarType::String.nullable(false))
+        .with_column(ident!("Total Bytes"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("Selected Bytes"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("Total Parts"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("Selected Parts"), ScalarType::UInt64.nullable(false));
 
     Ok(
         StatementDesc::new(Some(relation_desc)).with_params(match statement.explainee {
@@ -323,7 +323,8 @@ pub fn describe_explain_timestamp(
     ExplainTimestampStatement { select, .. }: ExplainTimestampStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let mut relation_desc = RelationDesc::empty();
-    relation_desc = relation_desc.with_column("Timestamp", ScalarType::String.nullable(false));
+    relation_desc =
+        relation_desc.with_column(ident!("Timestamp"), ScalarType::String.nullable(false));
 
     Ok(StatementDesc::new(Some(relation_desc))
         .with_params(describe_select(scx, select)?.param_types))
@@ -334,7 +335,7 @@ pub fn describe_explain_schema(
     ExplainSinkSchemaStatement { .. }: ExplainSinkSchemaStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let mut relation_desc = RelationDesc::empty();
-    relation_desc = relation_desc.with_column("Schema", ScalarType::String.nullable(false));
+    relation_desc = relation_desc.with_column(ident!("Schema"), ScalarType::String.nullable(false));
     Ok(StatementDesc::new(Some(relation_desc)))
 }
 
@@ -708,20 +709,20 @@ pub fn describe_subscribe(
     let SubscribeOptionExtracted { progress, .. } = stmt.options.try_into()?;
     let progress = progress.unwrap_or(false);
     let mut desc = RelationDesc::empty().with_column(
-        "mz_timestamp",
+        ident!("mz_timestamp"),
         ScalarType::Numeric {
             max_scale: Some(NumericMaxScale::ZERO),
         }
         .nullable(false),
     );
     if progress {
-        desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));
+        desc = desc.with_column(ident!("mz_progressed"), ScalarType::Bool.nullable(false));
     }
 
     let debezium = matches!(stmt.output, SubscribeOutput::EnvelopeDebezium { .. });
     match stmt.output {
         SubscribeOutput::Diffs | SubscribeOutput::WithinTimestampOrderBy { .. } => {
-            desc = desc.with_column("mz_diff", ScalarType::Int64.nullable(true));
+            desc = desc.with_column(ident!("mz_diff"), ScalarType::Int64.nullable(true));
             for (name, mut ty) in relation_desc.into_iter() {
                 if progress {
                     ty.nullable = true;
@@ -731,7 +732,7 @@ pub fn describe_subscribe(
         }
         SubscribeOutput::EnvelopeUpsert { key_columns }
         | SubscribeOutput::EnvelopeDebezium { key_columns } => {
-            desc = desc.with_column("mz_state", ScalarType::String.nullable(true));
+            desc = desc.with_column(ident!("mz_state"), ScalarType::String.nullable(true));
             let key_columns = key_columns
                 .into_iter()
                 .map(normalize::column_name)
@@ -762,10 +763,12 @@ pub fn describe_subscribe(
                 .filter(|(name, _ty)| !key_columns.contains(name))
             {
                 ty.nullable = true;
-                before_values_desc =
-                    before_values_desc.with_column(format!("before_{}", name), ty.clone());
+                before_values_desc = before_values_desc.with_column(
+                    ColumnName::try_from(format!("before_{}", name)).unwrap(),
+                    ty.clone(),
+                );
                 if debezium {
-                    name = format!("after_{}", name).into();
+                    name = format!("after_{}", name).try_into().unwrap();
                 }
                 after_values_desc = after_values_desc.with_column(name, ty);
             }
@@ -897,7 +900,7 @@ pub fn plan_subscribe(
         }
         SubscribeOutput::WithinTimestampOrderBy { order_by } => {
             scx.require_feature_flag(&vars::ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)?;
-            let mz_diff = "mz_diff".into();
+            let mz_diff = "mz_diff".try_into().unwrap();
             let output_columns = std::iter::once((0, &mz_diff))
                 .chain(output_columns.into_iter().map(|(i, c)| (i + 1, c)))
                 .collect_vec();

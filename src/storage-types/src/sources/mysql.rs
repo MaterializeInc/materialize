@@ -16,6 +16,7 @@ use std::num::NonZeroU64;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::UnresolvedItemName;
+use mz_sql_parser::ident;
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
 use once_cell::sync::Lazy;
@@ -130,9 +131,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
 
 pub static MYSQL_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
-        .with_column("source_id_lower", ScalarType::Uuid.nullable(false))
-        .with_column("source_id_upper", ScalarType::Uuid.nullable(false))
-        .with_column("transaction_id", ScalarType::UInt64.nullable(true))
+        .with_column(ident!("source_id_lower"), ScalarType::Uuid.nullable(false))
+        .with_column(ident!("source_id_upper"), ScalarType::Uuid.nullable(false))
+        .with_column(ident!("transaction_id"), ScalarType::UInt64.nullable(true))
 });
 
 impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {

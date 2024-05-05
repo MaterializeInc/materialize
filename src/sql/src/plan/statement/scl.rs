@@ -14,6 +14,7 @@
 
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::InspectShardStatement;
+use mz_sql_parser::ident;
 use std::time::Duration;
 use uncased::UncasedStr;
 
@@ -105,13 +106,13 @@ pub fn describe_show_variable(
 ) -> Result<StatementDesc, PlanError> {
     let desc = if variable.as_str() == UncasedStr::new("ALL") {
         RelationDesc::empty()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("setting", ScalarType::String.nullable(false))
-            .with_column("description", ScalarType::String.nullable(false))
+            .with_column(ident!("name"), ScalarType::String.nullable(false))
+            .with_column(ident!("setting"), ScalarType::String.nullable(false))
+            .with_column(ident!("description"), ScalarType::String.nullable(false))
     } else if variable.as_str() == SCHEMA_ALIAS {
-        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(true))
+        RelationDesc::empty().with_column(variable, ScalarType::String.nullable(true))
     } else {
-        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(false))
+        RelationDesc::empty().with_column(variable, ScalarType::String.nullable(false))
     };
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -133,7 +134,8 @@ pub fn describe_inspect_shard(
     _: &StatementContext,
     InspectShardStatement { .. }: InspectShardStatement,
 ) -> Result<StatementDesc, PlanError> {
-    let desc = RelationDesc::empty().with_column("state", ScalarType::Jsonb.nullable(false));
+    let desc =
+        RelationDesc::empty().with_column(ident!("state"), ScalarType::Jsonb.nullable(false));
     Ok(StatementDesc::new(Some(desc)))
 }
 

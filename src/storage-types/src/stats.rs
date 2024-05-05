@@ -270,6 +270,7 @@ mod tests {
         ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena,
         ScalarType,
     };
+    use mz_sql_parser::ident;
     use proptest::prelude::*;
 
     use super::*;
@@ -287,7 +288,7 @@ mod tests {
         }
 
         fn validate_stats(column_type: &ColumnType, datum: Datum<'_>) -> Result<(), String> {
-            let schema = RelationDesc::empty().with_column("col", column_type.clone());
+            let schema = RelationDesc::empty().with_column(ident!("col"), column_type.clone());
             let row = SourceData(Ok(Row::pack(std::iter::once(datum))));
 
             let mut builder = PartBuilder::new(&schema, &UnitSchema).expect("success");

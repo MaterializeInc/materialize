@@ -44,7 +44,7 @@ pub fn ident_ref(ident: &Ident) -> &str {
 
 /// Normalizes an identifier that represents a column name.
 pub fn column_name(id: Ident) -> ColumnName {
-    ColumnName::from(ident(id))
+    ColumnName::from(id)
 }
 
 /// Normalizes an unresolved object name.

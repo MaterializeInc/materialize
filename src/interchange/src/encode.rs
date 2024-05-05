@@ -50,7 +50,7 @@ pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType
             }
             raw_name.push_str(&i.to_string());
             i += 1;
-            candidate_name = ColumnName::from(raw_name); // .expect("De-duplicated name '{}' violates column name invariant.",raw_name,);
+            candidate_name = ColumnName::try_from(raw_name).unwrap();
         }
         seen.insert(candidate_name);
     }

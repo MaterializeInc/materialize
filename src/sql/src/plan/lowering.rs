@@ -44,6 +44,7 @@ use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
+use mz_sql_parser::ident;
 
 use crate::plan::expr::{
     AggregateExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
@@ -1128,7 +1129,7 @@ impl HirScalarExpr {
                             let agg_input = MirScalarExpr::CallVariadic {
                                 func: mz_expr::VariadicFunc::RecordCreate {
                                     field_names: (0..agg_input.len())
-                                        .map(|_| ColumnName::from("?column?"))
+                                        .map(|_| ColumnName::from(ident!("(.*)")))
                                         .collect_vec(),
                                 },
                                 exprs: agg_input,
@@ -1140,7 +1141,10 @@ impl HirScalarExpr {
                             let agg_input_type = ScalarType::Record {
                                 fields: std::iter::once(&list_type)
                                     .map(|t| {
-                                        (ColumnName::from("?column?"), t.clone().nullable(false))
+                                        (
+                                            ColumnName::from(ident!("(.*)")),
+                                            t.clone().nullable(false),
+                                        )
                                     })
                                     .collect_vec(),
                                 custom_id: None,
@@ -1180,7 +1184,10 @@ impl HirScalarExpr {
                                 [original_row_record_type, mir_encoded_args_type]
                                     .iter()
                                     .map(|t| {
-                                        (ColumnName::from("?column?"), t.clone().nullable(false))
+                                        (
+                                            ColumnName::from(ident!("(.*)")),
+                                            t.clone().nullable(false),
+                                        )
                                     })
                                     .collect_vec();
                             let fn_input_record = MirScalarExpr::CallVariadic {
@@ -1205,7 +1212,7 @@ impl HirScalarExpr {
                             let agg_input = MirScalarExpr::CallVariadic {
                                 func: mz_expr::VariadicFunc::RecordCreate {
                                     field_names: (0..agg_input.len())
-                                        .map(|_| ColumnName::from("?column?"))
+                                        .map(|_| ColumnName::from(ident!("(.*)")))
                                         .collect_vec(),
                                 },
                                 exprs: agg_input,
@@ -1213,7 +1220,7 @@ impl HirScalarExpr {
 
                             let agg_input_type = ScalarType::Record {
                                 fields: vec![(
-                                    ColumnName::from("?column?"),
+                                    ColumnName::from(ident!("(.*)")),
                                     fn_input_record_type.nullable(false),
                                 )],
                                 custom_id: None,
@@ -1405,7 +1412,7 @@ impl HirScalarExpr {
                         .column_types
                         .iter()
                         .take(input_arity)
-                        .map(|t| (ColumnName::from("?column?"), t.clone()))
+                        .map(|t| (ColumnName::from(ident!("(.*)")), t.clone()))
                         .collect_vec();
 
                     // Original row made into a record

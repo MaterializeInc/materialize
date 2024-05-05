@@ -1087,7 +1087,7 @@ pub fn plan_coerce<'a>(
             HirScalarExpr::CallVariadic {
                 func: VariadicFunc::RecordCreate {
                     field_names: (0..arity)
-                        .map(|i| ColumnName::from(format!("f{}", i + 1)))
+                        .map(|i| ColumnName::try_from(format!("f{}", i + 1)).unwrap())
                         .collect(),
                 },
                 exprs: out,

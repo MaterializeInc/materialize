@@ -116,12 +116,12 @@ pub(super) fn generate_text_columns(
                 })?;
 
         if !desc.columns.iter().any(|column| column.name == col) {
-            let column = mz_repr::ColumnName::from(col);
+            let column = mz_repr::ColumnName::try_from(col).unwrap();
             let similar = desc
                 .columns
                 .iter()
                 .filter_map(|c| {
-                    let c_name = mz_repr::ColumnName::from(c.name.clone());
+                    let c_name = mz_repr::ColumnName::try_from(c.name.clone()).unwrap();
                     c_name.is_similar(&column).then_some(c_name)
                 })
                 .collect();

@@ -35,8 +35,7 @@ use enum_kinds::EnumKind;
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt;
-use mz_repr::RelationType;
-use mz_repr::{ColumnType, Datum, RelationDesc, RowArena, ScalarType};
+use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType};
 use mz_sql_parser::ast::{CteBlock, Expr, Function, FunctionArgs, Select, SelectItem, SetExpr};
 use once_cell::sync::Lazy;
 
@@ -78,8 +77,10 @@ pub fn describe_select_if_side_effecting(
     // We currently support only a single call to a side-effecting function
     // without an alias, so there is always a single output column is named
     // after the function.
-    let desc =
-        RelationDesc::empty().with_column(sef_call.imp.name, sef_call.imp.return_type.clone());
+    let desc = RelationDesc::empty().with_column(
+        ColumnName::try_from(sef_call.imp.name).unwrap(),
+        sef_call.imp.return_type.clone(),
+    );
 
     Ok(Some(desc))
 }

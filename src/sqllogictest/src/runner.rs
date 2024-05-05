@@ -1461,7 +1461,7 @@ impl<'a> RunnerInner<'a> {
                 let actual_column_names = row
                     .columns()
                     .iter()
-                    .map(|t| ColumnName::from(t.name()))
+                    .map(|t| ColumnName::try_from(t.name()).unwrap())
                     .collect::<Vec<_>>();
                 if expected_column_names != &actual_column_names {
                     return Ok(Outcome::WrongColumnNames {
@@ -2566,7 +2566,7 @@ fn test_generate_view_sql() {
             r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
-        (("SELECT a, b, c FROM t1, t2", Some(3), Some(vec![ColumnName::from("a"), ColumnName::from("b"), ColumnName::from("c")])),
+        (("SELECT a, b, c FROM t1, t2", Some(3), Some(vec![ColumnName::from(ident!("(.*)"))])),
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
             r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c")"#.to_string(),
@@ -2589,7 +2589,7 @@ fn test_generate_view_sql() {
             r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
-        (("SELECT a, b, b + d AS c, a + b AS d FROM t1, t2 ORDER BY a, c, a + b", Some(4), Some(vec![ColumnName::from("a"), ColumnName::from("b"), ColumnName::from("c"), ColumnName::from("d")])),
+        (("SELECT a, b, b + d AS c, a + b AS d FROM t1, t2 ORDER BY a, c, a + b", Some(4), Some(vec![ColumnName::from(ident!("(.*)"))])),
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d") AS SELECT "a", "b", "b" + "d" AS "c", "a" + "b" AS "d" FROM "t1", "t2" ORDER BY "a", "c", "a" + "b""#.to_string(),
             r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d")"#.to_string(),

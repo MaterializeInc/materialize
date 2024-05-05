@@ -49,6 +49,7 @@ use mz_repr::adt::regex::{any_regex, Regex};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
+use mz_sql_parser::ident;
 use mz_sql_pretty::pretty_str;
 use num::traits::CheckedNeg;
 use proptest::prelude::*;
@@ -2709,9 +2710,9 @@ impl BinaryFunc {
 
             TimezoneOffset => ScalarType::Record {
                 fields: vec![
-                    ("abbrev".into(), ScalarType::String.nullable(false)),
-                    ("base_utc_offset".into(), ScalarType::Interval.nullable(false)),
-                    ("dst_offset".into(), ScalarType::Interval.nullable(false)),
+                    (ident!("abbrev").into(), ScalarType::String.nullable(false)),
+                    (ident!("base_utc_offset").into(), ScalarType::Interval.nullable(false)),
+                    (ident!("dst_offset").into(), ScalarType::Interval.nullable(false)),
                 ],
                 custom_id: None,
             }.nullable(true),

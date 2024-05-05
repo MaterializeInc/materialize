@@ -16,6 +16,7 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, RelationDesc, ScalarType, Timestamp};
+use mz_sql_parser::ident;
 use mz_storage_types::sources::SourceData;
 
 use crate::action::{ControlFlow, State};
@@ -41,9 +42,9 @@ pub async fn run_force_compaction(
     };
 
     let relation_desc = RelationDesc::empty()
-        .with_column("key", ScalarType::String.nullable(true))
-        .with_column("f1", ScalarType::String.nullable(true))
-        .with_column("f2", ScalarType::Int64.nullable(true));
+        .with_column(ident!("key"), ScalarType::String.nullable(true))
+        .with_column(ident!("f1"), ScalarType::String.nullable(true))
+        .with_column(ident!("f2"), ScalarType::Int64.nullable(true));
 
     mz_persist_client::cli::admin::force_compaction::<SourceData, (), Timestamp, Diff>(
         cfg,

@@ -984,8 +984,8 @@ pub fn plan_webhook_validate_using(
             .then_some(ScalarType::Bytes)
             .unwrap_or(ScalarType::String);
         let name = alias
-            .map(|a| a.into_string())
-            .unwrap_or_else(|| "body".to_string());
+            .map(|a| ColumnName::from(a))
+            .unwrap_or_else(|| ColumnName::from(ident!("body")));
 
         column_typs.push(ColumnType {
             scalar_type,
@@ -1012,8 +1012,8 @@ pub fn plan_webhook_validate_using(
             .then_some(ScalarType::Bytes)
             .unwrap_or(ScalarType::String);
         let name = alias
-            .map(|a| a.into_string())
-            .unwrap_or_else(|| "headers".to_string());
+            .map(|a| ColumnName::from(a))
+            .unwrap_or_else(|| ColumnName::from(ident!("headers")));
 
         column_typs.push(ColumnType {
             scalar_type: ScalarType::Map {
@@ -1064,9 +1064,9 @@ pub fn plan_webhook_validate_using(
 
         // Plan the expression using the secret's alias, if one is provided.
         let name = if let Some(alias) = alias {
-            alias.into_string()
+            alias.into()
         } else {
-            item
+            ColumnName::try_from(item).unwrap()
         };
         column_names.push(name);
 
@@ -1895,7 +1895,7 @@ fn plan_values(
     // Build column names.
     let mut scope = Scope::empty();
     for i in 0..ncols {
-        let name = format!("column{}", i + 1);
+        let name = Ident::new(format!("column{}", i + 1)).unwrap();
         scope.items.push(ScopeItem::from_column_name(name));
     }
 
@@ -2874,7 +2874,7 @@ fn plan_rows_from_internal<'a>(
     left_expr = left_expr.map(vec![HirScalarExpr::column(left_scope.len() - 1)]);
     left_scope
         .items
-        .push(ScopeItem::from_column_name("ordinality"));
+        .push(ScopeItem::from_column_name(ident!("ordinality")));
 
     for function in functions {
         // The right hand side of a join must be planned in a new scope.
@@ -3066,9 +3066,10 @@ fn plan_table_function_internal(
             partition_by: vec![],
             order_by: vec![],
         })]);
-        scope
-            .items
-            .push(ScopeItem::from_name(scope_name, "ordinality"));
+        scope.items.push(ScopeItem::from_name(
+            scope_name,
+            ColumnName::from(ident!("ordinality")),
+        ));
     }
 
     Ok((expr, scope))
@@ -3185,8 +3186,8 @@ fn invent_column_name(
             Expr::Value(v) => match v {
                 // Per PostgreSQL, `bool` and `interval` literals take on the name
                 // of their type, but not other literal types.
-                Value::Boolean(_) => Some(("bool".into(), NameQuality::High)),
-                Value::Interval(_) => Some(("interval".into(), NameQuality::High)),
+                Value::Boolean(_) => Some((ident!("bool").into(), NameQuality::High)),
+                Value::Interval(_) => Some((ident!("interval").into(), NameQuality::High)),
                 _ => None,
             },
             Expr::Function(func) => {
@@ -3206,19 +3207,22 @@ fn invent_column_name(
                 {
                     None
                 } else {
-                    Some((item.into(), NameQuality::High))
+                    Some((item.try_into().unwrap(), NameQuality::High))
                 }
             }
             Expr::HomogenizingFunction { function, .. } => Some((
-                function.to_string().to_lowercase().into(),
+                function.to_string().to_lowercase().try_into().unwrap(),
                 NameQuality::High,
             )),
-            Expr::NullIf { .. } => Some(("nullif".into(), NameQuality::High)),
-            Expr::Array { .. } => Some(("array".into(), NameQuality::High)),
-            Expr::List { .. } => Some(("list".into(), NameQuality::High)),
+            Expr::NullIf { .. } => Some((ident!("nullif").into(), NameQuality::High)),
+            Expr::Array { .. } => Some((ident!("array").into(), NameQuality::High)),
+            Expr::List { .. } => Some((ident!("list").into(), NameQuality::High)),
             Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names) {
                 Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
-                _ => Some((data_type.unqualified_item_name().into(), NameQuality::Low)),
+                _ => Some((
+                    data_type.unqualified_item_name().try_into().unwrap(),
+                    NameQuality::Low,
+                )),
             },
             Expr::Case { else_result, .. } => {
                 match else_result
@@ -3226,13 +3230,13 @@ fn invent_column_name(
                     .and_then(|else_result| invent(ecx, else_result, table_func_names))
                 {
                     Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
-                    _ => Some(("case".into(), NameQuality::Low)),
+                    _ => Some((ident!("case").into(), NameQuality::Low)),
                 }
             }
             Expr::FieldAccess { field, .. } => {
                 Some((normalize::column_name(field.clone()), NameQuality::High))
             }
-            Expr::Exists { .. } => Some(("exists".into(), NameQuality::High)),
+            Expr::Exists { .. } => Some((ident!("exists").into(), NameQuality::High)),
             Expr::Subscript { expr, .. } => invent(ecx, expr, table_func_names),
             Expr::Subquery(query) | Expr::ListSubquery(query) | Expr::ArraySubquery(query) => {
                 // A bit silly to have to plan the query here just to get its column
@@ -3245,7 +3249,7 @@ fn invent_column_name(
                     .first()
                     .map(|name| (name.column_name.clone(), NameQuality::High))
             }
-            Expr::Row { .. } => Some(("row".into(), NameQuality::High)),
+            Expr::Row { .. } => Some((ident!("row").into(), NameQuality::High)),
             _ => None,
         }
     }
@@ -3370,7 +3374,7 @@ fn expand_select_item<'a>(
                 .clone()
                 .map(normalize::column_name)
                 .or_else(|| invent_column_name(ecx, expr, table_func_names))
-                .unwrap_or_else(|| "?column?".into());
+                .unwrap_or_else(|| ident!("?column?").into());
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
     }
@@ -3594,7 +3598,7 @@ fn plan_using_constraint(
 
             new_items.push(ScopeItem::from_name(
                 alias_item_name.clone(),
-                column_name.clone().to_string(),
+                column_name.clone(),
             ));
 
             // Should be safe to use either `lhs` or `rhs` here since the column
@@ -4352,7 +4356,7 @@ where
                 func: aggregate_concat(aggregation_order_by),
                 expr: Box::new(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: iter::repeat(ColumnName::from(""))
+                        field_names: iter::repeat(ColumnName::from(ident!("(.*)")))
                             .take(aggregation_exprs.len())
                             .collect(),
                     },
@@ -4711,7 +4715,7 @@ fn plan_aggregate_common(
     // If a function supports ORDER BY (even if there was no ORDER BY specified),
     // map the needed expressions into the aggregate datum.
     if func.is_order_sensitive() {
-        let field_names = iter::repeat(ColumnName::from(""))
+        let field_names = iter::repeat(ColumnName::from(ident!("(.*)")))
             .take(1 + order_by_exprs.len())
             .collect();
         let mut exprs = vec![expr];

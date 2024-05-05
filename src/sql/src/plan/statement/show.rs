@@ -24,6 +24,7 @@ use mz_sql_parser::ast::{
     ShowCreateMaterializedViewStatement, ShowObjectType, SystemObjectType, UnresolvedItemName,
     WithOptionValue,
 };
+use mz_sql_parser::ident;
 use query::QueryContext;
 
 use crate::ast::visit_mut::VisitMut;
@@ -50,8 +51,8 @@ pub fn describe_show_create_view(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column(ident!("name"), ScalarType::String.nullable(false))
+            .with_column(ident!("create_sql"), ScalarType::String.nullable(false)),
     )))
 }
 
@@ -68,8 +69,8 @@ pub fn describe_show_create_materialized_view(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column(ident!("name"), ScalarType::String.nullable(false))
+            .with_column(ident!("create_sql"), ScalarType::String.nullable(false)),
     )))
 }
 
@@ -92,8 +93,8 @@ pub fn describe_show_create_table(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column(ident!("name"), ScalarType::String.nullable(false))
+            .with_column(ident!("create_sql"), ScalarType::String.nullable(false)),
     )))
 }
 
@@ -139,8 +140,8 @@ pub fn describe_show_create_source(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column(ident!("name"), ScalarType::String.nullable(false))
+            .with_column(ident!("create_sql"), ScalarType::String.nullable(false)),
     )))
 }
 
@@ -157,8 +158,8 @@ pub fn describe_show_create_sink(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column(ident!("name"), ScalarType::String.nullable(false))
+            .with_column(ident!("create_sql"), ScalarType::String.nullable(false)),
     )))
 }
 
@@ -175,8 +176,8 @@ pub fn describe_show_create_index(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column(ident!("name"), ScalarType::String.nullable(false))
+            .with_column(ident!("create_sql"), ScalarType::String.nullable(false)),
     )))
 }
 
@@ -193,8 +194,8 @@ pub fn describe_show_create_connection(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column(ident!("name"), ScalarType::String.nullable(false))
+            .with_column(ident!("create_sql"), ScalarType::String.nullable(false)),
     )))
 }
 

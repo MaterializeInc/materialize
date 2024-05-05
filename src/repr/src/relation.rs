@@ -14,9 +14,7 @@ use mz_lowertest::{MzReflect, ReflectedTypeInfo};
 use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_sql_parser::ast::{Ident, IdentError};
-use proptest::arbitrary::any;
 use proptest::strategy::Strategy;
-use proptest::string::StringParam;
 use proptest::{prelude::Arbitrary, strategy::BoxedStrategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -289,30 +287,30 @@ impl From<Ident> for ColumnName {
 /*
 impl From<String> for ColumnName {
     fn from(s: String) -> ColumnName {
-        ColumnName(mz_sql_parser::ast::Ident::new(s).unwrap()) // TODO: Should use try from?
+        ColumnName(Ident::new(s).unwrap()) // TODO: Should use try from?
     }
 }
 */
 
 impl TryFrom<String> for ColumnName {
-    type Error = mz_sql_parser::ast::IdentError;
+    type Error = IdentError;
     fn try_from(s: String) -> Result<ColumnName, Self::Error> {
-        mz_sql_parser::ast::Ident::new(s).map(|ident| ColumnName(ident))
+        Ident::new(s).map(|ident| ColumnName(ident))
     }
 }
 
 /*
 impl From<&str> for ColumnName {
     fn from(s: &str) -> ColumnName {
-        ColumnName(mz_sql_parser::ast::Ident::new(s).unwrap()) // TODO: Should use try from?
+        ColumnName(Ident::new(s).unwrap()) // TODO: Should use try from?
     }
 }
 */
 
 impl TryFrom<&str> for ColumnName {
-    type Error = mz_sql_parser::ast::IdentError;
+    type Error = IdentError;
     fn try_from(s: &str) -> Result<ColumnName, Self::Error> {
-        mz_sql_parser::ast::Ident::new(s).map(|ident| ColumnName(ident))
+        Ident::new(s).map(|ident| ColumnName(ident))
     }
 }
 
@@ -379,10 +377,11 @@ impl MzReflect for ColumnName {
 ///
 /// ```
 /// use mz_repr::{ColumnType, RelationDesc, ScalarType};
+/// use mz_sql_parser::ident;
 ///
 /// let desc = RelationDesc::empty()
-///     .with_column("id", ScalarType::Int64.nullable(false))
-///     .with_column("price", ScalarType::Float64.nullable(true));
+///     .with_column(ident!("id"), ScalarType::Int64.nullable(false))
+///     .with_column(ident!("price"), ScalarType::Float64.nullable(true));
 /// ```
 ///
 /// In more complicated cases, like when constructing a `RelationDesc` in
@@ -391,13 +390,14 @@ impl MzReflect for ColumnName {
 ///
 /// ```
 /// use mz_repr::RelationDesc;
+/// use mz_sql_parser::ident;
 ///
 /// # fn plan_query(_: &str) -> mz_repr::RelationType { mz_repr::RelationType::new(vec![]) }
 /// let relation_type = plan_query("SELECT * FROM table");
 /// let names = (0..relation_type.arity()).map(|i| match i {
-///     0 => "first",
-///     1 => "second",
-///     _ => "unknown",
+///     0 => ident!("first"),
+///     1 => ident!("second"),
+///     _ => ident!("unknown"),
 /// });
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```

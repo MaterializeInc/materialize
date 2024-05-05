@@ -51,6 +51,7 @@ use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
+use mz_sql_parser::ident;
 use tracing::warn;
 
 use crate::avro::is_null;
@@ -155,7 +156,7 @@ fn get_union_columns<'a>(
             // the column's output type is nullable, as this
             // column will be null whenever it is uninhabited.
             let ty = validate_schema_2(seen_avro_nodes, node)?;
-            columns.push((name.into(), ty.nullable(vs.len() > 1)));
+            columns.push((name.try_into().unwrap(), ty.nullable(vs.len() > 1)));
             if let Some(named_idx) = named_idx {
                 seen_avro_nodes.remove(&named_idx);
             }
@@ -176,7 +177,9 @@ fn get_named_columns<'a>(
         Ok(vec![(
             // TODO(benesch): we should do better than this when there's no base
             // name, e.g., invent a name based on the type.
-            base_name.unwrap_or("?column?").into(),
+            base_name
+                .map(|base_name| ColumnName::try_from(base_name).unwrap())
+                .unwrap_or(ident!("?column?").into()),
             scalar_type.nullable(false),
         )])
     }

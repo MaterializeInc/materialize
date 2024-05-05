@@ -213,7 +213,7 @@ mod tests {
             scalar_type: mz_repr::ScalarType::String,
             nullable: true,
         }]);
-        let column_names = vec![ColumnName::from("col1")];
+        let column_names = vec![ColumnName::from(ident!("(.*)"))];
         let desc = RelationDesc::new(typ, column_names.into_iter());
         let mut uploader = PgCopyUploader::new(
             sdk_config.clone(),

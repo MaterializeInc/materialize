@@ -20,6 +20,7 @@ use mz_persist_types::{PersistLocation, ShardId};
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::UnresolvedItemName;
+use mz_sql_parser::ident;
 use mz_timely_util::antichain::AntichainExt;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -399,9 +400,9 @@ pub struct TxnsCodecRow;
 impl TxnsCodecRow {
     pub fn desc() -> RelationDesc {
         RelationDesc::empty()
-            .with_column("shard_id", ScalarType::String.nullable(false))
-            .with_column("ts", ScalarType::UInt64.nullable(false))
-            .with_column("batch", ScalarType::Bytes.nullable(true))
+            .with_column(ident!("shard_id"), ScalarType::String.nullable(false))
+            .with_column(ident!("ts"), ScalarType::UInt64.nullable(false))
+            .with_column(ident!("batch"), ScalarType::Bytes.nullable(true))
     }
 }
 
