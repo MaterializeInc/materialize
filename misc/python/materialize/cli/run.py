@@ -267,7 +267,7 @@ def main() -> int:
             command += ["--test", test]
         command += args.args
         command += ["--", "--nocapture"]
-        os.environ["COCKROACH_URL"] = args.postgres
+        env["COCKROACH_URL"] = args.postgres
     else:
         raise UIError(f"unknown program {args.program}")
 
