@@ -3741,6 +3741,7 @@ where
             desc: ingestion_description.desc,
             instance_id: ingestion_description.instance_id,
             remap_collection_id: ingestion_description.remap_collection_id,
+            timestamp_interval: ingestion_description.timestamp_interval,
         };
 
         let storage_instance_id = description.instance_id;

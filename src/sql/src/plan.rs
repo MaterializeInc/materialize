@@ -1284,6 +1284,7 @@ pub enum DataSourceDesc {
 pub struct Ingestion {
     pub desc: SourceDesc<ReferencedConnection>,
     pub progress_subsource: GlobalId,
+    pub timestamp_interval: Duration,
 }
 
 #[derive(Clone, Debug, Serialize)]

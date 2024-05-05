@@ -111,18 +111,10 @@ fn plan_create_source_desc_postgres(
         format,
         key_constraint: _,
         include_metadata,
-        with_options,
+        with_options: _,
         referenced_subsources: _,
         progress_subsource: _,
     } = &stmt;
-
-    let CreateSourceOptionExtracted {
-        timeline: _,
-        timestamp_interval,
-        ignore_keys: _,
-        retain_history: _,
-        seen: _,
-    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     for (check, feature) in [
         (
@@ -395,7 +387,6 @@ fn plan_create_source_desc_postgres(
         connection,
         encoding: None,
         envelope,
-        timestamp_interval: get_timestamp_interval(scx, timestamp_interval)?,
     };
 
     Ok((source_desc, relation_desc))
@@ -427,18 +418,10 @@ fn plan_create_source_desc_mysql(
         format,
         key_constraint: _,
         include_metadata,
-        with_options,
+        with_options: _,
         referenced_subsources: _,
         progress_subsource: _,
     } = &stmt;
-
-    let CreateSourceOptionExtracted {
-        timeline: _,
-        timestamp_interval,
-        ignore_keys: _,
-        retain_history: _,
-        seen: _,
-    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     for (check, feature) in [
         (
@@ -521,7 +504,6 @@ fn plan_create_source_desc_mysql(
         connection,
         encoding: None,
         envelope,
-        timestamp_interval: get_timestamp_interval(scx, timestamp_interval)?,
     };
 
     Ok((source_desc, relation_desc))
@@ -541,18 +523,10 @@ fn plan_create_source_desc_kafka(
         format,
         key_constraint: _,
         include_metadata,
-        with_options,
+        with_options: _,
         referenced_subsources: _,
         progress_subsource: _,
     } = &stmt;
-
-    let CreateSourceOptionExtracted {
-        timeline: _,
-        timestamp_interval,
-        ignore_keys: _,
-        retain_history: _,
-        seen: _,
-    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
 
@@ -686,7 +660,6 @@ fn plan_create_source_desc_kafka(
         connection: external_connection,
         encoding,
         envelope,
-        timestamp_interval: get_timestamp_interval(scx, timestamp_interval)?,
     };
 
     Ok((source_desc, topic_desc))
@@ -928,18 +901,10 @@ fn plan_create_source_desc_load_gen(
         format,
         key_constraint: _,
         include_metadata,
-        with_options,
+        with_options: _,
         referenced_subsources: _,
         progress_subsource: _,
     } = &stmt;
-
-    let CreateSourceOptionExtracted {
-        timeline: _,
-        timestamp_interval,
-        ignore_keys: _,
-        retain_history: _,
-        seen: _,
-    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     let CreateSourceConnection::LoadGenerator { generator, options } = connection else {
         panic!("must be Load Generator connection")
@@ -989,7 +954,6 @@ fn plan_create_source_desc_load_gen(
         connection,
         encoding,
         envelope,
-        timestamp_interval: get_timestamp_interval(scx, timestamp_interval)?,
     };
 
     Ok((source_desc, desc))
@@ -1055,7 +1019,7 @@ pub fn plan_create_source(
 
     let CreateSourceOptionExtracted {
         timeline,
-        timestamp_interval: _,
+        timestamp_interval,
         ignore_keys,
         retain_history,
         seen: _,
@@ -1176,11 +1140,30 @@ pub fn plan_create_source(
         })
         .transpose()?;
 
+    let timestamp_interval = match timestamp_interval {
+        Some(duration) => {
+            let min = scx.catalog.system_vars().min_timestamp_interval();
+            let max = scx.catalog.system_vars().max_timestamp_interval();
+            if duration < min || duration > max {
+                return Err(PlanError::InvalidTimestampInterval {
+                    min,
+                    max,
+                    requested: duration,
+                });
+            }
+            duration
+        }
+        // Use this pattern instead of unwrap in case we want to set the config
+        // to be out of the bounds of the min and max timestamp intervals.
+        None => scx.catalog.config().timestamp_interval,
+    };
+
     let source = Source {
         create_sql,
         data_source: DataSourceDesc::Ingestion(Ingestion {
             desc: source_desc,
             progress_subsource,
+            timestamp_interval,
         }),
         desc,
         compaction_window,
@@ -1847,27 +1830,4 @@ pub fn plan_create_subsource(
         timeline: Timeline::EpochMilliseconds,
         in_cluster: None,
     }))
-}
-
-fn get_timestamp_interval(
-    scx: &StatementContext,
-    timestamp_interval: Option<Duration>,
-) -> Result<Duration, PlanError> {
-    match timestamp_interval {
-        Some(duration) => {
-            let min = scx.catalog.system_vars().min_timestamp_interval();
-            let max = scx.catalog.system_vars().max_timestamp_interval();
-            if duration < min || duration > max {
-                return Err(PlanError::InvalidTimestampInterval {
-                    min,
-                    max,
-                    requested: duration,
-                });
-            }
-            Ok(duration)
-        }
-        // Use this pattern instead of unwrap in case we want to set the config
-        // to be out of the bounds of the min and max timestamp intervals.
-        None => Ok(scx.catalog.config().timestamp_interval),
-    }
 }

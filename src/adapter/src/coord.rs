@@ -1873,6 +1873,7 @@ impl Coordinator {
                         mz_sql::plan::Ingestion {
                             desc,
                             progress_subsource,
+                            timestamp_interval,
                         },
                     cluster_id,
                 } => {
@@ -1881,6 +1882,7 @@ impl Coordinator {
                         desc,
                         cluster_id,
                         progress_subsource,
+                        timestamp_interval,
                     );
 
                     (
