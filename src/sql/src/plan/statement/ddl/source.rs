@@ -10,25 +10,23 @@
 //! Planning functions related to running ingestions (e.g. Kafka, PostgreSQL,
 //! MySQL).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
-use mz_ore::cast::TryCastFrom;
+
 use mz_ore::str::StrExt;
-use mz_proto::RustType;
-use mz_repr::adt::system::Oid;
-use mz_repr::{strconv, ColumnName, ColumnType, RelationDesc, RelationType, ScalarType};
+
+use mz_repr::{strconv, ColumnName, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     self, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, ColumnOption, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
     CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    Format, Ident, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
-    SourceIncludeMetadata, Statement, TableConstraint, UnresolvedItemName,
+    Format, KeyConstraint, ProtobufSchema, SourceIncludeMetadata, Statement, TableConstraint,
+    UnresolvedItemName,
 };
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
@@ -39,37 +37,28 @@ use mz_storage_types::sources::encoding::{
 use mz_storage_types::sources::envelope::{
     KeyEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
 };
-use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
-use mz_storage_types::sources::load_generator::{
-    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
-    LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
-};
-use mz_storage_types::sources::mysql::{
-    MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
-};
-use mz_storage_types::sources::postgres::{
-    CastType, PostgresSourceConnection, PostgresSourcePublicationDetails,
-    ProtoPostgresSourcePublicationDetails,
-};
-use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, SourceDesc, Timeline};
-use prost::Message;
+use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
+use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, Timeline};
 
 use crate::ast::display::AstDisplay;
-use crate::kafka_util::KafkaSourceConfigOptionExtracted;
-use crate::names::{Aug, FullItemName, PartialItemName, RawDatabaseSpecifier, ResolvedItemName};
+use crate::names::{Aug, PartialItemName, ResolvedItemName};
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::expr::ColumnRef;
-use crate::plan::query::{ExprContext, QueryLifetime};
-use crate::plan::scope::Scope;
 use crate::plan::statement::StatementContext;
-use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
-    plan_utils, query, CreateSourcePlan, DataSourceDesc, HirScalarExpr, Ingestion, Plan,
-    QueryContext, Source, StatementDesc,
+    plan_utils, query, CreateSourcePlan, DataSourceDesc, Ingestion, Plan, Source, StatementDesc,
 };
 use crate::session::vars;
+
+mod kafka;
+mod load_generator;
+mod mysql;
+mod postgres;
+
+pub(crate) use load_generator::load_generator_ast_to_generator;
+pub(crate) use mysql::MySqlConfigOptionExtracted;
+pub use postgres::PgConfigOptionExtracted;
 
 pub fn describe_create_source(
     _: &StatementContext,
@@ -83,880 +72,6 @@ pub fn describe_create_subsource(
     _: CreateSubsourceStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
-}
-
-generate_extracted_config!(
-    PgConfigOption,
-    (Details, String),
-    (Publication, String),
-    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
-);
-
-fn plan_create_source_desc_postgres(
-    scx: &StatementContext,
-    stmt: &CreateSourceStatement<Aug>,
-) -> Result<(SourceDesc<ReferencedConnection>, RelationDesc), PlanError> {
-    mz_ore::soft_assert_or_log!(
-        stmt.referenced_subsources.is_none(),
-        "referenced subsources must be cleared in purification"
-    );
-
-    let CreateSourceStatement {
-        name: _,
-        in_cluster: _,
-        col_names: _,
-        connection,
-        envelope,
-        if_not_exists: _,
-        format,
-        key_constraint: _,
-        include_metadata,
-        with_options: _,
-        referenced_subsources: _,
-        progress_subsource: _,
-    } = &stmt;
-
-    for (check, feature) in [
-        (
-            matches!(envelope, Some(ast::SourceEnvelope::None) | None),
-            "ENVELOPE other than NONE",
-        ),
-        (format.is_none(), "FORMAT"),
-        (include_metadata.is_empty(), "INCLUDE metadata"),
-    ] {
-        if !check {
-            bail_never_supported!(format!("{} with PostgreSQL source", feature));
-        }
-    }
-
-    let CreateSourceConnection::Postgres {
-        connection,
-        options,
-    } = connection
-    else {
-        panic!("must be PG connection")
-    };
-
-    let connection_item = scx.get_item_by_resolved_name(connection)?;
-    let connection = match connection_item.connection()? {
-        Connection::Postgres(connection) => connection.clone(),
-        _ => sql_bail!(
-            "{} is not a postgres connection",
-            scx.catalog.resolve_full_name(connection_item.name())
-        ),
-    };
-
-    let PgConfigOptionExtracted {
-        details,
-        publication,
-        text_columns,
-        seen: _,
-    } = options.clone().try_into()?;
-
-    let details = details
-        .as_ref()
-        .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
-    let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
-    let details =
-        ProtoPostgresSourcePublicationDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
-
-    // Create a "catalog" of the tables in the PG details.
-    let mut tables_by_name = BTreeMap::new();
-    for table in details.tables.iter() {
-        tables_by_name
-            .entry(table.name.clone())
-            .or_insert_with(BTreeMap::new)
-            .entry(table.namespace.clone())
-            .or_insert_with(BTreeMap::new)
-            .entry(connection.database.clone())
-            .or_insert(table);
-    }
-
-    let publication_catalog = crate::catalog::SubsourceCatalog(tables_by_name);
-
-    let mut text_cols: BTreeMap<Oid, BTreeSet<String>> = BTreeMap::new();
-
-    // Look up the referenced text_columns in the publication_catalog.
-    for name in text_columns {
-        let (qual, col) = match name.0.split_last().expect("must have at least one element") {
-            (col, qual) => (UnresolvedItemName(qual.to_vec()), col.as_str().to_string()),
-        };
-
-        let (_name, table_desc) = publication_catalog
-            .resolve(qual)
-            .expect("known to exist from purification");
-
-        assert!(
-            table_desc
-                .columns
-                .iter()
-                .find(|column| column.name == col)
-                .is_some(),
-            "validated column exists in table during purification"
-        );
-
-        text_cols
-            .entry(Oid(table_desc.oid))
-            .or_default()
-            .insert(col);
-    }
-
-    // Here we will generate the cast expressions required to convert the text encoded
-    // columns into the appropriate target types, creating a Vec<MirScalarExpr> per table.
-    // The postgres source reader will then eval each of those on the incoming rows based
-    // on the target table
-    let mut table_casts = BTreeMap::new();
-
-    for (i, table) in details.tables.iter().enumerate() {
-        // First, construct an expression context where the expression is evaluated on an
-        // imaginary row which has the same number of columns as the upstream table but all
-        // of the types are text
-        let mut cast_scx = scx.clone();
-        cast_scx.param_types = Default::default();
-        let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Source);
-        let mut column_types = vec![];
-        for column in table.columns.iter() {
-            column_types.push(ColumnType {
-                nullable: column.nullable,
-                scalar_type: ScalarType::String,
-            });
-        }
-
-        let cast_ecx = ExprContext {
-            qcx: &cast_qcx,
-            name: "plan_postgres_source_cast",
-            scope: &Scope::empty(),
-            relation_type: &RelationType {
-                column_types,
-                keys: vec![],
-            },
-            allow_aggregates: false,
-            allow_subqueries: false,
-            allow_parameters: false,
-            allow_windows: false,
-        };
-
-        // Then, for each column we will generate a MirRelationExpr that extracts the nth
-        // column and casts it to the appropriate target type
-        let mut column_casts = vec![];
-        for (i, column) in table.columns.iter().enumerate() {
-            let (cast_type, ty) = match text_cols.get(&Oid(table.oid)) {
-                // Treat the column as text if it was referenced in
-                // `TEXT COLUMNS`. This is the only place we need to
-                // perform this logic; even if the type is unsupported,
-                // we'll be able to ingest its values as text in
-                // storage.
-                Some(names) if names.contains(&column.name) => {
-                    (CastType::Text, mz_pgrepr::Type::Text)
-                }
-                _ => {
-                    match mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod) {
-                        Ok(t) => (CastType::Natural, t),
-                        // If this reference survived purification, we
-                        // do not expect it to be from a table that the
-                        // user will consume., i.e. expect this table to
-                        // be filtered out of table casts.
-                        Err(_) => {
-                            column_casts.push((
-                                CastType::Natural,
-                                HirScalarExpr::CallVariadic {
-                                    func: mz_expr::VariadicFunc::ErrorIfNull,
-                                    exprs: vec![
-                                        HirScalarExpr::literal_null(ScalarType::String),
-                                        HirScalarExpr::literal(
-                                            mz_repr::Datum::from(
-                                                format!(
-                                                    "Unsupported type with OID {}",
-                                                    column.type_oid
-                                                )
-                                                .as_str(),
-                                            ),
-                                            ScalarType::String,
-                                        ),
-                                    ],
-                                }
-                                .lower_uncorrelated()
-                                .expect("no correlation"),
-                            ));
-                            continue;
-                        }
-                    }
-                }
-            };
-
-            let data_type = scx.resolve_type(ty)?;
-            let scalar_type = query::scalar_type_from_sql(scx, &data_type)?;
-
-            let col_expr = HirScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: i,
-            });
-
-            let cast_expr = plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;
-
-            let cast = if column.nullable {
-                cast_expr
-            } else {
-                // We must enforce nullability constraint on cast
-                // because PG replication stream does not propagate
-                // constraint changes and we want to error subsource if
-                // e.g. the constraint is dropped and we don't notice
-                // it.
-                HirScalarExpr::CallVariadic {
-                        func: mz_expr::VariadicFunc::ErrorIfNull,
-                        exprs: vec![
-                            cast_expr,
-                            HirScalarExpr::literal(
-                                mz_repr::Datum::from(
-                                    format!(
-                                        "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
-                                        table.namespace.clone(),
-                                        table.name.clone(),
-                                        column.name.clone())
-                                        .as_str(),
-                                ),
-                                ScalarType::String,
-                            ),
-                        ],
-                    }
-            };
-
-            // We expect only reg* types to encounter this issue. Users
-            // can ingest the data as text if they need to ingest it.
-            // This is acceptable because we don't expect the OIDs from
-            // an external PG source to be unilaterally usable in
-            // resolving item names in MZ.
-            let mir_cast = cast.lower_uncorrelated().map_err(|_e| {
-                tracing::info!(
-                    "cannot ingest {:?} data from PG source because cast is correlated",
-                    scalar_type
-                );
-
-                let publication = match publication.clone() {
-                    Some(publication) => publication,
-                    None => return sql_err!("[internal error]: missing publication"),
-                };
-
-                PlanError::PublicationContainsUningestableTypes {
-                    publication,
-                    type_: scx.humanize_scalar_type(&scalar_type),
-                    column: UnresolvedItemName::qualified(&[
-                        Ident::new_unchecked(table.name.to_string()),
-                        Ident::new_unchecked(column.name.to_string()),
-                    ])
-                    .to_ast_string(),
-                }
-            })?;
-
-            column_casts.push((cast_type, mir_cast));
-        }
-        let r = table_casts.insert(i + 1, column_casts);
-        assert!(r.is_none(), "cannot have table defined multiple times");
-    }
-
-    let publication_details =
-        PostgresSourcePublicationDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
-
-    let connection =
-        GenericSourceConnection::<ReferencedConnection>::from(PostgresSourceConnection {
-            connection: connection_item.id(),
-            connection_id: connection_item.id(),
-            table_casts,
-            publication: publication.expect("validated exists during purification"),
-            publication_details,
-        });
-
-    mz_ore::soft_assert_no_log!(
-        connection.metadata_columns().is_empty(),
-        "PG connections do not contain metadata columns"
-    );
-
-    let (envelope, relation_desc) = UnplannedSourceEnvelope::None(KeyEnvelope::None).desc(
-        None,
-        RelationDesc::empty(),
-        RelationDesc::empty(),
-    )?;
-
-    mz_ore::soft_assert_eq_or_log!(
-        relation_desc,
-        RelationDesc::empty(),
-        "PostgreSQL source's primary source must have an empty relation desc"
-    );
-
-    let source_desc = SourceDesc::<ReferencedConnection> {
-        connection,
-        encoding: None,
-        envelope,
-    };
-
-    Ok((source_desc, relation_desc))
-}
-
-generate_extracted_config!(
-    MySqlConfigOption,
-    (Details, String),
-    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
-    (IgnoreColumns, Vec::<UnresolvedItemName>, Default(vec![]))
-);
-
-fn plan_create_source_desc_mysql(
-    scx: &StatementContext,
-    stmt: &CreateSourceStatement<Aug>,
-) -> Result<(SourceDesc<ReferencedConnection>, RelationDesc), PlanError> {
-    mz_ore::soft_assert_or_log!(
-        stmt.referenced_subsources.is_none(),
-        "referenced subsources must be cleared in purification"
-    );
-
-    let CreateSourceStatement {
-        name: _,
-        in_cluster: _,
-        col_names: _,
-        connection,
-        envelope,
-        if_not_exists: _,
-        format,
-        key_constraint: _,
-        include_metadata,
-        with_options: _,
-        referenced_subsources: _,
-        progress_subsource: _,
-    } = &stmt;
-
-    for (check, feature) in [
-        (
-            matches!(envelope, Some(ast::SourceEnvelope::None) | None),
-            "ENVELOPE other than NONE",
-        ),
-        (format.is_none(), "FORMAT"),
-        (include_metadata.is_empty(), "INCLUDE metadata"),
-    ] {
-        if !check {
-            bail_never_supported!(format!("{} with MySQL source", feature));
-        }
-    }
-
-    let CreateSourceConnection::MySql {
-        connection,
-        options,
-    } = connection
-    else {
-        panic!("must be MySQL connection")
-    };
-
-    let connection_item = scx.get_item_by_resolved_name(connection)?;
-    match connection_item.connection()? {
-        Connection::MySql(connection) => connection,
-        _ => sql_bail!(
-            "{} is not a MySQL connection",
-            scx.catalog.resolve_full_name(connection_item.name())
-        ),
-    };
-    let MySqlConfigOptionExtracted {
-        details,
-        text_columns,
-        ignore_columns,
-        seen: _,
-    } = options.clone().try_into()?;
-
-    let details = details
-        .as_ref()
-        .ok_or_else(|| sql_err!("internal error: MySQL source missing details"))?;
-    let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
-    let details = ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
-    let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
-
-    let text_columns = text_columns
-        .into_iter()
-        .map(|name| name.try_into().map_err(|e| sql_err!("{}", e)))
-        .collect::<Result<Vec<_>, _>>()?;
-    let ignore_columns = ignore_columns
-        .into_iter()
-        .map(|name| name.try_into().map_err(|e| sql_err!("{}", e)))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let connection = GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
-        connection: connection_item.id(),
-        connection_id: connection_item.id(),
-        details,
-        text_columns,
-        ignore_columns,
-    });
-
-    mz_ore::soft_assert_no_log!(
-        connection.metadata_columns().is_empty(),
-        "PG connections do not contain metadata columns"
-    );
-
-    let (envelope, relation_desc) = UnplannedSourceEnvelope::None(KeyEnvelope::None).desc(
-        None,
-        RelationDesc::empty(),
-        RelationDesc::empty(),
-    )?;
-
-    mz_ore::soft_assert_eq_or_log!(
-        relation_desc,
-        RelationDesc::empty(),
-        "PostgreSQL source's primary source must have an empty relation desc"
-    );
-
-    let source_desc = SourceDesc::<ReferencedConnection> {
-        connection,
-        encoding: None,
-        envelope,
-    };
-
-    Ok((source_desc, relation_desc))
-}
-
-fn plan_create_source_desc_kafka(
-    scx: &StatementContext,
-    stmt: &CreateSourceStatement<Aug>,
-) -> Result<(SourceDesc<ReferencedConnection>, RelationDesc), PlanError> {
-    let CreateSourceStatement {
-        name: _,
-        in_cluster: _,
-        col_names: _,
-        connection,
-        envelope,
-        if_not_exists: _,
-        format,
-        key_constraint: _,
-        include_metadata,
-        with_options: _,
-        referenced_subsources: _,
-        progress_subsource: _,
-    } = &stmt;
-
-    let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
-
-    let CreateSourceConnection::Kafka {
-        connection: connection_name,
-        options,
-    } = connection
-    else {
-        panic!("must be Kafka connection")
-    };
-
-    let connection_item = scx.get_item_by_resolved_name(connection_name)?;
-    if !matches!(connection_item.connection()?, Connection::Kafka(_)) {
-        sql_bail!(
-            "{} is not a kafka connection",
-            scx.catalog.resolve_full_name(connection_item.name())
-        )
-    }
-
-    let KafkaSourceConfigOptionExtracted {
-        group_id_prefix,
-        topic,
-        topic_metadata_refresh_interval,
-        start_timestamp: _, // purified into `start_offset`
-        start_offset,
-        seen: _,
-    }: KafkaSourceConfigOptionExtracted = options.clone().try_into()?;
-
-    let topic = topic.expect("validated exists during purification");
-
-    let mut start_offsets = BTreeMap::new();
-    if let Some(offsets) = start_offset {
-        for (part, offset) in offsets.iter().enumerate() {
-            if *offset < 0 {
-                sql_bail!("START OFFSET must be a nonnegative integer");
-            }
-            start_offsets.insert(i32::try_from(part)?, *offset);
-        }
-    }
-
-    if !start_offsets.is_empty() && envelope.requires_all_input() {
-        sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
-    }
-
-    if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
-        // This is a librdkafka-enforced restriction that, if violated,
-        // would result in a runtime error for the source.
-        sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
-    }
-
-    if !include_metadata.is_empty()
-        && !matches!(
-            envelope,
-            ast::SourceEnvelope::Upsert | ast::SourceEnvelope::None | ast::SourceEnvelope::Debezium
-        )
-    {
-        // TODO(guswynn): should this be `bail_unsupported!`?
-        sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
-    }
-
-    let metadata_columns = include_metadata
-        .into_iter()
-        .flat_map(|item| match item {
-            SourceIncludeMetadata::Timestamp { alias } => {
-                let name = match alias {
-                    Some(name) => name.to_string(),
-                    None => "timestamp".to_owned(),
-                };
-                Some((name, KafkaMetadataKind::Timestamp))
-            }
-            SourceIncludeMetadata::Partition { alias } => {
-                let name = match alias {
-                    Some(name) => name.to_string(),
-                    None => "partition".to_owned(),
-                };
-                Some((name, KafkaMetadataKind::Partition))
-            }
-            SourceIncludeMetadata::Offset { alias } => {
-                let name = match alias {
-                    Some(name) => name.to_string(),
-                    None => "offset".to_owned(),
-                };
-                Some((name, KafkaMetadataKind::Offset))
-            }
-            SourceIncludeMetadata::Headers { alias } => {
-                let name = match alias {
-                    Some(name) => name.to_string(),
-                    None => "headers".to_owned(),
-                };
-                Some((name, KafkaMetadataKind::Headers))
-            }
-            SourceIncludeMetadata::Header {
-                alias,
-                key,
-                use_bytes,
-            } => Some((
-                alias.to_string(),
-                KafkaMetadataKind::Header {
-                    key: key.clone(),
-                    use_bytes: *use_bytes,
-                },
-            )),
-            SourceIncludeMetadata::Key { .. } => {
-                // handled below
-                None
-            }
-        })
-        .collect();
-
-    let connection = KafkaSourceConnection::<ReferencedConnection> {
-        connection: connection_item.id(),
-        connection_id: connection_item.id(),
-        topic,
-        start_offsets,
-        group_id_prefix,
-        topic_metadata_refresh_interval,
-        metadata_columns,
-    };
-
-    let external_connection = GenericSourceConnection::Kafka(connection);
-
-    let (encoding, envelope, topic_desc) = plan_encoding_envelope(
-        scx,
-        &external_connection,
-        format,
-        &envelope,
-        include_metadata,
-    )?;
-
-    let source_desc = SourceDesc::<ReferencedConnection> {
-        connection: external_connection,
-        encoding,
-        envelope,
-    };
-
-    Ok((source_desc, topic_desc))
-}
-
-generate_extracted_config!(
-    LoadGeneratorOption,
-    (TickInterval, Duration),
-    (ScaleFactor, f64),
-    (MaxCardinality, u64),
-    (Keys, u64),
-    (SnapshotRounds, u64),
-    (TransactionalSnapshot, bool),
-    (ValueSize, u64),
-    (Seed, u64),
-    (Partitions, u64),
-    (BatchSize, u64)
-);
-
-impl LoadGeneratorOptionExtracted {
-    pub(super) fn ensure_only_valid_options(
-        &self,
-        loadgen: &ast::LoadGenerator,
-    ) -> Result<(), PlanError> {
-        use mz_sql_parser::ast::LoadGeneratorOptionName::*;
-
-        let mut options = self.seen.clone();
-
-        let permitted_options: &[_] = match loadgen {
-            ast::LoadGenerator::Auction => &[TickInterval],
-            ast::LoadGenerator::Counter => &[TickInterval, MaxCardinality],
-            ast::LoadGenerator::Marketing => &[TickInterval],
-            ast::LoadGenerator::Datums => &[TickInterval],
-            ast::LoadGenerator::Tpch => &[TickInterval, ScaleFactor],
-            ast::LoadGenerator::KeyValue => &[
-                TickInterval,
-                Keys,
-                SnapshotRounds,
-                TransactionalSnapshot,
-                ValueSize,
-                Seed,
-                Partitions,
-                BatchSize,
-            ],
-        };
-
-        for o in permitted_options {
-            options.remove(o);
-        }
-
-        if !options.is_empty() {
-            sql_bail!(
-                "{} load generators do not support {} values",
-                loadgen,
-                options.iter().join(", ")
-            )
-        }
-
-        Ok(())
-    }
-}
-
-pub(crate) fn load_generator_ast_to_generator(
-    scx: &StatementContext,
-    loadgen: &ast::LoadGenerator,
-    options: &[LoadGeneratorOption<Aug>],
-    include_metadata: &[SourceIncludeMetadata],
-) -> Result<
-    (
-        LoadGenerator,
-        Option<BTreeMap<FullItemName, (usize, RelationDesc)>>,
-    ),
-    PlanError,
-> {
-    let extracted: LoadGeneratorOptionExtracted = options.to_vec().try_into()?;
-    extracted.ensure_only_valid_options(loadgen)?;
-
-    if loadgen != &ast::LoadGenerator::KeyValue && !include_metadata.is_empty() {
-        sql_bail!("INCLUDE metadata only supported with `KEY VALUE` load generators");
-    }
-
-    let load_generator = match loadgen {
-        ast::LoadGenerator::Auction => LoadGenerator::Auction,
-        ast::LoadGenerator::Counter => {
-            let LoadGeneratorOptionExtracted {
-                max_cardinality, ..
-            } = extracted;
-            LoadGenerator::Counter { max_cardinality }
-        }
-        ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
-        ast::LoadGenerator::Datums => LoadGenerator::Datums,
-        ast::LoadGenerator::Tpch => {
-            let LoadGeneratorOptionExtracted { scale_factor, .. } = extracted;
-
-            // Default to 0.01 scale factor (=10MB).
-            let sf: f64 = scale_factor.unwrap_or(0.01);
-            if !sf.is_finite() || sf < 0.0 {
-                sql_bail!("unsupported scale factor {sf}");
-            }
-
-            let f_to_i = |multiplier: f64| -> Result<i64, PlanError> {
-                let total = (sf * multiplier).floor();
-                let mut i = i64::try_cast_from(total)
-                    .ok_or_else(|| sql_err!("unsupported scale factor {sf}"))?;
-                if i < 1 {
-                    i = 1;
-                }
-                Ok(i)
-            };
-
-            // The multiplications here are safely unchecked because they will
-            // overflow to infinity, which will be caught by f64_to_i64.
-            let count_supplier = f_to_i(10_000f64)?;
-            let count_part = f_to_i(200_000f64)?;
-            let count_customer = f_to_i(150_000f64)?;
-            let count_orders = f_to_i(150_000f64 * 10f64)?;
-            let count_clerk = f_to_i(1_000f64)?;
-
-            LoadGenerator::Tpch {
-                count_supplier,
-                count_part,
-                count_customer,
-                count_orders,
-                count_clerk,
-            }
-        }
-        mz_sql_parser::ast::LoadGenerator::KeyValue => {
-            scx.require_feature_flag(&vars::ENABLE_LOAD_GENERATOR_KEY_VALUE)?;
-            let LoadGeneratorOptionExtracted {
-                keys,
-                snapshot_rounds,
-                transactional_snapshot,
-                value_size,
-                tick_interval,
-                seed,
-                partitions,
-                batch_size,
-                ..
-            } = extracted;
-
-            let mut include_offset = None;
-            for im in include_metadata {
-                match im {
-                    SourceIncludeMetadata::Offset { alias } => {
-                        include_offset = match alias {
-                            Some(alias) => Some(alias.to_string()),
-                            None => Some(LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT.to_string()),
-                        }
-                    }
-                    SourceIncludeMetadata::Key { .. } => continue,
-
-                    _ => {
-                        sql_bail!("only `INCLUDE OFFSET` and `INCLUDE KEY` is supported");
-                    }
-                };
-            }
-
-            let lgkv = KeyValueLoadGenerator {
-                keys: keys.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires KEYS"))?,
-                snapshot_rounds: snapshot_rounds
-                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires SNAPSHOT ROUNDS"))?,
-                // Defaults to true.
-                transactional_snapshot: transactional_snapshot.unwrap_or(true),
-                value_size: value_size
-                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires VALUE SIZE"))?,
-                partitions: partitions
-                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires PARTITIONS"))?,
-                tick_interval,
-                batch_size: batch_size
-                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires BATCH SIZE"))?,
-                seed: seed.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires SEED"))?,
-                include_offset,
-            };
-
-            if lgkv.keys == 0
-                || lgkv.partitions == 0
-                || lgkv.value_size == 0
-                || lgkv.batch_size == 0
-            {
-                sql_bail!("LOAD GENERATOR KEY VALUE options must be non-zero")
-            }
-
-            if lgkv.keys % lgkv.partitions != 0 {
-                sql_bail!("KEYS must be a multiple of PARTITIONS")
-            }
-
-            if lgkv.batch_size > lgkv.keys {
-                sql_bail!("KEYS must be larger than BATCH SIZE")
-            }
-
-            // This constraints simplifies the source implementation.
-            // We can lift it later.
-            if (lgkv.keys / lgkv.partitions) % lgkv.batch_size != 0 {
-                sql_bail!("PARTITIONS * BATCH SIZE must be a divisor of KEYS")
-            }
-
-            if lgkv.snapshot_rounds == 0 {
-                sql_bail!("SNAPSHOT ROUNDS must be larger than 0")
-            }
-
-            LoadGenerator::KeyValue(lgkv)
-        }
-    };
-
-    let mut available_subsources = BTreeMap::new();
-    for (i, (name, desc)) in load_generator.views().iter().enumerate() {
-        let name = FullItemName {
-            database: RawDatabaseSpecifier::Name(
-                mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME.to_owned(),
-            ),
-            schema: load_generator.schema_name().into(),
-            item: name.to_string(),
-        };
-        // The zero-th output is the main output
-        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-        // to handle the main source and the subsources uniformly
-        available_subsources.insert(name, (i + 1, desc.clone()));
-    }
-    let available_subsources = if available_subsources.is_empty() {
-        None
-    } else {
-        Some(available_subsources)
-    };
-
-    Ok((load_generator, available_subsources))
-}
-
-fn plan_create_source_desc_load_gen(
-    scx: &StatementContext,
-    stmt: &CreateSourceStatement<Aug>,
-) -> Result<(SourceDesc<ReferencedConnection>, RelationDesc), PlanError> {
-    let CreateSourceStatement {
-        name,
-        in_cluster: _,
-        col_names,
-        connection,
-        envelope,
-        if_not_exists: _,
-        format,
-        key_constraint: _,
-        include_metadata,
-        with_options: _,
-        referenced_subsources: _,
-        progress_subsource: _,
-    } = &stmt;
-
-    let CreateSourceConnection::LoadGenerator { generator, options } = connection else {
-        panic!("must be Load Generator connection")
-    };
-
-    for (check, feature) in [
-        (
-            matches!(envelope, Some(ast::SourceEnvelope::None) | None)
-                || mz_sql_parser::ast::LoadGenerator::KeyValue == *generator,
-            "ENVELOPE other than NONE (except for KEY VALUE)",
-        ),
-        (format.is_none(), "FORMAT"),
-    ] {
-        if !check {
-            bail_never_supported!(format!("{} with load generator source", feature));
-        }
-    }
-
-    let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
-
-    let (load_generator, _available_subsources) =
-        load_generator_ast_to_generator(scx, generator, options, include_metadata)?;
-
-    let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
-    let tick_micros = match tick_interval {
-        Some(interval) => Some(interval.as_micros().try_into()?),
-        None => None,
-    };
-
-    let connection =
-        GenericSourceConnection::<ReferencedConnection>::from(LoadGeneratorSourceConnection {
-            load_generator,
-            tick_micros,
-        });
-
-    let (encoding, envelope, mut desc) =
-        plan_encoding_envelope(scx, &connection, format, &envelope, include_metadata)?;
-
-    plan_utils::maybe_rename_columns(format!("source {}", name), &mut desc, col_names)?;
-
-    let names: Vec<_> = desc.iter_names().cloned().collect();
-    if let Some(dup) = names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.as_str().quoted());
-    }
-
-    let source_desc = SourceDesc::<ReferencedConnection> {
-        connection,
-        encoding,
-        envelope,
-    };
-
-    Ok((source_desc, desc))
 }
 
 generate_extracted_config!(
@@ -996,14 +111,14 @@ pub fn plan_create_source(
     }
 
     let (source_desc, mut desc) = match stmt.connection {
-        CreateSourceConnection::Kafka { .. } => plan_create_source_desc_kafka(scx, &stmt)?,
+        CreateSourceConnection::Kafka { .. } => kafka::plan_create_source_desc_kafka(scx, &stmt)?,
         CreateSourceConnection::LoadGenerator { .. } => {
-            // Load generator sources' primary source's output can be empty or
-            // not––the inner impl here determines which it is.
-            plan_create_source_desc_load_gen(scx, &stmt)?
+            load_generator::plan_create_source_desc_load_gen(scx, &stmt)?
         }
-        CreateSourceConnection::MySql { .. } => plan_create_source_desc_mysql(scx, &stmt)?,
-        CreateSourceConnection::Postgres { .. } => plan_create_source_desc_postgres(scx, &stmt)?,
+        CreateSourceConnection::MySql { .. } => mysql::plan_create_source_desc_mysql(scx, &stmt)?,
+        CreateSourceConnection::Postgres { .. } => {
+            postgres::plan_create_source_desc_postgres(scx, &stmt)?
+        }
     };
 
     // The are the common elements for all sources.
@@ -1628,28 +743,6 @@ fn get_encoding_inner(
     Ok(SourceDataEncoding { key: None, value })
 }
 
-fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanError {
-    let user_keys = user_keys.iter().map(|column| column.as_str()).join(", ");
-
-    let existing_keys = desc
-        .typ()
-        .keys
-        .iter()
-        .map(|key_columns| {
-            key_columns
-                .iter()
-                .map(|col| desc.get_name(*col).as_str())
-                .join(", ")
-        })
-        .join(", ");
-
-    sql_err!(
-        "Key constraint ({}) conflicts with existing key ({})",
-        user_keys,
-        existing_keys
-    )
-}
-
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
 
 #[derive(Debug)]
@@ -1830,4 +923,26 @@ pub fn plan_create_subsource(
         timeline: Timeline::EpochMilliseconds,
         in_cluster: None,
     }))
+}
+
+fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanError {
+    let user_keys = user_keys.iter().map(|column| column.as_str()).join(", ");
+
+    let existing_keys = desc
+        .typ()
+        .keys
+        .iter()
+        .map(|key_columns| {
+            key_columns
+                .iter()
+                .map(|col| desc.get_name(*col).as_str())
+                .join(", ")
+        })
+        .join(", ");
+
+    sql_err!(
+        "Key constraint ({}) conflicts with existing key ({})",
+        user_keys,
+        existing_keys
+    )
 }

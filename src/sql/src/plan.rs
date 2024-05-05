@@ -96,6 +96,7 @@ pub use notice::PlanNotice;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
+// TODO(#26906): move this so it is solely in planning.
 pub use statement::ddl::source::PgConfigOptionExtracted;
 pub use statement::ddl::{
     AlterSourceAddSubsourceOptionExtracted, PlannedAlterRoleOption, PlannedRoleVariable,
