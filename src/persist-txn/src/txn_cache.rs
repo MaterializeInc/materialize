@@ -79,9 +79,14 @@ use crate::TxnsCodecDefault;
 #[derive(Debug)]
 pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     txns_id: ShardId,
+    // TODO(jkosh44) These invariants are not upheld. The current code allows us to compact this
+    // cache arbitrarily ahead of the `since` of the txns shard. Either these invariants are
+    // incorrect or the current code is incorrect, currently it's not clear which.
+    // See https://github.com/MaterializeInc/materialize/issues/26893.
     /// Invariant: <= the minimum unapplied batch.
     /// Invariant: <= the minimum unapplied register.
     since_ts: T,
+    /// The contents of this cache are updated up to, but not including, this time.
     pub(crate) progress_exclusive: T,
 
     next_batch_id: usize,
@@ -95,6 +100,8 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     /// An index into `unapplied_batches` keyed by the serialized batch.
     batch_idx: HashMap<Vec<u8>, usize>,
     /// The times at which each data shard has been written.
+    ///
+    /// Invariant: All write times in this are >= self.since_ts.
     pub(crate) datas: BTreeMap<ShardId, DataTimes<T>>,
     /// The registers and forgets needing application as of the current progress.
     ///
@@ -117,7 +124,9 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
 /// A self-updating [TxnsCacheState].
 #[derive(Debug)]
 pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+    /// A subscribe over the txn shard.
     pub(crate) txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
+    /// Pending updates for timestamps that haven't closed.
     pub(crate) buf: Vec<(TxnsEntry, T, i64)>,
     state: TxnsCacheState<T>,
 }
@@ -148,6 +157,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     ///
     /// Specifically, a data shard is registered at a timestamp `ts` if it has a
     /// `register_ts <= ts` but no `register_ts < forget_ts < ts`.
+    // TODO(jkosh44) This method allows timestamps in the future with allows the
+    // answer to change over time. See
+    // https://github.com/MaterializeInc/materialize/issues/26903.
     pub fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
         self.assert_only_data_id(data_id);
         let Some(data_times) = self.datas.get(data_id) else {
@@ -196,6 +208,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             .find_map(|reg| reg.forget_ts.as_ref());
         // Forgetting a shard guarantees that all previous writes have been applied.
         let applied = |x| matches!(lastest_forget, Some(forget_ts) if forget_ts >= x);
+        // TODO(jkosh44) latest_write and empty_to are not right, `writes` can be compacted past
+        // an unapplied write, meaning we can miss a write.
+        // See https://github.com/MaterializeInc/materialize/issues/26893.
         let latest_write = all
             .writes
             .iter()
@@ -208,6 +223,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             .find(|x| as_of < **x)
             .unwrap_or(&self.progress_exclusive)
             .clone();
+        // Many callers will use `empty_to` as an argument to `self.data_listen_next`, which cannot
+        // give a meaningful answer for compacted timestamps.
+        assert!(
+            empty_to >= self.since_ts,
+            "empty to timestamp {:?} should be >= than since timestamp {:?}",
+            empty_to,
+            self.since_ts
+        );
         debug!(
             "data_snapshot {:.9} latest_write={:?} as_of={:?} empty_to={:?}: all={:?}",
             data_id.to_string(),
@@ -370,13 +393,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     }
 
     /// Allows compaction to internal representations, losing the ability to
-    /// answer queries about times less_than since_ts.
+    /// answer queries about times less than `since_ts`.
     ///
-    /// To ensure that this is not `O(data shard)`, we update them lazily as
-    /// they are touched in self.update.
+    /// To ensure that this is not `O(data shard)`, we update entries lazily as
+    /// they are touched pushing new writes.
     ///
-    /// Callers must first wait for `update_ge` with the same or later timestamp
-    /// to return. Panics otherwise.
+    /// Callers must first wait for [`TxnsCache::update_ge`] with the same or
+    /// later timestamp to return. Panics otherwise.
     pub fn compact_to(&mut self, since_ts: &T) {
         // Make things easier on ourselves by allowing update to work on
         // un-compacted data.
@@ -385,6 +408,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         // NB: This intentionally does not compact self.unapplied_batches,
         // because we aren't allowed to alter those timestamps. This is fine
         // because it and self.batch_idx are self-compacting, anyway.
+        //
+        // TODO(jkosh44) This violates the invariants of `self.since_ts`.
+        // Specifically, it allows the since to be larger than the minimum
+        // unapplied batch and register. See
+        // https://github.com/MaterializeInc/materialize/issues/26893.
         if &self.since_ts < since_ts {
             self.since_ts.clone_from(since_ts);
         } else {
@@ -393,6 +421,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         self.compact_data_times()
     }
 
+    /// Update contents with `entries` and mark this cache as progressed up to `progress`.
     pub(crate) fn push_entries(&mut self, mut entries: Vec<(TxnsEntry, T, i64)>, progress: T) {
         // Persist emits the times sorted by little endian encoding,
         // which is not what we want. If we ever expose an interface for
@@ -492,6 +521,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 .insert(idx, (data_id, batch, ts.clone()));
             assert_eq!(prev, None);
             let times = self.datas.get_mut(&data_id).expect("data is initialized");
+            // Sanity check that shard is registered.
+            assert_eq!(times.last_reg().forget_ts, None);
             if times.writes.is_empty() {
                 self.datas_min_write_ts.push(Reverse((ts.clone(), data_id)));
             }
@@ -528,7 +559,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         );
         loop {
             // Repeatedly grab the data shard with the minimum write_ts while it
-            // (the minimum since_ts) is less_than the since_ts. If that results
+            // (the minimum write_ts) is less_than the since_ts. If that results
             // in no registration and no writes, forget about the data shard
             // entirely, so it doesn't sit around in the map forever. This will
             // eventually finish because each data shard we compact will not
@@ -555,8 +586,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 times
             );
 
-            // Advance the registration times.
-            while let Some(x) = times.registered.front_mut() {
+            // Pop registrations that are forgotten before since_ts. We can
+            // stop as soon as something is >= or not forgotten.
+            while let Some(x) = times.registered.front() {
                 if let Some(forget_ts) = x.forget_ts.as_ref() {
                     if forget_ts < &self.since_ts {
                         times.registered.pop_front();
@@ -578,6 +610,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
 
             // Now re-insert it into datas_min_write_ts if non-empty.
             if let Some(ts) = times.writes.front() {
+                assert!(!times.registered.is_empty());
                 self.datas_min_write_ts.push(Reverse((ts.clone(), data_id)));
             }
 
@@ -631,6 +664,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
+        // Unapplied batches are all indexed and sorted.
         if self.batch_idx.len() != self.unapplied_batches.len() {
             return Err(format!(
                 "expected index len {} to match what it's indexing {}",
@@ -657,6 +691,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             prev_batch_ts = ts.clone();
         }
 
+        // Unapplied registers are sorted.
         let mut prev_register_ts = T::minimum();
         for (_, ts) in self.unapplied_registers.iter() {
             if ts < &prev_register_ts {
@@ -669,28 +704,40 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         }
 
         for (data_id, data_times) in self.datas.iter() {
-            let () = data_times.validate(&self.since_ts)?;
+            let () = data_times.validate()?;
 
             if let Some(ts) = data_times.writes.front() {
-                assert!(&self.since_ts <= ts);
+                // Writes are compacted.
+                if &self.since_ts > ts {
+                    return Err(format!(
+                        "{:?} write ts {:?} not past since ts {:?}",
+                        data_id, ts, self.since_ts
+                    ));
+                }
+                // datas_min_write_ts has an entry for this write.
                 // Oof, bummer to do this iteration.
-                assert!(
-                    self.datas_min_write_ts
-                        .iter()
-                        .any(|Reverse((t, d))| t == ts && d == data_id),
-                    "{:?} {:?} missing from {:?}",
-                    data_id,
-                    ts,
-                    self.datas_min_write_ts
-                );
+                if !self
+                    .datas_min_write_ts
+                    .iter()
+                    .any(|Reverse((t, d))| t == ts && d == data_id)
+                {
+                    return Err(format!(
+                        "{:?} {:?} missing from {:?}",
+                        data_id, ts, self.datas_min_write_ts
+                    ));
+                }
             }
         }
 
+        // datas_min_write_ts actually contains the min write time for each shard.
         for Reverse((ts, data_id)) in self.datas_min_write_ts.iter() {
-            assert_eq!(
-                self.datas.get(data_id).unwrap().writes.front().as_ref(),
-                Some(&ts)
-            );
+            let min_ts = self.datas.get(data_id).unwrap().writes.front();
+            if min_ts != Some(ts) {
+                return Err(format!(
+                    "{:?} datas_min_write_ts {:?} does not match actual min write ts {:?}",
+                    data_id, ts, min_ts
+                ));
+            }
         }
 
         Ok(())
@@ -698,6 +745,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
 }
 
 impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
+    /// Initialize the txn shard at `init_ts` and returns a [TxnsCache] reading
+    /// from that shard.
     pub(crate) async fn init(
         init_ts: T,
         txns_read: ReadHandle<C::Key, C::Val, T, i64>,
@@ -738,7 +787,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         Self::from_read(txns_read, as_of, only_data_id).await
     }
 
-    pub(crate) async fn from_read(
+    async fn from_read(
         txns_read: ReadHandle<C::Key, C::Val, T, i64>,
         as_of: Antichain<T>,
         only_data_id: Option<ShardId>,
@@ -799,6 +848,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                 };
             }
         }
+        debug_assert_eq!(self.validate(), Ok(()));
         debug!(
             "cache correct before {:?} len={} least_ts={:?}",
             self.progress_exclusive,
@@ -883,8 +933,6 @@ pub(crate) struct DataTimes<T> {
     /// - Everything in writes is in one of these intervals.
     pub(crate) registered: VecDeque<DataRegistered<T>>,
     /// Invariant: These are in increasing order.
-    ///
-    /// Invariant: Each of these is >= self.since_ts.
     pub(crate) writes: VecDeque<T>,
 }
 
@@ -920,20 +968,14 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
         self.registered.back().expect("at least one registration")
     }
 
-    pub(crate) fn validate(&self, since_ts: &T) -> Result<(), String> {
-        // Writes are sorted
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        // Writes are sorted.
         let mut prev_ts = T::minimum();
         for ts in self.writes.iter() {
             if ts < &prev_ts {
                 return Err(format!(
                     "write ts {:?} out of order after {:?}",
                     ts, prev_ts
-                ));
-            }
-            if ts < since_ts {
-                return Err(format!(
-                    "write ts {:?} not advanced past since ts {:?}",
-                    ts, since_ts
                 ));
             }
             prev_ts = ts.clone();
@@ -1209,7 +1251,7 @@ mod tests {
         let d0 = txns.expect_register(1).await;
 
         // During code review, we discussed an alternate implementation of
-        // empty_to that was an Option: None when we new about a write > the
+        // empty_to that was an Option: None when we knew about a write > the
         // as_of, and Some when we didn't. The None case would mean that we
         // don't need to CaA empty updates in. This is quite appealing, but
         // would cause an issue with the guarantee that `apply_le(as_of)` is
@@ -1256,8 +1298,7 @@ mod tests {
                 })
             }
             dt.writes = write_ts.into_iter().cloned().collect();
-            let since_ts = u64::minimum();
-            dt.validate(&since_ts).map_err(|_| ())
+            dt.validate().map_err(|_| ())
         }
 
         // Valid
