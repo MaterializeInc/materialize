@@ -356,7 +356,7 @@ class MySqlExecutor(Executor):
                 f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
                     FROM MYSQL CONNECTION mysql{self.num}
-                    FOR TABLES ({identifier(self.table)} AS {identifier(self.table)})""",
+                    FOR TABLES (mysql.{identifier(self.table)} AS {identifier(self.table)})""",
             )
         self.mz_conn.autocommit = False
 
