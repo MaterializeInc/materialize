@@ -801,7 +801,8 @@ mod test {
             let index = worker.index();
             let tokens = worker.dataflow::<u64, _, _>(move |scope| {
                 let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
-                let (_output, output_stream) = producer.new_output::<Vec<usize>>();
+                let (_output, output_stream) =
+                    producer.new_output::<CapacityContainerBuilder<Vec<usize>>>();
                 let producer_button = producer.build(move |mut capabilities| async move {
                     let mut cap = capabilities.pop().unwrap();
                     if index != 0 {
