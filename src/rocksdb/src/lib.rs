@@ -285,6 +285,9 @@ enum Command<K, V> {
     Shutdown {
         done_sender: oneshot::Sender<()>,
     },
+    ManualCompaction {
+        done_sender: oneshot::Sender<()>,
+    },
 }
 
 /// An async wrapper around RocksDB.
@@ -555,6 +558,17 @@ where
         }
     }
 
+    /// Trigger manual compaction of the RocksDB instance.
+    pub async fn manual_compaction(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Command::ManualCompaction { done_sender: tx })
+            .await
+            .map_err(|_| Error::RocksDBThreadGoneAway)?;
+
+        rx.await.map_err(|_| Error::RocksDBThreadGoneAway)
+    }
+
     /// Gracefully shut down RocksDB. Can error if the instance
     /// is already shut down or errored.
     pub async fn close(self) -> Result<(), Error> {
@@ -633,6 +647,11 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                 drop(write_buffer_handle);
                 let _ = done_sender.send(());
                 return;
+            }
+            Command::ManualCompaction { done_sender } => {
+                // Compact the full key-range.
+                db.compact_range::<&[u8], &[u8]>(None, None);
+                let _ = done_sender.send(());
             }
             Command::MultiGet {
                 mut batch,

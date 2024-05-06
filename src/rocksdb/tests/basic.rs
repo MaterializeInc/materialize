@@ -167,11 +167,15 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
 
     let mut rolling_sum = 50;
     let key = "a".to_string();
+    // Set the key to an initial value using Put
     instance
         .multi_update(vec![(key.clone(), KeyUpdate::Put(rolling_sum))])
         .await?;
 
-    for _ in 10..100 {
+    // Send a bunch of merge operations to the key, each merge transaction
+    // should add 25 million to the key value, and every 10 transactions
+    // we use a Put to set the key to a specific value.
+    for i in 1..100 {
         let merges = vec![5u32, 5_000_000];
         rolling_sum += merges.iter().sum::<u32>();
 
@@ -182,6 +186,13 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
                     .map(|v| (key.clone(), KeyUpdate::Merge(v))),
             )
             .await?;
+
+        if i % 10 == 0 {
+            rolling_sum += 3;
+            instance
+                .multi_update(vec![(key.clone(), KeyUpdate::Put(rolling_sum))])
+                .await?;
+        }
     }
 
     let mut ret = vec![Default::default(); 1];
@@ -189,6 +200,43 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
         .multi_get(vec![key.clone()], ret.iter_mut(), |value| value)
         .await?;
 
+    // Validate the Get operation returns the correct sum
+    assert_eq!(
+        ret.into_iter()
+            .map(|v| v.map(|v| v.value))
+            .collect::<Vec<_>>(),
+        vec![Some(rolling_sum)]
+    );
+
+    // Send more merge/put operations, this time compacting between each transaction
+    for i in 1..100 {
+        let merges = vec![5u32, 5_000_000];
+        rolling_sum += merges.iter().sum::<u32>();
+
+        instance
+            .multi_update(
+                merges
+                    .into_iter()
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v))),
+            )
+            .await?;
+
+        instance.manual_compaction().await?;
+
+        if i % 10 == 0 {
+            rolling_sum += 3;
+            instance
+                .multi_update(vec![(key.clone(), KeyUpdate::Put(rolling_sum))])
+                .await?;
+        }
+    }
+
+    let mut ret = vec![Default::default(); 1];
+    instance
+        .multi_get(vec![key.clone()], ret.iter_mut(), |value| value)
+        .await?;
+
+    // Validate the Get operation returns the correct sum
     assert_eq!(
         ret.into_iter()
             .map(|v| v.map(|v| v.value))
