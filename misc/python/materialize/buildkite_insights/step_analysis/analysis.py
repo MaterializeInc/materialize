@@ -64,7 +64,9 @@ def _print_outcome_entry_as_txt(
     output_type: str,
 ) -> None:
     formatted_duration = (
-        f"{entry.duration_in_min:.2f}" if entry.duration_in_min is not None else "None"
+        f"{entry.duration_in_min:.2f}".rjust(6)
+        if entry.duration_in_min is not None
+        else "None"
     )
     url = "" if output_type == OUTPUT_TYPE_TXT_SHORT else f"{entry.web_url_to_build}, "
     print(
