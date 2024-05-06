@@ -168,6 +168,8 @@ def validate_state(
             # arbitrary error can occur if envd is not yet ready after restart
             if is_last_run:
                 print(f"Validation failed in try {try_info}, aborting!")
+                if last_error_message is not None:
+                    print(f"Last error message was: {last_error_message}")
             else:
                 print(f"Validation failed in try {try_info}, retrying.")
             last_error_message = str(e)
@@ -178,7 +180,6 @@ def validate_state(
         # do not raise an FailedTestExecutionError because we are not in mzcompose
         fail(
             f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s!",
-            msg=last_error_message,
         )
 
     duration = round(end_time - start_time, 1)
