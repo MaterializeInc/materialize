@@ -11,6 +11,7 @@
 // parameter to the arrow Field::with_metadata method.
 #![allow(clippy::disallowed_types)]
 
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -113,7 +114,7 @@ impl ArrowBuilder {
         let mut arrays = vec![];
         let mut fields: Vec<Field> = vec![];
         for mut col in self.columns.into_iter() {
-            arrays.push(col.inner.finish());
+            arrays.push(col.finish());
             fields.push((&col).into());
         }
         RecordBatch::try_new(Schema::new(fields).into(), arrays)
@@ -228,11 +229,182 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, Strin
         // arrow::datatypes::IntervalUnit::MonthDayNano is not yet implemented in the arrow parquet writer
         // https://github.com/apache/arrow-rs/blob/0d031cc8aa81296cb1bdfedea7a7cb4ec6aa54ea/parquet/src/arrow/arrow_writer/mod.rs#L859
         // ScalarType::Interval => DataType::Interval(arrow::datatypes::IntervalUnit::DayTime)
+        ScalarType::Array(inner) => {
+            // Postgres / MZ Arrays are weird, since they can be multi-dimensional but this is not
+            // enforced in the type system, so can change per-value.
+            // We use a struct type with two fields - one containing the array elements as a list
+            // and the other containing the number of dimensions the array represents. Since arrays
+            // are not allowed to be ragged, the number of elements in each dimension is the same.
+            let (inner_type, inner_name) = scalar_to_arrow_datatype(inner)?;
+            // TODO: Document these field names in our copy-to-s3 docs
+            let inner_field = field_with_typename("item", inner_type, true, &inner_name);
+            let list_field = Arc::new(field_with_typename(
+                "items",
+                DataType::List(inner_field.into()),
+                false,
+                "array_items",
+            ));
+            let dims_field = Arc::new(field_with_typename(
+                "dimensions",
+                DataType::UInt8,
+                false,
+                "array_dimensions",
+            ));
+            (DataType::Struct([list_field, dims_field].into()), "array")
+        }
+        ScalarType::List {
+            element_type,
+            custom_id: _,
+        } => {
+            let (inner_type, inner_name) = scalar_to_arrow_datatype(element_type)?;
+            // TODO: Document these field names in our copy-to-s3 docs
+            let field = field_with_typename("item", inner_type, true, &inner_name);
+            (DataType::List(field.into()), "list")
+        }
+        ScalarType::Map {
+            value_type,
+            custom_id: _,
+        } => {
+            let (value_type, value_name) = scalar_to_arrow_datatype(value_type)?;
+            // Arrow maps are represented as an 'entries' struct with 'keys' and 'values' fields.
+            let field_names = MapFieldNames::default();
+            let struct_type = DataType::Struct(
+                vec![
+                    Field::new(&field_names.key, DataType::Utf8, false),
+                    field_with_typename(&field_names.value, value_type, true, &value_name),
+                ]
+                .into(),
+            );
+            (
+                DataType::Map(
+                    Field::new(&field_names.entry, struct_type, false).into(),
+                    false,
+                ),
+                "map",
+            )
+        }
         _ => anyhow::bail!("{:?} unimplemented", scalar_type),
     };
     Ok((data_type, extension_name.to_lowercase()))
 }
 
+fn builder_for_datatype(
+    data_type: &DataType,
+    item_capacity: usize,
+    data_capacity: usize,
+) -> Result<ColBuilder, anyhow::Error> {
+    let builder = match &data_type {
+        DataType::Boolean => {
+            ColBuilder::BooleanBuilder(BooleanBuilder::with_capacity(item_capacity))
+        }
+        DataType::Int16 => ColBuilder::Int16Builder(Int16Builder::with_capacity(item_capacity)),
+        DataType::Int32 => ColBuilder::Int32Builder(Int32Builder::with_capacity(item_capacity)),
+        DataType::Int64 => ColBuilder::Int64Builder(Int64Builder::with_capacity(item_capacity)),
+        DataType::UInt8 => ColBuilder::UInt8Builder(UInt8Builder::with_capacity(item_capacity)),
+        DataType::UInt16 => ColBuilder::UInt16Builder(UInt16Builder::with_capacity(item_capacity)),
+        DataType::UInt32 => ColBuilder::UInt32Builder(UInt32Builder::with_capacity(item_capacity)),
+        DataType::UInt64 => ColBuilder::UInt64Builder(UInt64Builder::with_capacity(item_capacity)),
+        DataType::Float32 => {
+            ColBuilder::Float32Builder(Float32Builder::with_capacity(item_capacity))
+        }
+        DataType::Float64 => {
+            ColBuilder::Float64Builder(Float64Builder::with_capacity(item_capacity))
+        }
+        DataType::Date32 => ColBuilder::Date32Builder(Date32Builder::with_capacity(item_capacity)),
+        DataType::Time64(arrow::datatypes::TimeUnit::Microsecond) => {
+            ColBuilder::Time64MicrosecondBuilder(Time64MicrosecondBuilder::with_capacity(
+                item_capacity,
+            ))
+        }
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
+            ColBuilder::TimestampMicrosecondBuilder(TimestampMicrosecondBuilder::with_capacity(
+                item_capacity,
+            ))
+        }
+        DataType::LargeBinary => ColBuilder::LargeBinaryBuilder(LargeBinaryBuilder::with_capacity(
+            item_capacity,
+            data_capacity,
+        )),
+        DataType::FixedSizeBinary(byte_width) => ColBuilder::FixedSizeBinaryBuilder(
+            FixedSizeBinaryBuilder::with_capacity(item_capacity, *byte_width),
+        ),
+        DataType::Utf8 => {
+            ColBuilder::StringBuilder(StringBuilder::with_capacity(item_capacity, data_capacity))
+        }
+        DataType::LargeUtf8 => ColBuilder::LargeStringBuilder(LargeStringBuilder::with_capacity(
+            item_capacity,
+            data_capacity,
+        )),
+        DataType::Decimal128(precision, scale) => ColBuilder::Decimal128Builder(
+            Decimal128Builder::with_capacity(item_capacity)
+                .with_precision_and_scale(*precision, *scale)?,
+        ),
+        DataType::List(field) => {
+            let inner_col_builder = ArrowColumn::new(
+                field.name().clone(),
+                field.is_nullable(),
+                field.data_type().clone(),
+                typename_from_field(*&field)?,
+                item_capacity,
+                data_capacity,
+            )?;
+            ColBuilder::ListBuilder(Box::new(
+                ListBuilder::new(inner_col_builder).with_field(Arc::clone(field)),
+            ))
+        }
+        DataType::Struct(fields) => {
+            let mut field_builders: Vec<Box<dyn ArrayBuilder>> = vec![];
+            for field in fields {
+                let inner_col_builder = ArrowColumn::new(
+                    field.name().clone(),
+                    field.is_nullable(),
+                    field.data_type().clone(),
+                    typename_from_field(*&field)?,
+                    item_capacity,
+                    data_capacity,
+                )?;
+                field_builders.push(Box::new(inner_col_builder));
+            }
+            ColBuilder::StructBuilder(StructBuilder::new(fields.clone(), field_builders))
+        }
+        DataType::Map(entries_field, _sorted) => {
+            let entries_field = entries_field.as_ref();
+            if let DataType::Struct(fields) = entries_field.data_type() {
+                if fields.len() != 2 {
+                    anyhow::bail!(
+                        "Expected map entries to have 2 fields, found {}",
+                        fields.len()
+                    )
+                }
+                let key_builder = StringBuilder::with_capacity(item_capacity, data_capacity);
+                let value_field = &fields[1];
+                let value_builder = ArrowColumn::new(
+                    value_field.name().clone(),
+                    value_field.is_nullable(),
+                    value_field.data_type().clone(),
+                    typename_from_field(value_field)?,
+                    item_capacity,
+                    data_capacity,
+                )?;
+                ColBuilder::MapBuilder(Box::new(
+                    MapBuilder::with_capacity(
+                        Some(MapFieldNames::default()),
+                        key_builder,
+                        value_builder,
+                        item_capacity,
+                    )
+                    .with_values_field(Arc::clone(value_field)),
+                ))
+            } else {
+                anyhow::bail!("Expected map entries to be a struct")
+            }
+        }
+        _ => anyhow::bail!("{:?} unimplemented", data_type),
+    };
+    Ok(builder)
+}
+
+#[derive(Debug)]
 struct ArrowColumn {
     field_name: String,
     nullable: bool,
@@ -243,12 +415,38 @@ struct ArrowColumn {
 
 impl From<&ArrowColumn> for Field {
     fn from(col: &ArrowColumn) -> Self {
-        Field::new(col.field_name.clone(), col.data_type.clone(), col.nullable).with_metadata(
-            HashMap::from([(
-                "ARROW:extension:name".to_string(),
-                format!("materialize.v1.{}", col.extension_type_name),
-            )]),
+        field_with_typename(
+            &col.field_name,
+            col.data_type.clone(),
+            col.nullable,
+            &col.extension_type_name,
         )
+    }
+}
+
+/// Create a Field and include the materialize 'type name' as an extension in the metadata.
+fn field_with_typename(
+    name: &str,
+    data_type: DataType,
+    nullable: bool,
+    extension_type_name: &str,
+) -> Field {
+    Field::new(name, data_type, nullable).with_metadata(HashMap::from([(
+        "ARROW:extension:name".to_string(),
+        format!("materialize.v1.{}", extension_type_name),
+    )]))
+}
+
+/// Extract the materialize 'type name' from the metadata of a Field.
+fn typename_from_field(field: &Field) -> Result<String, anyhow::Error> {
+    let metadata = field.metadata();
+    let extension_name = metadata
+        .get("ARROW:extension:name")
+        .ok_or_else(|| anyhow::anyhow!("Missing extension name in metadata"))?;
+    if let Some(name) = extension_name.strip_prefix("materialize.v1") {
+        Ok(name.to_string())
+    } else {
+        anyhow::bail!("Extension name {} does not match expected", extension_name,)
     }
 }
 
@@ -261,67 +459,12 @@ impl ArrowColumn {
         item_capacity: usize,
         data_capacity: usize,
     ) -> Result<Self, anyhow::Error> {
-        let inner: ColBuilder = match &data_type {
-            DataType::Boolean => {
-                ColBuilder::BooleanBuilder(BooleanBuilder::with_capacity(item_capacity))
-            }
-            DataType::Int16 => ColBuilder::Int16Builder(Int16Builder::with_capacity(item_capacity)),
-            DataType::Int32 => ColBuilder::Int32Builder(Int32Builder::with_capacity(item_capacity)),
-            DataType::Int64 => ColBuilder::Int64Builder(Int64Builder::with_capacity(item_capacity)),
-            DataType::UInt8 => ColBuilder::UInt8Builder(UInt8Builder::with_capacity(item_capacity)),
-            DataType::UInt16 => {
-                ColBuilder::UInt16Builder(UInt16Builder::with_capacity(item_capacity))
-            }
-            DataType::UInt32 => {
-                ColBuilder::UInt32Builder(UInt32Builder::with_capacity(item_capacity))
-            }
-            DataType::UInt64 => {
-                ColBuilder::UInt64Builder(UInt64Builder::with_capacity(item_capacity))
-            }
-            DataType::Float32 => {
-                ColBuilder::Float32Builder(Float32Builder::with_capacity(item_capacity))
-            }
-            DataType::Float64 => {
-                ColBuilder::Float64Builder(Float64Builder::with_capacity(item_capacity))
-            }
-            DataType::Date32 => {
-                ColBuilder::Date32Builder(Date32Builder::with_capacity(item_capacity))
-            }
-            DataType::Time64(arrow::datatypes::TimeUnit::Microsecond) => {
-                ColBuilder::Time64MicrosecondBuilder(Time64MicrosecondBuilder::with_capacity(
-                    item_capacity,
-                ))
-            }
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
-                ColBuilder::TimestampMicrosecondBuilder(TimestampMicrosecondBuilder::with_capacity(
-                    item_capacity,
-                ))
-            }
-            DataType::LargeBinary => ColBuilder::LargeBinaryBuilder(
-                LargeBinaryBuilder::with_capacity(item_capacity, data_capacity),
-            ),
-            DataType::FixedSizeBinary(byte_width) => ColBuilder::FixedSizeBinaryBuilder(
-                FixedSizeBinaryBuilder::with_capacity(item_capacity, *byte_width),
-            ),
-            DataType::Utf8 => ColBuilder::StringBuilder(StringBuilder::with_capacity(
-                item_capacity,
-                data_capacity,
-            )),
-            DataType::LargeUtf8 => ColBuilder::LargeStringBuilder(
-                LargeStringBuilder::with_capacity(item_capacity, data_capacity),
-            ),
-            DataType::Decimal128(precision, scale) => ColBuilder::Decimal128Builder(
-                Decimal128Builder::with_capacity(item_capacity)
-                    .with_precision_and_scale(*precision, *scale)?,
-            ),
-            _ => anyhow::bail!("{:?} unimplemented", data_type),
-        };
         Ok(Self {
+            inner: builder_for_datatype(&data_type, item_capacity, data_capacity)?,
             field_name,
             nullable,
             data_type,
             extension_type_name,
-            inner,
         })
     }
 }
@@ -331,10 +474,21 @@ macro_rules! make_col_builder {
         /// An enum wrapper for all arrow builder types that we support. Used to store
         /// a builder for each column and avoid dynamic dispatch and downcasting
         /// when appending data.
+        #[derive(Debug)]
         enum ColBuilder {
             $(
                 $x($x),
             )*
+            /// ListBuilder & MapBuilder are handled separately than other builder types since they
+            /// uses generic parameters for the inner types, and are boxed to avoid recursive
+            /// type definitions.
+            ListBuilder(Box<ListBuilder<ArrowColumn>>),
+            MapBuilder(Box<MapBuilder<StringBuilder, ArrowColumn>>),
+            /// StructBuilder is handled separately since its `append_null()` method must be
+            /// overriden to both append nulls to all field builders and to append a null to
+            /// the struct. It's unclear why `arrow-rs` implemented this differently than
+            /// ListBuilder and MapBuilder.
+            StructBuilder(StructBuilder),
         }
 
         impl ColBuilder {
@@ -343,15 +497,62 @@ macro_rules! make_col_builder {
                     $(
                         ColBuilder::$x(builder) => builder.append_null(),
                     )*
+                    ColBuilder::ListBuilder(builder) => builder.append_null(),
+                    ColBuilder::MapBuilder(builder) => builder.append(false).unwrap(),
+                    ColBuilder::StructBuilder(builder) => {
+                        for i in 0..builder.num_fields() {
+                            let field_builder: &mut ArrowColumn = builder.field_builder(i).unwrap();
+                            field_builder.inner.append_null();
+                        }
+                        builder.append_null();
+                    }
                 }
             }
+        }
 
+        /// Implement the ArrayBuilder trait for ArrowColumn so that we can use an ArrowColumn as
+        /// an inner-builder type in an [`arrow::array::builder::GenericListBuilder`]
+        /// and an [`arrow::array::builder::StructBuilder`] and re-use our methods for appending
+        /// data to the column.
+        impl ArrayBuilder for ArrowColumn {
+            fn len(&self) -> usize {
+                match &self.inner {
+                    $(
+                        ColBuilder::$x(builder) => builder.len(),
+                    )*
+                    ColBuilder::ListBuilder(builder) => builder.len(),
+                    ColBuilder::MapBuilder(builder) => builder.len(),
+                    ColBuilder::StructBuilder(builder) => builder.len(),
+                }
+            }
             fn finish(&mut self) -> ArrayRef {
-                match self {
+                match &mut self.inner {
                     $(
                         ColBuilder::$x(builder) => Arc::new(builder.finish()),
                     )*
+                    ColBuilder::ListBuilder(builder) => Arc::new(builder.finish()),
+                    ColBuilder::MapBuilder(builder) => Arc::new(builder.finish()),
+                    ColBuilder::StructBuilder(builder) => Arc::new(builder.finish()),
                 }
+            }
+            fn finish_cloned(&self) -> ArrayRef {
+                match &self.inner {
+                    $(
+                        ColBuilder::$x(builder) => Arc::new(builder.finish_cloned()),
+                    )*
+                    ColBuilder::ListBuilder(builder) => Arc::new(builder.finish_cloned()),
+                    ColBuilder::MapBuilder(builder) => Arc::new(builder.finish_cloned()),
+                    ColBuilder::StructBuilder(builder) => Arc::new(builder.finish_cloned()),
+                }
+            }
+            fn as_any(&self) -> &(dyn Any + 'static) {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut (dyn Any + 'static) {
+                self
+            }
+            fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+                self
             }
         }
     };
@@ -462,6 +663,47 @@ impl ArrowColumn {
                 } else {
                     anyhow::bail!("Expected Decimal128 data type")
                 }
+            }
+            (ColBuilder::StructBuilder(struct_builder), Datum::Array(arr)) => {
+                // We've received an array datum which we know is represented as an Arrow struct
+                // with two fields: the list of elements and the number of dimensions
+                let list_builder: &mut ArrowColumn = struct_builder.field_builder(0).unwrap();
+                if let ColBuilder::ListBuilder(list_builder) = &mut list_builder.inner {
+                    let inner_builder = list_builder.values();
+                    for datum in arr.elements().into_iter() {
+                        inner_builder.append_datum(datum)?;
+                    }
+                    list_builder.append(true);
+                } else {
+                    anyhow::bail!(
+                        "Expected ListBuilder for StructBuilder with Array datum: {:?}",
+                        struct_builder
+                    )
+                }
+                let dims_builder: &mut ArrowColumn = struct_builder.field_builder(1).unwrap();
+                if let ColBuilder::UInt8Builder(dims_builder) = &mut dims_builder.inner {
+                    dims_builder.append_value(arr.dims().ndims());
+                } else {
+                    anyhow::bail!(
+                        "Expected UInt8Builder for StructBuilder with Array datum: {:?}",
+                        struct_builder
+                    )
+                }
+                struct_builder.append(true)
+            }
+            (ColBuilder::ListBuilder(list_builder), Datum::List(list)) => {
+                let inner_builder = list_builder.values();
+                for datum in list.into_iter() {
+                    inner_builder.append_datum(datum)?;
+                }
+                list_builder.append(true)
+            }
+            (ColBuilder::MapBuilder(builder), Datum::Map(map)) => {
+                for (key, value) in map.iter() {
+                    builder.keys().append_value(key);
+                    builder.values().append_datum(value)?;
+                }
+                builder.append(true).unwrap()
             }
             (_builder, datum) => {
                 anyhow::bail!("Datum {:?} does not match builder", datum)

@@ -182,7 +182,7 @@ $ s3-verify-keys bucket=copytos3 prefix-path=test/5 key-pattern=INCOMPLETE
     FORMAT = 'parquet'
   );
 
-> COPY (SELECT false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, '85907cb9-ac9b-4e35-84b8-60dc69368aca'::uuid, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 1234567890123456789012.4567890123456789::numeric(38,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/parquet_test/3'
+> COPY (SELECT array[1,2]::int[], array[array[1, 2], array[NULL, 4]], false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, '85907cb9-ac9b-4e35-84b8-60dc69368aca'::uuid, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 1234567890123456789012.4567890123456789::numeric(38,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/parquet_test/3'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
@@ -198,7 +198,7 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/2
 2
 
 $ s3-verify-data bucket=copytos3 key=parquet_test/3
-false inf {"s":"abc"} 85907cb9ac9b4e3584b860dc69368aca 1 32767 2147483647 9223372036854775807 1234567890123456789012.4567890123456789 2010-10-10 10:10:10 2010-10-10T10:10:10 aaaa 5c7841414141 това е d182d0b5d0bad181d182
+{items: [1, 2], dimensions: 1} {items: [1, 2, , 4], dimensions: 2} false inf {"s":"abc"} 85907cb9ac9b4e3584b860dc69368aca 1 32767 2147483647 9223372036854775807 1234567890123456789012.4567890123456789 2010-10-10 10:10:10 2010-10-10T10:10:10 aaaa 5c7841414141 това е d182d0b5d0bad181d182
 
 # Confirm that unimplemented types will early exit before writing to s3
 ! COPY (SELECT '0 day'::interval)  TO 's3://copytos3/parquet_test/5'
@@ -259,3 +259,17 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/9 sort-rows=true
 1234.0000000000 -1234.000000000000000 1234 1234.00000
 123456789.1234567890 -123456789.123456789123450 1234567890000 123456789.12345
 10000000000000000001.0000000000 100000000000000.000000100000000 -100000000 100000000000000000000000000000000.00001
+
+# Tests for nested types
+
+> CREATE TABLE t3 (c1 real list list, c2 varchar list, c3 MAP[text=>MAP[text=>double]], c4 int[][]);
+> INSERT INTO t3 VALUES (LIST[[1.25, 2.5],[223.3333]], LIST['a', 'b'], '{a=>{b=>2.5}}', ARRAY[[1, 2],[3, 5]]);
+> INSERT INTO t3 VALUES (LIST[[0.0], NULL], NULL, NULL, NULL);
+> INSERT INTO t3 VALUES (NULL, LIST[NULL], '{a=>NULL}', ARRAY[[1, 2], [NULL, NULL]]::int[][]);
+
+> COPY t3 TO 's3://copytos3/parquet_test/10' WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
+
+$ s3-verify-data bucket=copytos3 key=parquet_test/10 sort-rows=true
+[[0.0], ]   // allow-trailing-whitespace
+ [] {a: } {items: [1, 2, , ], dimensions: 2}
+[[1.25, 2.5], [223.3333]] [a, b] {a: {b: 2.5}} {items: [1, 2, 3, 5], dimensions: 2}

@@ -36,7 +36,7 @@ use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSION
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
+use mz_sql::ast::{CopyDirection, CopyStatement, FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
@@ -899,34 +899,46 @@ where
             }
         };
 
-        if let Some(desc) = stmt.desc().relation_desc.clone() {
-            for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
-                match (format, &ty.scalar_type) {
-                    (Format::Binary, mz_repr::ScalarType::List { .. }) => {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::PROTOCOL_VIOLATION,
-                                "binary encoding of list types is not implemented",
-                            ))
-                            .await;
+        // Binary encodings are disabled for list, map, and aclitem types, but this doesn't
+        // apply to COPY TO statements.
+        if !stmt.stmt().map_or(false, |stmt| {
+            matches!(
+                stmt,
+                Statement::Copy(CopyStatement {
+                    direction: CopyDirection::To,
+                    ..
+                })
+            )
+        }) {
+            if let Some(desc) = stmt.desc().relation_desc.clone() {
+                for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
+                    match (format, &ty.scalar_type) {
+                        (Format::Binary, mz_repr::ScalarType::List { .. }) => {
+                            return self
+                                .error(ErrorResponse::error(
+                                    SqlState::PROTOCOL_VIOLATION,
+                                    "binary encoding of list types is not implemented",
+                                ))
+                                .await;
+                        }
+                        (Format::Binary, mz_repr::ScalarType::Map { .. }) => {
+                            return self
+                                .error(ErrorResponse::error(
+                                    SqlState::PROTOCOL_VIOLATION,
+                                    "binary encoding of map types is not implemented",
+                                ))
+                                .await;
+                        }
+                        (Format::Binary, mz_repr::ScalarType::AclItem) => {
+                            return self
+                                .error(ErrorResponse::error(
+                                    SqlState::PROTOCOL_VIOLATION,
+                                    "binary encoding of aclitem types does not exist",
+                                ))
+                                .await;
+                        }
+                        _ => (),
                     }
-                    (Format::Binary, mz_repr::ScalarType::Map { .. }) => {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::PROTOCOL_VIOLATION,
-                                "binary encoding of map types is not implemented",
-                            ))
-                            .await;
-                    }
-                    (Format::Binary, mz_repr::ScalarType::AclItem) => {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::PROTOCOL_VIOLATION,
-                                "binary encoding of aclitem types does not exist",
-                            ))
-                            .await;
-                    }
-                    _ => (),
                 }
             }
         }
