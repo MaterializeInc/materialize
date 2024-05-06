@@ -44,33 +44,46 @@ def print_data(
     data_is_incomplete: bool,
 ) -> None:
     if output_type == OUTPUT_TYPE_CSV:
-        print("step_key,build_number,created_at,duration_in_min,passed,retry_count")
+        _print_outcome_entry_csv_header()
 
     for entry in job_outcomes:
         if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
-            formatted_duration = (
-                f"{entry.duration_in_min:.2f}"
-                if entry.duration_in_min is not None
-                else "None"
-            )
-            url = (
-                ""
-                if output_type == OUTPUT_TYPE_TXT_SHORT
-                else f"{entry.web_url_to_build}, "
-            )
-            print(
-                f"{entry.step_key}, #{entry.build_number}, {entry.formatted_date()}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
-            )
+            _print_outcome_entry_as_txt(entry, output_type)
         elif output_type == OUTPUT_TYPE_CSV:
-            print(
-                f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min},{1 if entry.passed else 0},{entry.retry_count}"
-            )
+            _print_outcome_entry_as_csv(entry)
 
     if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
         print_stats(job_outcomes, build_steps)
 
     if data_is_incomplete:
         print("Warning! Data is incomplete due to exceeded rate limit!")
+
+
+def _print_outcome_entry_as_txt(
+    entry: BuildJobOutcome,
+    output_type: str,
+) -> None:
+    formatted_duration = (
+        f"{entry.duration_in_min:.2f}".rjust(6)
+        if entry.duration_in_min is not None
+        else "None"
+    )
+    url = "" if output_type == OUTPUT_TYPE_TXT_SHORT else f"{entry.web_url_to_build}, "
+    print(
+        f"{entry.step_key}, #{entry.build_number}, {entry.formatted_date()}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
+    )
+
+
+def _print_outcome_entry_csv_header() -> None:
+    print("step_key,build_number,created_at,duration_in_min,passed,retry_count")
+
+
+def _print_outcome_entry_as_csv(
+    entry: BuildJobOutcome,
+) -> None:
+    print(
+        f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min},{1 if entry.passed else 0},{entry.retry_count}"
+    )
 
 
 def print_stats(
