@@ -1,5 +1,10 @@
 # dbt-materialize Changelog
 
+## 1.7.8 - 2024-05-06
+
+* Fix permission management in blue/green automation macros for non-admin users
+  ([#26733](https://github.com/MaterializeInc/materialize/pull/26773)).
+
 ## 1.7.7 - 2024-04-19
 
 * Tweak [`deploy_permission_validation]`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_permission_validation.sql)
