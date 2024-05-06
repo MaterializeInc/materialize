@@ -62,7 +62,9 @@ pub trait SourceRender {
     /// Rendering a source is expected to return four things.
     ///
     /// First, a source must produce a collection that is produced by the rendered dataflow and
-    /// must contain *definite*[^1] data for all times beyond the resumption frontier.
+    /// must contain *definite*[^1] data for all times beyond the resumption frontier. This
+    /// collection must be spread evenly across the workers for efficient resource utilization
+    /// later on.
     ///
     /// Second, a source may produce an optional progress stream that will be used to drive
     /// reclocking. This is useful for sources that can query the highest offsets of the external
@@ -92,7 +94,7 @@ pub trait SourceRender {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceMessage {
     /// The message key
     pub key: Row,
@@ -103,7 +105,7 @@ pub struct SourceMessage {
 }
 
 /// A record produced by a source
-#[derive(Clone, Serialize, Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceOutput<FromTime> {
     /// The record's key (or some empty/default value for sources without the concept of key)
     pub key: Row,

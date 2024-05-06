@@ -32,6 +32,7 @@ use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection,
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use mz_timely_util::order::Partitioned;
 use rdkafka::client::Client;
 use rdkafka::consumer::base_consumer::PartitionQueue;
@@ -827,6 +828,10 @@ impl SourceRender for KafkaSourceConnection {
                 }
             }
         });
+
+        // Distribute produced values evenly across the workers, as required by the `SourceRender`
+        // contract.
+        let stream = stream.distribute_values();
 
         (
             stream.as_collection(),

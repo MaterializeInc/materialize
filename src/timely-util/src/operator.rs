@@ -152,8 +152,13 @@ where
     /// into the operator is dropped.
     fn with_token(&self, token: Weak<()>) -> Stream<G, D1>;
 
-    /// Distributes the data of the stream to all workers in a round-robin fashion.
+    /// Distributes the containers of data of the stream to all workers in a round-robin fashion.
     fn distribute(&self) -> Stream<G, D1>
+    where
+        D1: ExchangeData;
+
+    /// Distributes the individual pieces of data of the stream to all workers in a round-robin fashion.
+    fn distribute_values(&self) -> Stream<G, D1>
     where
         D1: ExchangeData;
 }
@@ -461,6 +466,29 @@ where
                 });
             }
         })
+    }
+
+    fn distribute_values(&self) -> Stream<G, D1>
+    where
+        D1: ExchangeData,
+    {
+        let mut vector = Vec::new();
+        let mut next: u64 = 0;
+        self.unary(
+            Exchange::new(move |_| {
+                next = next.wrapping_add(1);
+                next
+            }),
+            "DistributeValues",
+            move |_, _| {
+                move |input, output| {
+                    input.for_each(|time, data| {
+                        data.swap(&mut vector);
+                        output.session(&time).give_vec(&mut vector);
+                    });
+                }
+            },
+        )
     }
 }
 

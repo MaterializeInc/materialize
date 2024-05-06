@@ -92,6 +92,7 @@ use futures::TryStreamExt;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_timely_util::antichain::AntichainExt;
+use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
@@ -492,10 +493,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             })
         });
 
-    // TODO: Split row decoding into a separate operator that can be distributed across all workers
     let snapshot_updates = raw_data
         .as_collection()
         .map(move |(output_index, event)| (output_index, event.err_into()));
+
+    // TODO: Split row decoding into a separate operator that can be distributed across all workers
+    //
+    // For now, we just distribute after, to meet the `SourceRender` contract.
+    let snapshot_updates = snapshot_updates.inner.distribute_values().as_collection();
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 

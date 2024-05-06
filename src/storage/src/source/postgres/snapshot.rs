@@ -491,7 +491,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     });
 
     // Distribute the raw COPY data to all workers and turn it into a collection
-    let raw_collection = raw_data.distribute().as_collection();
+    //
+    // This is required by the `SourceRender` contract, as well as the for efficient
+    // decoding.
+    let raw_collection = raw_data.distribute_values().as_collection();
 
     // We now decode the COPY protocol and apply the cast expressions
     let mut text_row = Row::default();

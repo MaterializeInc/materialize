@@ -396,8 +396,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         })
     });
 
-    // Distribute the raw slot data to all workers and turn it into a collection
-    let raw_collection = data_stream.distribute().as_collection();
+    // Distribute the raw slot data to all workers and turn it into a collection.
+    //
+    // This is required by the `SourceRender` contract, as well as the for efficient
+    // decoding.
+    let raw_collection = data_stream.distribute_values().as_collection();
 
     // We now process the slot updates and apply the cast expressions
     let mut final_row = Row::default();
