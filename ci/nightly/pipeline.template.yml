@@ -1270,7 +1270,7 @@ steps:
       - id: rqg-left-join-stacks
         label: "RQG left join stacks workload"
         depends_on: build-aarch64
-        timeout_in_minutes: 35
+        timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-small
         plugins:
