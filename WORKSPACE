@@ -110,8 +110,8 @@ aspect_bazel_lib_register_toolchains()
 #
 # Load additional toolchains and dependencies required for building openssl.
 
-load("//bazel/third_party/openssl:openssl_repositories.bzl", "openssl_repositories")
+load("//misc/bazel/third_party/openssl:openssl_repositories.bzl", "openssl_repositories")
 openssl_repositories()
 
-load("//bazel/third_party/openssl:openssl_setup.bzl", "openssl_setup")
+load("//misc/bazel/third_party/openssl:openssl_setup.bzl", "openssl_setup")
 openssl_setup()

@@ -11,7 +11,6 @@
 /.cargo                             @benesch
 /.config                            @benesch
 /.github                            @benesch
-/bazel                              @parkmycar @guswynn @maddyblue
 /bin
 /bin/lint-versions                  @MaterializeInc/testing
 /ci                                 @MaterializeInc/testing
@@ -19,6 +18,7 @@
 /doc/user                           @morsapaes
 /doc/developer/reference/compute    @MaterializeInc/compute
 /doc/developer/reference/storage    @MaterializeInc/storage
+/misc/bazel                         @parkmycar @guswynn @maddyblue
 /misc/dbt-materialize               @morsapaes
 /misc/python/materialize/benches    @MaterializeInc/testing
 /misc/python/materialize/buildkite_insights @MaterializeInc/testing
