@@ -20,6 +20,7 @@ import pg8000
 import requests
 import websocket
 from pg8000 import Connection
+from pg8000.exceptions import InterfaceError
 from pg8000.native import identifier
 
 import materialize.parallel_workload.database
@@ -909,15 +910,18 @@ class FlipFlagsAction(Action):
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
         flag_value = self.rng.choice(self.flags_with_values[flag_name])
 
+        conn = None
+
         try:
             conn = self.create_system_connection(exe)
-        except:
+            self.flip_flag(conn, flag_name, flag_value)
+            return True
+        except InterfaceError:
+            if conn is not None:
+                conn.close()
+
             # ignore it
             return False
-
-        self.flip_flag(conn, flag_name, flag_value)
-        conn.close()
-        return True
 
     def create_system_connection(
         self, exe: Executor, num_attempts: int = 10
