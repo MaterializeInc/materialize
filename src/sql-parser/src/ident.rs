@@ -61,14 +61,14 @@
 macro_rules! ident {
     ($val:expr) => {{
         let _x: &'static str = $val;
-        $crate::ident!(@internal_check_len 255, $val);
+        $crate::ident!(@internal_check 255, $val);
 
         $crate::ast::Ident::new_unchecked($val)
     }};
 
     // Internal helper macro to assert the length of the provided string literal is less than our
     // maximum.
-    (@internal_check_len $max_len:literal, $val:expr) => {{
+    (@internal_check $max_len:literal, $val:expr) => {{
         #[allow(dead_code)]
         const fn check_len<const MAX: usize, const LEN: usize>() {
             if LEN > MAX {
@@ -83,6 +83,8 @@ macro_rules! ident {
             }
         }
 
+        // `str` does not implement `const PartialEq`, which is why we need to
+        // hand roll this equals function.
         const fn equal(lhs: &str, rhs: &str) -> bool {
             let lhs = lhs.as_bytes();
             let rhs = rhs.as_bytes();
