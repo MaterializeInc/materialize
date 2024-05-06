@@ -299,10 +299,10 @@ pub struct HollowBatchPart<T> {
 pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
-    /// Pointers usable to retrieve the updates.
-    pub parts: Vec<BatchPart<T>>,
     /// The number of updates in the batch.
     pub len: usize,
+    /// Pointers usable to retrieve the updates.
+    pub(crate) parts: Vec<BatchPart<T>>,
     /// Runs of sequential sorted batch parts, stored as indices into `parts`.
     /// ex.
     /// ```text
@@ -310,7 +310,7 @@ pub struct HollowBatch<T> {
     ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
     ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
     /// ```
-    pub runs: Vec<usize>,
+    pub(crate) runs: Vec<usize>,
 }
 
 impl<T: Debug> Debug for HollowBatch<T> {
