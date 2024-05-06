@@ -13,6 +13,7 @@ usage: buildkite-step-durations [-h]
                                 [--branch BRANCH]
                                 [--build-state {running,scheduled,passed,failing,failed,blocked,canceled,canceling,skipped,not_run,finished}]
                                 [--build-step-state {assigned,broken,canceled,failed,passed,running,scheduled,skipped,timed_out,unblocked,waiting,waiting_failed}]
+                                [--include-commit-hash]
                                 [--output-type {txt,txt-short,csv}]
                                 {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,release-qualification,security,slt,test,www}
 ```
