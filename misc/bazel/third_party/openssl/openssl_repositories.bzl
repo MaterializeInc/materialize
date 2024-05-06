@@ -26,7 +26,7 @@ def openssl_repositories():
     maybe(
         http_archive,
         name = "openssl",
-        build_file = Label("//bazel/third_party/openssl:BUILD.openssl.bazel"),
+        build_file = Label("//misc/bazel/third_party/openssl:BUILD.openssl.bazel"),
         integrity = OPENSSL_INTEGRITY,
         strip_prefix = "openssl-{0}".format(OPENSSL_VERSION),
         urls = [
