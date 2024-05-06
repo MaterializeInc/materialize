@@ -496,11 +496,8 @@ impl PgwireBalancer {
         // per tenant. In the future we may want to remove non-SNI connections.
         if let Conn::Ssl(ssl_stream) = conn.inner() {
             let tenant = resolved.tenant.as_deref().unwrap_or_else(|| "unknown");
-            if ssl_stream.ssl().servername(NameType::HOST_NAME).is_some() {
-                metrics.tenant_pgwire_sni_count(tenant, true).inc();
-            } else {
-                metrics.tenant_pgwire_sni_count(tenant, false).inc();
-            }
+            let has_sni = ssl_stream.ssl().servername(NameType::HOST_NAME).is_some();
+            metrics.tenant_pgwire_sni_count(tenant, has_sni).inc();
         }
 
         let _active_guard = resolved
