@@ -172,8 +172,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     /// given timestamp. See [Self::registered_at].
     pub(crate) fn all_registered_at(&self, ts: &T) -> Vec<ShardId> {
         assert_eq!(self.only_data_id, None);
-        // TODO(jkosh44) This assert is wrong, it should be >, see
-        // https://github.com/MaterializeInc/materialize/issues/26903.
         assert!(self.progress_exclusive >= *ts);
         self.datas
             .iter()
