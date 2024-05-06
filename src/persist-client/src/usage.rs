@@ -475,7 +475,7 @@ impl StorageUsageClient {
 
         let mut current_state_batches_bytes = 0;
         let mut current_state_rollups_bytes = 0;
-        states_iter.state().map_blobs(|x| match x {
+        states_iter.state().blobs().for_each(|x| match x {
             HollowBlobRef::Batch(x) => {
                 for part in x.parts.iter() {
                     let part = match part {

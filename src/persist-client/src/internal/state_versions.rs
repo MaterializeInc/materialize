@@ -1068,7 +1068,7 @@ impl<T: Timestamp + Lattice + Codec64> InspectDiff<'_, T> {
     /// Blob removals, along with all other diffs, are ignored.
     pub fn referenced_blob_fn<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, f: F) {
         match self {
-            InspectDiff::FromInitial(x) => x.map_blobs(f),
+            InspectDiff::FromInitial(x) => x.blobs().for_each(f),
             InspectDiff::Diff(x) => x.map_blob_inserts(f),
         }
     }
@@ -1114,7 +1114,7 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
 
         use crate::internal::state::BatchPart;
 
-        x.map_blobs(|x| match x {
+        x.blobs().for_each(|x| match x {
             HollowBlobRef::Batch(x) => {
                 self.full_batches.insert(x.clone());
             }

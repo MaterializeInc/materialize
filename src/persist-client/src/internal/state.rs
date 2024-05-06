@@ -1455,7 +1455,7 @@ where
 
     pub fn size_metrics(&self) -> StateSizeMetrics {
         let mut ret = StateSizeMetrics::default();
-        self.map_blobs(|x| match x {
+        self.blobs().for_each(|x| match x {
             HollowBlobRef::Batch(x) => {
                 ret.hollow_batch_count += 1;
                 ret.batch_part_count += x.part_count();
@@ -1660,13 +1660,10 @@ where
         None
     }
 
-    pub(crate) fn map_blobs<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
-        self.collections
-            .trace
-            .map_batches(|x| f(HollowBlobRef::Batch(x)));
-        for x in self.collections.rollups.values() {
-            f(HollowBlobRef::Rollup(x));
-        }
+    pub(crate) fn blobs(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
+        let batches = self.collections.trace.batches().map(HollowBlobRef::Batch);
+        let rollups = self.collections.rollups.values().map(HollowBlobRef::Rollup);
+        batches.chain(rollups)
     }
 }
 

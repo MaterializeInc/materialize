@@ -464,7 +464,7 @@ where
             // Extra paranoia: verify that none of the blobs we're about to delete
             // are in our current state (we should only be truncating blobs from
             // before this state!)
-            states.state().map_blobs(|blob| match blob {
+            states.state().blobs().for_each(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     for live_part in &batch.parts {
                         match live_part {
