@@ -53,7 +53,8 @@ pub struct DataSnapshot<T> {
     pub(crate) latest_write: Option<T>,
     /// The as_of asked for.
     pub(crate) as_of: T,
-    /// An upper bound on the times known to be empty of unapplied writes via txns.
+    /// Some timestamp s.t. [as_of, empty_to) is known to be empty of
+    /// unapplied writes via txns.
     pub(crate) empty_to: T,
 }
 
@@ -65,7 +66,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     /// physical upper of the data shard. This is suitable for use as an initial
     /// input to `TxnsCache::data_listen_next` (after reading up to it, of
     /// course).
-    #[instrument(level = "debug", fields(shard = %self.data_id, ts = ?self.as_of))]
+    #[instrument(level = "debug", fields(shard = %self.data_id, ts = ?self.as_of, empty_to = ?self.empty_to))]
     pub(crate) async fn unblock_read<K, V, D>(
         &self,
         mut data_write: WriteHandle<K, V, T, D>,
@@ -88,7 +89,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
                 .await;
         }
 
-        // Now fill `(latest_write,as_of]` with empty updates, so we can read
+        // Now fill `(latest_write, as_of]` with empty updates, so we can read
         // the shard at as_of normally. In practice, because CaA takes an
         // exclusive upper, we actually fill `(latest_write, empty_to)`.
         //
@@ -108,6 +109,10 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
             );
             return Antichain::new();
         };
+
+        // TODO(jkosh44) We should not be writing to unregistered shards, but
+        // we haven't checked to see if this was registered at `self.empty_to`.
+        // See https://github.com/MaterializeInc/materialize/issues/27088.
         while data_upper < self.empty_to {
             // It would be very bad if we accidentally filled any times <=
             // latest_write with empty updates, so defensively assert on each
@@ -205,7 +210,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         O: Opaque + Codec64,
     {
         // This is used by the optimizer in planning to get cost statistics, so
-        // it can't use `unblock_reads`. Instead use the "translated as_of"
+        // it can't use `unblock_read`. Instead use the "translated as_of"
         // trick we invented but didn't end up using for read of the shard
         // contents. The reason we didn't use it for that was because we'd have
         // to deal with advancing timestamps of the updates we read, but the
@@ -277,9 +282,67 @@ pub enum DataListenNext<T> {
     /// shard. Wait for it to progress with `update_gt` and call
     /// `data_listen_next` again.
     WaitForTxnsProgress,
-    /// We've lost historical distinctions and can no longer answer queries
-    /// about times before the returned one.
-    CompactedTo(T),
+}
+
+/// A mapping between the physical upper of a data shard and the largest upper
+/// which is known to logically have the same contents.
+///
+/// Said another way, `[physical_upper,logical_upper)` is known to be empty (in
+/// the "definite" sense).
+///
+/// Invariant: physical_upper <= logical_upper
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DataRemapEntry<T> {
+    /// The physical upper of a data shard.
+    pub physical_upper: T,
+    /// An upper bound on the times known to be empty of writes via txns since
+    /// `physical_upper`.
+    pub logical_upper: T,
+}
+
+/// A token exchangeable for a [`DataSubscribe`].
+///
+/// Must be unblocked via [`DataSubscribeBlocked::unblock_subscribe`].
+#[derive(Debug)]
+pub(crate) struct DataSubscribeBlocked<T>(pub(crate) DataSnapshot<T>);
+
+/// A token that keeps track of a [`DataRemapEntry`] for shard `data_id`.
+#[derive(Debug)]
+pub(crate) struct DataSubscribe<T> {
+    /// The id of the data shard.
+    pub(crate) data_id: ShardId,
+    /// The physical and logical upper of `data_id`.
+    pub(crate) remap: DataRemapEntry<T>,
+}
+
+impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> DataSubscribeBlocked<T> {
+    /// Unblocks the snapshot portion of this subscribe. See
+    /// [`DataSnapshot::unblock_read`].
+    ///
+    /// Returns `None` if the upper of the data shard is the empty antichain.
+    #[instrument(level = "debug", fields(shard = %self.0.data_id, ts = ?self.0.as_of, empty_to = ?self.0.empty_to))]
+    pub(crate) async fn unblock_subscribe<K, V, D>(
+        self,
+        data_write: WriteHandle<K, V, T, D>,
+    ) -> Option<DataSubscribe<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let snapshot = self.0;
+        let empty_to = snapshot.unblock_read(data_write).await;
+        let Some(empty_to) = empty_to.into_option() else {
+            return None;
+        };
+        Some(DataSubscribe {
+            data_id: snapshot.data_id,
+            remap: DataRemapEntry {
+                physical_upper: empty_to.clone(),
+                logical_upper: empty_to,
+            },
+        })
+    }
 }
 
 /// A shared [TxnsCache] running in a task and communicated with over a channel.
@@ -565,12 +628,6 @@ where
                             "compacting TxnsRead cache to {:?} progress={:?}",
                             prev_frontier, self.cache.progress_exclusive
                         );
-                        // NB: If we add back a `data_listen_next` method, then
-                        // this will need to held back for any active users of
-                        // that. We'd probably package that up in some sort of
-                        // "subscription" abstraction that holds a capability on
-                        // this compaction frontier.
-                        self.cache.compact_to(&prev_frontier);
                     }
 
                     // The frontier has advanced, so respond to waits and retain
