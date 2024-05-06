@@ -152,27 +152,38 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         self.txns_id
     }
 
-    /// Returns whether the data shard was registered to the txns set at the
-    /// given timestamp.
+    /// Returns whether the data shard was registered to the txns set as of the
+    /// current progress.
     ///
-    /// Specifically, a data shard is registered at a timestamp `ts` if it has a
-    /// `register_ts <= ts` but no `register_ts < forget_ts < ts`.
-    // TODO(jkosh44) This method allows timestamps in the future with allows the
-    // answer to change over time. See
-    // https://github.com/MaterializeInc/materialize/issues/26903.
-    pub fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
+    /// Specifically, a data shard is registered if the most recent register
+    /// timestamp is set but the most recent forget timestamp is not set.
+    pub fn registered(&self, data_id: &ShardId) -> bool {
         self.assert_only_data_id(data_id);
         let Some(data_times) = self.datas.get(data_id) else {
             return false;
         };
-        data_times.registered.iter().any(|x| x.contains(ts))
+        data_times.last_reg().forget_ts.is_none()
+    }
+
+    /// Returns the set of all data shards registered to the txns set as of the
+    /// current progress. See [Self::registered].
+    pub(crate) fn all_registered(&self) -> Vec<ShardId> {
+        assert_eq!(self.only_data_id, None);
+        self.datas
+            .iter()
+            .filter(|(_, data_times)| data_times.last_reg().forget_ts.is_none())
+            .map(|(data_id, _)| *data_id)
+            .collect()
     }
 
     /// Returns the set of all data shards registered to the txns set at the
-    /// given timestamp. See [Self::registered_at].
+    /// given timestamp.
+    ///
+    /// Specifically, a data shard is registered at a timestamp `ts` if it has a
+    /// `register_ts <= ts` but no `register_ts < forget_ts < ts`.
     pub(crate) fn all_registered_at(&self, ts: &T) -> Vec<ShardId> {
         assert_eq!(self.only_data_id, None);
-        assert!(self.progress_exclusive >= *ts);
+        assert!(self.progress_exclusive > *ts);
         self.datas
             .iter()
             .filter(|(_, data_times)| data_times.registered.iter().any(|x| x.contains(ts)))
@@ -304,12 +315,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         } else if ts <= physical_ts {
             // There was some physical write, so read up to that time.
             ReadDataTo(physical_ts.step_forward())
-        } else if self.registered_at(data_id, &ts) {
+        } else if last_reg.forget_ts.is_none() {
             // Emitting logical progress at the wrong time is a correctness bug,
             // so be extra defensive about the necessary conditions: the most
             // recent registration is still active and we're in it.
-            assert!(last_reg.forget_ts.is_none() && last_reg.contains(&ts));
-            // The shard is registered so
+            assert!(last_reg.contains(&ts));
             EmitLogicalProgress(self.progress_exclusive.clone())
         } else {
             // The most recent forget is set, which means it's not registered as of

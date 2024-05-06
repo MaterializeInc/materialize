@@ -136,17 +136,6 @@ where
                 .expect("txns shard should not be closed");
 
             loop {
-                // Validate that the involved data shards are all registered.
-                let () = handle.txns_cache.update_ge(&txns_upper).await;
-                for (data_id, _) in self.writes.iter() {
-                    assert!(
-                        handle.txns_cache.registered_at(data_id, &commit_ts),
-                        "{} should be registered to commit at {:?}",
-                        data_id,
-                        commit_ts
-                    );
-                }
-
                 // txns_upper is the (inclusive) minimum timestamp at which we
                 // could possibly write. If our requested commit timestamp is before
                 // that, then it's no longer possible to write and the caller needs
@@ -158,6 +147,18 @@ where
                     );
                     return Err(txns_upper);
                 }
+
+                // Validate that the involved data shards are all registered.
+                let () = handle.txns_cache.update_ge(&txns_upper).await;
+                for (data_id, _) in self.writes.iter() {
+                    assert!(
+                        handle.txns_cache.registered(data_id),
+                        "{} should be registered as of current progress {:?}",
+                        data_id,
+                        handle.txns_cache.progress_exclusive,
+                    );
+                }
+
                 debug!(
                     "commit_at {:?}: [{:?}, {:?}) begin",
                     commit_ts,

@@ -243,13 +243,13 @@ where
                 .expect("txns should not be closed");
             loop {
                 self.txns_cache.update_ge(&txns_upper).await;
-                // Figure out which are still unregistered as of `txns_upper`. Below
+                // Figure out which are still unregistered. Below
                 // we write conditionally on the upper being what we expect so than
                 // we can re-run this if anything changes from underneath us.
                 let updates = updates
                     .iter()
                     .flat_map(|(data_id, (key, val))| {
-                        let registered = self.txns_cache.registered_at(data_id, &txns_upper);
+                        let registered = self.txns_cache.registered(data_id);
                         (!registered).then_some(((key, val), &register_ts, 1))
                     })
                     .collect::<Vec<_>>();
@@ -348,7 +348,7 @@ where
                     // Never registered or already forgotten. This could change in
                     // `[txns_upper, forget_ts]` (due to races) so close off that
                     // interval before returning, just don't write any updates.
-                    .filter(|data_id| self.txns_cache.registered_at(data_id, &txns_upper))
+                    .filter(|data_id| self.txns_cache.registered(data_id))
                     .map(|data_id| C::encode(TxnsEntry::Register(*data_id, T::encode(&forget_ts))))
                     .collect::<Vec<_>>();
                 let updates = updates
@@ -447,7 +447,7 @@ where
             let registered = loop {
                 self.txns_cache.update_ge(&txns_upper).await;
 
-                let registered = self.txns_cache.all_registered_at(&txns_upper);
+                let registered = self.txns_cache.all_registered();
                 let data_ids_debug = || {
                     registered
                         .iter()
@@ -1208,7 +1208,7 @@ mod tests {
 
         async fn registered_at_ts(&mut self, data_id: ShardId) -> bool {
             self.txns.txns_cache.update_ge(&self.ts).await;
-            self.txns.txns_cache.registered_at(&data_id, &self.ts)
+            self.txns.txns_cache.registered(&data_id)
         }
 
         // Writes to the given data shard, either via txns if it's registered or
