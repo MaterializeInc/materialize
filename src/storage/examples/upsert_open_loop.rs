@@ -115,6 +115,7 @@ use mz_ore::task;
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::probe::{Handle, ProbeNotify};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -577,87 +578,80 @@ async fn run_benchmark(
                 let active_worker = chosen_worker == worker_id;
 
                 let rocks_options = Arc::clone(rocks_options);
-                let _output: Stream<_, ()> = upsert_stream.unary_frontier(
+                let mut num_additions = 0;
+                let mut num_retractions = 0;
+                let mut buffer = Vec::new();
+
+                let mut frontier = Antichain::from_elem(0);
+                let mut max_lag = 0;
+                upsert_stream.sink(
                     Exchange::new(move |_| u64::cast_from(chosen_worker)),
                     &format!("source-{source_id}-counter"),
-                    move |_caps, _info| {
-                        let mut num_additions = 0;
-                        let mut num_retractions = 0;
-                        let mut buffer = Vec::new();
-
-                        let mut frontier = Antichain::from_elem(0);
-                        let mut max_lag = 0;
-
-                        move |input, _output| {
-                            if !active_worker {
-                                return;
-                            }
-                            input.for_each(|_time, data| {
-                                data.swap(&mut buffer);
-                                for (_k, _v, diff) in buffer.drain(..) {
-                                    if diff == 1 {
-                                        num_additions += 1;
-                                    } else if diff == -1 {
-                                        num_retractions += 1;
-                                    } else {
-                                        panic!("unexpected record diff: {diff}");
-                                    }
+                    move |input| {
+                        if !active_worker {
+                            return;
+                        }
+                        input.for_each(|_time, data| {
+                            data.swap(&mut buffer);
+                            for (_k, _v, diff) in buffer.drain(..) {
+                                if diff == 1 {
+                                    num_additions += 1;
+                                } else if diff == -1 {
+                                    num_retractions += 1;
+                                } else {
+                                    panic!("unexpected record diff: {diff}");
                                 }
-                            });
+                            }
+                        });
 
-                            if input.frontier().is_empty() {
-                                assert_eq!(num_records_total, num_additions);
-                                info!(
-                                    "Processing source {source_id} finished \
+                        if input.frontier().is_empty() {
+                            assert_eq!(num_records_total, num_additions);
+                            info!(
+                                "Processing source {source_id} finished \
                                     after {} ms and processed {num_additions} additions and \
                                     {num_retractions} retractions",
-                                    start.elapsed().as_millis(),
-                                );
-                            } else if PartialOrder::less_than(
-                                &frontier.borrow(),
-                                &input.frontier().frontier(),
-                            ) {
-                                frontier = input.frontier().frontier().to_owned();
-                                let data_timestamp = frontier.clone().into_option().unwrap();
-                                let elapsed = start.elapsed();
+                                start.elapsed().as_millis(),
+                            );
+                        } else if PartialOrder::less_than(
+                            &frontier.borrow(),
+                            &input.frontier().frontier(),
+                        ) {
+                            frontier = input.frontier().frontier().to_owned();
+                            let data_timestamp = frontier.clone().into_option().unwrap();
+                            let elapsed = start.elapsed();
 
-                                #[allow(clippy::as_conversions)]
-                                {
-                                    let lag = elapsed.as_millis() as u64 - data_timestamp;
-                                    max_lag = std::cmp::max(max_lag, lag);
-                                    let elapsed_seconds = elapsed.as_secs();
-                                    let key_mb_read = (num_additions * args.key_record_size_bytes)
-                                        as f64
-                                        / MIB as f64;
-                                    let mb_read = (num_additions
-                                        * (args.key_record_size_bytes
-                                            + args.value_record_size_bytes))
-                                        as f64
-                                        / MIB as f64;
-                                    let key_throughput = key_mb_read / elapsed_seconds as f64;
-                                    let throughput = mb_read / elapsed_seconds as f64;
+                            #[allow(clippy::as_conversions)]
+                            {
+                                let lag = elapsed.as_millis() as u64 - data_timestamp;
+                                max_lag = std::cmp::max(max_lag, lag);
+                                let elapsed_seconds = elapsed.as_secs();
+                                let key_mb_read = (num_additions * args.key_record_size_bytes)
+                                    as f64
+                                    / MIB as f64;
+                                let mb_read = (num_additions
+                                    * (args.key_record_size_bytes + args.value_record_size_bytes))
+                                    as f64
+                                    / MIB as f64;
+                                let key_throughput = key_mb_read / elapsed_seconds as f64;
+                                let throughput = mb_read / elapsed_seconds as f64;
 
-                                    let rocksdb_stats = if args.rocksdb_print_stats {
-                                        calculate_rocksdb_stats(
-                                            Some(&rocks_options),
-                                            elapsed_seconds,
-                                        )
+                                let rocksdb_stats = if args.rocksdb_print_stats {
+                                    calculate_rocksdb_stats(Some(&rocks_options), elapsed_seconds)
                                         .unwrap_or_else(String::new)
-                                    } else {
-                                        "".to_string()
-                                    };
+                                } else {
+                                    "".to_string()
+                                };
 
-                                    info!(
-                                        "After {} ms, source {source_id} has read {num_additions} \
+                                info!(
+                                    "After {} ms, source {source_id} has read {num_additions} \
                                     records (throughput {:.3} MiB/s, key throughput {:.3} MiB/s). \
                                     Max processing lag {max_lag}ms, \
                                     most recent processing lag {lag}ms.{}",
-                                        elapsed.as_millis(),
-                                        throughput,
-                                        key_throughput,
-                                        rocksdb_stats
-                                    );
-                                }
+                                    elapsed.as_millis(),
+                                    throughput,
+                                    key_throughput,
+                                    rocksdb_stats
+                                );
                             }
                         }
                     },
@@ -792,7 +786,7 @@ where
 
     let mut source_op = AsyncOperatorBuilder::new(format!("source-{source_id}"), scope);
 
-    let (mut output, output_stream) = source_op.new_output();
+    let (mut output, output_stream) = source_op.new_output::<CapacityContainerBuilder<_>>();
 
     let _shutdown_button = source_op.build(move |mut capabilities| async move {
         if !active_worker {

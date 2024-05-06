@@ -99,7 +99,7 @@ where
 {
     match oks {
         MzArrangementImport::RowRow(inner) => {
-            let oks = threshold_arrangement(inner, name, |v: DatumSeq<'_>| v.into_owned(), logic);
+            let oks = threshold_arrangement(inner, name, |v: DatumSeq| v.into_owned(), logic);
             MzArrangement::RowRow(oks)
         }
     }
