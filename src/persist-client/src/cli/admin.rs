@@ -314,7 +314,7 @@ where
             let bytes = req
                 .inputs
                 .iter()
-                .flat_map(|x| x.parts.iter().map(|x| x.encoded_size_bytes()))
+                .map(|x| x.encoded_size_bytes())
                 .sum::<usize>();
             let start = Instant::now();
             info!(
@@ -352,11 +352,7 @@ where
                 attempt,
                 idx,
                 res.output.parts.len(),
-                res.output
-                    .parts
-                    .iter()
-                    .map(|x| x.encoded_size_bytes())
-                    .sum::<usize>(),
+                res.output.encoded_size_bytes(),
                 start.elapsed(),
             );
             let (apply_res, maintenance) = machine

@@ -214,9 +214,7 @@ impl StorageUsageClient {
         while let Some(_) = states_iter.next(|diff| {
             diff.referenced_blob_fn(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
-                    for part in &batch.parts {
-                        batches_bytes += part.encoded_size_bytes();
-                    }
+                    batches_bytes += batch.encoded_size_bytes();
                 }
                 HollowBlobRef::Rollup(rollup) => {
                     rollup_bytes += rollup.encoded_size_bytes.unwrap_or(1);
@@ -982,17 +980,8 @@ mod tests {
             .await;
         }
 
-        let batches_size = b1
-            .batch
-            .parts
-            .iter()
-            .map(|x| u64::cast_from(x.encoded_size_bytes()))
-            .sum::<u64>()
-            + b2.batch
-                .parts
-                .iter()
-                .map(|x| u64::cast_from(x.encoded_size_bytes()))
-                .sum::<u64>();
+        let batches_size =
+            u64::cast_from(b1.batch.encoded_size_bytes() + b2.batch.encoded_size_bytes());
 
         write
             .expect_compare_and_append_batch(&mut [&mut b1], 0, 3)

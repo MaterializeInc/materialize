@@ -417,6 +417,11 @@ impl<T> HollowBatch<T> {
             })
             .sum()
     }
+
+    /// The sum of the encoded sizes of all parts in the batch.
+    pub fn encoded_size_bytes(&self) -> usize {
+        self.parts.iter().map(|p| p.encoded_size_bytes()).sum()
+    }
 }
 
 pub(crate) struct HollowBatchRunIter<'a, T> {
@@ -1475,9 +1480,8 @@ where
                 ret.batch_part_count += x.parts.len();
                 ret.num_updates += x.len;
 
-                let mut batch_size = 0;
+                let batch_size = x.encoded_size_bytes();
                 for x in x.parts.iter() {
-                    batch_size += x.encoded_size_bytes();
                     if x.ts_rewrite().is_some() {
                         ret.rewrite_part_count += 1;
                     }

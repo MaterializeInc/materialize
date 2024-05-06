@@ -305,8 +305,7 @@ where
         let total_input_bytes = req
             .inputs
             .iter()
-            .flat_map(|batch| batch.parts.iter())
-            .map(|parts| parts.encoded_size_bytes())
+            .map(|batch| batch.encoded_size_bytes())
             .sum::<usize>();
         let timeout = Duration::max(
             // either our minimum timeout

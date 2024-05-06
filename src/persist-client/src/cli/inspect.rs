@@ -526,11 +526,7 @@ pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
         let writers = state.collections.writers.len();
 
         state.collections.trace.map_batches(|b| {
-            bytes += b
-                .parts
-                .iter()
-                .map(|p| p.encoded_size_bytes())
-                .sum::<usize>();
+            bytes += b.encoded_size_bytes();
             parts += b.parts.len();
             batches += 1;
             if b.parts.is_empty() {
