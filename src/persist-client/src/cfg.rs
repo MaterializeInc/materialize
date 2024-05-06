@@ -32,8 +32,8 @@ use crate::internal::machine::{
 };
 use crate::internal::state::ROLLUP_THRESHOLD;
 use crate::operators::{
-    PERSIST_SINK_MINIMUM_BATCH_UPDATES, STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES,
-    STORAGE_SOURCE_DECODE_FUEL,
+    OPTIMIZE_IGNORED_DATA_DECODE, PERSIST_SINK_MINIMUM_BATCH_UPDATES,
+    STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES, STORAGE_SOURCE_DECODE_FUEL,
 };
 use crate::read::READER_LEASE_DURATION;
 
@@ -268,6 +268,12 @@ impl PersistConfig {
         STORAGE_SOURCE_DECODE_FUEL.get(self)
     }
 
+    /// CYA to allow opt-out of a performance optimization to skip decoding
+    /// ignored data.
+    pub fn optimize_ignored_data_decode(&self) -> bool {
+        OPTIMIZE_IGNORED_DATA_DECODE.get(self)
+    }
+
     /// Overrides the value for "persist_reader_lease_duration".
     pub fn set_reader_lease_duration(&self, val: Duration) {
         self.set_config(&READER_LEASE_DURATION, val);
@@ -328,6 +334,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
         .add(&crate::internal::apply::ROUNDTRIP_SPINE)
         .add(&crate::iter::SPLIT_OLD_RUNS)
+        .add(&crate::operators::OPTIMIZE_IGNORED_DATA_DECODE)
         .add(&crate::operators::PERSIST_SINK_MINIMUM_BATCH_UPDATES)
         .add(&crate::operators::STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)

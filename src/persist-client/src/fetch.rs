@@ -543,6 +543,14 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
             stats,
         )
     }
+
+    /// Decodes and returns the pushdown stats for this part, if known.
+    pub fn stats(&self) -> Option<PartStats> {
+        match &self.buf {
+            FetchedBlobBuf::Hollow { part, .. } => part.stats.as_ref().map(|x| x.decode()),
+            FetchedBlobBuf::Inline { .. } => None,
+        }
+    }
 }
 
 /// A [Blob] object that has been fetched, but not yet fully decoded.
@@ -635,10 +643,14 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// [Self::next] but optionally providing a `K` and `V` for alloc reuse.
+    ///
+    /// When `result_override` is specified, return it instead of decoding data.
+    /// This is used when we know the decoded result will be ignored.
     pub fn next_with_storage(
         &mut self,
         key: &mut Option<K>,
         val: &mut Option<V>,
+        result_override: Option<(K, V)>,
     ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
         while let Some((k, v, mut t, d)) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
@@ -672,21 +684,25 @@ where
                 continue;
             }
 
-            let k = self.metrics.codecs.key.decode(|| match key.take() {
-                Some(mut key) => match K::decode_from(&mut key, k, &mut self.key_storage) {
-                    Ok(()) => Ok(key),
-                    Err(err) => Err(err),
-                },
-                None => K::decode(k),
-            });
-            let v = self.metrics.codecs.val.decode(|| match val.take() {
-                Some(mut val) => match V::decode_from(&mut val, v, &mut self.val_storage) {
-                    Ok(()) => Ok(val),
-                    Err(err) => Err(err),
-                },
-                None => V::decode(v),
-            });
-            return Some(((k, v), t, d));
+            if let Some((key, val)) = result_override {
+                return Some(((Ok(key), Ok(val)), t, d));
+            } else {
+                let k = self.metrics.codecs.key.decode(|| match key.take() {
+                    Some(mut key) => match K::decode_from(&mut key, k, &mut self.key_storage) {
+                        Ok(()) => Ok(key),
+                        Err(err) => Err(err),
+                    },
+                    None => K::decode(k),
+                });
+                let v = self.metrics.codecs.val.decode(|| match val.take() {
+                    Some(mut val) => match V::decode_from(&mut val, v, &mut self.val_storage) {
+                        Ok(()) => Ok(val),
+                        Err(err) => Err(err),
+                    },
+                    None => V::decode(v),
+                });
+                return Some(((k, v), t, d));
+            }
         }
         None
     }
@@ -702,7 +718,7 @@ where
     type Item = ((Result<K, String>, Result<V, String>), T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_with_storage(&mut None, &mut None)
+        self.next_with_storage(&mut None, &mut None, None)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
