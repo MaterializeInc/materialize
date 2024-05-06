@@ -355,7 +355,7 @@ def workflow_many_connections(c: Composition) -> None:
     c.up("balancerd", "frontegg-mock", "materialized")
 
     cursors = []
-    connections = 1000 - 10  #  Go almost to the limit, but not above
+    connections = 1000 - 10  # Go almost to the limit, but not above
     print(f"Opening {connections} connections.")
     for i in range(connections):
         cursor = sql_cursor(c)
@@ -384,5 +384,24 @@ def workflow_webhook(c: Composition) -> None:
         > SELECT * FROM wh
         a
     """
+        )
+    )
+
+
+def workflow_pgwire_without_sni(c: Composition) -> None:
+    c.up("balancerd", "frontegg-mock", "materialized")
+    c.up("testdrive", persistent=True)
+
+    # there's no easy way to connect via python and disable SNI
+    # so instead we call out to psql-execute with `sslsni=0` to
+    # ensure we can establish connections via Frontegg resolver
+    c.testdrive(
+        dedent(
+            f"""
+            $ psql-execute command="SELECT 1" connection=postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require&sslsni=0
+            \\ ?column?
+            ----------
+                    1
+            """
         )
     )
