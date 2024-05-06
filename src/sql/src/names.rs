@@ -490,29 +490,23 @@ impl std::fmt::Display for ResolvedItemName {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ResolvedColumnName {
-    Column {
-        relation: ResolvedItemName,
-        name: ColumnName,
-        index: usize,
-    },
+pub enum ResolvedColumnReference {
+    Column { name: ColumnName, index: usize },
     Error,
 }
 
-impl AstDisplay for ResolvedColumnName {
+impl AstDisplay for ResolvedColumnReference {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ResolvedColumnName::Column { relation, name, .. } => {
-                f.write_node(relation);
-                f.write_str(".");
+            ResolvedColumnReference::Column { name, .. } => {
                 f.write_node(&Ident::new_unchecked(name.as_str()));
             }
-            ResolvedColumnName::Error => {}
+            ResolvedColumnReference::Error => {}
         }
     }
 }
 
-impl std::fmt::Display for ResolvedColumnName {
+impl std::fmt::Display for ResolvedColumnReference {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(self.to_ast_string().as_str())
     }
@@ -803,7 +797,7 @@ impl AstDisplay for ResolvedObjectName {
 impl AstInfo for Aug {
     type NestedStatement = Statement<Raw>;
     type ItemName = ResolvedItemName;
-    type ColumnName = ResolvedColumnName;
+    type ColumnReference = ResolvedColumnReference;
     type SchemaName = ResolvedSchemaName;
     type DatabaseName = ResolvedDatabaseName;
     type ClusterName = ResolvedClusterName;
@@ -1595,10 +1589,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         )
     }
 
-    fn fold_column_name(
-        &mut self,
-        column_name: <Raw as AstInfo>::ColumnName,
-    ) -> <Aug as AstInfo>::ColumnName {
+    fn fold_column_name(&mut self, column_name: ast::ColumnName<Raw>) -> ast::ColumnName<Aug> {
         let item_name = self.resolve_item_name(
             column_name.relation,
             ItemResolutionConfig {
@@ -1607,6 +1598,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 relations: true,
             },
         );
+
         match &item_name {
             ResolvedItemName::Item { id, full_name, .. } => {
                 let item = self.catalog.get_item(id);
@@ -1617,11 +1609,14 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         if self.status.is_ok() {
                             self.status = Err(e.into());
                         }
-                        return ResolvedColumnName::Error;
+                        return ast::ColumnName {
+                            relation: ResolvedItemName::Error,
+                            column: ResolvedColumnReference::Error,
+                        };
                     }
                 };
 
-                let name = normalize::column_name(column_name.column);
+                let name = normalize::column_name(column_name.column.clone());
                 let Some((index, _typ)) = desc.get_by_name(&name) else {
                     if self.status.is_ok() {
                         let similar = desc.iter_similar_names(&name).cloned().collect();
@@ -1631,17 +1626,30 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             similar,
                         })
                     }
-                    return ResolvedColumnName::Error;
+                    return ast::ColumnName {
+                        relation: ResolvedItemName::Error,
+                        column: ResolvedColumnReference::Error,
+                    };
                 };
 
-                ResolvedColumnName::Column {
+                ast::ColumnName {
                     relation: item_name,
-                    name,
-                    index,
+                    column: ResolvedColumnReference::Column { name, index },
                 }
             }
-            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => ResolvedColumnName::Error,
+            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => ast::ColumnName {
+                relation: ResolvedItemName::Error,
+                column: ResolvedColumnReference::Error,
+            },
         }
+    }
+
+    fn fold_column_reference(
+        &mut self,
+        _node: <Raw as AstInfo>::ColumnReference,
+    ) -> <Aug as AstInfo>::ColumnReference {
+        // Do not call this function directly; instead resolve through `fold_column_name`
+        ResolvedColumnReference::Error
     }
 
     fn fold_data_type(
@@ -2107,12 +2115,6 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             if catalog_full_name == *full_name {
                 *print_id = false;
             }
-        }
-    }
-
-    fn visit_column_name_mut(&mut self, name: &mut ResolvedColumnName) {
-        if let ResolvedColumnName::Column { relation, .. } = name {
-            self.visit_item_name_mut(relation);
         }
     }
 
