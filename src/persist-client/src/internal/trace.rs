@@ -298,7 +298,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                         let Some(next_batch) = legacy_batches.pop() else {
                             break;
                         };
-                        if next_batch.parts.is_empty() {
+                        if next_batch.is_empty() {
                             new_upper = next_batch.desc.upper().clone();
                         } else {
                             legacy_batches.push(next_batch);

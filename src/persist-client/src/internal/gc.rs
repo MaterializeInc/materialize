@@ -335,7 +335,7 @@ where
             InspectDiff::Diff(diff) => {
                 diff.map_blob_deletes(|blob| match blob {
                     HollowBlobRef::Batch(batch) => {
-                        seqno_held_parts += batch.parts.len();
+                        seqno_held_parts += batch.part_count();
                     }
                     HollowBlobRef::Rollup(_) => {}
                 });

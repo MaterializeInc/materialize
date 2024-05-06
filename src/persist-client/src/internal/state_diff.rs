@@ -748,8 +748,8 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             key: ins,
             val: StateFieldValDiff::Insert(()),
         }] => {
-            if del.parts.len() == 0
-                && ins.parts.len() == 0
+            if del.is_empty()
+                && ins.is_empty()
                 && del.desc.lower() == ins.desc.lower()
                 && PartialOrder::less_than(del.desc.upper(), ins.desc.upper())
             {

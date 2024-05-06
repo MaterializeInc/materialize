@@ -424,6 +424,14 @@ impl<T> HollowBatch<T> {
             .sum()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.parts.is_empty()
+    }
+
+    pub fn part_count(&self) -> usize {
+        self.parts.len()
+    }
+
     /// The sum of the encoded sizes of all parts in the batch.
     pub fn encoded_size_bytes(&self) -> usize {
         self.parts.iter().map(|p| p.encoded_size_bytes()).sum()
@@ -784,7 +792,7 @@ where
 
         // If the time interval is empty, the list of updates must also be
         // empty.
-        if batch.desc.upper() == batch.desc.lower() && !batch.parts.is_empty() {
+        if batch.desc.upper() == batch.desc.lower() && !batch.is_empty() {
             return Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidUsage::InvalidEmptyTimeInterval {
                     lower: batch.desc.lower().clone(),
@@ -1178,7 +1186,7 @@ where
         let mut is_empty = true;
         self.trace.map_batches(|b| {
             batch_count += 1;
-            is_empty &= b.parts.is_empty()
+            is_empty &= b.is_empty()
         });
         batch_count <= 1 && is_empty
     }
@@ -1206,7 +1214,7 @@ where
         let mut batch_count = 0;
         self.trace.map_batches(|b| {
             batch_count += 1;
-            if !b.parts.is_empty() && to_replace.is_none() {
+            if !b.is_empty() && to_replace.is_none() {
                 to_replace = Some(b.desc.clone());
             }
         });
@@ -1450,7 +1458,7 @@ where
         self.map_blobs(|x| match x {
             HollowBlobRef::Batch(x) => {
                 ret.hollow_batch_count += 1;
-                ret.batch_part_count += x.parts.len();
+                ret.batch_part_count += x.part_count();
                 ret.num_updates += x.len;
 
                 let batch_size = x.encoded_size_bytes();

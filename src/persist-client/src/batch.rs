@@ -92,10 +92,10 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     fn drop(&mut self) {
-        if self.batch.parts.len() > 0 {
+        if self.batch.part_count() > 0 {
             warn!(
                 "un-consumed Batch, with {} parts and dangling blob keys: {:?}",
-                self.batch.parts.len(),
+                self.batch.part_count(),
                 self.batch
                     .parts
                     .iter()
@@ -1311,7 +1311,7 @@ mod tests {
             .finish(&schemas, Antichain::from_elem(4))
             .await
             .expect("invalid usage");
-        assert_eq!(batch.batch.parts.len(), 3);
+        assert_eq!(batch.batch.part_count(), 3);
         write
             .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(4))
             .await
@@ -1347,7 +1347,7 @@ mod tests {
             )
             .await;
 
-        assert_eq!(batch.batch.parts.len(), 3);
+        assert_eq!(batch.batch.part_count(), 3);
         for part in &batch.batch.parts {
             let part = match part {
                 BatchPart::Hollow(x) => x,
@@ -1390,7 +1390,7 @@ mod tests {
             .await
             .expect("invalid usage");
 
-        assert_eq!(batch.batch.parts.len(), 2);
+        assert_eq!(batch.batch.part_count(), 2);
         for part in &batch.batch.parts {
             let part = match part {
                 BatchPart::Hollow(x) => x,
