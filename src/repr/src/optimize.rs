@@ -13,6 +13,42 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+/// The various kinds of statements that can be optimized. This corresponds to a
+/// subset of [`mz_sql_parser::ast::StatementKind`] variants for which we have a
+/// dedicated `Optimizer` implementations.
+#[derive(Debug, Copy, Clone)]
+pub enum StatementKind {
+    CopyTo,
+    CreateIndex,
+    CreateMaterializedView,
+    CreateView,
+    Peek,
+    Subscribe,
+}
+
+impl StatementKind {
+    /// A label to attach to optimizer metrics that can be used to differentiate
+    /// between the various statement kinds.
+    ///
+    /// For statements that differentiate between slow and fast paths, the
+    /// optional `slow_path` parameter can be set to indicate which of the two
+    /// paths is taken.
+    pub fn metric_label(&self, slow_path: Option<bool>) -> &'static str {
+        match self {
+            Self::CopyTo => "copy_to",
+            Self::CreateIndex => "index",
+            Self::CreateMaterializedView => "materialized_view",
+            Self::CreateView => "view",
+            Self::Peek => match slow_path {
+                Some(false) => "peek:slow_path",
+                Some(true) => "peek:fast_path",
+                None => "peek",
+            },
+            Self::Subscribe => "subscribe",
+        }
+    }
+}
+
 /// A macro for feature flags managed by the optimizer.
 macro_rules! optimizer_feature_flags {
     ({ $($feature:ident: $type:ty,)* }) => {

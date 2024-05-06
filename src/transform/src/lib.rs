@@ -28,7 +28,7 @@ use std::{fmt, iter};
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
-use mz_repr::optimize::OptimizerFeatures;
+use mz_repr::optimize::{OptimizerFeatures, StatementKind};
 use mz_repr::GlobalId;
 use tracing::error;
 
@@ -90,6 +90,8 @@ macro_rules! any {
 pub struct TransformCtx<'a> {
     /// The global ID for this query (if it exists).
     pub global_id: Option<GlobalId>,
+    /// The kind of the optimized statement.
+    pub kind: StatementKind,
     /// The indexes accessible.
     pub indexes: &'a dyn IndexOracle,
     /// Statistical estimates.
@@ -110,11 +112,13 @@ impl<'a> TransformCtx<'a> {
     /// [`Optimizer::logical_optimizer`] in order to transform a stand-alone
     /// [`MirRelationExpr`].
     pub fn local(
+        kind: StatementKind,
         features: &'a OptimizerFeatures,
         typecheck_ctx: &'a typecheck::SharedContext,
         df_meta: &'a mut DataflowMetainfo,
     ) -> Self {
         Self {
+            kind,
             indexes: &EmptyIndexOracle,
             stats: &EmptyStatisticsOracle,
             global_id: None,
@@ -129,6 +133,7 @@ impl<'a> TransformCtx<'a> {
     ///
     /// Used to call [`dataflow::optimize_dataflow`].
     pub fn global(
+        kind: StatementKind,
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
         features: &'a OptimizerFeatures,
@@ -136,6 +141,7 @@ impl<'a> TransformCtx<'a> {
         df_meta: &'a mut DataflowMetainfo,
     ) -> Self {
         Self {
+            kind,
             indexes,
             stats,
             global_id: None,
