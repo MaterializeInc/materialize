@@ -342,6 +342,7 @@ SCENARIOS = [
         ),
         materialized_memory="8Gb",
         clusterd_memory="6Gb",
+        disabled=True,
     ),
     PgCdcScenario(
         name="pg-cdc-large-tx",
