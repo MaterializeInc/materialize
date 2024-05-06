@@ -143,6 +143,21 @@ impl AstDisplay for RawColumnName {
 }
 impl_display!(RawColumnName);
 
+impl<T> FoldNode<Raw, T> for RawColumnName
+where
+    T: AstInfo,
+{
+    type Folded = T::ColumnName;
+
+    fn fold<F>(self, f: &mut F) -> Self::Folded
+    where
+        F: Fold<Raw, T>,
+    {
+        f.fold_column_name(self)
+    }
+}
+
+
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub enum RawClusterName {
     Unresolved(Ident),
