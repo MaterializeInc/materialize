@@ -367,6 +367,9 @@ where
                     return Err(txns_upper);
                 }
 
+                // Ensure the latest writes for each shard has been applied, so we don't run into
+                // any issues trying to apply it later.
+                //
                 // TODO(jkosh44) While this comment accurately reflects the
                 // current behavior of `self.txns_cache`, the current behavior
                 // is not correct. See https://github.com/MaterializeInc/materialize/issues/26893.

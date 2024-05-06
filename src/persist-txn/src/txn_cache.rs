@@ -82,11 +82,11 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     // TODO(jkosh44) These invariants are not upheld. The current code allows us to compact this
     // cache arbitrarily ahead of the `since` of the txns shard. Either these invariants are
     // incorrect or the current code is incorrect, currently it's not clear which.
-    // See https://github.com/MaterializeInc/materialize/issues/26893
+    // See https://github.com/MaterializeInc/materialize/issues/26893.
     /// Invariant: <= the minimum unapplied batch.
     /// Invariant: <= the minimum unapplied register.
     since_ts: T,
-    /// The contents of this cache are updated as of, but not including, this time.
+    /// The contents of this cache are updated up to, but not including, this time.
     pub(crate) progress_exclusive: T,
 
     next_batch_id: usize,
@@ -212,7 +212,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         let applied = |x| matches!(lastest_forget, Some(forget_ts) if forget_ts >= x);
         // TODO(jkosh44) latest_write and empty_to are not right, `writes` can be compacted past
         // an unapplied write, meaning we can miss a write.
-        // See https://github.com/MaterializeInc/materialize/issues/26893
+        // See https://github.com/MaterializeInc/materialize/issues/26893.
         let latest_write = all
             .writes
             .iter()
@@ -407,10 +407,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         // un-compacted data.
         assert!(&self.progress_exclusive >= since_ts);
 
-        // TODO(jkosh44) This violates the invariants of `self.since_ts`.
         // NB: This intentionally does not compact self.unapplied_batches,
         // because we aren't allowed to alter those timestamps. This is fine
         // because it and self.batch_idx are self-compacting, anyway.
+        //
+        // TODO(jkosh44) This violates the invariants of `self.since_ts`.
+        // Specifically, it allows the since to be larger than the minimum
+        // unapplied batch and register. See
+        // https://github.com/MaterializeInc/materialize/issues/26893.
         if &self.since_ts < since_ts {
             self.since_ts.clone_from(since_ts);
         } else {
