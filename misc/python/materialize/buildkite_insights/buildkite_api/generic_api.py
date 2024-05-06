@@ -24,7 +24,7 @@ class RateLimitExceeded(Exception):
         self.partial_result = partial_result
 
 
-def get(request_path: str, params: dict[str, Any]) -> Any:
+def get(request_path: str, params: dict[str, Any], as_json: bool = True) -> Any:
     headers = {}
     token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
 
@@ -39,7 +39,10 @@ def get(request_path: str, params: dict[str, Any]) -> Any:
     if r.status_code == STATUS_CODE_RATE_LIMIT_EXCEEDED:
         raise RateLimitExceeded([])
 
-    return r.json()
+    if as_json:
+        return r.json()
+    else:
+        return r.text
 
 
 def get_multiple(
