@@ -326,6 +326,7 @@ struct ServerMetricsConfig {
     tenant_connections: IntGaugeVec,
     tenant_connection_rx: IntCounterVec,
     tenant_connection_tx: IntCounterVec,
+    tenant_pgwire_sni_count: IntCounterVec,
 }
 
 impl ServerMetricsConfig {
@@ -347,13 +348,18 @@ impl ServerMetricsConfig {
         ));
         let tenant_connection_rx = registry.register(metric!(
             name: "mz_balancer_tenant_connection_rx",
-            help: "Number of bytes received from a client for a tenent.",
+            help: "Number of bytes received from a client for a tenant.",
             var_labels: ["source", "tenant"],
         ));
         let tenant_connection_tx = registry.register(metric!(
             name: "mz_balancer_tenant_connection_tx",
-            help: "Number of bytes sent to a client for a tenent.",
+            help: "Number of bytes sent to a client for a tenant.",
             var_labels: ["source", "tenant"],
+        ));
+        let tenant_pgwire_sni_count = registry.register(metric!(
+            name: "mz_balancer_tenant_pgwire_sni_count",
+            help: "Count of pgwire connections that have and do not have SNI available per tenant.",
+            var_labels: ["tenant", "has_sni"],
         ));
         Self {
             connection_status,
@@ -361,6 +367,7 @@ impl ServerMetricsConfig {
             tenant_connections,
             tenant_connection_rx,
             tenant_connection_tx,
+            tenant_pgwire_sni_count,
         }
     }
 }
@@ -414,6 +421,12 @@ impl ServerMetrics {
         self.inner
             .tenant_connection_tx
             .with_label_values(&[self.source, tenant])
+    }
+
+    fn tenant_pgwire_sni_count(&self, tenant: &str, has_sni: bool) -> IntCounter {
+        self.inner
+            .tenant_pgwire_sni_count
+            .with_label_values(&[tenant, &has_sni.to_string()])
     }
 
     fn status_label(is_ok: bool) -> &'static str {
@@ -478,6 +491,18 @@ impl PgwireBalancer {
                     .await;
             }
         };
+
+        // Count the # of pgwire connections that have SNI available / unavailable
+        // per tenant. In the future we may want to remove non-SNI connections.
+        if let Conn::Ssl(ssl_stream) = conn.inner() {
+            let tenant = resolved.tenant.as_deref().unwrap_or_else(|| "unknown");
+            if ssl_stream.ssl().servername(NameType::HOST_NAME).is_some() {
+                metrics.tenant_pgwire_sni_count(tenant, true).inc();
+            } else {
+                metrics.tenant_pgwire_sni_count(tenant, false).inc();
+            }
+        }
+
         let _active_guard = resolved
             .tenant
             .as_ref()
