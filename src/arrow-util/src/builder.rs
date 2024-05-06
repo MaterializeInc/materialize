@@ -140,15 +140,15 @@ impl ArrowBuilder {
 /// this type: https://arrow.apache.org/docs/format/Columnar.html#extension-types
 fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, String), anyhow::Error> {
     let (data_type, extension_name) = match scalar_type {
-        ScalarType::Bool => (DataType::Boolean, "bool"),
-        ScalarType::Int16 => (DataType::Int16, "int16"),
-        ScalarType::Int32 => (DataType::Int32, "int32"),
-        ScalarType::Int64 => (DataType::Int64, "int64"),
-        ScalarType::UInt16 => (DataType::UInt16, "uint16"),
-        ScalarType::UInt32 => (DataType::UInt32, "uint32"),
-        ScalarType::UInt64 => (DataType::UInt64, "uint64"),
-        ScalarType::Float32 => (DataType::Float32, "float32"),
-        ScalarType::Float64 => (DataType::Float64, "float64"),
+        ScalarType::Bool => (DataType::Boolean, "boolean"),
+        ScalarType::Int16 => (DataType::Int16, "smallint"),
+        ScalarType::Int32 => (DataType::Int32, "integer"),
+        ScalarType::Int64 => (DataType::Int64, "bigint"),
+        ScalarType::UInt16 => (DataType::UInt16, "uint2"),
+        ScalarType::UInt32 => (DataType::UInt32, "uint4"),
+        ScalarType::UInt64 => (DataType::UInt64, "uint8"),
+        ScalarType::Float32 => (DataType::Float32, "real"),
+        ScalarType::Float64 => (DataType::Float64, "double"),
         ScalarType::Date => (DataType::Date32, "date"),
         // The resolution of our time and timestamp types is microseconds, which is lucky
         // since the original parquet 'ConvertedType's support microsecond resolution but not
@@ -171,22 +171,22 @@ fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, Strin
             ),
             "timestamptz",
         ),
-        ScalarType::Bytes => (DataType::LargeBinary, "bytes"),
+        ScalarType::Bytes => (DataType::LargeBinary, "bytea"),
         ScalarType::Char { length } => {
             if length.map_or(false, |l| l.into_u32() < i32::MAX.unsigned_abs()) {
-                (DataType::Utf8, "char")
+                (DataType::Utf8, "text")
             } else {
-                (DataType::LargeUtf8, "char")
+                (DataType::LargeUtf8, "text")
             }
         }
         ScalarType::VarChar { max_length } => {
             if max_length.map_or(false, |l| l.into_u32() < i32::MAX.unsigned_abs()) {
-                (DataType::Utf8, "varchar")
+                (DataType::Utf8, "text")
             } else {
-                (DataType::LargeUtf8, "varchar")
+                (DataType::LargeUtf8, "text")
             }
         }
-        ScalarType::String => (DataType::LargeUtf8, "string"),
+        ScalarType::String => (DataType::LargeUtf8, "text"),
         // Parquet does have a UUID 'Logical Type' in parquet format 2.4+, but there is no arrow
         // UUID type, so we match the format (a 16-byte fixed-length binary array) ourselves.
         ScalarType::Uuid => (DataType::FixedSizeBinary(16), "uuid"),
