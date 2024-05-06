@@ -86,3 +86,12 @@ def trim_match(
         result = f"{result} [...]"
 
     return result
+
+
+def determine_line_number(input: str, position: int) -> int:
+    return 1 + input[:position].count("\n")
+
+
+def determine_position_in_line(input: str, position: int) -> int:
+    position_line_start = input[:position].rfind("\n")
+    return position - position_line_start
