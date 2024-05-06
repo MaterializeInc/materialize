@@ -57,6 +57,7 @@ use mz_timely_util::builder_async::{
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
@@ -293,14 +294,14 @@ where
     let name = format!("SourceGenericStats({})", source_id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let (mut data_output, data) = builder.new_output();
-    let (progress_output, derived_progress) = builder.new_output();
+    let (mut data_output, data) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (progress_output, derived_progress) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut data_input = builder.new_input_for_many(
         &input_data.inner,
         Pipeline,
         [&data_output, &progress_output],
     );
-    let (mut health_output, derived_health) = builder.new_output();
+    let (mut health_output, derived_health) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     builder.build(move |mut caps| async move {
         let health_cap = caps.pop().unwrap();
@@ -453,7 +454,7 @@ where
 
     let operator_name = format!("remap({})", id);
     let mut remap_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut remap_output, remap_stream) = remap_op.new_output();
+    let (mut remap_output, remap_stream) = remap_op.new_output::<CapacityContainerBuilder<_>>();
 
     let button = remap_op.build(move |capabilities| async move {
         if !active_worker {

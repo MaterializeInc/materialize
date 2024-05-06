@@ -141,6 +141,7 @@ impl<H: Digest> Hasher for DigestHasher<H> {
 }
 
 use std::convert::Infallible;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 
 use self::types::ValueMetadata;
@@ -915,7 +916,7 @@ impl<G: Scope> UpsertErrorEmitter<G>
     for (
         &mut AsyncOutputHandle<
             <G as ScopeParent>::Timestamp,
-            Vec<(OutputIndex, HealthStatusUpdate)>,
+            CapacityContainerBuilder<Vec<(OutputIndex, HealthStatusUpdate)>>,
             Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
         >,
         &Capability<<G as ScopeParent>::Timestamp>,
@@ -932,7 +933,7 @@ async fn process_upsert_state_error<G: Scope>(
     e: anyhow::Error,
     health_output: &mut AsyncOutputHandle<
         <G as ScopeParent>::Timestamp,
-        Vec<(OutputIndex, HealthStatusUpdate)>,
+        CapacityContainerBuilder<Vec<(OutputIndex, HealthStatusUpdate)>>,
         Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,

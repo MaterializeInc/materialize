@@ -7,15 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_expr::MfpPlan;
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
-use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::operator::StreamExt;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::InputCapability;
+use timely::dataflow::channels::pushers::buffer::Session;
+use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
@@ -43,9 +43,6 @@ where
         let stream = ok_collection.inner;
         let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, _| {
             Box::new(move |input, ok_output, err_output| {
-                let mut ok_session = ConsolidateBuffer::new(ok_output, 0);
-                let mut err_session = ConsolidateBuffer::new(err_output, 1);
-
                 let mut datums = DatumVec::new();
                 let mut datums_mfp = DatumVec::new();
 
@@ -54,6 +51,9 @@ where
 
                 input.for_each(|cap, data| {
                     data.swap(&mut storage);
+
+                    let mut ok_session = ok_output.session_with_builder(&cap);
+                    let mut err_session = err_output.session_with_builder(&cap);
 
                     'input: for (input_row, time, diff) in storage.drain(..) {
                         let temp_storage = RowArena::new();
@@ -67,14 +67,14 @@ where
                         let args = match args {
                             Ok(args) => args,
                             Err(e) => {
-                                err_session.give(&cap, (e.into(), time, diff));
+                                err_session.give((e.into(), time, diff));
                                 continue 'input;
                             }
                         };
                         let mut extensions = match func.eval(&args, &temp_storage) {
                             Ok(exts) => exts.fuse(),
                             Err(e) => {
-                                err_session.give(&cap, (e.into(), time, diff));
+                                err_session.give((e.into(), time, diff));
                                 continue 'input;
                             }
                         };
@@ -85,7 +85,6 @@ where
                             table_func_output.extend((&mut extensions).take(1023));
                             // We could consolidate `table_func_output`, but it seems unlikely to be productive.
                             drain_through_mfp(
-                                &cap,
                                 &input_row,
                                 &time,
                                 &diff,
@@ -115,7 +114,6 @@ where
 ///
 /// The method decodes `input_row`, and should be amortized across non-trivial `extensions`.
 fn drain_through_mfp<T>(
-    cap: &InputCapability<T>,
     input_row: &Row,
     input_time: &T,
     input_diff: &Diff,
@@ -123,12 +121,15 @@ fn drain_through_mfp<T>(
     extensions: &[(Row, Diff)],
     mfp_plan: &MfpPlan,
     until: &Antichain<Timestamp>,
-    ok_output: &mut ConsolidateBuffer<T, Row, Diff, Tee<T, Vec<(Row, T, Diff)>>>,
-    err_output: &mut ConsolidateBuffer<
+    ok_output: &mut Session<
         T,
-        DataflowError,
-        Diff,
-        Tee<T, Vec<(DataflowError, T, Diff)>>,
+        ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>,
+        Counter<T, Vec<(Row, T, Diff)>, Tee<T, Vec<(Row, T, Diff)>>>,
+    >,
+    err_output: &mut Session<
+        T,
+        ConsolidatingContainerBuilder<Vec<(DataflowError, T, Diff)>>,
+        Counter<T, Vec<(DataflowError, T, Diff)>, Tee<T, Vec<(DataflowError, T, Diff)>>>,
     >,
 ) where
     T: crate::render::RenderTimestamp,
@@ -163,13 +164,13 @@ fn drain_through_mfp<T>(
                     // Copy the whole time, and re-populate event time.
                     let mut time = input_time.clone();
                     *time.event_time_mut() = event_time;
-                    ok_output.give(cap, (row, time, diff));
+                    ok_output.give((row, time, diff));
                 }
                 Err((err, event_time, diff)) => {
                     // Copy the whole time, and re-populate event time.
                     let mut time = input_time.clone();
                     *time.event_time_mut() = event_time;
-                    err_output.give(cap, (err, time, diff));
+                    err_output.give((err, time, diff));
                 }
             };
         }

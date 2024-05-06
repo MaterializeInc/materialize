@@ -52,6 +52,7 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -115,10 +116,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
-    let (mut data_output, data_stream) = builder.new_output();
-    let (upper_output, upper_stream) = builder.new_output();
+    let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all subsources
-    let (mut definite_error_handle, definite_errors) = builder.new_output();
+    let (mut definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
     let mut rewind_input = builder.new_input_for_many(
         rewind_stream,
         Exchange::new(move |_| repl_reader_id),
