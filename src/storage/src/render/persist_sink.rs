@@ -113,6 +113,7 @@ use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
@@ -411,7 +412,7 @@ where
     );
 
     let (mut output, output_stream) = mint_op.new_output();
-    let (mut data_output, data_output_stream) = mint_op.new_output();
+    let (mut data_output, data_output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
 
     // The description and the data-passthrough outputs are both driven by this input, so
     // they use a standard input connection.
@@ -592,7 +593,7 @@ where
     let mut write_op =
         AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
 
-    let (mut output, output_stream) = write_op.new_output();
+    let (mut output, output_stream) = write_op.new_output::<CapacityContainerBuilder<_>>();
 
     let mut descriptions_input =
         write_op.new_input_for(&batch_descriptions.broadcast(), Pipeline, &output);
@@ -962,7 +963,7 @@ where
         .clone();
 
     // An output whose frontier tracks the last successful compare and append of this operator
-    let (_upper_output, upper_stream) = append_op.new_output();
+    let (_upper_output, upper_stream) = append_op.new_output::<CapacityContainerBuilder<_>>();
 
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn

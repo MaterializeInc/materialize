@@ -13,21 +13,22 @@ use std::future::Future;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::rc::Weak;
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder};
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use timely::container::{CapacityContainerBuilder, ContainerBuilder};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::operator::{self, Operator};
-use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHandle};
+use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHandleCore};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::{Antichain, Timestamp};
-use timely::{Container, Data, ExchangeData, PartialOrder};
+use timely::{Data, ExchangeData, PartialOrder};
 
-use crate::buffer::ConsolidateBuffer;
 use crate::builder_async::{
     AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
     OperatorBuilder as OperatorBuilderAsync,
@@ -49,23 +50,23 @@ where
     /// streams, where the first output stream represents successful
     /// computations and the second output stream represents failed
     /// computations.
-    fn unary_fallible<D2, E, B, P>(
+    fn unary_fallible<DCB, ECB, B, P>(
         &self,
         pact: P,
         name: &str,
         constructor: B,
-    ) -> (Stream<G, D2>, Stream<G, E>)
+    ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
-        D2: Data,
-        E: Data,
+        DCB: ContainerBuilder,
+        ECB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
         ) -> Box<
             dyn FnMut(
                     &mut InputHandle<G::Timestamp, D1, P::Puller>,
-                    &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, Vec<D2>>>,
-                    &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, Vec<E>>>,
+                    &mut OutputHandleCore<G::Timestamp, DCB, Tee<G::Timestamp, DCB::Container>>,
+                    &mut OutputHandleCore<G::Timestamp, ECB, Tee<G::Timestamp, ECB::Container>>,
                 ) + 'static,
         >,
         P: ParallelizationContract<G::Timestamp, Vec<D1>>;
@@ -80,7 +81,11 @@ where
             Capability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, Vec<D2>>>,
+            AsyncOutputHandle<
+                G::Timestamp,
+                CapacityContainerBuilder<Vec<D2>>,
+                Tee<G::Timestamp, Vec<D2>>,
+            >,
         ) -> BFut,
         BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, Vec<D1>>;
@@ -104,7 +109,11 @@ where
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, Vec<D3>>>,
+            AsyncOutputHandle<
+                G::Timestamp,
+                CapacityContainerBuilder<Vec<D3>>,
+                Tee<G::Timestamp, Vec<D3>>,
+            >,
         ) -> BFut,
         BFut: Future + 'static,
         P1: ParallelizationContract<G::Timestamp, Vec<D1>>,
@@ -257,23 +266,23 @@ where
     D1: Data,
     G: Scope,
 {
-    fn unary_fallible<D2, E, B, P>(
+    fn unary_fallible<DCB, ECB, B, P>(
         &self,
         pact: P,
         name: &str,
         constructor: B,
-    ) -> (Stream<G, D2>, Stream<G, E>)
+    ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
-        D2: Data,
-        E: Data,
+        DCB: ContainerBuilder,
+        ECB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
         ) -> Box<
             dyn FnMut(
                     &mut InputHandle<G::Timestamp, D1, P::Puller>,
-                    &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, Vec<D2>>>,
-                    &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, Vec<E>>>,
+                    &mut OutputHandleCore<G::Timestamp, DCB, Tee<G::Timestamp, DCB::Container>>,
+                    &mut OutputHandleCore<G::Timestamp, ECB, Tee<G::Timestamp, ECB::Container>>,
                 ) + 'static,
         >,
         P: ParallelizationContract<G::Timestamp, Vec<D1>>,
@@ -308,7 +317,11 @@ where
             Capability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, Vec<D2>>>,
+            AsyncOutputHandle<
+                G::Timestamp,
+                CapacityContainerBuilder<Vec<D2>>,
+                Tee<G::Timestamp, Vec<D2>>,
+            >,
         ) -> BFut,
         BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, Vec<D1>>,
@@ -344,7 +357,11 @@ where
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
-            AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, Vec<D3>>>,
+            AsyncOutputHandle<
+                G::Timestamp,
+                CapacityContainerBuilder<Vec<D3>>,
+                Tee<G::Timestamp, Vec<D3>>,
+            >,
         ) -> BFut,
         BFut: Future + 'static,
         P1: ParallelizationContract<G::Timestamp, Vec<D1>>,
@@ -457,7 +474,7 @@ where
             move |input, output| {
                 input.for_each(|time, data| {
                     data.swap(&mut vector);
-                    output.session(&time).give_vec(&mut vector);
+                    output.session(&time).give_container(&mut vector);
                 });
             }
         })
@@ -504,22 +521,24 @@ where
         G::Timestamp: Lattice,
     {
         self.inner
-            .unary(Pipeline, "ExplodeOne", move |_, _| {
-                let mut buffer = Vec::new();
-                move |input, output| {
-                    let mut out = ConsolidateBuffer::new(output, 0);
-                    input.for_each(|time, data| {
-                        data.swap(&mut buffer);
-                        out.give_iterator(
-                            &time,
-                            buffer.drain(..).map(|(x, t, d)| {
-                                let (x, d2) = logic(x);
-                                (x, t, d2.multiply(&d))
-                            }),
-                        );
-                    });
-                }
-            })
+            .unary::<ConsolidatingContainerBuilder<_>, _, _, _>(
+                Pipeline,
+                "ExplodeOne",
+                move |_, _| {
+                    let mut buffer = Vec::new();
+                    move |input, output| {
+                        input.for_each(|time, data| {
+                            data.swap(&mut buffer);
+                            output
+                                .session_with_builder(&time)
+                                .give_iterator(buffer.drain(..).map(|(x, t, d)| {
+                                    let (x, d2) = logic(x);
+                                    (x, t, d2.multiply(&d))
+                                }));
+                        });
+                    }
+                },
+            )
             .as_collection()
     }
 
@@ -629,17 +648,17 @@ where
 /// The source is defined by a name, and a constructor which takes a default capability and an
 /// output handle to a future. The future is then repeatedly scheduled, and is expected to
 /// eventually send data and downgrade and release capabilities.
-pub fn source_async<G: Scope, C, B, BFut>(
+pub fn source_async<G: Scope, CB, B, BFut>(
     scope: &G,
     name: String,
     constructor: B,
-) -> StreamCore<G, C>
+) -> StreamCore<G, CB::Container>
 where
-    C: Container,
+    CB: ContainerBuilder,
     B: FnOnce(
         Capability<G::Timestamp>,
         OperatorInfo,
-        AsyncOutputHandle<G::Timestamp, C, Tee<G::Timestamp, C>>,
+        AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
     ) -> BFut,
     BFut: Future + 'static,
 {

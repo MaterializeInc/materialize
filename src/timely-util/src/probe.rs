@@ -17,6 +17,7 @@ use std::cell::RefCell;
 use std::convert::Infallible;
 use std::rc::Rc;
 
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::{CapabilitySet, InspectCore};
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
@@ -163,7 +164,7 @@ where
     T: Timestamp,
 {
     let mut builder = AsyncOperatorBuilder::new(name, scope);
-    let (_output, output_stream) = builder.new_output();
+    let (_output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     builder.build(move |capabilities| async move {
         let mut cap_set = CapabilitySet::from(capabilities);

@@ -1032,7 +1032,7 @@ where
                 // Pass through inputs.
                 input.for_each(|cap, data| {
                     data.swap(&mut buffer);
-                    output.session(&cap).give_vec(&mut buffer);
+                    output.session(&cap).give_container(&mut buffer);
                 });
 
                 if hydrated {
@@ -1291,7 +1291,7 @@ where
                     let cap = early_cap.as_ref().expect("early_cap can't be dropped yet");
                     output.session(cap)
                 };
-                session.give_vec(&mut buffer);
+                session.give_container(&mut buffer);
             });
 
             let frontier = input.frontier().frontier();

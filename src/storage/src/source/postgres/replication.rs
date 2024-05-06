@@ -102,6 +102,7 @@ use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
 use serde::{Deserialize, Serialize};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::Capability;
@@ -165,11 +166,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
-    let (mut data_output, data_stream) = builder.new_output();
-    let (upper_output, upper_stream) = builder.new_output();
-    let (mut definite_error_handle, definite_errors) = builder.new_output();
+    let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
 
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut rewind_input = builder.new_input_for_many(
         rewind_stream,
@@ -446,7 +448,7 @@ async fn raw_stream<'a>(
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
     stats_output: &'a mut AsyncOutputHandle<
         MzOffset,
-        Vec<ProgressStatisticsUpdate>,
+        CapacityContainerBuilder<Vec<ProgressStatisticsUpdate>>,
         Tee<MzOffset, Vec<ProgressStatisticsUpdate>>,
     >,
     stats_cap: &'a Capability<MzOffset>,

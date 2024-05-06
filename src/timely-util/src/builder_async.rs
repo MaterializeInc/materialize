@@ -20,6 +20,7 @@ use std::task::{Context, Poll, Waker};
 
 use futures_util::task::ArcWake;
 use timely::communication::{Message, Pull, Push};
+use timely::container::{CapacityContainerBuilder, ContainerBuilder};
 use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::counter::Counter as PushCounter;
@@ -191,58 +192,62 @@ pub enum Event<T: Timestamp, C, D> {
 
 // TODO: delete and use CapabilityTrait instead once TimelyDataflow/timely-dataflow#512 gets merged
 pub trait CapabilityTrait<T: Timestamp> {
-    fn session<'a, D, P>(
+    fn session<'a, CB, P>(
         &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, D, P>,
-    ) -> Session<'a, T, D, PushCounter<T, D, P>>
+        handle: &'a mut OutputHandleCore<'_, T, CB, P>,
+    ) -> Session<'a, T, CB, PushCounter<T, CB::Container, P>>
     where
-        D: Container,
-        P: Push<Bundle<T, D>>;
+        CB: ContainerBuilder,
+        P: Push<Bundle<T, CB::Container>>;
 }
 
 impl<T: Timestamp> CapabilityTrait<T> for InputCapability<T> {
     #[inline]
-    fn session<'a, D, P>(
+    fn session<'a, CB, P>(
         &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, D, P>,
-    ) -> Session<'a, T, D, PushCounter<T, D, P>>
+        handle: &'a mut OutputHandleCore<'_, T, CB, P>,
+    ) -> Session<'a, T, CB, PushCounter<T, CB::Container, P>>
     where
-        D: Container,
-        P: Push<Bundle<T, D>>,
+        CB: ContainerBuilder,
+        P: Push<Bundle<T, CB::Container>>,
     {
-        handle.session(self)
+        handle.session_with_builder(self)
     }
 }
 
 impl<T: Timestamp> CapabilityTrait<T> for Capability<T> {
     #[inline]
-    fn session<'a, D, P>(
+    fn session<'a, CB, P>(
         &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, D, P>,
-    ) -> Session<'a, T, D, PushCounter<T, D, P>>
+        handle: &'a mut OutputHandleCore<'_, T, CB, P>,
+    ) -> Session<'a, T, CB, PushCounter<T, CB::Container, P>>
     where
-        D: Container,
-        P: Push<Bundle<T, D>>,
+        CB: ContainerBuilder,
+        P: Push<Bundle<T, CB::Container>>,
     {
-        handle.session(self)
+        handle.session_with_builder(self)
     }
 }
 
-pub struct AsyncOutputHandle<T: Timestamp, D: Container, P: Push<Bundle<T, D>> + 'static> {
+pub struct AsyncOutputHandle<
+    T: Timestamp,
+    CB: ContainerBuilder,
+    P: Push<Bundle<T, CB::Container>> + 'static,
+> {
     // The field order is important here as the handle is borrowing from the wrapper. See also the
     // safety argument in the constructor
-    handle: Rc<RefCell<OutputHandleCore<'static, T, D, P>>>,
-    wrapper: Rc<Pin<Box<OutputWrapper<T, D, P>>>>,
+    handle: Rc<RefCell<OutputHandleCore<'static, T, CB, P>>>,
+    wrapper: Rc<Pin<Box<OutputWrapper<T, CB, P>>>>,
     index: usize,
 }
 
-impl<T, D, P> AsyncOutputHandle<T, D, P>
+impl<T, CB, P> AsyncOutputHandle<T, CB, P>
 where
     T: Timestamp,
-    D: Container,
-    P: Push<Bundle<T, D>> + 'static,
+    CB: ContainerBuilder,
+    P: Push<Bundle<T, CB::Container>> + 'static,
 {
-    fn new(wrapper: OutputWrapper<T, D, P>, index: usize) -> Self {
+    fn new(wrapper: OutputWrapper<T, CB, P>, index: usize) -> Self {
         let mut wrapper = Rc::new(Box::pin(wrapper));
         // SAFETY:
         // get_unchecked_mut is safe because we are not moving the wrapper
@@ -257,7 +262,7 @@ where
                 .as_mut()
                 .get_unchecked_mut()
                 .activate();
-            std::mem::transmute::<OutputHandleCore<'_, T, D, P>, OutputHandleCore<'static, T, D, P>>(
+            std::mem::transmute::<OutputHandleCore<'_, T, CB, P>, OutputHandleCore<'static, T, CB, P>>(
                 handle,
             )
         };
@@ -270,7 +275,10 @@ where
 
     #[allow(clippy::unused_async)]
     #[inline]
-    pub async fn give_container<C: CapabilityTrait<T>>(&mut self, cap: &C, container: &mut D) {
+    pub async fn give_container<C>(&mut self, cap: &C, container: &mut CB::Container)
+    where
+        C: CapabilityTrait<T>,
+    {
         let mut handle = self.handle.borrow_mut();
         cap.session(&mut handle).give_container(container);
     }
@@ -280,7 +288,7 @@ where
     }
 }
 
-impl<'a, T, D, P> AsyncOutputHandle<T, Vec<D>, P>
+impl<'a, T, D, P> AsyncOutputHandle<T, CapacityContainerBuilder<Vec<D>>, P>
 where
     T: Timestamp,
     D: Data,
@@ -293,8 +301,8 @@ where
     }
 }
 
-impl<T: Timestamp, D: Container, P: Push<Bundle<T, D>> + 'static> Clone
-    for AsyncOutputHandle<T, D, P>
+impl<T: Timestamp, CB: ContainerBuilder, P: Push<Bundle<T, CB::Container>> + 'static> Clone
+    for AsyncOutputHandle<T, CB, P>
 {
     fn clone(&self) -> Self {
         Self {
@@ -378,7 +386,9 @@ pub trait OutputIndex {
     fn index(&self) -> usize;
 }
 
-impl<T: Timestamp, D: Container> OutputIndex for AsyncOutputHandle<T, D, Tee<T, D>> {
+impl<T: Timestamp, CB: ContainerBuilder> OutputIndex
+    for AsyncOutputHandle<T, CB, Tee<T, CB::Container>>
+{
     fn index(&self) -> usize {
         self.index
     }
@@ -491,11 +501,11 @@ impl<G: Scope> OperatorBuilder<G> {
     }
 
     /// Adds a new output, returning the output handle and stream.
-    pub fn new_output<D: Container>(
+    pub fn new_output<CB: ContainerBuilder>(
         &mut self,
     ) -> (
-        AsyncOutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
-        StreamCore<G, D>,
+        AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
+        StreamCore<G, CB::Container>,
     ) {
         let index = self.builder.shape().outputs();
 

@@ -29,6 +29,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use serde::{Deserialize, Serialize};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
@@ -297,9 +298,11 @@ where
     let mut mint_op =
         AsyncOperatorBuilder::new(format!("{} mint_batch_descriptions", operator_name), scope);
 
-    let (mut output, output_stream) = mint_op.new_output();
-    let (mut desired_oks_output, desired_oks_output_stream) = mint_op.new_output();
-    let (mut desired_errs_output, desired_errs_output_stream) = mint_op.new_output();
+    let (mut output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
+    let (mut desired_oks_output, desired_oks_output_stream) =
+        mint_op.new_output::<CapacityContainerBuilder<_>>();
+    let (mut desired_errs_output, desired_errs_output_stream) =
+        mint_op.new_output::<CapacityContainerBuilder<_>>();
 
     // The `desired` inputs drive both the description output and their respective passthrough
     // output.
@@ -952,7 +955,7 @@ where
     // We never output anything, but we update our capabilities based on the
     // persist frontier we know about. So someone can listen on our output
     // frontier and learn about the persist frontier advancing.
-    let (mut _output, output_stream) = append_op.new_output();
+    let (mut _output, output_stream) = append_op.new_output::<CapacityContainerBuilder<_>>();
 
     let hashed_id = sink_id.hashed();
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();

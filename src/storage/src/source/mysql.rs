@@ -59,6 +59,7 @@ use std::rc::Rc;
 use differential_dataflow::Collection;
 use mz_storage_types::sources::SourceExport;
 use serde::{Deserialize, Serialize};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
@@ -312,13 +313,13 @@ async fn return_definite_error(
     outputs: &[usize],
     data_handle: &mut AsyncOutputHandle<
         GtidPartition,
-        Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
+        CapacityContainerBuilder<Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
         Tee<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
     >,
     data_cap_set: &CapabilitySet<GtidPartition>,
     definite_error_handle: &mut AsyncOutputHandle<
         GtidPartition,
-        Vec<ReplicationError>,
+        CapacityContainerBuilder<Vec<ReplicationError>>,
         Tee<GtidPartition, Vec<ReplicationError>>,
     >,
     definite_error_cap_set: &CapabilitySet<GtidPartition>,

@@ -9,6 +9,7 @@
 
 //! A source that reads from an a persist shard.
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -35,7 +36,6 @@ use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
-use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -45,6 +45,7 @@ use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
@@ -398,7 +399,8 @@ where
     let operator_info = builder.operator_info();
 
     let mut fetched_input = builder.new_input(fetched, Pipeline);
-    let (mut updates_output, updates_stream) = builder.new_output();
+    let (mut updates_output, updates_stream) =
+        builder.new_output::<ConsolidatingContainerBuilder<_>>();
 
     // Re-used state for processing and building rows.
     let mut datum_vec = mz_repr::DatumVec::new();
@@ -436,7 +438,6 @@ where
             let mut work = 0;
             let start_time = Instant::now();
             let mut output = updates_output.activate();
-            let mut handle = ConsolidateBuffer::new(&mut output, 0);
             while !pending_work.is_empty() && !yield_fn(start_time, work) {
                 let done = pending_work.front_mut().unwrap().do_work(
                     &mut work,
@@ -447,7 +448,7 @@ where
                     map_filter_project.as_ref(),
                     &mut datum_vec,
                     &mut row_builder,
-                    &mut handle,
+                    &mut output,
                 );
                 if done {
                     pending_work.pop_front();
@@ -503,10 +504,16 @@ impl PendingWork {
         map_filter_project: Option<&MfpPlan>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
-        output: &mut ConsolidateBuffer<
+        output: &mut OutputHandleCore<
+            '_,
             (mz_repr::Timestamp, Subtime),
-            Result<Row, DataflowError>,
-            Diff,
+            ConsolidatingContainerBuilder<
+                Vec<(
+                    Result<Row, DataflowError>,
+                    (mz_repr::Timestamp, Subtime),
+                    Diff,
+                )>,
+            >,
             P,
         >,
     ) -> bool
@@ -523,6 +530,7 @@ impl PendingWork {
         >,
         YFn: Fn(Instant, usize) -> bool,
     {
+        let mut session = output.session_with_builder(&self.capability);
         let fetched_part = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
         let mut row_buf = None;
@@ -576,8 +584,7 @@ impl PendingWork {
                                     if !until.less_equal(&time) {
                                         let mut emit_time = *self.capability.time();
                                         emit_time.0 = time;
-                                        output
-                                            .give_at(&self.capability, (Ok(row), emit_time, diff));
+                                        session.give((Ok(row), emit_time, diff));
                                         *work += 1;
                                     }
                                 }
@@ -586,8 +593,7 @@ impl PendingWork {
                                     if !until.less_equal(&time) {
                                         let mut emit_time = *self.capability.time();
                                         emit_time.0 = time;
-                                        output
-                                            .give_at(&self.capability, (Err(err), emit_time, diff));
+                                        session.give((Err(err), emit_time, diff));
                                         *work += 1;
                                     }
                                 }
@@ -601,14 +607,14 @@ impl PendingWork {
                     } else {
                         let mut emit_time = *self.capability.time();
                         emit_time.0 = time;
-                        output.give_at(&self.capability, (Ok(row), emit_time, diff));
+                        session.give((Ok(row), emit_time, diff));
                         *work += 1;
                     }
                 }
                 (Ok(SourceData(Err(err))), Ok(())) => {
                     let mut emit_time = *self.capability.time();
                     emit_time.0 = time;
-                    output.give_at(&self.capability, (Err(err), emit_time, diff));
+                    session.give((Err(err), emit_time, diff));
                     *work += 1;
                 }
                 // TODO(petrosagg): error handling
