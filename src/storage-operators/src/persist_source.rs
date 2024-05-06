@@ -936,6 +936,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use timely::container::CapacityContainerBuilder;
     use timely::dataflow::operators::{Enter, Probe};
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::sync::oneshot;
@@ -1360,7 +1361,8 @@ mod tests {
     ) -> (Stream<G, Part>, oneshot::Sender<()>) {
         let (finalizer_tx, finalizer_rx) = oneshot::channel();
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope);
-        let (mut output_handle, output) = iterator.new_output::<Vec<Part>>();
+        let (mut output_handle, output) =
+            iterator.new_output::<CapacityContainerBuilder<Vec<Part>>>();
 
         iterator.build(|mut caps| async move {
             let mut capability = Some(caps.pop().unwrap());
@@ -1397,7 +1399,8 @@ mod tests {
     ) -> UnboundedSender<()> {
         let (tx, mut rx) = unbounded_channel::<()>();
         let mut consumer = AsyncOperatorBuilder::new("consumer".to_string(), scope);
-        let (output_handle, output) = consumer.new_output::<Vec<std::convert::Infallible>>();
+        let (output_handle, output) =
+            consumer.new_output::<CapacityContainerBuilder<Vec<std::convert::Infallible>>>();
         let mut input = consumer.new_input_for(input, Pipeline, &output_handle);
 
         consumer.build(|_caps| async move {
