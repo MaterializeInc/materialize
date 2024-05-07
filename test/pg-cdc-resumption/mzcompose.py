@@ -73,6 +73,9 @@ def workflow_disruptions(c: Composition) -> None:
             print(
                 f"--- Running scenario {scenario.__name__} with overrides: {overrides}"
             )
+            c.override_current_testcase_name(
+                f"Scenario '{scenario.__name__}' of workflow_disruptions"
+            )
             initialize(c)
             scenario(c)
             end(c)
