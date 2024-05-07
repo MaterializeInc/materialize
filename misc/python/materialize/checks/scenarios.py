@@ -303,6 +303,6 @@ class TogglePersistUseArrowRsLibrary(SystemVarChange):
             executor,
             seed,
             name="persist_use_arrow_rs_library",
-            value_1="FALSE",
-            value_2="TRUE",
+            value_1="read",
+            value_2="read_and_write",
         )

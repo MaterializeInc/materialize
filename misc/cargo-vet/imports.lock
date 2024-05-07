@@ -749,6 +749,13 @@ user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
 
+[[publisher.twox-hash]]
+version = "1.6.3"
+when = "2022-05-04"
+user-id = 1060
+user-login = "shepmaster"
+user-name = "Jake Goulding"
+
 [[publisher.unicode-ident]]
 version = "1.0.0"
 when = "2022-05-16"

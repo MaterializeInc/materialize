@@ -88,6 +88,18 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     x.add_dynamic("persist_inline_writes_total_max_bytes", ::mz_dyncfg::ConfigVal::Usize(0));
                     x
                 },
+                {
+                    // Exercises reading with arrow-rs
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_use_arrow_rs_library", ::mz_dyncfg::ConfigVal::String("read".to_string()));
+                    x
+                },
+                {
+                    // Exercises reading and writing with arrow-rs
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_use_arrow_rs_library", ::mz_dyncfg::ConfigVal::String("read_and_write".to_string()));
+                    x
+                },
             ];
 
             for (idx, dyncfgs) in dyncfgs.into_iter().enumerate() {

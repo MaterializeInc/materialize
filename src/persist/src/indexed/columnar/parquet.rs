@@ -34,10 +34,55 @@ use crate::indexed::encoding::{
 };
 use crate::metrics::ColumnarMetrics;
 
-pub(crate) const USE_ARROW_RS_LIBRARY: Config<bool> = Config::new(
+#[derive(Debug, Copy, Clone)]
+enum UseArrowRsLibrary {
+    Off,
+    Read,
+    ReadAndWrite,
+}
+
+impl UseArrowRsLibrary {
+    /// Returns whether or not we should use [`arrow`] for reads.
+    fn for_reads(&self) -> bool {
+        matches!(
+            self,
+            UseArrowRsLibrary::Read | UseArrowRsLibrary::ReadAndWrite
+        )
+    }
+
+    /// Returns whether or not we should use [`arrow`] for writes.
+    fn for_writes(&self) -> bool {
+        matches!(self, UseArrowRsLibrary::ReadAndWrite)
+    }
+
+    /// Parses the provided string, returns [`UseArrowRsLibrary::Off`] on any failure.
+    fn from_str(s: &str) -> UseArrowRsLibrary {
+        match s.to_lowercase().as_str() {
+            "read" => UseArrowRsLibrary::Read,
+            "read_and_write" => UseArrowRsLibrary::ReadAndWrite,
+            "off" => UseArrowRsLibrary::Off,
+            val => {
+                // Complain loudly if the value is not what we expect.
+                tracing::error!(?val, "unrecognized value for persist_use_arrow_rs_library");
+                UseArrowRsLibrary::Off
+            }
+        }
+    }
+
+    /// Returns a string representation for [`UseArrowRsLibrary`].
+    const fn to_str(self) -> &'static str {
+        match self {
+            UseArrowRsLibrary::Off => "off",
+            UseArrowRsLibrary::Read => "read",
+            UseArrowRsLibrary::ReadAndWrite => "read_and_write",
+        }
+    }
+}
+
+pub(crate) const USE_ARROW_RS_LIBRARY: Config<&str> = Config::new(
     "persist_use_arrow_rs_library",
-    false,
-    "When `true` uses the newer arrow-rs library for writing data, `false` uses the existing arrow2 library.",
+    UseArrowRsLibrary::Off.to_str(),
+    "'off' by default, providing 'read' will use the newer arrow-rs library for reads, 'read_and_write' will use it for both reads and writes.",
 );
 
 const INLINE_METADATA_KEY: &str = "MZ:inline";
@@ -52,7 +97,8 @@ pub fn encode_trace_parquet<W: Write + Send, T: Timestamp + Codec64>(
     batch.validate()?;
     let inline_meta = encode_trace_inline_meta(batch, ProtoBatchFormat::ParquetKvtd);
 
-    if USE_ARROW_RS_LIBRARY.get(&metrics.cfg) {
+    let use_arrow_rs = UseArrowRsLibrary::from_str(&USE_ARROW_RS_LIBRARY.get(&metrics.cfg));
+    if use_arrow_rs.for_writes() {
         metrics.arrow_metrics.encode_arrow_rs.inc();
         encode_parquet_kvtd_arrow_rs(w, inline_meta, &batch.updates)
     } else {
@@ -66,7 +112,8 @@ pub fn decode_trace_parquet<T: Timestamp + Codec64>(
     buf: SegmentedBytes,
     metrics: &ColumnarMetrics,
 ) -> Result<BlobTraceBatchPart<T>, Error> {
-    let (metadata, updates) = if USE_ARROW_RS_LIBRARY.get(&metrics.cfg) {
+    let use_arrow_rs = UseArrowRsLibrary::from_str(&USE_ARROW_RS_LIBRARY.get(&metrics.cfg));
+    let (metadata, updates) = if use_arrow_rs.for_reads() {
         let metadata =
             parquet::arrow::arrow_reader::ArrowReaderMetadata::load(&buf, Default::default())?;
         let metadata = metadata
