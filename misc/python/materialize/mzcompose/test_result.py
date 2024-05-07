@@ -35,9 +35,11 @@ class TestFailureDetails:
     message: str
     details: str | None
     test_class_name_override: str | None = None
+    """The test class usually describes the framework."""
     test_case_name_override: str | None = None
-    # depending on the check, this may either be a file name or a path
+    """The test case usually describes the workflow, unless more fine-grained information is available."""
     location: str | None = None
+    """depending on the check, this may either be a file name or a path"""
     line_number: int | None = None
 
     def location_as_file_name(self) -> str | None:
