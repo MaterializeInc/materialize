@@ -101,6 +101,14 @@ pub enum NotReadyReason {
     OomKilled,
 }
 
+impl fmt::Display for NotReadyReason {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            NotReadyReason::OomKilled => f.write_str("oom-killed"),
+        }
+    }
+}
+
 /// Describes the status of an orchestrated service.
 #[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
 pub enum ServiceStatus {

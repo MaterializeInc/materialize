@@ -17,9 +17,10 @@ use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
-use mz_controller::clusters::ClusterEvent;
+use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
+use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::usage::ShardsUsageReferenced;
@@ -29,6 +30,7 @@ use mz_sql::pure::PurifiedStatement;
 use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
+use serde_json::json;
 use tracing::{event, info_span, warn, Instrument, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -43,6 +45,7 @@ use crate::coord::{
 };
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
+use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, TimestampContext};
 
@@ -644,6 +647,38 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     async fn message_cluster_event(&mut self, event: ClusterEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
+
+        if let Some(segment_client) = &self.segment_client {
+            let env_id = &self.catalog().config().environment_id;
+            let mut properties = json!({
+                "cluster_id": event.cluster_id.to_string(),
+                "replica_id": event.replica_id.to_string(),
+                "process_id": event.process_id,
+                "status": event.status.as_kebab_case_str(),
+            });
+            match event.status {
+                ClusterStatus::Ready => (),
+                ClusterStatus::NotReady(reason) => {
+                    let properties = match &mut properties {
+                        serde_json::Value::Object(map) => map,
+                        _ => unreachable!(),
+                    };
+                    properties.insert(
+                        "reason".into(),
+                        json!(reason.display_or("unknown").to_string()),
+                    );
+                }
+            };
+            segment_client.environment_track(
+                env_id,
+                "Cluster Changed Status",
+                properties,
+                EventDetails {
+                    timestamp: Some(event.time),
+                    ..Default::default()
+                },
+            );
+        }
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.

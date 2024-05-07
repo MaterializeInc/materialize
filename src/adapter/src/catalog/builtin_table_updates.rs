@@ -42,7 +42,7 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::refresh_schedule::RefreshEvery;
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
+use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -377,7 +377,7 @@ impl CatalogState {
         let not_ready_reason = match event.status {
             ClusterStatus::Ready => None,
             ClusterStatus::NotReady(None) => None,
-            ClusterStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("oom-killed"),
+            ClusterStatus::NotReady(Some(reason)) => Some(reason.to_string()),
         };
 
         BuiltinTableUpdate {
@@ -386,7 +386,7 @@ impl CatalogState {
                 Datum::String(&replica_id.to_string()),
                 Datum::UInt64(process_id),
                 Datum::String(status),
-                not_ready_reason.into(),
+                Datum::from(not_ready_reason.as_deref()),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),
             diff,
