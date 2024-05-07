@@ -1491,11 +1491,18 @@ impl Coordinator {
         for entry in &entries {
             // TODO(#26794): we should move this invariant into `CatalogEntry`.
             mz_ore::soft_assert_or_log!(
-                entry
-                    .used_by()
-                    .iter()
-                    .all(|dependent_id| *dependent_id > entry.id),
-                "item dependencies should respect `GlobalId`'s PartialOrd \
+                // We only expect user objects to objects obey this invariant.
+                // System objects, for instance, can depend on other system
+                // objects that belong to a schema that is simply loaded first.
+                // To meaningfully resolve this, we could need more careful
+                // loading order or more complex IDs, neither of which seem very
+                // beneficial.
+                !entry.id().is_user()
+                    || entry
+                        .used_by()
+                        .iter()
+                        .all(|dependent_id| *dependent_id > entry.id),
+                "user item dependencies should respect `GlobalId`'s PartialOrd \
                 but {:?} depends on {:?}",
                 entry.id,
                 entry.used_by()
