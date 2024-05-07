@@ -11,6 +11,7 @@
 import json
 import os
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -19,10 +20,21 @@ from materialize import MZ_ROOT
 PATH_TO_TEMP_DIR = MZ_ROOT / "temp"
 
 
-def get_file_path(
-    file_prefix: str, pipeline_slug: str, params_hash: str, file_extension: str = "json"
-) -> str:
-    return f"{PATH_TO_TEMP_DIR}/{file_prefix}-{pipeline_slug}-params-{params_hash}.{file_extension}"
+@dataclass
+class FilePath:
+    def get(self) -> str:
+        raise NotImplementedError
+
+    def __str__(self):
+        return self.get()
+
+
+@dataclass
+class SimpleFilePath(FilePath):
+    file_name: str
+
+    def get(self) -> str:
+        return self.file_name
 
 
 def ensure_temp_dir_exists() -> None:
@@ -37,16 +49,16 @@ def ensure_temp_dir_exists() -> None:
 
 
 def write_results_to_file(
-    results: list[Any], output_file_path: str, quiet_mode: bool = False
+    results: list[Any], output_file_path: FilePath, quiet_mode: bool = False
 ) -> None:
-    with open(output_file_path, "w") as f:
+    with open(output_file_path.get(), "w") as f:
         json.dump(results, f, ensure_ascii=False, indent=4)
         if not quiet_mode:
             print(f"Written data to {output_file_path}")
 
 
-def read_results_from_file(file_path: str, quiet_mode: bool = False) -> list[Any]:
-    with open(file_path) as f:
+def read_results_from_file(file_path: FilePath, quiet_mode: bool = False) -> list[Any]:
+    with open(file_path.get()) as f:
         data = json.load(f)
         if not quiet_mode:
             print(f"Loaded data from {file_path}")
@@ -54,15 +66,15 @@ def read_results_from_file(file_path: str, quiet_mode: bool = False) -> list[Any
 
 
 def exists_file_with_recent_data(
-    file_path: str, max_allowed_cache_age_in_hours: int | None
+    file_path: FilePath, max_allowed_cache_age_in_hours: int | None
 ) -> bool:
-    if not os.path.isfile(file_path):
+    if not os.path.isfile(file_path.get()):
         return False
 
     if max_allowed_cache_age_in_hours is None:
         return True
 
-    modification_date_as_sec_since_epoch = os.path.getmtime(file_path)
+    modification_date_as_sec_since_epoch = os.path.getmtime(file_path.get())
     modification_date = datetime.utcfromtimestamp(modification_date_as_sec_since_epoch)
 
     max_modification_date = datetime.now() - timedelta(

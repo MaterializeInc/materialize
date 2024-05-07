@@ -14,9 +14,7 @@ from typing import Any
 from materialize.buildkite_insights.buildkite_api import builds_api
 from materialize.buildkite_insights.cache import generic_cache
 from materialize.buildkite_insights.cache.cache_constants import FetchMode
-from materialize.buildkite_insights.util.data_io import (
-    get_file_path,
-)
+from materialize.buildkite_insights.cache.generic_cache import CacheFilePath
 
 
 def get_or_query_builds(
@@ -81,10 +79,10 @@ def _get_file_path_for_builds(
     max_fetches: int,
     items_per_page: int,
     first_page: int,
-) -> str:
+) -> CacheFilePath:
     max_entries = max_fetches * items_per_page
     meta_data = f"{meta_data}-{max_entries}-{first_page}"
     hash_value = hashlib.sha256(bytes(meta_data, encoding="utf-8")).hexdigest()[:8]
-    return get_file_path(
-        file_prefix="builds", pipeline_slug=pipeline_slug, params_hash=hash_value
+    return CacheFilePath(
+        cache_item_type="builds", pipeline_slug=pipeline_slug, params_hash=hash_value
     )

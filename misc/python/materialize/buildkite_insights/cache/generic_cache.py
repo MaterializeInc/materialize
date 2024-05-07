@@ -9,12 +9,15 @@
 # by the Apache License, Version 2.0.
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from materialize.buildkite_insights.cache.cache_constants import (
     FetchMode,
 )
 from materialize.buildkite_insights.util.data_io import (
+    PATH_TO_TEMP_DIR,
+    FilePath,
     ensure_temp_dir_exists,
     exists_file_with_recent_data,
     read_results_from_file,
@@ -22,8 +25,19 @@ from materialize.buildkite_insights.util.data_io import (
 )
 
 
+@dataclass
+class CacheFilePath(FilePath):
+    cache_item_type: str
+    pipeline_slug: str
+    params_hash: str
+    file_extension: str = "json"
+
+    def get(self) -> str:
+        return f"{PATH_TO_TEMP_DIR}/{self.cache_item_type}-{self.pipeline_slug}-params-{self.params_hash}.{self.file_extension}"
+
+
 def get_or_query_data(
-    cache_file_path: str,
+    cache_file_path: CacheFilePath,
     fetch_action: Callable[[], Any],
     fetch_mode: FetchMode,
     max_allowed_cache_age_in_hours: int | None = 10,
