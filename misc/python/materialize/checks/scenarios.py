@@ -294,3 +294,15 @@ class TogglePersistRoundtripSpine(SystemVarChange):
             value_1="FALSE",
             value_2="TRUE",
         )
+
+
+class TogglePersistUseArrowRsLibrary(SystemVarChange):
+    def __init__(self, checks: list[type[Check]], executor: Executor, seed: str | None):
+        super().__init__(
+            checks,
+            executor,
+            seed,
+            name="persist_use_arrow_rs_library",
+            value_1="FALSE",
+            value_2="TRUE",
+        )
