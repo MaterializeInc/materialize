@@ -903,6 +903,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"+++ Scenario {scenario.name} is disabled, skipping.")
             continue
 
+        c.override_current_testcase_name(f"Scenario {scenario.name}")
+
         if args.find_minimal_memory:
             print(f"+++ Starting memory search for scenario {scenario.name}")
 
