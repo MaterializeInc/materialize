@@ -1270,6 +1270,7 @@ impl Schema<SourceData> for RelationDesc {
 #[cfg(test)]
 mod tests {
     use mz_repr::ScalarType;
+    use mz_sql_parser::ident;
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
@@ -1299,13 +1300,14 @@ mod tests {
         rows.push(SourceData(Err(EnvelopeError::Flat("foo".into()).into())));
 
         // Non-nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
+        let schema =
+            RelationDesc::empty().with_column(ident!("col"), scalar_type.clone().nullable(false));
         for row in rows.iter() {
             assert_eq!(validate_roundtrip(&schema, row), Ok(()));
         }
 
         // Nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
+        let schema = RelationDesc::empty().with_column(ident!("col"), scalar_type.nullable(true));
         rows.push(SourceData(Ok(Row::pack(std::iter::once(Datum::Null)))));
         for row in rows.iter() {
             assert_eq!(validate_roundtrip(&schema, row), Ok(()));

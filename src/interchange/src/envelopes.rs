@@ -18,6 +18,7 @@ use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
+use mz_sql_parser::ident;
 use once_cell::sync::Lazy;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
@@ -150,7 +151,10 @@ pub(crate) fn dbz_envelope(
             custom_id: Some(DBZ_ROW_TYPE_ID),
         },
     };
-    vec![("before".into(), row.clone()), ("after".into(), row)]
+    vec![
+        (ident!("before").into(), row.clone()),
+        (ident!("after").into(), row),
+    ]
 }
 
 pub fn dbz_format(rp: &mut RowPacker, dp: DiffPair<Row>) {

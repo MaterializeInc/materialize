@@ -466,7 +466,7 @@ fn build_row_schema_fields(
         if let Some(comment) = item_id.and_then(|item_id| {
             options.doc_comments.get(&DocTarget::Field {
                 object_id: item_id,
-                column_name: name.into(),
+                column_name: name.try_into().unwrap(),
             })
         }) {
             field

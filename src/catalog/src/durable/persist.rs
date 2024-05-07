@@ -38,6 +38,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Opaque;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{Diff, RelationDesc, ScalarType};
+use mz_sql_parser::ident;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
@@ -1427,7 +1428,7 @@ fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
 /// Returns the schema of the `Row`s/`SourceData`s stored in the persist
 /// shard backing the catalog.
 fn desc() -> RelationDesc {
-    RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
+    RelationDesc::empty().with_column(ident!("data"), ScalarType::Jsonb.nullable(false))
 }
 
 /// Fetch the current upper of the catalog state.

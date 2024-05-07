@@ -17,6 +17,7 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::UnresolvedItemName;
+use mz_sql_parser::ident;
 use once_cell::sync::Lazy;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
@@ -71,8 +72,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
     }
 }
 
-pub static PG_PROGRESS_DESC: Lazy<RelationDesc> =
-    Lazy::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
+pub static PG_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty().with_column(ident!("lsn"), ScalarType::UInt64.nullable(true))
+});
 
 impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
     fn name(&self) -> &'static str {

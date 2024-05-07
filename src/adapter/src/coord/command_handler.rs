@@ -12,6 +12,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql_parser::ident;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -1105,7 +1106,7 @@ impl Coordinator {
                     // Double check that the body column of the webhook source matches the type
                     // we're about to deserialize as.
                     let body_column = desc
-                        .get_by_name(&"body".into())
+                        .get_by_name(&ident!("body").into())
                         .map(|(_idx, ty)| ty.clone())
                         .ok_or(name.clone())?;
                     assert!(!body_column.nullable, "webhook body column is nullable!?");

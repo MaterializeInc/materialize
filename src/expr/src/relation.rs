@@ -31,6 +31,7 @@ use mz_repr::explain::{
     DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
 };
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
+use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion};
@@ -2576,8 +2577,8 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 let column_name = match lag_lead {
-                    LagLeadType::Lag => "?lag?",
-                    LagLeadType::Lead => "?lead?",
+                    LagLeadType::Lag => ident!("?lag?"),
+                    LagLeadType::Lead => ident!("?lead?"),
                 };
 
                 // Extract the encoded args
@@ -2613,7 +2614,7 @@ impl AggregateExpr {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![
                                 ColumnName::from(column_name),
-                                ColumnName::from("?record?"),
+                                ColumnName::from(ident!("?record?")),
                             ],
                         },
                         exprs: vec![null_offset_check, original_row],
@@ -2658,8 +2659,8 @@ impl AggregateExpr {
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![
-                                ColumnName::from("?first_value?"),
-                                ColumnName::from("?record?"),
+                                ColumnName::from(ident!("?first_value?")),
+                                ColumnName::from(ident!("?record?")),
                             ],
                         },
                         exprs: vec![value, original_row],
@@ -2704,8 +2705,8 @@ impl AggregateExpr {
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![
-                                ColumnName::from("?last_value?"),
-                                ColumnName::from("?record?"),
+                                ColumnName::from(ident!("?last_value?")),
+                                ColumnName::from(ident!("?record?")),
                             ],
                         },
                         exprs: vec![value, original_row],
@@ -2763,8 +2764,8 @@ impl AggregateExpr {
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![
-                                ColumnName::from("?window_agg?"),
-                                ColumnName::from("?record?"),
+                                ColumnName::from(ident!("?window_agg?")),
+                                ColumnName::from(ident!("?record?")),
                             ],
                         },
                         exprs: vec![value, original_row],
@@ -2847,7 +2848,10 @@ impl AggregateExpr {
             },
             exprs: vec![MirScalarExpr::CallVariadic {
                 func: VariadicFunc::RecordCreate {
-                    field_names: vec![ColumnName::from(col_name), ColumnName::from("?record?")],
+                    field_names: vec![
+                        ColumnName::try_from(col_name).unwrap(),
+                        ColumnName::from(ident!("?record?")),
+                    ],
                 },
                 exprs: vec![
                     MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),

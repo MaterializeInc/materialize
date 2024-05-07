@@ -21,6 +21,7 @@ use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
+use mz_sql_parser::ident;
 use once_cell::sync::Lazy;
 
 use crate::ast::{SelectStatement, Statement};
@@ -1775,7 +1776,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::AclExplode,
                         exprs: vec![aclitems],
                     },
-                    column_names: vec!["grantor".into(), "grantee".into(), "privilege_type".into(), "is_grantable".into()],
+                    column_names: vec![ident!("grantor").into(), ident!("grantee").into(), ident!("privilege_type").into(), ident!("is_grantable").into()],
                 })
             }) => ReturnType::set_of(RecordAny), 1689;
         },
@@ -3101,7 +3102,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 };
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from("key"), ColumnName::from("val")],
+                        field_names: vec![ColumnName::from(ident!("key")), ColumnName::from(ident!("val"))],
                     },
                     exprs: vec![key, val],
                 };
@@ -3112,7 +3113,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String) => Operation::binary_ordered(|_ecx, value, sep, order_by| {
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from("value"), ColumnName::from("sep")],
+                        field_names: vec![ColumnName::from(ident!("value")), ColumnName::from(ident!("sep"))],
                     },
                     exprs: vec![value, sep],
                 };
@@ -3155,7 +3156,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
                 };
@@ -3165,7 +3166,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
                 };
@@ -3174,7 +3175,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs,
                 };
@@ -3187,7 +3188,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
                 };
@@ -3197,7 +3198,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
                 };
@@ -3206,7 +3207,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        field_names: vec![ColumnName::from(ident!("expr")), ColumnName::from(ident!("offset")), ColumnName::from(ident!("default"))]
                     },
                     exprs,
                 };
@@ -3228,7 +3229,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::GenerateSeriesInt32,
                         exprs,
                     },
-                    column_names: vec!["generate_series".into()],
+                    column_names: vec![ident!("generate_series").into()],
                 })
             }) => ReturnType::set_of(Int32.into()), 1066;
             params!(Int32, Int32) => Operation::binary(move |_ecx, start, stop| {
@@ -3237,7 +3238,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::GenerateSeriesInt32,
                         exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32)],
                     },
-                    column_names: vec!["generate_series".into()],
+                    column_names: vec![ident!("generate_series").into()],
                 })
             }) => ReturnType::set_of(Int32.into()), 1067;
             params!(Int64, Int64, Int64) => Operation::variadic(move |_ecx, exprs| {
@@ -3246,7 +3247,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::GenerateSeriesInt64,
                         exprs,
                     },
-                    column_names: vec!["generate_series".into()],
+                    column_names: vec![ident!("generate_series").into()],
                 })
             }) => ReturnType::set_of(Int64.into()), 1068;
             params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
@@ -3257,7 +3258,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::GenerateSeriesInt64,
                         exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
                     },
-                    column_names: vec!["generate_series".into()],
+                    column_names: vec![ident!("generate_series").into()],
                 })
             }) => ReturnType::set_of(Int64.into()), 1069;
             params!(Timestamp, Timestamp, Interval) => Operation::variadic(move |_ecx, exprs| {
@@ -3266,7 +3267,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::GenerateSeriesTimestamp,
                         exprs,
                     },
-                    column_names: vec!["generate_series".into()],
+                    column_names: vec![ident!("generate_series").into()],
                 })
             }) => ReturnType::set_of(Timestamp.into()), 938;
             params!(TimestampTz, TimestampTz, Interval) => Operation::variadic(move |_ecx, exprs| {
@@ -3275,7 +3276,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::GenerateSeriesTimestampTz,
                         exprs,
                     },
-                    column_names: vec!["generate_series".into()],
+                    column_names: vec![ident!("generate_series").into()],
                 })
             }) => ReturnType::set_of(TimestampTz.into()), 939;
         },
@@ -3287,7 +3288,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::GenerateSubscriptsArray,
                         exprs,
                     },
-                    column_names: vec!["generate_subscripts".into()],
+                    column_names: vec![ident!("generate_subscripts").into()],
                 })
             }) => ReturnType::set_of(Int32.into()), 1192;
         },
@@ -3299,7 +3300,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::JsonbArrayElements { stringify: false },
                         exprs: vec![jsonb],
                     },
-                    column_names: vec!["value".into()],
+                    column_names: vec![ident!("value").into()],
                 })
             }) => ReturnType::set_of(Jsonb.into()), 3219;
         },
@@ -3310,7 +3311,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::JsonbArrayElements { stringify: true },
                         exprs: vec![jsonb],
                     },
-                    column_names: vec!["value".into()],
+                    column_names: vec![ident!("value").into()],
                 })
             }) => ReturnType::set_of(String.into()), 3465;
         },
@@ -3321,7 +3322,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::JsonbEach { stringify: false },
                         exprs: vec![jsonb],
                     },
-                    column_names: vec!["key".into(), "value".into()],
+                    column_names: vec![ident!("key").into(), ident!("value").into()],
                 })
             }) => ReturnType::set_of(RecordAny), 3208;
         },
@@ -3332,7 +3333,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::JsonbEach { stringify: true },
                         exprs: vec![jsonb],
                     },
-                    column_names: vec!["key".into(), "value".into()],
+                    column_names: vec![ident!("key").into(), ident!("value").into()],
                 })
             }) => ReturnType::set_of(RecordAny), 3932;
         },
@@ -3343,7 +3344,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::JsonbObjectKeys,
                         exprs: vec![jsonb],
                     },
-                    column_names: vec!["jsonb_object_keys".into()],
+                    column_names: vec![ident!("jsonb_object_keys").into()],
                 })
             }) => ReturnType::set_of(String.into()), 3931;
         },
@@ -3497,7 +3498,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 };
                 let ncols = usize::try_from(ncols).expect("known to be greater than zero");
 
-                let column_names = (1..=ncols).map(|i| format!("column{}", i).into()).collect();
+                let column_names = (1..=ncols).map(|i| format!("column{}", i).try_into().unwrap()).collect();
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
                         func: TableFunc::CsvExtract(ncols),
@@ -3684,7 +3685,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
 
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
-                        field_names: vec![ColumnName::from("key"), ColumnName::from("val")],
+                        field_names: vec![ColumnName::from(ident!("key")), ColumnName::from(ident!("val"))],
                     },
                     exprs: vec![key, val],
                 };
@@ -3776,7 +3777,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 let column_names = regex
                     .capture_groups_iter()
                     .map(|cg| {
-                        cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index)).into()
+                        cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index)).try_into().unwrap()
                     })
                     .collect();
                 Ok(TableFuncPlan {
@@ -3816,7 +3817,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::UnnestArray { el_typ },
                         exprs: vec![e],
                     },
-                    column_names: vec!["unnest".into()],
+                    column_names: vec![ident!("unnest").into()],
                 })
             }) =>
                 // This return type should be equivalent to "ArrayElementAny", but this would be its sole use.
@@ -3828,7 +3829,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::UnnestList { el_typ },
                         exprs: vec![e],
                     },
-                    column_names: vec!["unnest".into()],
+                    column_names: vec![ident!("unnest").into()],
                 })
             }) =>
                 // This return type should be equivalent to "ListElementAny", but this would be its sole use.
@@ -3840,7 +3841,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         func: TableFunc::UnnestMap { value_type },
                         exprs: vec![e],
                     },
-                    column_names: vec!["key".into(), "value".into()],
+                    column_names: vec![ident!("key").into(), ident!("value").into()],
                 })
             }) =>
                 // This return type should be equivalent to "ListElementAny", but this would be its sole use.
@@ -3878,7 +3879,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                         func: TableFunc::MzAclExplode,
                         exprs: vec![mz_aclitems],
                     },
-                    column_names: vec!["grantor".into(), "grantee".into(), "privilege_type".into(), "is_grantable".into()],
+                    column_names: vec![ident!("grantor").into(), ident!("grantee").into(), ident!("privilege_type").into(), ident!("is_grantable").into()],
                 })
             }) => ReturnType::set_of(RecordAny), oid::FUNC_MZ_ACL_ITEM_EXPLODE_OID;
         },

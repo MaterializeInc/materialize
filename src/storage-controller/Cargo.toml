@@ -28,6 +28,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto", features = ["tokio-postgres"] }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
+mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }

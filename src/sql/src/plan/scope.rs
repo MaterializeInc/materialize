@@ -46,6 +46,7 @@ use std::iter;
 
 use mz_ore::iter::IteratorExt;
 use mz_repr::ColumnName;
+use mz_sql_parser::ident;
 
 use crate::ast::Expr;
 use crate::names::{Aug, PartialItemName};
@@ -143,7 +144,7 @@ impl ScopeItem {
     pub fn empty() -> ScopeItem {
         ScopeItem {
             table_name: None,
-            column_name: "?column?".into(),
+            column_name: ident!("?column?").into(),
             exprs: BTreeSet::new(),
             from_single_column_function: false,
             allow_unqualified_references: true,

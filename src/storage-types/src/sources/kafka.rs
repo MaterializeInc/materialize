@@ -18,6 +18,7 @@ use mz_dyncfg::ConfigSet;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_sql_parser::ident;
 use mz_timely_util::order::{Extrema, Partitioned};
 use once_cell::sync::Lazy;
 use proptest::prelude::any;
@@ -79,13 +80,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
 pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
         .with_column(
-            "partition",
+            ident!("partition"),
             ScalarType::Range {
                 element_type: Box::new(ScalarType::Numeric { max_scale: None }),
             }
             .nullable(false),
         )
-        .with_column("offset", ScalarType::UInt64.nullable(true))
+        .with_column(ident!("offset"), ScalarType::UInt64.nullable(true))
 });
 
 impl KafkaSourceConnection {
@@ -130,11 +131,11 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
     }
 
     fn key_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("key", ScalarType::Bytes.nullable(true))
+        RelationDesc::empty().with_column(ident!("key"), ScalarType::Bytes.nullable(true))
     }
 
     fn value_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("value", ScalarType::Bytes.nullable(true))
+        RelationDesc::empty().with_column(ident!("value"), ScalarType::Bytes.nullable(true))
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
@@ -165,14 +166,14 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
                         element_type: Box::new(ScalarType::Record {
                             fields: vec![
                                 (
-                                    "key".into(),
+                                    ident!("key").into(),
                                     ColumnType {
                                         nullable: false,
                                         scalar_type: ScalarType::String,
                                     },
                                 ),
                                 (
-                                    "value".into(),
+                                    ident!("value").into(),
                                     ColumnType {
                                         nullable: true,
                                         scalar_type: ScalarType::Bytes,

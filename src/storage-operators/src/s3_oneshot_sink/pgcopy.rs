@@ -202,6 +202,7 @@ mod tests {
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     async fn test_multiple_files() -> Result<(), anyhow::Error> {
+        use mz_sql_parser::ident;
         let sdk_config = mz_aws_util::defaults().load().await;
         let (bucket, path) = match s3_bucket_path_for_test() {
             Some(tuple) => tuple,
@@ -213,7 +214,7 @@ mod tests {
             scalar_type: mz_repr::ScalarType::String,
             nullable: true,
         }]);
-        let column_names = vec![ColumnName::from("col1")];
+        let column_names = vec![ColumnName::from(ident!("col1"))];
         let desc = RelationDesc::new(typ, column_names.into_iter());
         let mut uploader = PgCopyUploader::new(
             sdk_config.clone(),

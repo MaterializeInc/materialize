@@ -10,9 +10,12 @@
 use std::{fmt, iter, vec};
 
 use anyhow::bail;
-use mz_lowertest::MzReflect;
+use mz_lowertest::{MzReflect, ReflectedTypeInfo};
 use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_sql_parser::ast::{Ident, IdentError};
+use proptest::strategy::Strategy;
+use proptest::{prelude::Arbitrary, strategy::BoxedStrategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -249,27 +252,20 @@ impl RustType<ProtoKey> for Vec<usize> {
 }
 
 /// The name of a column in a [`RelationDesc`].
-#[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
-)]
-pub struct ColumnName(pub(crate) String);
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+pub struct ColumnName(pub(crate) mz_sql_parser::ast::Ident);
 
 impl ColumnName {
     /// Returns this column name as a `str`.
     pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Returns a mutable reference to the string underlying this column name.
-    pub fn as_mut_str(&mut self) -> &mut String {
-        &mut self.0
+        self.0.as_str()
     }
 
     /// Returns if this [`ColumnName`] is similar to the provided one.
     pub fn is_similar(&self, other: &ColumnName) -> bool {
         const SIMILARITY_THRESHOLD: f64 = 0.6;
 
-        let a_lowercase = self.0.to_lowercase();
+        let a_lowercase = self.as_str().to_lowercase();
         let b_lowercase = other.as_str().to_lowercase();
 
         strsim::normalized_levenshtein(&a_lowercase, &b_lowercase) >= SIMILARITY_THRESHOLD
@@ -278,19 +274,13 @@ impl ColumnName {
 
 impl fmt::Display for ColumnName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(self.as_str())
     }
 }
 
-impl From<String> for ColumnName {
-    fn from(s: String) -> ColumnName {
-        ColumnName(s)
-    }
-}
-
-impl From<&str> for ColumnName {
-    fn from(s: &str) -> ColumnName {
-        ColumnName(s.into())
+impl From<Ident> for ColumnName {
+    fn from(ident: Ident) -> ColumnName {
+        ColumnName(ident)
     }
 }
 
@@ -300,24 +290,67 @@ impl From<&ColumnName> for ColumnName {
     }
 }
 
+impl TryFrom<String> for ColumnName {
+    type Error = IdentError;
+    fn try_from(s: String) -> Result<ColumnName, Self::Error> {
+        Ident::new(s).map(|ident| ColumnName(ident))
+    }
+}
+
+impl TryFrom<&str> for ColumnName {
+    type Error = IdentError;
+    fn try_from(s: &str) -> Result<ColumnName, Self::Error> {
+        Ident::new(s).map(|ident| ColumnName(ident))
+    }
+}
+
 impl RustType<ProtoColumnName> for ColumnName {
     fn into_proto(&self) -> ProtoColumnName {
         ProtoColumnName {
-            value: Some(self.0.clone()),
+            value: Some(self.as_str().to_string()),
         }
     }
 
     fn from_proto(proto: ProtoColumnName) -> Result<Self, TryFromProtoError> {
-        Ok(ColumnName(proto.value.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoColumnName::value")
-        })?))
+        ColumnName::try_from(
+            proto
+                .value
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoColumnName::value"))?,
+        )
+        .map_err(|err| {
+            TryFromProtoError::invalid_identifier(format!("Invalid identifier: {:?}", err))
+        })
     }
 }
 
-impl From<ColumnName> for mz_sql_parser::ast::Ident {
+impl From<ColumnName> for Ident {
     fn from(value: ColumnName) -> Self {
-        // Note: ColumnNames are known to be less than the max length of an Ident (I think?).
-        mz_sql_parser::ast::Ident::new_unchecked(value.0)
+        value.0.clone()
+    }
+}
+
+impl Arbitrary for ColumnName {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        // Note that the regex for "all strings with up to 255 printable
+        // characters" is a superset of valid identifiers, because their size
+        // limit is measure in terms of byte length (not number of characters),
+        // and certain identifiers like "." and ".." are forbidden. Using a
+        // naïve rejection sampling to prune the strategy to valid identifiers
+        // should be fine, given the rejection rate is low.
+        "\\PC{0,255}"
+            .prop_filter_map("Filter to valid identifiers", |s| {
+                ColumnName::try_from(s).ok()
+            })
+            .boxed()
+    }
+}
+
+impl MzReflect for ColumnName {
+    fn add_to_reflected_type_info(_rti: &mut ReflectedTypeInfo) {
+        // Nothing to do, because type isn't an enum or struct.
     }
 }
 
@@ -331,10 +364,11 @@ impl From<ColumnName> for mz_sql_parser::ast::Ident {
 ///
 /// ```
 /// use mz_repr::{ColumnType, RelationDesc, ScalarType};
+/// use mz_sql_parser::ident;
 ///
 /// let desc = RelationDesc::empty()
-///     .with_column("id", ScalarType::Int64.nullable(false))
-///     .with_column("price", ScalarType::Float64.nullable(true));
+///     .with_column(ident!("id"), ScalarType::Int64.nullable(false))
+///     .with_column(ident!("price"), ScalarType::Float64.nullable(true));
 /// ```
 ///
 /// In more complicated cases, like when constructing a `RelationDesc` in
@@ -343,13 +377,14 @@ impl From<ColumnName> for mz_sql_parser::ast::Ident {
 ///
 /// ```
 /// use mz_repr::RelationDesc;
+/// use mz_sql_parser::ident;
 ///
 /// # fn plan_query(_: &str) -> mz_repr::RelationType { mz_repr::RelationType::new(vec![]) }
 /// let relation_type = plan_query("SELECT * FROM table");
 /// let names = (0..relation_type.arity()).map(|i| match i {
-///     0 => "first",
-///     1 => "second",
-///     _ => "unknown",
+///     0 => ident!("first"),
+///     1 => ident!("second"),
+///     _ => ident!("unknown"),
 /// });
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```

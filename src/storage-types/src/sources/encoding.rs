@@ -13,7 +13,8 @@ use anyhow::Context;
 use mz_interchange::{avro, protobuf};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::regex::any_regex;
-use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, ScalarType};
+use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -175,7 +176,7 @@ impl RustType<ProtoDataEncoding> for DataEncoding {
 pub fn included_column_desc(included_columns: Vec<(&str, ColumnType)>) -> RelationDesc {
     let mut desc = RelationDesc::empty();
     for (name, ty) in included_columns {
-        desc = desc.with_column(name, ty);
+        desc = desc.with_column(ColumnName::try_from(name).unwrap(), ty);
     }
     desc
 }
@@ -200,10 +201,10 @@ impl<C: ConnectionAccess> DataEncoding<C> {
         // Add columns for the data, based on the encoding format.
         Ok(match self {
             Self::Bytes => {
-                RelationDesc::empty().with_column("data", ScalarType::Bytes.nullable(false))
+                RelationDesc::empty().with_column(ident!("data"), ScalarType::Bytes.nullable(false))
             }
             Self::Json => {
-                RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
+                RelationDesc::empty().with_column(ident!("data"), ScalarType::Jsonb.nullable(false))
             }
             Self::Avro(AvroEncoding { schema, .. }) => {
                 let parsed_schema = avro::parse_schema(schema).context("validating avro schema")?;
@@ -233,22 +234,29 @@ impl<C: ConnectionAccess> DataEncoding<C> {
                         Some(name) => name.to_owned(),
                     };
                     let ty = ScalarType::String.nullable(true);
-                    desc.with_column(name, ty)
+                    desc.with_column(ColumnName::try_from(name).unwrap(), ty)
                 }),
             Self::Csv(CsvEncoding { columns, .. }) => match columns {
                 ColumnSpec::Count(n) => (1..=*n).fold(RelationDesc::empty(), |desc, i| {
-                    desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
+                    desc.with_column(
+                        ColumnName::try_from(format!("column{}", i)).unwrap(),
+                        ScalarType::String.nullable(false),
+                    )
                 }),
-                ColumnSpec::Header { names } => names
-                    .iter()
-                    .map(|s| &**s)
-                    .fold(RelationDesc::empty(), |desc, name| {
-                        desc.with_column(name, ScalarType::String.nullable(false))
-                    }),
+                ColumnSpec::Header { names } => {
+                    names
+                        .iter()
+                        .map(|s| &**s)
+                        .fold(RelationDesc::empty(), |desc, name| {
+                            desc.with_column(
+                                ColumnName::try_from(name).unwrap(),
+                                ScalarType::String.nullable(false),
+                            )
+                        })
+                }
             },
-            Self::Text => {
-                RelationDesc::empty().with_column("text", ScalarType::String.nullable(false))
-            }
+            Self::Text => RelationDesc::empty()
+                .with_column(ident!("text"), ScalarType::String.nullable(false)),
         })
     }
 

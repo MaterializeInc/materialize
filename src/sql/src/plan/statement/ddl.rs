@@ -495,7 +495,7 @@ pub fn plan_create_webhook_source(
             nullable: false,
         },
     ];
-    let mut column_names = vec!["body".to_string()];
+    let mut column_names = vec![ColumnName::from(ident!("body"))];
 
     let mut headers = WebhookHeaders::default();
 
@@ -508,7 +508,7 @@ pub fn plan_create_webhook_source(
             },
             nullable: false,
         });
-        column_names.push("headers".to_string());
+        column_names.push(ColumnName::from(ident!("headers")));
 
         let (allow, block): (BTreeSet<_>, BTreeSet<_>) =
             filters.into_iter().partition_map(|filter| {
@@ -531,7 +531,7 @@ pub fn plan_create_webhook_source(
             scalar_type,
             nullable: true,
         });
-        column_names.push(header.column_name.into_string());
+        column_names.push(ColumnName::from(header.column_name));
 
         let column_idx = column_ty.len() - 1;
         // Double check we're consistent with column names.
@@ -1783,9 +1783,9 @@ pub(crate) fn load_generator_ast_to_generator(
 }
 
 fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize), PlanError> {
-    let before = value_desc.get_by_name(&"before".into());
+    let before = value_desc.get_by_name(&ColumnName::from(ident!("before")));
     let (after_idx, after_ty) = value_desc
-        .get_by_name(&"after".into())
+        .get_by_name(&ColumnName::from(ident!("after")))
         .ok_or_else(|| sql_err!("'after' column missing from debezium input"))?;
     let before_idx = if let Some((before_idx, before_ty)) = before {
         if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
@@ -3279,7 +3279,7 @@ pub fn plan_create_type(
                 let key = ident(column_def.name.clone());
                 let (id, modifiers) = validate_data_type(scx, data_type, "", &key)?;
                 fields.push(CatalogRecordField {
-                    name: ColumnName::from(key.clone()),
+                    name: ColumnName::try_from(key.clone()).unwrap(),
                     type_reference: id,
                     type_modifiers: modifiers,
                 });

@@ -27,6 +27,7 @@ mz-avro = { path = "../avro", features = ["snappy"] }
 mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["network", "cli"] }
 mz-repr = { path = "../repr" }
+mz-sql-parser = { path = "../sql-parser" }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 prost-reflect = "0.11.4"

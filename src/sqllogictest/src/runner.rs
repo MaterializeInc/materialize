@@ -1461,7 +1461,7 @@ impl<'a> RunnerInner<'a> {
                 let actual_column_names = row
                     .columns()
                     .iter()
-                    .map(|t| ColumnName::from(t.name()))
+                    .map(|t| ColumnName::try_from(t.name()).unwrap())
                     .collect::<Vec<_>>();
                 if expected_column_names != &actual_column_names {
                     return Ok(Outcome::WrongColumnNames {
@@ -2557,6 +2557,7 @@ fn mutate(sql: &str) -> Vec<String> {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_generate_view_sql() {
+    use mz_sql_parser::ident;
     let uuid = Uuid::parse_str("67e5504410b1426f9247bb680e5fe0c8").unwrap();
     let cases = vec![
         (("SELECT * FROM t", None, None),
@@ -2566,7 +2567,7 @@ fn test_generate_view_sql() {
             r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
-        (("SELECT a, b, c FROM t1, t2", Some(3), Some(vec![ColumnName::from("a"), ColumnName::from("b"), ColumnName::from("c")])),
+        (("SELECT a, b, c FROM t1, t2", Some(3), Some(vec![ColumnName::from(ident!("a")), ColumnName::from(ident!("b")), ColumnName::from(ident!("c"))])),
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
             r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c")"#.to_string(),
@@ -2589,7 +2590,7 @@ fn test_generate_view_sql() {
             r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
-        (("SELECT a, b, b + d AS c, a + b AS d FROM t1, t2 ORDER BY a, c, a + b", Some(4), Some(vec![ColumnName::from("a"), ColumnName::from("b"), ColumnName::from("c"), ColumnName::from("d")])),
+        (("SELECT a, b, b + d AS c, a + b AS d FROM t1, t2 ORDER BY a, c, a + b", Some(4), Some(vec![ColumnName::from(ident!("a")), ColumnName::from(ident!("b")), ColumnName::from(ident!("c")), ColumnName::from(ident!("d"))])),
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d") AS SELECT "a", "b", "b" + "d" AS "c", "a" + "b" AS "d" FROM "t1", "t2" ORDER BY "a", "c", "a" + "b""#.to_string(),
             r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d")"#.to_string(),

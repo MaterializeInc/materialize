@@ -40,7 +40,7 @@ impl DecodedDescriptors {
         seen_messages.insert(message_descriptor.name().to_owned());
         let mut columns = vec![];
         for field in message_descriptor.fields() {
-            let name = ColumnName::from(field.name());
+            let name = ColumnName::try_from(field.name()).unwrap();
             let ty = derive_column_type(&mut seen_messages, &field)?;
             columns.push((name, ty))
         }
@@ -155,7 +155,7 @@ fn derive_inner_type(
             seen_messages.insert(m.name().to_owned());
             let mut fields = Vec::with_capacity(m.fields().len());
             for field in m.fields() {
-                let column_name = ColumnName::from(field.name());
+                let column_name = ColumnName::try_from(field.name()).unwrap();
                 let column_type = derive_column_type(seen_messages, &field)?;
                 fields.push((column_name, column_type))
             }

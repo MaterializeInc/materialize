@@ -30,6 +30,7 @@ use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
+use mz_sql_parser::ident;
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::{Arbitrary, Just};
@@ -1920,15 +1921,15 @@ impl AggregateFunc {
                     .clone()
                     .nullable(true);
                 let column_name = match lag_lead {
-                    LagLeadType::Lag => "?lag?",
-                    LagLeadType::Lead => "?lead?",
+                    LagLeadType::Lag => ident!("?lag?"),
+                    LagLeadType::Lead => ident!("?lead?"),
                 };
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
                             (ColumnName::from(column_name), value_type),
-                            (ColumnName::from("?record?"), original_row_type),
+                            (ColumnName::from(ident!("?record?")), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -1948,8 +1949,8 @@ impl AggregateFunc {
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
-                            (ColumnName::from("?first_value?"), value_type),
-                            (ColumnName::from("?record?"), original_row_type),
+                            (ColumnName::from(ident!("?first_value?")), value_type),
+                            (ColumnName::from(ident!("?record?")), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -1969,8 +1970,8 @@ impl AggregateFunc {
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
-                            (ColumnName::from("?last_value?"), value_type),
-                            (ColumnName::from("?record?"), original_row_type),
+                            (ColumnName::from(ident!("?last_value?")), value_type),
+                            (ColumnName::from(ident!("?record?")), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -1993,8 +1994,11 @@ impl AggregateFunc {
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
-                            (ColumnName::from("?window_agg?"), wrapped_aggr_out_type),
-                            (ColumnName::from("?record?"), original_row_type),
+                            (
+                                ColumnName::from(ident!("?window_agg?")),
+                                wrapped_aggr_out_type,
+                            ),
+                            (ColumnName::from(ident!("?record?")), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -2032,10 +2036,10 @@ impl AggregateFunc {
                 element_type: Box::new(ScalarType::Record {
                     fields: vec![
                         (
-                            ColumnName::from(col_name),
+                            ColumnName::try_from(col_name).unwrap(),
                             ScalarType::Int64.nullable(false),
                         ),
-                        (ColumnName::from("?record?"), {
+                        (ColumnName::from(ident!("?record?")), {
                             let inner = match &fields[0].1.scalar_type {
                                 ScalarType::List { element_type, .. } => element_type.clone(),
                                 _ => unreachable!(),

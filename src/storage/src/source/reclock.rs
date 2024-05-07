@@ -634,6 +634,7 @@ mod tests {
     use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
+    use mz_sql_parser::ident;
     use mz_storage_client::util::remap_handle::RemapHandle;
     use mz_storage_types::controller::CollectionMetadata;
     use mz_storage_types::sources::kafka::RangeBound;
@@ -660,13 +661,13 @@ mod tests {
     static PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         RelationDesc::empty()
             .with_column(
-                "partition",
+                ident!("partition"),
                 ScalarType::Range {
                     element_type: Box::new(ScalarType::Int32),
                 }
                 .nullable(false),
             )
-            .with_column("offset", ScalarType::UInt64.nullable(true))
+            .with_column(ident!("offset"), ScalarType::UInt64.nullable(true))
     });
 
     async fn make_test_operator(

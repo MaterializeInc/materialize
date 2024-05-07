@@ -11,7 +11,7 @@
 
 use anyhow::{anyhow, bail};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
+use mz_repr::{ColumnName, ColumnType, RelationDesc, RelationType, ScalarType};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -270,6 +270,7 @@ impl UnplannedSourceEnvelope {
                         (key_desc.concat(value_desc), Some(key_indices))
                     }
                     KeyEnvelope::Named(key_name) => {
+                        let key_name = ColumnName::try_from(key_name.as_str()).unwrap();
                         let key_desc = {
                             // if the key has multiple objects, nest them as a record inside of a single name
                             if key_desc.arity() > 1 {
@@ -286,9 +287,9 @@ impl UnplannedSourceEnvelope {
                                     },
                                 }]);
 
-                                RelationDesc::new(key_as_record, [key_name.to_string()])
+                                RelationDesc::new(key_as_record, [key_name])
                             } else {
-                                key_desc.with_names([key_name.to_string()])
+                                key_desc.with_names([key_name])
                             }
                         };
                         let (key_desc, key) = match self {

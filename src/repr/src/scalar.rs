@@ -4048,9 +4048,10 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
 
 #[mz_ore::test]
 fn verify_base_eq_record_nullability() {
+    use mz_sql_parser::ident;
     let s1 = ScalarType::Record {
         fields: vec![(
-            "c".into(),
+            ident!("c").into(),
             ColumnType {
                 scalar_type: ScalarType::Bool,
                 nullable: true,
@@ -4060,7 +4061,7 @@ fn verify_base_eq_record_nullability() {
     };
     let s2 = ScalarType::Record {
         fields: vec![(
-            "c".into(),
+            ident!("c").into(),
             ColumnType {
                 scalar_type: ScalarType::Bool,
                 nullable: false,

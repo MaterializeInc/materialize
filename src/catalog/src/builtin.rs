@@ -46,6 +46,7 @@ use mz_sql::session::user::{
     MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID,
     SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
+use mz_sql_parser::ident;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
@@ -1912,8 +1913,8 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_KAFKA_SINKS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("topic", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("topic"), ScalarType::String.nullable(false))
         .with_key(vec![0]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -1923,12 +1924,15 @@ pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_KAFKA_CONNECTIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
         .with_column(
-            "brokers",
+            ident!("brokers"),
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
-        .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
+        .with_column(
+            ident!("sink_progress_topic"),
+            ScalarType::String.nullable(false),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -1938,9 +1942,12 @@ pub static MZ_KAFKA_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_KAFKA_SOURCES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("group_id_prefix", ScalarType::String.nullable(false))
-        .with_column("topic", ScalarType::String.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("group_id_prefix"),
+            ScalarType::String.nullable(false),
+        )
+        .with_column(ident!("topic"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -1949,9 +1956,12 @@ pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_POSTGRES_SOURCES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("replication_slot", ScalarType::String.nullable(false))
-        .with_column("timeline_id", ScalarType::UInt64.nullable(true)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("replication_slot"),
+            ScalarType::String.nullable(false),
+        )
+        .with_column(ident!("timeline_id"), ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -1960,9 +1970,9 @@ pub static MZ_POSTGRES_SOURCE_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_POSTGRES_SOURCE_TABLES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("schema_name", ScalarType::String.nullable(false))
-        .with_column("table_name", ScalarType::String.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("schema_name"), ScalarType::String.nullable(false))
+        .with_column(ident!("table_name"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -1971,9 +1981,9 @@ pub static MZ_MYSQL_SOURCE_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTabl
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_MYSQL_SOURCE_TABLES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("schema_name", ScalarType::String.nullable(false))
-        .with_column("table_name", ScalarType::String.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("schema_name"), ScalarType::String.nullable(false))
+        .with_column(ident!("table_name"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -1982,8 +1992,11 @@ pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTabl
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_OBJECT_DEPENDENCIES_OID,
     desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("referenced_object_id", ScalarType::String.nullable(false)),
+        .with_column(ident!("object_id"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("referenced_object_id"),
+            ScalarType::String.nullable(false),
+        ),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -1993,8 +2006,8 @@ pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSo
     oid: oid::SOURCE_MZ_COMPUTE_DEPENDENCIES_OID,
     data_source: IntrospectionType::ComputeDependencies,
     desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("dependency_id", ScalarType::String.nullable(false)),
+        .with_column(ident!("object_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("dependency_id"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2004,9 +2017,9 @@ pub static MZ_COMPUTE_HYDRATION_STATUSES: Lazy<BuiltinSource> = Lazy::new(|| Bui
     oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_STATUSES_OID,
     data_source: IntrospectionType::ComputeHydrationStatus,
     desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column("hydrated", ScalarType::Bool.nullable(false)),
+        .with_column(ident!("object_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("replica_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("hydrated"), ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2017,11 +2030,14 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: Lazy<BuiltinSource
         oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER_OID,
         data_source: IntrospectionType::ComputeOperatorHydrationStatus,
         desc: RelationDesc::empty()
-            .with_column("object_id", ScalarType::String.nullable(false))
-            .with_column("physical_plan_node_id", ScalarType::UInt64.nullable(false))
-            .with_column("replica_id", ScalarType::String.nullable(false))
-            .with_column("worker_id", ScalarType::UInt64.nullable(false))
-            .with_column("hydrated", ScalarType::Bool.nullable(false)),
+            .with_column(ident!("object_id"), ScalarType::String.nullable(false))
+            .with_column(
+                ident!("physical_plan_node_id"),
+                ScalarType::UInt64.nullable(false),
+            )
+            .with_column(ident!("replica_id"), ScalarType::String.nullable(false))
+            .with_column(ident!("worker_id"), ScalarType::UInt64.nullable(false))
+            .with_column(ident!("hydrated"), ScalarType::Bool.nullable(false)),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
@@ -2031,12 +2047,12 @@ pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_DATABASES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
         .with_column(
-            "privileges",
+            ident!("privileges"),
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
@@ -2047,13 +2063,13 @@ pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SCHEMAS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("database_id", ScalarType::String.nullable(true))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("database_id"), ScalarType::String.nullable(true))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
         .with_column(
-            "privileges",
+            ident!("privileges"),
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
@@ -2064,14 +2080,14 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_COLUMNS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("position", ScalarType::UInt64.nullable(false))
-        .with_column("nullable", ScalarType::Bool.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false))
-        .with_column("default", ScalarType::String.nullable(true))
-        .with_column("type_oid", ScalarType::Oid.nullable(false))
-        .with_column("type_mod", ScalarType::Int32.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("position"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("nullable"), ScalarType::Bool.nullable(false))
+        .with_column(ident!("type"), ScalarType::String.nullable(false))
+        .with_column(ident!("default"), ScalarType::String.nullable(true))
+        .with_column(ident!("type_oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("type_mod"), ScalarType::Int32.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2080,14 +2096,17 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_INDEXES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("on_id", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
-        .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("on_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("cluster_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("create_sql"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("redacted_create_sql"),
+            ScalarType::String.nullable(false),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2096,11 +2115,11 @@ pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_INDEX_COLUMNS_OID,
     desc: RelationDesc::empty()
-        .with_column("index_id", ScalarType::String.nullable(false))
-        .with_column("index_position", ScalarType::UInt64.nullable(false))
-        .with_column("on_position", ScalarType::UInt64.nullable(true))
-        .with_column("on_expression", ScalarType::String.nullable(true))
-        .with_column("nullable", ScalarType::Bool.nullable(false)),
+        .with_column(ident!("index_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("index_position"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("on_position"), ScalarType::UInt64.nullable(true))
+        .with_column(ident!("on_expression"), ScalarType::String.nullable(true))
+        .with_column(ident!("nullable"), ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2109,17 +2128,20 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_TABLES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("schema_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
         .with_column(
-            "privileges",
+            ident!("privileges"),
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
-        .with_column("create_sql", ScalarType::String.nullable(true))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(true)),
+        .with_column(ident!("create_sql"), ScalarType::String.nullable(true))
+        .with_column(
+            ident!("redacted_create_sql"),
+            ScalarType::String.nullable(true),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2128,18 +2150,21 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_CONNECTIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("schema_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("type"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
         .with_column(
-            "privileges",
+            ident!("privileges"),
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
-        .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
+        .with_column(ident!("create_sql"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("redacted_create_sql"),
+            ScalarType::String.nullable(false),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2148,9 +2173,9 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SSH_TUNNEL_CONNECTIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("public_key_1", ScalarType::String.nullable(false))
-        .with_column("public_key_2", ScalarType::String.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("public_key_1"), ScalarType::String.nullable(false))
+        .with_column(ident!("public_key_2"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2159,24 +2184,27 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SOURCES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false))
-        .with_column("connection_id", ScalarType::String.nullable(true))
-        .with_column("size", ScalarType::String.nullable(true))
-        .with_column("envelope_type", ScalarType::String.nullable(true))
-        .with_column("key_format", ScalarType::String.nullable(true))
-        .with_column("value_format", ScalarType::String.nullable(true))
-        .with_column("cluster_id", ScalarType::String.nullable(true))
-        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("schema_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("type"), ScalarType::String.nullable(false))
+        .with_column(ident!("connection_id"), ScalarType::String.nullable(true))
+        .with_column(ident!("size"), ScalarType::String.nullable(true))
+        .with_column(ident!("envelope_type"), ScalarType::String.nullable(true))
+        .with_column(ident!("key_format"), ScalarType::String.nullable(true))
+        .with_column(ident!("value_format"), ScalarType::String.nullable(true))
+        .with_column(ident!("cluster_id"), ScalarType::String.nullable(true))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
         .with_column(
-            "privileges",
+            ident!("privileges"),
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
-        .with_column("create_sql", ScalarType::String.nullable(true))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(true)),
+        .with_column(ident!("create_sql"), ScalarType::String.nullable(true))
+        .with_column(
+            ident!("redacted_create_sql"),
+            ScalarType::String.nullable(true),
+        ),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2185,19 +2213,22 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SINKS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false))
-        .with_column("connection_id", ScalarType::String.nullable(true))
-        .with_column("size", ScalarType::String.nullable(true))
-        .with_column("envelope_type", ScalarType::String.nullable(true))
-        .with_column("format", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
-        .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("schema_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("type"), ScalarType::String.nullable(false))
+        .with_column(ident!("connection_id"), ScalarType::String.nullable(true))
+        .with_column(ident!("size"), ScalarType::String.nullable(true))
+        .with_column(ident!("envelope_type"), ScalarType::String.nullable(true))
+        .with_column(ident!("format"), ScalarType::String.nullable(false))
+        .with_column(ident!("cluster_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("create_sql"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("redacted_create_sql"),
+            ScalarType::String.nullable(false),
+        ),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2206,18 +2237,21 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_VIEWS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("definition", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("schema_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("definition"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
         .with_column(
-            "privileges",
+            ident!("privileges"),
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
-        .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
+        .with_column(ident!("create_sql"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("redacted_create_sql"),
+            ScalarType::String.nullable(false),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2226,19 +2260,22 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_MATERIALIZED_VIEWS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("definition", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("schema_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("cluster_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("definition"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
         .with_column(
-            "privileges",
+            ident!("privileges"),
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
-        .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
+        .with_column(ident!("create_sql"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("redacted_create_sql"),
+            ScalarType::String.nullable(false),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2248,15 +2285,18 @@ pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: Lazy<BuiltinTable> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::TABLE_MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES_OID,
         desc: RelationDesc::empty()
-            .with_column("materialized_view_id", ScalarType::String.nullable(false))
-            .with_column("type", ScalarType::String.nullable(false))
-            .with_column("interval", ScalarType::Interval.nullable(true))
             .with_column(
-                "aligned_to",
+                ident!("materialized_view_id"),
+                ScalarType::String.nullable(false),
+            )
+            .with_column(ident!("type"), ScalarType::String.nullable(false))
+            .with_column(ident!("interval"), ScalarType::Interval.nullable(true))
+            .with_column(
+                ident!("aligned_to"),
                 ScalarType::TimestampTz { precision: None }.nullable(true),
             )
             .with_column(
-                "at",
+                ident!("at"),
                 ScalarType::TimestampTz { precision: None }.nullable(true),
             ),
         is_retained_metrics_object: false,
@@ -2267,18 +2307,21 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_TYPES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("category", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("schema_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("category"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
         .with_column(
-            "privileges",
+            ident!("privileges"),
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
-        .with_column("create_sql", ScalarType::String.nullable(true))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(true)),
+        .with_column(ident!("create_sql"), ScalarType::String.nullable(true))
+        .with_column(
+            ident!("redacted_create_sql"),
+            ScalarType::String.nullable(true),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2289,9 +2332,9 @@ pub static MZ_TYPE_PG_METADATA: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_TYPE_PG_METADATA_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("typinput", ScalarType::Oid.nullable(false))
-        .with_column("typreceive", ScalarType::Oid.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("typinput"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("typreceive"), ScalarType::Oid.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2300,8 +2343,8 @@ pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_ARRAY_TYPES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("element_id", ScalarType::String.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("element_id"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2309,7 +2352,7 @@ pub static MZ_BASE_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_base_types",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_BASE_TYPES_OID,
-    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::empty().with_column(ident!("id"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2318,10 +2361,10 @@ pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_LIST_TYPES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("element_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("element_id"), ScalarType::String.nullable(false))
         .with_column(
-            "element_modifiers",
+            ident!("element_modifiers"),
             ScalarType::List {
                 element_type: Box::new(ScalarType::Int64),
                 custom_id: None,
@@ -2336,11 +2379,11 @@ pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_MAP_TYPES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("key_id", ScalarType::String.nullable(false))
-        .with_column("value_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("key_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("value_id"), ScalarType::String.nullable(false))
         .with_column(
-            "key_modifiers",
+            ident!("key_modifiers"),
             ScalarType::List {
                 element_type: Box::new(ScalarType::Int64),
                 custom_id: None,
@@ -2348,7 +2391,7 @@ pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             .nullable(true),
         )
         .with_column(
-            "value_modifiers",
+            ident!("value_modifiers"),
             ScalarType::List {
                 element_type: Box::new(ScalarType::Int64),
                 custom_id: None,
@@ -2363,10 +2406,10 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_ROLES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("inherit", ScalarType::Bool.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("inherit"), ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2375,9 +2418,9 @@ pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_ROLE_MEMBERS_OID,
     desc: RelationDesc::empty()
-        .with_column("role_id", ScalarType::String.nullable(false))
-        .with_column("member", ScalarType::String.nullable(false))
-        .with_column("grantor", ScalarType::String.nullable(false)),
+        .with_column(ident!("role_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("member"), ScalarType::String.nullable(false))
+        .with_column(ident!("grantor"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2386,9 +2429,12 @@ pub static MZ_ROLE_PARAMETERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_ROLE_PARAMETERS_OID,
     desc: RelationDesc::empty()
-        .with_column("role_id", ScalarType::String.nullable(false))
-        .with_column("parameter_name", ScalarType::String.nullable(false))
-        .with_column("parameter_value", ScalarType::String.nullable(false)),
+        .with_column(ident!("role_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("parameter_name"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("parameter_value"),
+            ScalarType::String.nullable(false),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2396,7 +2442,7 @@ pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_PSEUDO_TYPES_OID,
-    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::empty().with_column(ident!("id"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2405,21 +2451,21 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_FUNCTIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("schema_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
         .with_column(
-            "argument_type_ids",
+            ident!("argument_type_ids"),
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
         .with_column(
-            "variadic_argument_type_id",
+            ident!("variadic_argument_type_id"),
             ScalarType::String.nullable(true),
         )
-        .with_column("return_type_id", ScalarType::String.nullable(true))
-        .with_column("returns_set", ScalarType::Bool.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column(ident!("return_type_id"), ScalarType::String.nullable(true))
+        .with_column(ident!("returns_set"), ScalarType::Bool.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2428,13 +2474,13 @@ pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_OPERATORS_OID,
     desc: RelationDesc::empty()
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
         .with_column(
-            "argument_type_ids",
+            ident!("argument_type_ids"),
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
-        .with_column("return_type_id", ScalarType::String.nullable(true)),
+        .with_column(ident!("return_type_id"), ScalarType::String.nullable(true)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2443,9 +2489,12 @@ pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_AGGREGATES_OID,
     desc: RelationDesc::empty()
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("agg_kind", ScalarType::String.nullable(false))
-        .with_column("agg_num_direct_args", ScalarType::Int16.nullable(false)),
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("agg_kind"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("agg_num_direct_args"),
+            ScalarType::Int16.nullable(false),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2455,19 +2504,22 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTERS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
         .with_column(
-            "privileges",
+            ident!("privileges"),
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
-        .with_column("managed", ScalarType::Bool.nullable(false))
-        .with_column("size", ScalarType::String.nullable(true))
-        .with_column("replication_factor", ScalarType::UInt32.nullable(true))
-        .with_column("disk", ScalarType::Bool.nullable(true))
+        .with_column(ident!("managed"), ScalarType::Bool.nullable(false))
+        .with_column(ident!("size"), ScalarType::String.nullable(true))
         .with_column(
-            "availability_zones",
+            ident!("replication_factor"),
+            ScalarType::UInt32.nullable(true),
+        )
+        .with_column(ident!("disk"), ScalarType::Bool.nullable(true))
+        .with_column(
+            ident!("availability_zones"),
             ScalarType::List {
                 element_type: Box::new(ScalarType::String),
                 custom_id: None,
@@ -2482,10 +2534,10 @@ pub static MZ_CLUSTER_SCHEDULES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_SCHEDULES_OID,
     desc: RelationDesc::empty()
-        .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false))
+        .with_column(ident!("cluster_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("type"), ScalarType::String.nullable(false))
         .with_column(
-            "refresh_rehydration_time_estimate",
+            ident!("refresh_rehydration_time_estimate"),
             ScalarType::Interval.nullable(true),
         ),
     is_retained_metrics_object: false,
@@ -2497,13 +2549,13 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SECRETS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("oid"), ScalarType::Oid.nullable(false))
+        .with_column(ident!("schema_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
         .with_column(
-            "privileges",
+            ident!("privileges"),
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
@@ -2515,15 +2567,18 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICAS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("size", ScalarType::String.nullable(true))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("cluster_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("size"), ScalarType::String.nullable(true))
         // `NULL` for un-orchestrated clusters and for replicas where the user
         // hasn't specified them.
-        .with_column("availability_zone", ScalarType::String.nullable(true))
-        .with_column("owner_id", ScalarType::String.nullable(false))
-        .with_column("disk", ScalarType::Bool.nullable(true)),
+        .with_column(
+            ident!("availability_zone"),
+            ScalarType::String.nullable(true),
+        )
+        .with_column(ident!("owner_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("disk"), ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2532,7 +2587,7 @@ pub static MZ_INTERNAL_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| Built
     name: "mz_internal_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_INTERNAL_CLUSTER_REPLICAS_OID,
-    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::empty().with_column(ident!("id"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2542,12 +2597,12 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICA_STATUSES_OID,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column("process_id", ScalarType::UInt64.nullable(false))
-        .with_column("status", ScalarType::String.nullable(false))
-        .with_column("reason", ScalarType::String.nullable(true))
+        .with_column(ident!("replica_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("process_id"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("status"), ScalarType::String.nullable(false))
+        .with_column(ident!("reason"), ScalarType::String.nullable(true))
         .with_column(
-            "updated_at",
+            ident!("updated_at"),
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: true,
@@ -2559,14 +2614,14 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICA_SIZES_OID,
     desc: RelationDesc::empty()
-        .with_column("size", ScalarType::String.nullable(false))
-        .with_column("processes", ScalarType::UInt64.nullable(false))
-        .with_column("workers", ScalarType::UInt64.nullable(false))
-        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(false))
-        .with_column("disk_bytes", ScalarType::UInt64.nullable(true))
+        .with_column(ident!("size"), ScalarType::String.nullable(false))
+        .with_column(ident!("processes"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("workers"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("cpu_nano_cores"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("memory_bytes"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("disk_bytes"), ScalarType::UInt64.nullable(true))
         .with_column(
-            "credits_per_hour",
+            ident!("credits_per_hour"),
             ScalarType::Numeric { max_scale: None }.nullable(false),
         ),
     is_retained_metrics_object: true,
@@ -2579,9 +2634,9 @@ pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinSource> = Lazy::new(|| Bui
     oid: oid::SOURCE_MZ_CLUSTER_REPLICA_HEARTBEATS_OID,
     data_source: IntrospectionType::ComputeReplicaHeartbeats,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column(ident!("replica_id"), ScalarType::String.nullable(false))
         .with_column(
-            "last_heartbeat",
+            ident!("last_heartbeat"),
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: false,
@@ -2593,13 +2648,13 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_AUDIT_EVENTS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt64.nullable(false))
-        .with_column("event_type", ScalarType::String.nullable(false))
-        .with_column("object_type", ScalarType::String.nullable(false))
-        .with_column("details", ScalarType::Jsonb.nullable(false))
-        .with_column("user", ScalarType::String.nullable(true))
+        .with_column(ident!("id"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("event_type"), ScalarType::String.nullable(false))
+        .with_column(ident!("object_type"), ScalarType::String.nullable(false))
+        .with_column(ident!("details"), ScalarType::Jsonb.nullable(false))
+        .with_column(ident!("user"), ScalarType::String.nullable(true))
         .with_column(
-            "occurred_at",
+            ident!("occurred_at"),
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: false,
@@ -2828,10 +2883,10 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_STATEMENT_LIFECYCLE_HISTORY_OID,
     desc: RelationDesc::empty()
-        .with_column("statement_id", ScalarType::Uuid.nullable(false))
-        .with_column("event_type", ScalarType::String.nullable(false))
+        .with_column(ident!("statement_id"), ScalarType::Uuid.nullable(false))
+        .with_column(ident!("event_type"), ScalarType::String.nullable(false))
         .with_column(
-            "occurred_at",
+            ident!("occurred_at"),
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     data_source: IntrospectionType::StatementLifecycleHistory,
@@ -2960,11 +3015,11 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_STORAGE_USAGE_BY_SHARD_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt64.nullable(false))
-        .with_column("shard_id", ScalarType::String.nullable(true))
-        .with_column("size_bytes", ScalarType::UInt64.nullable(false))
+        .with_column(ident!("id"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("shard_id"), ScalarType::String.nullable(true))
+        .with_column(ident!("size_bytes"), ScalarType::UInt64.nullable(false))
         .with_column(
-            "collection_timestamp",
+            ident!("collection_timestamp"),
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: false,
@@ -2975,7 +3030,8 @@ pub static MZ_EGRESS_IPS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_egress_ips",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_EGRESS_IPS_OID,
-    desc: RelationDesc::empty().with_column("egress_ip", ScalarType::String.nullable(false)),
+    desc: RelationDesc::empty()
+        .with_column(ident!("egress_ip"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2985,8 +3041,8 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| Bui
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_AWS_PRIVATELINK_CONNECTIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("principal", ScalarType::String.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("principal"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2996,25 +3052,34 @@ pub static MZ_AWS_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_AWS_CONNECTIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("endpoint", ScalarType::String.nullable(true))
-        .with_column("region", ScalarType::String.nullable(true))
-        .with_column("access_key_id", ScalarType::String.nullable(true))
-        .with_column("access_key_id_secret_id", ScalarType::String.nullable(true))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("endpoint"), ScalarType::String.nullable(true))
+        .with_column(ident!("region"), ScalarType::String.nullable(true))
+        .with_column(ident!("access_key_id"), ScalarType::String.nullable(true))
         .with_column(
-            "secret_access_key_secret_id",
+            ident!("access_key_id_secret_id"),
             ScalarType::String.nullable(true),
         )
-        .with_column("session_token", ScalarType::String.nullable(true))
-        .with_column("session_token_secret_id", ScalarType::String.nullable(true))
-        .with_column("assume_role_arn", ScalarType::String.nullable(true))
         .with_column(
-            "assume_role_session_name",
+            ident!("secret_access_key_secret_id"),
             ScalarType::String.nullable(true),
         )
-        .with_column("principal", ScalarType::String.nullable(true))
-        .with_column("external_id", ScalarType::String.nullable(true))
-        .with_column("example_trust_policy", ScalarType::Jsonb.nullable(true)),
+        .with_column(ident!("session_token"), ScalarType::String.nullable(true))
+        .with_column(
+            ident!("session_token_secret_id"),
+            ScalarType::String.nullable(true),
+        )
+        .with_column(ident!("assume_role_arn"), ScalarType::String.nullable(true))
+        .with_column(
+            ident!("assume_role_session_name"),
+            ScalarType::String.nullable(true),
+        )
+        .with_column(ident!("principal"), ScalarType::String.nullable(true))
+        .with_column(ident!("external_id"), ScalarType::String.nullable(true))
+        .with_column(
+            ident!("example_trust_policy"),
+            ScalarType::Jsonb.nullable(true),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3026,11 +3091,11 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICA_METRICS_OID,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column("process_id", ScalarType::UInt64.nullable(false))
-        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
-        .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
+        .with_column(ident!("replica_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("process_id"), ScalarType::UInt64.nullable(false))
+        .with_column(ident!("cpu_nano_cores"), ScalarType::UInt64.nullable(true))
+        .with_column(ident!("memory_bytes"), ScalarType::UInt64.nullable(true))
+        .with_column(ident!("disk_bytes"), ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -3041,9 +3106,12 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| Buil
     oid: oid::SOURCE_MZ_CLUSTER_REPLICA_FRONTIERS_OID,
     data_source: IntrospectionType::ReplicaFrontiers,
     desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column("write_frontier", ScalarType::MzTimestamp.nullable(true)),
+        .with_column(ident!("object_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("replica_id"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("write_frontier"),
+            ScalarType::MzTimestamp.nullable(true),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3054,9 +3122,15 @@ pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     oid: oid::SOURCE_MZ_FRONTIERS_OID,
     data_source: IntrospectionType::Frontiers,
     desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("read_frontier", ScalarType::MzTimestamp.nullable(true))
-        .with_column("write_frontier", ScalarType::MzTimestamp.nullable(true)),
+        .with_column(ident!("object_id"), ScalarType::String.nullable(false))
+        .with_column(
+            ident!("read_frontier"),
+            ScalarType::MzTimestamp.nullable(true),
+        )
+        .with_column(
+            ident!("write_frontier"),
+            ScalarType::MzTimestamp.nullable(true),
+        ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3079,15 +3153,15 @@ pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SUBSCRIPTIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("session_id", ScalarType::UInt32.nullable(false))
-        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("session_id"), ScalarType::UInt32.nullable(false))
+        .with_column(ident!("cluster_id"), ScalarType::String.nullable(false))
         .with_column(
-            "created_at",
+            ident!("created_at"),
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )
         .with_column(
-            "referenced_object_ids",
+            ident!("referenced_object_ids"),
             ScalarType::List {
                 element_type: Box::new(ScalarType::String),
                 custom_id: None,
@@ -3103,10 +3177,10 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SESSIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt32.nullable(false))
-        .with_column("role_id", ScalarType::String.nullable(false))
+        .with_column(ident!("id"), ScalarType::UInt32.nullable(false))
+        .with_column(ident!("role_id"), ScalarType::String.nullable(false))
         .with_column(
-            "connected_at",
+            ident!("connected_at"),
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: false,
@@ -3118,12 +3192,12 @@ pub static MZ_DEFAULT_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_DEFAULT_PRIVILEGES_OID,
     desc: RelationDesc::empty()
-        .with_column("role_id", ScalarType::String.nullable(false))
-        .with_column("database_id", ScalarType::String.nullable(true))
-        .with_column("schema_id", ScalarType::String.nullable(true))
-        .with_column("object_type", ScalarType::String.nullable(false))
-        .with_column("grantee", ScalarType::String.nullable(false))
-        .with_column("privileges", ScalarType::String.nullable(false)),
+        .with_column(ident!("role_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("database_id"), ScalarType::String.nullable(true))
+        .with_column(ident!("schema_id"), ScalarType::String.nullable(true))
+        .with_column(ident!("object_type"), ScalarType::String.nullable(false))
+        .with_column(ident!("grantee"), ScalarType::String.nullable(false))
+        .with_column(ident!("privileges"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3132,7 +3206,8 @@ pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
     name: "mz_system_privileges",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SYSTEM_PRIVILEGES_OID,
-    desc: RelationDesc::empty().with_column("privileges", ScalarType::MzAclItem.nullable(false)),
+    desc: RelationDesc::empty()
+        .with_column(ident!("privileges"), ScalarType::MzAclItem.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3142,10 +3217,10 @@ pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_COMMENTS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("object_type", ScalarType::String.nullable(false))
-        .with_column("object_sub_id", ScalarType::Int32.nullable(true))
-        .with_column("comment", ScalarType::String.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("object_type"), ScalarType::String.nullable(false))
+        .with_column(ident!("object_sub_id"), ScalarType::Int32.nullable(true))
+        .with_column(ident!("comment"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3155,9 +3230,9 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_WEBHOOK_SOURCES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("url", ScalarType::String.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("name"), ScalarType::String.nullable(false))
+        .with_column(ident!("url"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3167,9 +3242,9 @@ pub static MZ_HISTORY_RETENTION_STRATEGIES: Lazy<BuiltinTable> = Lazy::new(|| Bu
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_HISTORY_RETENTION_STRATEGIES_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("strategy", ScalarType::String.nullable(false))
-        .with_column("value", ScalarType::Jsonb.nullable(false)),
+        .with_column(ident!("id"), ScalarType::String.nullable(false))
+        .with_column(ident!("strategy"), ScalarType::String.nullable(false))
+        .with_column(ident!("value"), ScalarType::Jsonb.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3201,8 +3276,8 @@ pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     oid: oid::SOURCE_MZ_STORAGE_SHARDS_OID,
     data_source: IntrospectionType::ShardMapping,
     desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("shard_id", ScalarType::String.nullable(false)),
+        .with_column(ident!("object_id"), ScalarType::String.nullable(false))
+        .with_column(ident!("shard_id"), ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
