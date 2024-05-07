@@ -144,7 +144,7 @@ notes = "Reads and writes files under a prefix controlled by the caller."
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:a3f0f31d280b41254fd98fe51ef614622addd949"
+version = "0.12.0@git:8d077e51068d4c6a073b3b34d66351c789a49a0d"
 
 [[audits.domain]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
