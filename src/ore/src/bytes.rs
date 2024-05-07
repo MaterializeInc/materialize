@@ -22,10 +22,13 @@
 //! to add these trait impls.
 //!
 
+use std::io::{Read, Seek};
+
 use bytes::{Buf, Bytes};
 use internal::SegmentedReader;
 use smallvec::SmallVec;
 
+use crate::cast::CastFrom;
 use crate::lgbytes::LgBytes;
 
 /// A cheaply clonable collection of possibly non-contiguous bytes.
@@ -211,6 +214,37 @@ impl<const N: usize> Buf for SegmentedBytes<N> {
                 }
             }
         }
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl parquet::file::reader::Length for SegmentedBytes {
+    fn len(&self) -> u64 {
+        u64::cast_from(self.len)
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl parquet::file::reader::ChunkReader for SegmentedBytes {
+    type T = internal::SegmentedReader;
+
+    fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
+        let mut reader = self.clone().reader();
+        reader.seek(std::io::SeekFrom::Start(start))?;
+        Ok(reader)
+    }
+
+    fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
+        let mut reader = self.clone().reader();
+        reader.seek(std::io::SeekFrom::Start(start))?;
+
+        // TODO(parkmycar): Make this possible to achieve zero-copy.
+        //
+        // It's currently non-trivial to do this because LgBytes is not easily reference counted.
+        let mut buf = vec![0; length];
+        reader.read_exact(&mut buf)?;
+
+        Ok(Bytes::from(buf))
     }
 }
 
