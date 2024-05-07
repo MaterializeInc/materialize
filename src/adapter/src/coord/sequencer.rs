@@ -823,7 +823,7 @@ impl Coordinator {
             let max_returned_query_size = session.vars().max_query_result_size();
 
             return match finishing.finish(
-                RowCollection::new(plan.returning),
+                RowCollection::new(&plan.returning),
                 plan.max_result_size,
                 Some(max_returned_query_size),
             ) {

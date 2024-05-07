@@ -233,12 +233,14 @@ impl Row {
 }
 
 impl Borrow<RowRef> for Row {
+    #[inline]
     fn borrow(&self) -> &RowRef {
         self.as_row_ref()
     }
 }
 
 impl AsRef<RowRef> for Row {
+    #[inline]
     fn as_ref(&self) -> &RowRef {
         self.as_row_ref()
     }
@@ -247,6 +249,7 @@ impl AsRef<RowRef> for Row {
 impl Deref for Row {
     type Target = RowRef;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_row_ref()
     }

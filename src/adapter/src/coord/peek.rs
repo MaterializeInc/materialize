@@ -479,7 +479,7 @@ impl crate::coord::Coordinator {
                     ));
                 }
             }
-            let row_collection = RowCollection::new(results);
+            let row_collection = RowCollection::new(&results);
             let row_count = row_collection.count();
 
             let (ret, reason) =

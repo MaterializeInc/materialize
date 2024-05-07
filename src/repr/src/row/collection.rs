@@ -37,7 +37,7 @@ pub struct RowCollection {
 
 impl RowCollection {
     /// Create a new [`RowCollection`] from a collection of [`Row`]s.
-    pub fn new(rows: Vec<(Row, NonZeroUsize)>) -> Self {
+    pub fn new(rows: &[(Row, NonZeroUsize)]) -> Self {
         // Pre-sizing our buffer should allow us to make just 1 allocation, and
         // use the perfect amount of memory.
         //
@@ -52,7 +52,7 @@ impl RowCollection {
             encoded.extend(row.data());
             metadata.push(EncodedRowMetadata {
                 offset: encoded.len(),
-                diff,
+                diff: *diff,
             });
         }
 
@@ -469,7 +469,7 @@ mod tests {
     fn test_sorted_iter() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let b = Row::pack_slice(&[Datum::UInt32(42)]);
-        let col = RowCollection::new(vec![
+        let col = RowCollection::new(&[
             (a.clone(), NonZeroUsize::new(3).unwrap()),
             (b.clone(), NonZeroUsize::new(2).unwrap()),
         ]);
@@ -495,7 +495,7 @@ mod tests {
     fn test_sorted_iter_offset() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let b = Row::pack_slice(&[Datum::UInt32(42)]);
-        let col = RowCollection::new(vec![
+        let col = RowCollection::new(&[
             (a.clone(), NonZeroUsize::new(3).unwrap()),
             (b.clone(), NonZeroUsize::new(2).unwrap()),
         ]);
@@ -536,7 +536,7 @@ mod tests {
     fn test_sorted_iter_limit() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let b = Row::pack_slice(&[Datum::UInt32(42)]);
-        let col = RowCollection::new(vec![
+        let col = RowCollection::new(&[
             (a.clone(), NonZeroUsize::new(3).unwrap()),
             (b.clone(), NonZeroUsize::new(2).unwrap()),
         ]);
@@ -587,7 +587,7 @@ mod tests {
     #[mz_ore::test]
     fn test_mapped_row_iterator() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
-        let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())]);
+        let col = RowCollection::new(&[(a.clone(), NonZeroUsize::new(3).unwrap())]);
         let col = col.sorted_view(|a, b| a.cmp(b));
 
         // Make sure we can call `.map` on a `dyn RowIterator`.
@@ -604,7 +604,7 @@ mod tests {
     #[mz_ore::test]
     fn test_projected_row_iterator() {
         let a = Row::pack_slice(&[Datum::String("hello world"), Datum::Int16(42)]);
-        let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(2).unwrap())]);
+        let col = RowCollection::new(&[(a.clone(), NonZeroUsize::new(2).unwrap())]);
         let col = col.sorted_view(|a, b| a.cmp(b));
 
         // Project away the first column.

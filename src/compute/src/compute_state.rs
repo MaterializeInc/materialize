@@ -866,7 +866,7 @@ impl PendingPeek {
                 Ok(vec![])
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(RowCollection::new(rows)),
+                Ok(rows) => PeekResponse::Rows(RowCollection::new(&rows)),
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -1068,7 +1068,7 @@ impl IndexPeek {
         }
 
         let response = match self.collect_finished_data(max_result_size) {
-            Ok(rows) => PeekResponse::Rows(RowCollection::new(rows)),
+            Ok(rows) => PeekResponse::Rows(RowCollection::new(&rows)),
             Err(text) => PeekResponse::Error(text),
         };
         Some(response)
