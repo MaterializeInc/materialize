@@ -451,7 +451,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         prog="parallel-workload",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Run a parallel workload againt Materialize",
+        description="Run a parallel workload against Materialize",
     )
 
     parser.add_argument("--host", default="localhost", type=str)
@@ -463,8 +463,8 @@ def main() -> int:
     args = parser.parse_args()
 
     ports: dict[str, int] = {
-        "materialized": 6875,
-        "mz_system": 6877,
+        "materialized": args.port,
+        "mz_system": args.system_port,
         "http": 6876,
         "kafka": 9092,
         "schema-registry": 8081,
