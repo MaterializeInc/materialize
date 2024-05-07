@@ -440,6 +440,7 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (Numeric, MzTimestamp) => Implicit: CastNumericToMzTimestamp(func::CastNumericToMzTimestamp),
         (Timestamp, MzTimestamp) => Implicit: CastTimestampToMzTimestamp(func::CastTimestampToMzTimestamp),
         (TimestampTz, MzTimestamp) => Implicit: CastTimestampTzToMzTimestamp(func::CastTimestampTzToMzTimestamp),
+        (Interval, MzTimestamp) => Implicit: CastIntervalToMzTimestamp(func::CastIntervalToMzTimestamp),
 
         // OID
         (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
