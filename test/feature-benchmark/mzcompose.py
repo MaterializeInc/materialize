@@ -158,10 +158,7 @@ def run_one_scenario(
             )
         )
 
-        if tag == "common-ancestor":
-            tag = resolve_ancestor_image_tag(
-                get_ancestor_overrides_for_performance_regressions(scenario_class)
-            )
+        tag = resolve_tag(tag, scenario_class)
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
 
@@ -231,6 +228,15 @@ def run_one_scenario(
             break
 
     return comparators
+
+
+def resolve_tag(tag: str, scenario_class: type[Scenario]) -> str:
+    if tag == "common-ancestor":
+        return resolve_ancestor_image_tag(
+            get_ancestor_overrides_for_performance_regressions(scenario_class)
+        )
+
+    return tag
 
 
 def create_mz_service(
@@ -494,6 +500,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     scenarios_with_regressions,
                     latest_report_by_scenario_name,
                     justification_by_scenario_name,
+                    baseline_tag=args.other_tag,
                 ),
             )
 
@@ -564,20 +571,23 @@ def _regressions_to_failure_details(
     scenarios_with_regressions: list[type[Scenario]],
     latest_report_by_scenario_name: dict[str, Report],
     justification_by_scenario_name: dict[str, str | None],
+    baseline_tag: str,
 ) -> list[TestFailureDetails]:
     failure_details = []
 
-    for scenario in scenarios_with_regressions:
-        scenario_name = scenario.__name__
+    for scenario_cls in scenarios_with_regressions:
+        scenario_name = scenario_cls.__name__
 
         if justification_by_scenario_name[scenario_name] is not None:
             continue
+
+        regression_against_tag = resolve_tag(baseline_tag, scenario_cls)
 
         report = latest_report_by_scenario_name[scenario_name]
         failure_details.append(
             TestFailureDetails(
                 test_case_name_override=scenario_name,
-                message="New regression",
+                message=f"New regression against {regression_against_tag}",
                 details=str(report),
             )
         )

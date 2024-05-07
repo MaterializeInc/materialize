@@ -197,16 +197,3 @@ class Report:
             )
 
         return "\n".join(output_lines)
-
-
-class SingleReport(Report):
-    def __str__(self) -> str:
-        output_lines = []
-
-        output_lines.append(f"{'NAME':<25} | {'THIS':^11}")
-        output_lines.append("-" * 50)
-
-        for comparison in self._comparisons:
-            output_lines.append(f"{comparison.name:<25} | {comparison.this():>11.3f}")
-
-        return "\n".join(output_lines)
