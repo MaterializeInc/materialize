@@ -44,7 +44,7 @@ You can manually exclude specific materialization types using the
 your dbt run invocations. To exclude sources and sinks, use:
 
 ```bash
-dbt run --exclude materialized:source materialized:sink
+dbt run --exclude config.materialized:source config.materialized:sink
 ```
 
 ##### YAML selectors
