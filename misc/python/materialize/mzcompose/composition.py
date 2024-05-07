@@ -591,13 +591,19 @@ class Composition:
     ) -> list[TestFailureDetails]:
         errors = [
             TestFailureDetails(
-                error_message, details=None, location=None, line_number=None
+                error_message,
+                details=None,
+                test_case_name_override=self.current_test_case_name_override,
+                location=None,
+                line_number=None,
             )
         ]
 
         if isinstance(e, CommandFailureCausedUIError):
             try:
-                extracted_errors = try_determine_errors_from_cmd_execution(e)
+                extracted_errors = try_determine_errors_from_cmd_execution(
+                    e, self.current_test_case_name_override
+                )
             except:
                 extracted_errors = []
             errors = extracted_errors if len(extracted_errors) > 0 else errors
@@ -607,7 +613,11 @@ class Composition:
         elif isinstance(e, WorkerFailedException):
             errors = [
                 TestFailureDetails(
-                    error_message, details=str(e.cause), location=None, line_number=None
+                    error_message,
+                    details=str(e.cause),
+                    location=None,
+                    line_number=None,
+                    test_case_name_override=self.current_test_case_name_override,
                 )
             ]
 
