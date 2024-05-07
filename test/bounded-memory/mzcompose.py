@@ -1023,10 +1023,12 @@ def find_minimal_memory(
     reduce_materialized_memory_by_gb: float,
     reduce_clusterd_memory_by_gb: float,
 ) -> tuple[str, str]:
-    assert reduce_materialized_memory_by_gb > 0 or reduce_clusterd_memory_by_gb > 0
+    assert (
+        reduce_materialized_memory_by_gb >= 0.1 or reduce_clusterd_memory_by_gb >= 0.1
+    )
 
-    min_allowed_materialized_memory_in_gb = 4.5
-    min_allowed_clusterd_memory_in_gb = 3.5
+    min_allowed_materialized_memory_in_gb = 4.0
+    min_allowed_clusterd_memory_in_gb = 2.0
 
     materialized_memory = initial_materialized_memory
     clusterd_memory = initial_clusterd_memory
@@ -1126,13 +1128,16 @@ def _reduce_memory(
         raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
 
     if math.isclose(reduce_by_gb, 0.0, abs_tol=0.01):
+        # allow staying at the same value
         return memory_spec
 
     current_gb = float(memory_spec.removesuffix("Gb"))
-    new_gb = current_gb - reduce_by_gb
 
-    if new_gb == lower_bound_in_gb:
+    if math.isclose(current_gb, lower_bound_in_gb, abs_tol=0.01):
+        # lower bound already reached
         return None
+
+    new_gb = current_gb - reduce_by_gb
 
     if new_gb < lower_bound_in_gb:
         new_gb = lower_bound_in_gb
