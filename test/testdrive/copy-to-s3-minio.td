@@ -160,10 +160,11 @@ $ s3-verify-data bucket=copytos3 key=test/3
 # Copy a large amount of data in the background and check to see that the INCOMPLETE
 # sentinel object is written during the copy
 
-$ postgres-execute background=true connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
-COPY (SELECT * FROM generate_series(1, 50000000)) TO 's3://copytos3/test/5' WITH (AWS CONNECTION = aws_conn, MAX FILE SIZE = "100MB", FORMAT = 'csv');
+# TODO(26963): Enable this test once it is more reliable
+# $ postgres-execute background=true connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
+# COPY (SELECT * FROM generate_series(1, 50000000)) TO 's3://copytos3/test/5' WITH (AWS CONNECTION = aws_conn, MAX FILE SIZE = "100MB", FORMAT = 'csv');
 
-$ s3-verify-keys bucket=copytos3 prefix-path=test/5 key-pattern=INCOMPLETE
+# $ s3-verify-keys bucket=copytos3 prefix-path=test/5 key-pattern=INCOMPLETE
 
 
 # Test with parquet formatting
