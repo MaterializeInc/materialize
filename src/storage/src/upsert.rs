@@ -45,7 +45,7 @@ use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::render::sources::OutputIndex;
 use crate::storage_state::StorageInstanceContext;
-use autospill::{AutoSpillBackend, RocksDBParams};
+use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
 use types::{upsert_bincode_opts, StateValue, UpsertState, UpsertStateBackend, Value};
 
@@ -269,6 +269,27 @@ where
 
         let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
 
+        let rocksdb_init_fn = move || async move {
+            rocksdb::RocksDB::new(
+                mz_rocksdb::RocksDBInstance::new(
+                    &rocksdb_dir,
+                    mz_rocksdb::InstanceOptions::new(
+                        env,
+                        rocksdb_cleanup_tries,
+                        None,
+                        // For now, just use the same config as the one used for
+                        // merging snapshots.
+                        upsert_bincode_opts(),
+                    ),
+                    tuning,
+                    rocksdb_shared_metrics,
+                    rocksdb_instance_metrics,
+                )
+                .await
+                .unwrap(),
+            )
+        };
+
         if allow_auto_spill {
             upsert_inner(
                 &thin_input,
@@ -279,18 +300,7 @@ where
                 upsert_metrics,
                 source_config,
                 move || async move {
-                    AutoSpillBackend::new(
-                        RocksDBParams {
-                            instance_path: rocksdb_dir,
-                            env,
-                            tuning_config: tuning,
-                            shared_metrics: rocksdb_shared_metrics,
-                            instance_metrics: rocksdb_instance_metrics,
-                            cleanup_tries: rocksdb_cleanup_tries,
-                        },
-                        spill_threshold,
-                        rocksdb_in_use_metric,
-                    )
+                    AutoSpillBackend::new(rocksdb_init_fn, spill_threshold, rocksdb_in_use_metric)
                 },
                 upsert_config,
                 prevent_snapshot_buffering,
@@ -305,26 +315,7 @@ where
                 previous_token,
                 upsert_metrics,
                 source_config,
-                move || async move {
-                    rocksdb::RocksDB::new(
-                        mz_rocksdb::RocksDBInstance::new(
-                            &rocksdb_dir,
-                            mz_rocksdb::InstanceOptions::<_, _, mz_rocksdb::StubMergeOperator<_>>::new(
-                                env,
-                                rocksdb_cleanup_tries,
-                                None,
-                                // For now, just use the same config as the one used for
-                                // merging snapshots.
-                                upsert_bincode_opts(),
-                            ),
-                            tuning,
-                            rocksdb_shared_metrics,
-                            rocksdb_instance_metrics,
-                        )
-                        .await
-                        .unwrap(),
-                    )
-                },
+                rocksdb_init_fn,
                 upsert_config,
                 prevent_snapshot_buffering,
                 snapshot_buffering_max,
@@ -667,12 +658,13 @@ where
         // (as required for `merge_snapshot_chunk`), with slightly more efficient serialization
         // than a default `Partitioned`.
         let mut state = UpsertState::<_, Option<FromTime>>::new(
-            state().await,
+            state,
             upsert_shared_metrics,
             &upsert_metrics,
             source_config.source_statistics,
             upsert_config.shrink_upsert_unused_buffers_by_ratio,
-        );
+        )
+        .await;
         let mut events = vec![];
         let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
 

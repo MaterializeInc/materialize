@@ -647,26 +647,30 @@ pub struct UpsertState<'metrics, S, O> {
     bincode_opts: BincodeOpts,
     bincode_buffer: Vec<u8>,
 
-    // We need to iterator over `merges` in `merge_snapshot_chunk`
+    // We need to iterate over `merges` in `merge_snapshot_chunk`
     // twice, so we have a scratch vector for this.
     merge_scratch: Vec<(UpsertKey, UpsertValue, mz_repr::Diff)>,
-    // "mini-upsert" map used in `merge_snapshot_chunk`, plus a
-    // scratch vector for calling `multi_get`
+    // "mini-upsert" map used in `merge_snapshot_chunk`
     merge_upsert_scratch: indexmap::IndexMap<UpsertKey, UpsertValueAndSize<O>>,
+    // a scratch vector for calling `multi_get`
     multi_get_scratch: Vec<UpsertKey>,
     shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
 impl<'metrics, S, O> UpsertState<'metrics, S, O> {
-    pub(crate) fn new(
-        inner: S,
+    pub(crate) async fn new<F, Fut>(
+        inner_init: F,
         metrics: Arc<UpsertSharedMetrics>,
         worker_metrics: &'metrics UpsertMetrics,
         stats: SourceStatistics,
         shrink_upsert_unused_buffers_by_ratio: usize,
-    ) -> Self {
+    ) -> Self
+    where
+        F: FnOnce() -> Fut + 'static,
+        Fut: std::future::Future<Output = S>,
+    {
         Self {
-            inner,
+            inner: inner_init().await,
             snapshot_start: Instant::now(),
             snapshot_stats: MergeStats::default(),
             snapshot_completed: false,
