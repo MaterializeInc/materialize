@@ -15,10 +15,11 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_compute_client::controller::{ComputeReplicaConfig, ComputeReplicaLogging};
+use mz_compute_client::controller::{
+    ComputeControllerTimestamp, ComputeReplicaConfig, ComputeReplicaLogging,
+};
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_compute_types::ComputeInstanceId;
@@ -35,7 +36,6 @@ use mz_repr::GlobalId;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
 use tracing::{error, warn};
 
 use crate::Controller;
@@ -53,7 +53,7 @@ pub struct ClusterConfig {
 pub type ClusterStatus = mz_orchestrator::ServiceStatus;
 
 /// Configures a cluster replica.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ReplicaConfig {
     /// The location of the replica.
     pub location: ReplicaLocation,
@@ -161,7 +161,7 @@ fn test_replica_allocation_deserialization() {
 }
 
 /// Configures the location of a cluster replica.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub enum ReplicaLocation {
     /// An unmanaged replica.
     Unmanaged(UnmanagedReplicaLocation),
@@ -225,7 +225,7 @@ pub enum ClusterRole {
 }
 
 /// The location of an unmanaged replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UnmanagedReplicaLocation {
     /// The network addresses of the storagectl endpoints for each process in
     /// the replica.
@@ -244,7 +244,7 @@ pub struct UnmanagedReplicaLocation {
 }
 
 /// Information about availability zone constraints for replicas.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ManagedReplicaAvailabilityZones {
     /// Specified if the `Replica` is from `MANAGED` cluster,
     /// and specifies if there is an `AVAILABILITY ZONES`
@@ -256,7 +256,7 @@ pub enum ManagedReplicaAvailabilityZones {
 }
 
 /// The location of a managed replica.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ManagedReplicaLocation {
     /// The resource allocation for the replica.
     pub allocation: ReplicaAllocation,
@@ -319,7 +319,7 @@ pub struct CreateReplicaConfig {
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Creates a cluster with the specified identifier and configuration.

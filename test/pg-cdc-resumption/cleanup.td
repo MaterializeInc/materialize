@@ -8,4 +8,4 @@
 # by the Apache License, Version 2.0.
 
 # Tests expect healthy sources at end of test.
-> ALTER SOURCE mz_source DROP SUBSOURCE alter_fail_drop_constraint, alter_fail_drop_col;
+> DROP SOURCE alter_fail_drop_constraint, alter_fail_drop_col;

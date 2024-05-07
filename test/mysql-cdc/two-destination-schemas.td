@@ -75,6 +75,6 @@ $ mysql-execute name=mysql
 DROP TABLE t1;
 DROP TABLE t2;
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 > DROP SCHEMA schema1 CASCADE;
 > DROP SCHEMA schema2 CASCADE;

@@ -52,6 +52,7 @@ use std::fmt::Debug;
 
 use crate::codec_impls::UnitSchema;
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
+use crate::dyn_col::DynColumnMut;
 use crate::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use crate::part::PartBuilder;
 use crate::stats::{ColumnStats, StatsFrom};
@@ -230,16 +231,19 @@ pub enum ColumnFormat {
 ///
 /// This allows us to amortize the cost of downcasting columns into concrete
 /// types.
-pub trait PartEncoder<'a, T> {
+pub trait PartEncoder<T> {
     /// Encodes the given value into the Part being constructed.
     fn encode(&mut self, val: &T);
+
+    /// Consumes `self` returning the columns that were written to.
+    fn finish(self) -> (usize, Vec<DynColumnMut>);
 }
 
 /// A decoder for values of a fixed schema.
 ///
 /// This allows us to amortize the cost of downcasting columns into concrete
 /// types.
-pub trait PartDecoder<'a, T> {
+pub trait PartDecoder<T> {
     /// Decodes the value at the given index.
     ///
     /// Implementations of this should reuse allocations within the passed value
@@ -250,34 +254,29 @@ pub trait PartDecoder<'a, T> {
 /// A description of the structure of a [crate::Codec] implementor.
 pub trait Schema<T>: Debug + Send + Sync {
     /// The associated [PartEncoder] implementor.
-    type Encoder<'a>: PartEncoder<'a, T>;
+    type Encoder: PartEncoder<T> + Debug;
     /// The associated [PartDecoder] implementor.
-    type Decoder<'a>: PartDecoder<'a, T>;
+    type Decoder: PartDecoder<T> + Debug;
 
     /// Returns the name and types of the columns in this type.
     fn columns(&self) -> DynStructCfg;
 
-    /// Returns a [Self::Decoder<'a>] for the given columns.
-    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String>;
+    /// Returns a [`Self::Decoder`] for the given columns.
+    fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String>;
 
-    /// Returns a [Self::Encoder<'a>] for the given columns.
-    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String>;
+    /// Returns a [Self::Encoder] for the given columns.
+    fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String>;
 }
 
 /// A helper for writing tests that validate that a piece of data roundtrips
 /// through the columnar format.
 pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
     schema: &T::Schema,
-    val: &T,
+    value: &T,
 ) -> Result<(), String> {
-    let mut part = PartBuilder::new(schema, &UnitSchema);
-    {
-        let mut part_mut = part.get_mut();
-        schema.encoder(part_mut.key)?.encode(val);
-        part_mut.ts.push(1u64);
-        part_mut.diff.push(1i64);
-    }
-    let part = part.finish()?;
+    let mut builder = PartBuilder::new(schema, &UnitSchema)?;
+    builder.push(value, &(), 1u64, 1i64);
+    let part = builder.finish();
 
     // Sanity check that we can compute stats.
     let _stats = part.key_stats().expect("stats should be compute-able");
@@ -286,10 +285,10 @@ pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
     assert_eq!(part.len(), 1);
     let part = part.key_ref();
     schema.decoder(part)?.decode(0, &mut actual);
-    if &actual != val {
+    if &actual != value {
         Err(format!(
             "validate_roundtrip expected {:?} but got {:?}",
-            val, actual
+            value, actual
         ))
     } else {
         Ok(())

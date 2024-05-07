@@ -244,6 +244,8 @@ Source materialize.public.right1
 Source materialize.public.right2
   filter=((#0) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 query IIIIII

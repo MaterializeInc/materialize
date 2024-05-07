@@ -12,9 +12,11 @@
 use std::borrow::Cow;
 use std::fmt::Debug;
 
+use mz_dyncfg::ConfigSet;
 use mz_persist_types::ShardId;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::bytes::ByteSize;
 use mz_repr::{GlobalId, RelationDesc};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -26,7 +28,7 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::connections::ConnectionContext;
+use crate::connections::{ConnectionContext, KafkaConnection};
 use crate::controller::{AlterError, CollectionMetadata};
 use crate::AlterCompatible;
 
@@ -382,6 +384,8 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub relation_key_indices: Option<Vec<usize>>,
     /// The user-specified key for the sink.
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    /// The index of the column containing message headers value, if any.
+    pub headers_index: Option<usize>,
     pub value_desc: RelationDesc,
     pub topic: String,
     pub compression_type: KafkaSinkCompressionType,
@@ -394,11 +398,16 @@ impl KafkaSinkConnection {
     ///
     /// The caller is responsible for providing the sink ID as it is not known
     /// to `KafkaSinkConnection`.
-    pub fn client_id(&self, connection_context: &ConnectionContext, sink_id: GlobalId) -> String {
-        format!(
-            "materialize-{}-{}-{}",
-            connection_context.environment_id, self.connection_id, sink_id,
-        )
+    pub fn client_id(
+        &self,
+        configs: &ConfigSet,
+        connection_context: &ConnectionContext,
+        sink_id: GlobalId,
+    ) -> String {
+        let mut client_id =
+            KafkaConnection::id_base(connection_context, self.connection_id, sink_id);
+        self.connection.enrich_client_id(configs, &mut client_id);
+        client_id
     }
 
     /// Returns the name of the progress topic to use for the sink.
@@ -421,7 +430,7 @@ impl KafkaSinkConnection {
             KafkaIdStyle::Prefix(ref prefix) => format!(
                 "{}{}",
                 prefix.as_deref().unwrap_or(""),
-                self.client_id(connection_context, sink_id)
+                KafkaConnection::id_base(connection_context, self.connection_id, sink_id),
             ),
             KafkaIdStyle::Legacy => format!("materialize-bootstrap-sink-{sink_id}"),
         }
@@ -440,7 +449,7 @@ impl KafkaSinkConnection {
             KafkaIdStyle::Prefix(ref prefix) => format!(
                 "{}{}",
                 prefix.as_deref().unwrap_or(""),
-                self.client_id(connection_context, sink_id)
+                KafkaConnection::id_base(connection_context, self.connection_id, sink_id)
             ),
             KafkaIdStyle::Legacy => format!("mz-producer-{sink_id}-0"),
         }
@@ -466,6 +475,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             format,
             relation_key_indices,
             key_desc_and_indices,
+            headers_index,
             value_desc,
             topic,
             compression_type,
@@ -488,6 +498,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
                 key_desc_and_indices == &other.key_desc_and_indices,
                 "key_desc_and_indices",
             ),
+            (headers_index == &other.headers_index, "headers_index"),
             (value_desc == &other.value_desc, "value_desc"),
             (topic == &other.topic, "topic"),
             (
@@ -529,6 +540,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             format,
             relation_key_indices,
             key_desc_and_indices,
+            headers_index,
             value_desc,
             topic,
             compression_type,
@@ -541,6 +553,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             format: format.into_inline_connection(r),
             relation_key_indices,
             key_desc_and_indices,
+            headers_index,
             value_desc,
             topic,
             compression_type,
@@ -595,6 +608,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             format: Some(self.format.into_proto()),
             key_desc_and_indices: self.key_desc_and_indices.into_proto(),
             relation_key_indices: self.relation_key_indices.into_proto(),
+            headers_index: self.headers_index.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
             topic: self.topic.clone(),
             compression_type: Some(match self.compression_type {
@@ -623,6 +637,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::format")?,
             key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
             relation_key_indices: proto.relation_key_indices.into_rust()?,
+            headers_index: proto.headers_index.into_rust()?,
             value_desc: proto
                 .value_desc
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::value_desc")?,
@@ -780,23 +795,55 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
     }
 }
 
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub enum S3SinkFormat {
+    /// Encoded using the PG `COPY` protocol, with one of its supported formats.
+    PgCopy(CopyFormatParams<'static>),
+    /// Encoded as Parquet.
+    Parquet,
+}
+
+impl RustType<ProtoS3SinkFormat> for S3SinkFormat {
+    fn into_proto(&self) -> ProtoS3SinkFormat {
+        use proto_s3_sink_format::Kind;
+        ProtoS3SinkFormat {
+            kind: Some(match self {
+                Self::PgCopy(params) => Kind::PgCopy(params.into_proto()),
+                Self::Parquet => Kind::Parquet(()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoS3SinkFormat) -> Result<Self, TryFromProtoError> {
+        use proto_s3_sink_format::Kind;
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoS3SinkFormat::kind"))?;
+
+        Ok(match kind {
+            Kind::PgCopy(proto) => Self::PgCopy(proto.into_rust()?),
+            Kind::Parquet(_) => Self::Parquet,
+        })
+    }
+}
+
 /// Info required to copy the data to s3.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct S3UploadInfo {
-    /// The s3 prefix path to write the data to.
-    pub prefix: String,
+    /// The s3 uri path to write the data to.
+    pub uri: String,
     /// The max file size of each file uploaded to S3.
     pub max_file_size: u64,
     /// The relation desc of the data to be uploaded to S3.
     pub desc: RelationDesc,
     /// The selected sink format.
-    pub format: CopyFormatParams<'static>,
+    pub format: S3SinkFormat,
 }
 
 impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
     fn into_proto(&self) -> ProtoS3UploadInfo {
         ProtoS3UploadInfo {
-            prefix: self.prefix.clone(),
+            uri: self.uri.clone(),
             max_file_size: self.max_file_size,
             desc: Some(self.desc.into_proto()),
             format: Some(self.format.into_proto()),
@@ -805,7 +852,7 @@ impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
 
     fn from_proto(proto: ProtoS3UploadInfo) -> Result<Self, TryFromProtoError> {
         Ok(S3UploadInfo {
-            prefix: proto.prefix,
+            uri: proto.uri,
             max_file_size: proto.max_file_size,
             desc: proto.desc.into_rust_if_some("ProtoS3UploadInfo::desc")?,
             format: proto
@@ -814,3 +861,6 @@ impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
         })
     }
 }
+
+pub const MIN_S3_SINK_FILE_SIZE: ByteSize = ByteSize::mb(16);
+pub const MAX_S3_SINK_FILE_SIZE: ByteSize = ByteSize::gb(4);

@@ -40,6 +40,7 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
     PreExecutionInconsistencyIgnoreFilterBase,
 )
 from materialize.output_consistency.input_data.operations.equality_operations_provider import (
+    TAG_EQUALITY,
     TAG_EQUALITY_ORDERING,
 )
 from materialize.output_consistency.input_data.operations.generic_operations_provider import (
@@ -159,6 +160,11 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 {ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR}
             ):
                 return YesIgnore("#23605: regexp with backslash")
+            if expression.count_args() == 4:
+                regex_flag = expression.args[3]
+                assert isinstance(regex_flag, EnumConstant)
+                if regex_flag.value == "g":
+                    return YesIgnore("Strange Postgres behavior (see PR 26526)")
 
         if db_function.function_name_in_lower_case == "nullif":
             type_arg0 = expression.args[0].try_resolve_exact_data_type()
@@ -213,7 +219,11 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             )
 
         if (
-            db_operation.is_tagged(TAG_EQUALITY_ORDERING)
+            (
+                db_operation.is_tagged(TAG_EQUALITY_ORDERING)
+                or db_operation.is_tagged(TAG_EQUALITY)
+                or db_operation.pattern == "$ IN ($)"
+            )
             and expression.args[0].resolve_return_type_category()
             == DataTypeCategory.NUMERIC
             and expression.args[1].resolve_return_type_category()
@@ -402,6 +412,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if _error_message_is_about_zero_or_value_ranges(mz_error_msg):
             return YesIgnore("Caused by a different precision")
 
+        if query_template.limit == 0:
+            return YesIgnore("#17189: LIMIT 0 does not swallow errors")
+
         return NoIgnore()
 
     def _shall_ignore_content_mismatch(
@@ -533,6 +546,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
             if value1_str == value2_str:
                 return YesIgnore("#24687: different representation of DECIMAL type")
+
+        if query_template.matches_any_expression(
+            lambda expression: expression.has_any_characteristic(
+                {ExpressionCharacteristics.TEXT_WITH_ESZETT},
+            ),
+            True,
+        ) and query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="upper"), True
+        ):
+            return YesIgnore("#26846: eszett in upper")
 
         return NoIgnore()
 

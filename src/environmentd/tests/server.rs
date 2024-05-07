@@ -1178,7 +1178,7 @@ fn test_storage_usage_collection_interval() {
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Wait for the initial storage usage collection to occur.
-    let timestamp = wait_for_next_collection(&mut client, DateTime::<Utc>::MIN_UTC);
+    let mut timestamp = wait_for_next_collection(&mut client, DateTime::<Utc>::MIN_UTC);
 
     // Create a table with no data.
     client
@@ -1194,14 +1194,19 @@ fn test_storage_usage_collection_interval() {
     assert_eq!(pre_create_storage_usage, 0);
 
     // Test that the storage usage for the table is nonzero after it is created
-    // (there is some overhead even for empty tables). We wait out two storage
+    // (there is some overhead even for empty tables). We wait multiple storage
     // collection intervals (here and below) because the next storage collection
     // may have been concurrent with the previous operation.
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let post_create_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
-    info!(%post_create_storage_usage);
-    assert!(post_create_storage_usage > 0);
+    let post_create_storage_usage = Retry::default().max_tries(10).retry(|_| {
+        timestamp = wait_for_next_collection(&mut client, timestamp);
+        let post_create_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+        info!(%post_create_storage_usage);
+        if post_create_storage_usage > 0 {
+            Ok(post_create_storage_usage)
+        } else {
+            Err(format!("expected non-zero post create storage usage, found: {post_create_storage_usage}"))
+        }
+    }).unwrap();
 
     // Insert some data into the table.
     for _ in 0..3 {
@@ -1211,21 +1216,36 @@ fn test_storage_usage_collection_interval() {
     }
 
     // Test that the storage usage for the table is larger than it was before.
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let after_insert_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
-    info!(%after_insert_storage_usage);
-    assert!(after_insert_storage_usage > post_create_storage_usage);
+    Retry::default().max_tries(10).retry(|_| {
+        timestamp = wait_for_next_collection(&mut client, timestamp);
+        let after_insert_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+        info!(%after_insert_storage_usage);
+        if after_insert_storage_usage > post_create_storage_usage {
+            Ok(())
+        } else {
+            Err(format!("expected insert storage usage, {after_insert_storage_usage}, to be higher than pre insert storage usage of {post_create_storage_usage}"))
+        }
+    }).unwrap();
 
     // Drop the table.
     client.batch_execute("DROP TABLE usage_test").unwrap();
 
     // Test that the storage usage is reported as zero.
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let timestamp = wait_for_next_collection(&mut client, timestamp);
-    let after_drop_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
-    info!(%after_drop_storage_usage);
-    assert_eq!(after_drop_storage_usage, 0);
+    Retry::default()
+        .max_tries(10)
+        .retry(|_| {
+            timestamp = wait_for_next_collection(&mut client, timestamp);
+            let after_drop_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+            info!(%after_drop_storage_usage);
+            if after_drop_storage_usage == 0 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "expected zero storage usage after drop, found {after_drop_storage_usage}"
+                ))
+            }
+        })
+        .unwrap();
 }
 
 #[mz_ore::test]
@@ -3009,9 +3029,9 @@ fn test_github_20262() {
         r#"{"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"i","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
         r#"{"type":"Error","payload":{"message":"canceling statement due to user request","code":"57014"}}"#,
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
+        r#"{"type":"Notice","payload":{"message":"there is no transaction in progress","code":"25P01","severity":"warning"}}"#,
         r#"{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}"#,
         r#"{"type":"CommandComplete","payload":"COMMIT"}"#,
-        r#"{"type":"Notice","payload":{"message":"there is no transaction in progress","severity":"warning"}}"#,
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
         r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#,
         r#"{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
@@ -4008,6 +4028,7 @@ async fn test_startup_cluster_notice_with_http_options() {
     [
       {
         "message": "cluster \"i_do_not_exist\" does not exist",
+        "code": "MZ007",
         "severity": "notice",
         "hint": "Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS."
       }
@@ -4060,7 +4081,9 @@ async fn test_startup_cluster_notice() {
             severity: "NOTICE",
             parsed_severity: None,
             code: SqlState(
-                E01000,
+                Other(
+                    "MZ005",
+                ),
             ),
             message: "default cluster \"quickstart\" does not exist",
             detail: None,
@@ -4105,7 +4128,9 @@ async fn test_startup_cluster_notice() {
             severity: "NOTICE",
             parsed_severity: None,
             code: SqlState(
-                E01000,
+                Other(
+                    "MZ005",
+                ),
             ),
             message: "role default cluster \"non_existant\" does not exist",
             detail: None,

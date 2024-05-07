@@ -256,6 +256,9 @@ where
             return;
         }
 
+        // Wait for the start signal before doing any work.
+        let () = start_signal.await;
+
         // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
         // up a background tokio task to heartbeat it. It is possible that we might get a
         // particularly adversarial scheduling where the CRDB query to register the id is sent and
@@ -278,6 +281,7 @@ where
                         key_schema,
                         val_schema,
                         diagnostics,
+                        false,
                     )
                     .await
             }
@@ -285,13 +289,6 @@ where
         .await
         .expect("reader creation shouldn't panic")
         .expect("could not open persist shard");
-
-        // Wait for the start signal only after having obtained a read handle and therefore a read
-        // hold on the source shard. The compute controller is currently not able to correctly
-        // maintain read holds for inputs to REFRESH MVs, so it needs a little help.
-        //
-        // TODO(#16275): move this await before the reader initialization
-        let () = start_signal.await;
 
         let cfg = read.cfg.clone();
         let metrics = Arc::clone(&read.metrics);
@@ -383,15 +380,26 @@ where
             for mut part_desc in parts {
                 // TODO: Push the filter down into the Subscribe?
                 if STATS_FILTER_ENABLED.get(&cfg) {
-                    let should_fetch = part_desc.part.stats().map_or(true, |stats| {
-                        should_fetch_part(&stats.decode(), current_frontier.borrow())
-                    });
-                    let bytes = u64::cast_from(part_desc.part.encoded_size_bytes());
+                    let (should_fetch, is_inline) = match &part_desc.part {
+                        BatchPart::Hollow(x) => {
+                            let should_fetch = x.stats.as_ref().map_or(true, |stats| {
+                                should_fetch_part(&stats.decode(), current_frontier.borrow())
+                            });
+                            (should_fetch, false)
+                        }
+                        BatchPart::Inline { .. } => (true, true),
+                    };
+                    let bytes = u64::cast_from(part_desc.encoded_size_bytes());
                     if should_fetch {
                         audit_budget_bytes =
                             audit_budget_bytes.saturating_add(part_desc.part.encoded_size_bytes());
-                        metrics.pushdown.parts_fetched_count.inc();
-                        metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+                        if is_inline {
+                            metrics.pushdown.parts_inline_count.inc();
+                            metrics.pushdown.parts_inline_bytes.inc_by(bytes);
+                        } else {
+                            metrics.pushdown.parts_fetched_count.inc();
+                            metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+                        }
                     } else {
                         metrics.pushdown.parts_filtered_count.inc();
                         metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
@@ -401,6 +409,7 @@ where
                                 x.key.hash(&mut h);
                                 usize::cast_from(h.finish()) % 100 < STATS_AUDIT_PERCENT.get(&cfg)
                             }
+                            BatchPart::Inline { .. } => false,
                         };
                         if should_audit && part_desc.part.encoded_size_bytes() < audit_budget_bytes
                         {
@@ -682,6 +691,7 @@ mod tests {
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
                 Diagnostics::for_tests(),
+                false,
             )
             .await
             .expect("invalid usage");

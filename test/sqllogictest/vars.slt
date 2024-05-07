@@ -456,10 +456,20 @@ CREATE ROLE parker;
 statement ok
 ALTER ROLE parker SET cluster TO foo;
 
+statement error invalid value for parameter "transaction_isolation": "garbage"
+ALTER ROLE parker SET transaction_isolation TO 'garbage';
+
 query T
 SHOW cluster;
 ----
 quickstart
+
+query TTT
+SELECT r.name, rp.parameter_name, rp.parameter_value
+FROM mz_role_parameters rp
+LEFT JOIN mz_roles r ON rp.role_id = r.id;
+----
+parker      cluster     foo
 
 simple conn=parker_1,user=parker
 SHOW cluster;
@@ -471,6 +481,12 @@ simple conn=parker_1,user=parker
 ALTER ROLE parker RESET cluster;
 ----
 COMPLETE 0
+
+query TTT
+SELECT r.name, rp.parameter_name, rp.parameter_value
+FROM mz_role_parameters rp
+LEFT JOIN mz_roles r ON rp.role_id = r.id;
+----
 
 # Altering the Role defaults does not take effect until you restart your session, this matches
 # Postgres.
@@ -492,6 +508,13 @@ simple conn=parker_2,user=parker
 ALTER ROLE parker SET cluster TO bar;
 ----
 COMPLETE 0
+
+query TTT
+SELECT r.name, rp.parameter_name, rp.parameter_value
+FROM mz_role_parameters rp
+LEFT JOIN mz_roles r ON rp.role_id = r.id;
+----
+parker      cluster         bar
 
 simple conn=parker_3,user=parker
 SHOW cluster;
@@ -597,6 +620,14 @@ ALTER ROLE parker SET search_path TO foo, bar, baz;
 ----
 COMPLETE 0
 
+query TTT
+SELECT r.name, rp.parameter_name, rp.parameter_value
+FROM mz_role_parameters rp
+LEFT JOIN mz_roles r ON rp.role_id = r.id;
+----
+parker      cluster         bar
+parker      search_path     foo,␠bar,␠baz
+
 simple conn=parker_4,user=parker
 SHOW search_path;
 ----
@@ -613,6 +644,13 @@ SHOW search_path;
 ----
 public
 COMPLETE 1
+
+query TTT
+SELECT r.name, rp.parameter_name, rp.parameter_value
+FROM mz_role_parameters rp
+LEFT JOIN mz_roles r ON rp.role_id = r.id;
+----
+parker      cluster         bar
 
 statement ok
 CREATE ROLE joe;
@@ -632,6 +670,14 @@ SHOW cluster;
 ----
 will_work
 COMPLETE 1
+
+query TTT
+SELECT r.name, rp.parameter_name, rp.parameter_value
+FROM mz_role_parameters rp
+LEFT JOIN mz_roles r ON rp.role_id = r.id;
+----
+parker      cluster         bar
+joe         cluster         will_work
 
 # Should not be able to set a system variable.
 simple conn=parker_3,user=parker
@@ -669,6 +715,13 @@ simple conn=joe_1,user=joe
 ALTER ROLE joe RESET cluster;
 ----
 COMPLETE 0
+
+query TTT
+SELECT r.name, rp.parameter_name, rp.parameter_value
+FROM mz_role_parameters rp
+LEFT JOIN mz_roles r ON rp.role_id = r.id;
+----
+parker      cluster         bar
 
 simple conn=joe_2,user=joe
 SHOW cluster;

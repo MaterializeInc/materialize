@@ -41,9 +41,50 @@ where
             Some(v1) => self.all(|v2| v1 == v2),
         }
     }
+
+    /// Converts the the iterator into an `ExactSizeIterator` reporting the given size.
+    ///
+    /// The caller is responsible for providing the correct size of the iterator! Providing an
+    /// incorrect size value will lead to panics and/or incorrect responses to size queries.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given length is not consistent with this iterator's `size_hint`.
+    fn exact_size(self, len: usize) -> ExactSize<Self> {
+        let (lower, upper) = self.size_hint();
+        assert!(
+            lower <= len && upper.map_or(true, |upper| upper >= len),
+            "provided length {len} inconsistent with `size_hint`: {:?}",
+            (lower, upper)
+        );
+
+        ExactSize { inner: self, len }
+    }
 }
 
 impl<I> IteratorExt for I where I: Iterator {}
+
+/// Iterator type returned by [`IteratorExt::exact_size`].
+#[derive(Debug)]
+pub struct ExactSize<I> {
+    inner: I,
+    len: usize,
+}
+
+impl<I: Iterator> Iterator for ExactSize<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.len = self.len.saturating_sub(1);
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
+
+impl<I: Iterator> ExactSizeIterator for ExactSize<I> {}
 
 #[cfg(test)]
 mod tests {

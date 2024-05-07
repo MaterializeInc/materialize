@@ -28,11 +28,12 @@ use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::txn::TxnsCodec;
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::builder_async::{
-    AsyncInputHandle, Event, InputConnection, OperatorBuilder as AsyncOperatorBuilder,
-    PressOnDropButton,
+    AsyncInputHandle, Event as AsyncEvent, InputConnection,
+    OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::capture::EventCore;
+use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::{Broadcast, Capture, Leave, Map, Probe};
 use timely::dataflow::{ProbeHandle, Scope, Stream};
 use timely::order::TotalOrder;
@@ -312,7 +313,8 @@ where
         passthrough.scope().peers(),
         data_id.to_string(),
     );
-    let (mut passthrough_output, passthrough_stream) = builder.new_output();
+    let (mut passthrough_output, passthrough_stream) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
     let mut remap_input = builder.new_disconnected_input(&remap, Pipeline);
     let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
 
@@ -361,10 +363,10 @@ where
             let event = passthrough_input
                 .next()
                 .await
-                .unwrap_or_else(|| Event::Progress(Antichain::new()));
+                .unwrap_or_else(|| AsyncEvent::Progress(Antichain::new()));
             match event {
                 // NB: Ignore the data_cap because this input is disconnected.
-                Event::Data(_data_cap, mut data) => {
+                AsyncEvent::Data(_data_cap, mut data) => {
                     // NB: Nothing to do here for `until` because both the
                     // `shard_source` (before this operator) and
                     // `mfp_and_decode` (after this operator) do the necessary
@@ -372,7 +374,7 @@ where
                     debug!("{} emitting data {:?}", name, data);
                     passthrough_output.give_container(&cap, &mut data).await;
                 }
-                Event::Progress(new_progress) => {
+                AsyncEvent::Progress(new_progress) => {
                     // If `until.less_equal(new_progress)`, it means that all
                     // subsequent batches will contain only times greater or
                     // equal to `until`, which means they can be dropped in
@@ -423,7 +425,7 @@ where
 {
     while let Some(event) = input.next().await {
         let xs = match event {
-            Event::Progress(logical_upper) => {
+            AsyncEvent::Progress(logical_upper) => {
                 if let Some(logical_upper) = logical_upper.into_option() {
                     if remap.logical_upper < logical_upper {
                         remap.logical_upper = logical_upper;
@@ -432,7 +434,7 @@ where
                 }
                 continue;
             }
-            Event::Data(_cap, xs) => xs,
+            AsyncEvent::Data(_cap, xs) => xs,
         };
         for x in xs {
             debug!("{} got remap {:?}", name, x);
@@ -499,7 +501,7 @@ pub struct DataSubscribe {
     pub(crate) worker: Worker<timely::communication::allocator::Thread>,
     data: ProbeHandle<u64>,
     txns: ProbeHandle<u64>,
-    capture: mpsc::Receiver<EventCore<u64, Vec<(String, u64, i64)>>>,
+    capture: mpsc::Receiver<Event<u64, Vec<(String, u64, i64)>>>,
     output: Vec<(String, u64, i64)>,
 
     _tokens: Vec<PressOnDropButton>,
@@ -615,8 +617,8 @@ impl DataSubscribe {
                 Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
             };
             match event {
-                EventCore::Progress(_) => {}
-                EventCore::Messages(_, mut msgs) => self.output.append(&mut msgs),
+                Event::Progress(_) => {}
+                Event::Messages(_, mut msgs) => self.output.append(&mut msgs),
             }
         }
     }
@@ -964,10 +966,10 @@ mod tests {
         }
         let actual = sub.capture.into_iter().collect::<Vec<_>>();
         let expected = vec![
-            EventCore::Messages(3, vec![("2".to_owned(), 3, 1), ("3".to_owned(), 3, 1)]),
-            EventCore::Messages(3, vec![("4".to_owned(), 4, 1)]),
-            EventCore::Progress(vec![(0, -1), (3, 1)]),
-            EventCore::Progress(vec![(3, -1)]),
+            Event::Messages(3, vec![("2".to_owned(), 3, 1), ("3".to_owned(), 3, 1)]),
+            Event::Messages(3, vec![("4".to_owned(), 4, 1)]),
+            Event::Progress(vec![(0, -1), (3, 1)]),
+            Event::Progress(vec![(3, -1)]),
         ];
         assert_eq!(actual, expected);
     }

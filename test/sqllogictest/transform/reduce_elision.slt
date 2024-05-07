@@ -51,6 +51,8 @@ Explained Query:
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 ## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
@@ -91,6 +93,8 @@ Explained Query:
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 # Similar to the previous test, but
@@ -127,10 +131,11 @@ Explained Query:
                     ReadStorage materialize.public.x // { arity: 2, keys: "()" }
               ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
                 ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
-          Distinct project=[#0..=#3] // { arity: 4, keys: "([0, 1, 2, 3])" }
-            Get l0 // { arity: 4, keys: "()" }
+          Get l0 // { arity: 4, keys: "([0, 1, 2, 3])" }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF

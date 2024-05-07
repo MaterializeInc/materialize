@@ -28,7 +28,7 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use prost::Message;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::error::{CodecMismatch, CodecMismatchT};
@@ -38,9 +38,7 @@ use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
-use crate::internal::state::{
-    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
-};
+use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -322,6 +320,27 @@ impl StateVersions {
                 shard_metrics
                     .live_writers
                     .set(u64::cast_from(new_state.collections.writers.len()));
+                shard_metrics
+                    .rewrite_part_count
+                    .set(u64::cast_from(size_metrics.rewrite_part_count));
+                shard_metrics
+                    .inline_part_count
+                    .set(u64::cast_from(size_metrics.inline_part_count));
+                shard_metrics
+                    .inline_part_bytes
+                    .set(u64::cast_from(size_metrics.inline_part_bytes));
+
+                let spine_metrics = new_state.collections.trace.spine_metrics();
+                shard_metrics
+                    .compact_batches
+                    .set(spine_metrics.compact_batches);
+                shard_metrics
+                    .compacting_batches
+                    .set(spine_metrics.compacting_batches);
+                shard_metrics
+                    .noncompact_batches
+                    .set(spine_metrics.noncompact_batches);
+
                 Ok((CaSResult::Committed, new))
             }
             CaSResult::ExpectationMismatch => {
@@ -1088,7 +1107,12 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         }
     }
     fn validate_against_state(&mut self, x: &State<T>) {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
         use mz_ore::collections::HashSet;
+        use timely::progress::Antichain;
+
+        use crate::internal::state::BatchPart;
 
         x.map_blobs(|x| match x {
             HollowBlobRef::Batch(x) => {
@@ -1118,22 +1142,33 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         assert_eq!(inc_lower, full_lower);
         assert_eq!(inc_upper, full_upper);
 
+        fn part_unique<T: Hash>(x: &BatchPart<T>) -> String {
+            match x {
+                BatchPart::Hollow(x) => x.key.to_string(),
+                BatchPart::Inline {
+                    updates,
+                    ts_rewrite,
+                } => {
+                    let mut h = DefaultHasher::new();
+                    updates.hash(&mut h);
+                    ts_rewrite.as_ref().map(|x| x.elements()).hash(&mut h);
+                    h.finish().to_string()
+                }
+            }
+        }
+
         // Check that the overall set of parts contained in both representations is the same.
         let inc_parts: HashSet<_> = self
             .inc_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| match x {
-                BatchPart::Hollow(x) => &x.key,
-            })
+            .map(part_unique)
             .collect();
         let full_parts = self
             .full_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| match x {
-                BatchPart::Hollow(x) => &x.key,
-            })
+            .map(part_unique)
             .collect();
         assert_eq!(inc_parts, full_parts);
 

@@ -1620,6 +1620,16 @@ SELECT translate('hello', 'fl', 'tx')
 ----
 hexxo
 
+query T
+SELECT translate('12345', '143', 'ax')
+----
+a2x5
+
+query T
+SELECT translate('a', '👋a', E'xy')
+----
+y
+
 # constant_time_eq for string
 
 statement ok
@@ -1660,3 +1670,40 @@ query I
 SELECT count(*) FROM test_constant_time_eq WHERE constant_time_eq(str1, str2) <> (str1 = str2);
 ----
 0
+
+## initcap
+
+query T
+SELECT initcap('hi THOMAS')
+----
+Hi Thomas
+
+query I
+SELECT length(initcap(''))
+----
+0
+
+query T
+SELECT initcap('a')
+----
+A
+
+query T
+SELECT initcap('a,b,c')
+----
+A,B,C
+
+query T
+SELECT initcap('a18z')
+----
+A18z
+
+query T
+SELECT initcap('ABC')
+----
+Abc
+
+query T
+SELECT initcap('Let''s go')
+----
+Let'S Go

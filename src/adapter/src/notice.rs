@@ -133,6 +133,7 @@ pub enum AdapterNotice {
         var_name: Option<String>,
     },
     Welcome(String),
+    PlanInsights(String),
 }
 
 impl AdapterNotice {
@@ -195,6 +196,7 @@ impl AdapterNotice {
             AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
             AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
             AdapterNotice::Welcome(_) => Severity::Notice,
+            AdapterNotice::PlanInsights(_) => Severity::Notice,
         }
     }
 
@@ -250,10 +252,9 @@ impl AdapterNotice {
             AdapterNotice::SchemaAlreadyExists { .. } => SqlState::DUPLICATE_SCHEMA,
             AdapterNotice::TableAlreadyExists { .. } => SqlState::DUPLICATE_TABLE,
             AdapterNotice::ObjectAlreadyExists { .. } => SqlState::DUPLICATE_OBJECT,
-            AdapterNotice::DatabaseDoesNotExist { .. } => SqlState::WARNING,
-            AdapterNotice::ClusterDoesNotExist { .. } => SqlState::WARNING,
-            AdapterNotice::DefaultClusterDoesNotExist { .. } => SqlState::WARNING,
-            AdapterNotice::NoResolvableSearchPathSchema { .. } => SqlState::WARNING,
+            AdapterNotice::DatabaseDoesNotExist { .. } => SqlState::from_code("MZ006"),
+            AdapterNotice::ClusterDoesNotExist { .. } => SqlState::from_code("MZ007"),
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => SqlState::from_code("MZ008"),
             AdapterNotice::ExistingTransactionInProgress => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
                 SqlState::NO_ACTIVE_SQL_TRANSACTION
@@ -261,8 +262,8 @@ impl AdapterNotice {
             AdapterNotice::UserRequested { .. } => SqlState::WARNING,
             AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
             AdapterNotice::CascadeDroppedObject { .. } => SqlState::SUCCESSFUL_COMPLETION,
-            AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
-            AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedActiveDatabase { .. } => SqlState::from_code("MZ002"),
+            AdapterNotice::DroppedActiveCluster { .. } => SqlState::from_code("MZ003"),
             AdapterNotice::QueryTimestamp { .. } => SqlState::WARNING,
             AdapterNotice::EqualSubscribeBounds { .. } => SqlState::WARNING,
             AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
@@ -280,13 +281,15 @@ impl AdapterNotice {
                 PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => SqlState::WARNING,
             },
-            AdapterNotice::UnknownSessionDatabase(_) => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::UnknownSessionDatabase(_) => SqlState::from_code("MZ004"),
+            AdapterNotice::DefaultClusterDoesNotExist { .. } => SqlState::from_code("MZ005"),
             AdapterNotice::OptimizerNotice { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::DroppedInUseIndex { .. } => SqlState::WARNING,
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::WARNING,
             AdapterNotice::PerReplicaLogRead { .. } => SqlState::WARNING,
             AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
         }
     }
 }
@@ -456,6 +459,7 @@ impl fmt::Display for AdapterNotice {
                 )
             }
             AdapterNotice::Welcome(message) => message.fmt(f),
+            AdapterNotice::PlanInsights(message) => message.fmt(f),
         }
     }
 }

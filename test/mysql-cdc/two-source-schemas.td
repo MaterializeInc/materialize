@@ -62,7 +62,7 @@ contains:multiple subsources would be named t1
 1
 1
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
@@ -80,4 +80,4 @@ $ mysql-execute name=mysql
 DROP SCHEMA schema1;
 DROP SCHEMA schema2;
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;

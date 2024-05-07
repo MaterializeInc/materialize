@@ -759,6 +759,20 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
         }
 
         Ok(match kind {
+            StateUpdateKind::AuditLog(key, value) => {
+                let audit_log = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::AuditLog(audit_log))
+            }
+            StateUpdateKind::Cluster(key, value) => {
+                let cluster = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Cluster(cluster))
+            }
+            StateUpdateKind::ClusterReplica(key, value) => {
+                let cluster_replica = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::ClusterReplica(
+                    cluster_replica,
+                ))
+            }
             StateUpdateKind::Comment(key, value) => {
                 let comment = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Comment(comment))
@@ -773,6 +787,16 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     default_privilege,
                 ))
             }
+            StateUpdateKind::Item(key, value) => {
+                let item = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Item(item))
+            }
+            StateUpdateKind::IntrospectionSourceIndex(key, value) => {
+                let introspection_source_index = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::IntrospectionSourceIndex(
+                    introspection_source_index,
+                ))
+            }
             StateUpdateKind::Role(key, value) => {
                 let role = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Role(role))
@@ -781,10 +805,28 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let schema = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Schema(schema))
             }
+            StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                let storage_collection_metadata = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::StorageCollectionMetadata(
+                    storage_collection_metadata,
+                ))
+            }
+            StateUpdateKind::StorageUsage(key, value) => {
+                let storage_usage = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::StorageUsage(
+                    storage_usage,
+                ))
+            }
             StateUpdateKind::SystemConfiguration(key, value) => {
                 let system_configuration = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SystemConfiguration(
                     system_configuration,
+                ))
+            }
+            StateUpdateKind::SystemObjectMapping(key, value) => {
+                let system_object_mapping = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SystemObjectMapping(
+                    system_object_mapping,
                 ))
             }
             StateUpdateKind::SystemPrivilege(key, value) => {
@@ -793,20 +835,17 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     system_privilege,
                 ))
             }
-            // TODO(jkosh44) Add conversions for valid variants.
-            StateUpdateKind::AuditLog(_, _)
-            | StateUpdateKind::Cluster(_, _)
-            | StateUpdateKind::ClusterReplica(_, _)
-            | StateUpdateKind::Config(_, _)
+            StateUpdateKind::UnfinalizedShard(key, value) => {
+                let unfinalized_shard = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::UnfinalizedShard(
+                    unfinalized_shard,
+                ))
+            }
+            // Not exposed to higher layers.
+            StateUpdateKind::Config(_, _)
             | StateUpdateKind::Epoch(_)
             | StateUpdateKind::IdAllocator(_, _)
-            | StateUpdateKind::IntrospectionSourceIndex(_, _)
-            | StateUpdateKind::Item(_, _)
             | StateUpdateKind::Setting(_, _)
-            | StateUpdateKind::StorageUsage(_, _)
-            | StateUpdateKind::SystemObjectMapping(_, _)
-            | StateUpdateKind::StorageCollectionMetadata(_, _)
-            | StateUpdateKind::UnfinalizedShard(_, _)
             | StateUpdateKind::PersistTxnShard(_, _) => None,
         })
     }

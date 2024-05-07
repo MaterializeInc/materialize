@@ -59,7 +59,7 @@ use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::telemetry::SegmentClientExt;
+use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
 use crate::{catalog, flags, AdapterError, TimestampProvider};
 
@@ -219,8 +219,10 @@ impl Coordinator {
                         }
                         CatalogItem::Source(source) => {
                             sources_to_drop.push(*id);
-                            if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
-                                match &ingestion.desc.connection {
+                            if let DataSourceDesc::Ingestion { ingestion_desc, .. } =
+                                &source.data_source
+                            {
+                                match &ingestion_desc.desc.connection {
                                     GenericSourceConnection::Postgres(conn) => {
                                         let conn = conn
                                             .clone()
@@ -511,7 +513,8 @@ impl Coordinator {
                 self.drop_sources(sources_to_drop);
             }
             if !tables_to_drop.is_empty() {
-                self.drop_sources(tables_to_drop);
+                let ts = self.get_local_write_ts().await;
+                self.drop_tables(tables_to_drop, ts.timestamp);
             }
             if !webhook_sources_to_restart.is_empty() {
                 self.restart_webhook_sources(webhook_sources_to_restart);
@@ -550,7 +553,7 @@ impl Coordinator {
                 self.drop_secrets(secrets_to_drop).await;
             }
             if !vpc_endpoints_to_drop.is_empty() {
-                self.drop_vpc_endpoints(vpc_endpoints_to_drop).await;
+                self.drop_vpc_endpoints_in_background(vpc_endpoints_to_drop)
             }
             if !cluster_replicas_to_drop.is_empty() {
                 fail::fail_point!("after_catalog_drop_replica");
@@ -627,25 +630,24 @@ impl Coordinator {
         .await;
 
         let conn = conn_id.and_then(|id| self.active_conns.get(id));
-        if let (Some(segment_client), Some(user_metadata)) = (
-            &self.segment_client,
-            conn.and_then(|s| s.user().external_metadata.as_ref()),
-        ) {
+        if let Some(segment_client) = &self.segment_client {
             for VersionedEvent::V1(event) in audit_events {
                 let event_type = format!(
                     "{} {}",
                     event.object_type.as_title_case(),
                     event.event_type.as_title_case()
                 );
-                // Note: when there is no ConnMeta, that means something internal to
-                // environmentd initiated the transaction, hence the default name.
-                let application_name = conn.map(|s| s.application_name()).unwrap_or("environmentd");
                 segment_client.environment_track(
                     &self.catalog().config().environment_id,
-                    application_name,
-                    user_metadata.user_id,
                     event_type,
                     json!({ "details": event.details.as_json() }),
+                    EventDetails {
+                        user_id: conn
+                            .and_then(|c| c.user().external_metadata.as_ref())
+                            .map(|m| m.user_id),
+                        application_name: conn.map(|c| c.application_name()),
+                        ..Default::default()
+                    },
                 );
             }
         }
@@ -681,6 +683,7 @@ impl Coordinator {
             .expect("dropping replica must not fail");
     }
 
+    /// A convenience method for dropping sources.
     fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
             self.active_webhooks.remove(id);
@@ -691,6 +694,16 @@ impl Coordinator {
             .storage
             .drop_sources(storage_metadata, sources)
             .unwrap_or_terminate("cannot fail to drop sources");
+    }
+
+    fn drop_tables(&mut self, tables: Vec<GlobalId>, ts: Timestamp) {
+        for id in &tables {
+            self.drop_storage_read_policy(id);
+        }
+        self.controller
+            .storage
+            .drop_tables(tables, ts)
+            .unwrap_or_terminate("cannot fail to drop tables");
     }
 
     fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = GlobalId>) {
@@ -824,6 +837,7 @@ impl Coordinator {
         }
     }
 
+    /// A convenience method for dropping materialized views.
     fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();
@@ -856,20 +870,46 @@ impl Coordinator {
         }
     }
 
-    async fn drop_vpc_endpoints(&mut self, vpc_endpoints: Vec<GlobalId>) {
-        for vpc_endpoint in vpc_endpoints {
-            if let Err(e) = self
-                .cloud_resource_controller
-                .as_ref()
-                .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))
-                .expect("vpc endpoints should only be dropped in CLOUD, where `cloud_resource_controller` is `Some`")
-                .delete_vpc_endpoint(vpc_endpoint)
-                .await
-            {
-                warn!("Dropping VPC Endpoints has encountered an error: {}", e);
-                // TODO reschedule this https://github.com/MaterializeInc/cloud/issues/4407
+    fn drop_vpc_endpoints_in_background(&mut self, vpc_endpoints: Vec<GlobalId>) {
+        let cloud_resource_controller = Arc::clone(self.cloud_resource_controller
+            .as_ref()
+            .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))
+            .expect("vpc endpoints should only be dropped in CLOUD, where `cloud_resource_controller` is `Some`"));
+        // We don't want to block the coordinator on an external delete api
+        // calls, so move the drop vpc_endpoint to a separate task. This does
+        // mean that a failed drop won't bubble up to the user as an error
+        // message. However, even if it did (and how the code previously
+        // worked), mz has already dropped it from our catalog, and so we
+        // wouldn't be able to retry anyway. Any orphaned vpc_endpoints will
+        // eventually be cleaned during restart via coord bootstrap.
+        task::spawn(
+            || "drop_vpc_endpoints",
+            async move {
+                for vpc_endpoint in vpc_endpoints {
+                    let _ = Retry::default()
+                        .max_duration(Duration::from_secs(60))
+                        .retry_async(|_state| async {
+                            fail_point!("drop_vpc_endpoint", |r| {
+                                Err(anyhow::anyhow!("Fail point error {:?}", r))
+                            });
+                            match cloud_resource_controller
+                                .delete_vpc_endpoint(vpc_endpoint)
+                                .await
+                            {
+                                Ok(_) => Ok(()),
+                                Err(e) => {
+                                    warn!("Dropping VPC Endpoints has encountered an error: {}", e);
+                                    Err(e)
+                                }
+                            }
+                        })
+                        .await;
+                }
             }
-        }
+            .instrument(info_span!(
+                "coord::catalog_transact_inner::drop_vpc_endpoints"
+            )),
+        );
     }
 
     /// Removes all temporary items created by the specified connection, though
@@ -978,7 +1018,7 @@ impl Coordinator {
         sink: &Sink,
     ) -> Result<(), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
-        self.controller.storage.collection(sink.from)?;
+        self.controller.storage.check_exists(sink.from)?;
 
         let status_id = Some(
             self.catalog()
@@ -1003,10 +1043,8 @@ impl Coordinator {
         //
         // TODO: Maybe in the future, pass those holds on to storage, to hold on
         // to them and downgrade when possible?
-        let read_holds = self
-            .acquire_read_holds(mz_repr::Timestamp::MIN, &id_bundle, false)
-            .expect("can acquire read holds");
-        let as_of = self.least_valid_read(&id_bundle);
+        let read_holds = self.acquire_read_holds(&id_bundle);
+        let as_of = self.least_valid_read(&read_holds);
 
         let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {

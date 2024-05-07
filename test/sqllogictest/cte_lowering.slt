@@ -39,6 +39,8 @@ Project (#0)
       Filter (#0 < 3)
         Get materialize.public.y
 
+Target cluster: quickstart
+
 EOF
 
 # Check that CTE defined in outer context is explained properly
@@ -54,6 +56,8 @@ With
   cte l0 =
     Filter (#0 < 3)
       Get materialize.public.y
+
+Target cluster: quickstart
 
 EOF
 
@@ -77,6 +81,8 @@ With
         Constant // { arity: 0 }
           - ()
         Get materialize.public.y // { arity: 1 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -122,6 +128,8 @@ With
       Constant // { arity: 0 }
         - ()
       Get materialize.public.x // { arity: 1 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -225,6 +233,8 @@ With
         - ()
       Get materialize.public.x // { arity: 1 }
 
+Target cluster: quickstart
+
 EOF
 
 # Correlated CTE used at different scope level: offset 0 and offset 1 (RHS of the join)
@@ -276,6 +286,8 @@ With
       Constant // { arity: 0 }
         - ()
       Get materialize.public.x // { arity: 1 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -390,6 +402,8 @@ With
         - ()
       Get materialize.public.x // { arity: 1 }
 
+Target cluster: quickstart
+
 EOF
 
 query III
@@ -502,6 +516,8 @@ With
         - ()
       Get materialize.public.x // { arity: 1 }
 
+Target cluster: quickstart
+
 EOF
 
 # Check that CTEs are annotated with their names
@@ -559,6 +575,8 @@ Project (#1)
     cte l0 =
       Get materialize.public.y
 
+Target cluster: quickstart
+
 EOF
 
 # CTEs with the same name in nested context
@@ -573,5 +591,7 @@ With
     Get l0
   cte l0 =
     Get materialize.public.y
+
+Target cluster: quickstart
 
 EOF

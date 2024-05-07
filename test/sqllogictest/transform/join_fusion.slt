@@ -55,6 +55,8 @@ Source materialize.public.t2
 Source materialize.public.t3
   filter=((#0 > 0))
 
+Target cluster: quickstart
+
 EOF
 
 query IIIIII
@@ -134,6 +136,8 @@ Used Indexes:
   - materialize.public.pk_orders_orderkey (*** full scan ***)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -189,6 +193,8 @@ Used Indexes:
   - materialize.public.pk_orders_orderkey (*** full scan ***)
   - materialize.public.fk_lineitem_orderkey (*** full scan ***, lookup)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -229,6 +235,8 @@ Used Indexes:
   - materialize.public.fk_orders_custkey (lookup)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -267,6 +275,8 @@ Used Indexes:
   - materialize.public.fk_orders_custkey (lookup)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 #
@@ -280,5 +290,7 @@ AND a2.f1 IS NULL;
 ----
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 EOF

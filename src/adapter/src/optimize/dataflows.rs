@@ -295,11 +295,11 @@ impl<'a> DataflowBuilder<'a> {
         // TODO(petrosagg): store an inverse mapping of subsource -> source in the catalog so that
         // we can retrieve monotonicity information from the parent source.
         match &source.data_source {
-            DataSourceDesc::Ingestion(ingestion) => ingestion.desc.monotonic(),
-            DataSourceDesc::Introspection(_)
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc.desc.monotonic(),
+            DataSourceDesc::IngestionExport { .. }
+            | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
-            | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Source => false,
+            | DataSourceDesc::Webhook { .. } => false,
         }
     }
 

@@ -24,7 +24,7 @@ use arrow2::io::parquet::write::{
 use parquet2::write::{DynIter, FileWriter, WriteOptions as ParquetWriteOptions};
 
 use crate::codec_impls::UnitSchema;
-use crate::columnar::{PartDecoder, PartEncoder, Schema};
+use crate::columnar::{PartDecoder, Schema};
 use crate::part::{Part, PartBuilder};
 
 /// Encodes the given part into our parquet-based serialization format.
@@ -98,16 +98,11 @@ pub fn decode_part<R: Read + Seek, K, KS: Schema<K>, V, VS: Schema<V>>(
 /// through the parquet serialization format.
 pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
     schema: &S,
-    val: &T,
+    value: &T,
 ) -> Result<(), String> {
-    let mut part = PartBuilder::new(schema, &UnitSchema);
-    {
-        let mut part_mut = part.get_mut();
-        schema.encoder(part_mut.key)?.encode(val);
-        part_mut.ts.push(1u64);
-        part_mut.diff.push(1i64);
-    }
-    let part = part.finish()?;
+    let mut builder = PartBuilder::new(schema, &UnitSchema)?;
+    builder.push(value, &(), 1u64, 1i64);
+    let part = builder.finish();
 
     // Sanity check that we can compute stats.
     let _stats = part.key_stats().expect("stats should be compute-able");
@@ -121,10 +116,10 @@ pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
     assert_eq!(part.len(), 1);
     let part = part.key_ref();
     schema.decoder(part)?.decode(0, &mut actual);
-    if &actual != val {
+    if &actual != value {
         Err(format!(
             "validate_roundtrip expected {:?} but got {:?}",
-            val, actual
+            value, actual
         ))
     } else {
         Ok(())

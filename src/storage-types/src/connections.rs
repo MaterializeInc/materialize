@@ -10,7 +10,7 @@
 //! Connection types.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -18,11 +18,13 @@ use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{vpc_endpoint_host, AwsExternalIdPrefix, CloudResourceReader};
+use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
     BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
+use mz_ore::netio::resolve_address;
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -39,15 +41,18 @@ use rdkafka::client::BrokerAddr;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::ClientContext;
-use serde::{Deserialize, Serialize};
+use regex::Regex;
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
 use tokio_postgres::config::SslMode;
+use tracing::{debug, warn};
 use url::Url;
 
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{AwsConnection, AwsConnectionValidationError};
 use crate::controller::AlterError;
+use crate::dyncfgs::{ENFORCE_EXTERNAL_ADDRESSES, KAFKA_CLIENT_ID_ENRICHMENT_RULES};
 use crate::errors::{ContextCreationError, CsrConnectError};
 use crate::AlterCompatible;
 
@@ -515,6 +520,65 @@ impl<C: ConnectionAccess> KafkaConnection<C> {
 }
 
 impl KafkaConnection {
+    /// Generates a string that can be used as the base for a configuration ID
+    /// (e.g., `client.id`, `group.id`, `transactional.id`) for a Kafka source
+    /// or sink.
+    pub fn id_base(
+        connection_context: &ConnectionContext,
+        connection_id: GlobalId,
+        object_id: GlobalId,
+    ) -> String {
+        format!(
+            "materialize-{}-{}-{}",
+            connection_context.environment_id, connection_id, object_id,
+        )
+    }
+
+    /// Enriches the provided `client_id` according to any enrichment rules in
+    /// the `kafka_client_id_enrichment_rules` configuration parameter.
+    pub fn enrich_client_id(&self, configs: &ConfigSet, client_id: &mut String) {
+        #[derive(Debug, Deserialize)]
+        struct EnrichmentRule {
+            #[serde(deserialize_with = "deserialize_regex")]
+            pattern: Regex,
+            payload: String,
+        }
+
+        fn deserialize_regex<'de, D>(deserializer: D) -> Result<Regex, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let buf = String::deserialize(deserializer)?;
+            Regex::new(&buf).map_err(serde::de::Error::custom)
+        }
+
+        let rules = KAFKA_CLIENT_ID_ENRICHMENT_RULES.get(configs);
+        let rules = match serde_json::from_value::<Vec<EnrichmentRule>>(rules) {
+            Ok(rules) => rules,
+            Err(e) => {
+                warn!(%e, "failed to decode kafka_client_id_enrichment_rules");
+                return;
+            }
+        };
+
+        // Check every rule against every broker. Rules are matched in the order
+        // that they are specified. It is usually a configuration error if
+        // multiple rules match the same list of Kafka brokers, but we
+        // nonetheless want to provide well defined semantics.
+        debug!(?self.brokers, "evaluating client ID enrichment rules");
+        for rule in rules {
+            let is_match = self
+                .brokers
+                .iter()
+                .any(|b| rule.pattern.is_match(&b.address));
+            debug!(?rule, is_match, "evaluated client ID enrichment rule");
+            if is_match {
+                client_id.push('-');
+                client_id.push_str(&rule.payload);
+            }
+        }
+    }
+
     /// Creates a Kafka client for the connection.
     pub async fn create_with_context<C, T>(
         &self,
@@ -598,6 +662,9 @@ impl KafkaConnection {
             config.set(*k, v);
         }
 
+        // TODO(roshan): Implement enforcement of external address validation once
+        // rdkafka client has been updated to support providing multiple resolved
+        // addresses for brokers
         let mut context = TunnelingClientContext::new(
             context,
             Handle::current(),
@@ -627,8 +694,17 @@ impl KafkaConnection {
                     .await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
 
+                // Ensure any ssh-bastion address we connect to is resolved to an external address.
+                let resolved = resolve_address(
+                    &ssh_tunnel.connection.host,
+                    ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                )
+                .await?;
                 context.set_default_tunnel(TunnelConfig::Ssh(SshTunnelConfig {
-                    host: ssh_tunnel.connection.host.clone(),
+                    host: resolved
+                        .iter()
+                        .map(|a| a.to_string())
+                        .collect::<BTreeSet<_>>(),
                     port: ssh_tunnel.connection.port,
                     user: ssh_tunnel.connection.user.clone(),
                     key_pair,
@@ -672,11 +748,20 @@ impl KafkaConnection {
                     );
                 }
                 Tunnel::Ssh(ssh_tunnel) => {
+                    // Ensure any SSH bastion address we connect to is resolved to an external address.
+                    let ssh_host_resolved = resolve_address(
+                        &ssh_tunnel.connection.host,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                    )
+                    .await?;
                     context
                         .add_ssh_tunnel(
                             addr,
                             SshTunnelConfig {
-                                host: ssh_tunnel.connection.host.clone(),
+                                host: ssh_host_resolved
+                                    .iter()
+                                    .map(|a| a.to_string())
+                                    .collect::<BTreeSet<_>>(),
                                 port: ssh_tunnel.connection.port,
                                 user: ssh_tunnel.connection.user.clone(),
                                 key_pair: SshKeyPair::from_bytes(
@@ -971,15 +1056,28 @@ impl CsrConnection {
         // incorrectly starts using this port.
         const DUMMY_PORT: u16 = 11111;
 
+        // TODO: use types to enforce that the URL has a string hostname.
+        let host = self
+            .url
+            .host_str()
+            .ok_or_else(|| anyhow!("url missing host"))?;
         match &self.tunnel {
-            Tunnel::Direct => {}
+            Tunnel::Direct => {
+                // Ensure any host we connect to is resolved to an external address.
+                let resolved = resolve_address(
+                    host,
+                    ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                )
+                .await?;
+                client_config = client_config.resolve_to_addrs(
+                    host,
+                    &resolved
+                        .iter()
+                        .map(|addr| SocketAddr::new(*addr, DUMMY_PORT))
+                        .collect::<Vec<_>>(),
+                )
+            }
             Tunnel::Ssh(ssh_tunnel) => {
-                // TODO: use types to enforce that the URL has a string hostname.
-                let host = self
-                    .url
-                    .host_str()
-                    .ok_or_else(|| anyhow!("url missing host"))?;
-
                 let ssh_tunnel = ssh_tunnel
                     .connect(
                         storage_configuration,
@@ -1030,11 +1128,6 @@ impl CsrConnection {
             Tunnel::AwsPrivatelink(connection) => {
                 assert!(connection.port.is_none());
 
-                // TODO: use types to enforce that the URL has a string hostname.
-                let host = self
-                    .url
-                    .host_str()
-                    .ok_or_else(|| anyhow!("url missing host"))?;
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_host(
                     connection.connection_id,
                     connection.availability_zone.as_deref(),
@@ -1269,7 +1362,17 @@ impl PostgresConnection<InlinedConnection> {
         }
 
         let tunnel = match &self.tunnel {
-            Tunnel::Direct => mz_postgres_util::TunnelConfig::Direct,
+            Tunnel::Direct => {
+                // Ensure any host we connect to is resolved to an external address.
+                let resolved = resolve_address(
+                    &self.host,
+                    ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                )
+                .await?;
+                mz_postgres_util::TunnelConfig::Direct {
+                    resolved_ips: Some(resolved),
+                }
+            }
             Tunnel::Ssh(SshTunnel {
                 connection_id,
                 connection,
@@ -1278,9 +1381,18 @@ impl PostgresConnection<InlinedConnection> {
                     .read_in_task_if(in_task, *connection_id)
                     .await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
+                // Ensure any ssh-bastion host we connect to is resolved to an external address.
+                let resolved = resolve_address(
+                    &connection.host,
+                    ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                )
+                .await?;
                 mz_postgres_util::TunnelConfig::Ssh {
                     config: SshTunnelConfig {
-                        host: connection.host.clone(),
+                        host: resolved
+                            .iter()
+                            .map(|a| a.to_string())
+                            .collect::<BTreeSet<_>>(),
                         port: connection.port,
                         user: connection.user.clone(),
                         key_pair,
@@ -1633,7 +1745,17 @@ impl MySqlConnection<InlinedConnection> {
         opts = opts.ssl_opts(ssl_opts);
 
         let tunnel = match &self.tunnel {
-            Tunnel::Direct => mz_mysql_util::TunnelConfig::Direct,
+            Tunnel::Direct => {
+                // Ensure any host we connect to is resolved to an external address.
+                let resolved = resolve_address(
+                    &self.host,
+                    ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                )
+                .await?;
+                mz_mysql_util::TunnelConfig::Direct {
+                    resolved_ips: Some(resolved),
+                }
+            }
             Tunnel::Ssh(SshTunnel {
                 connection_id,
                 connection,
@@ -1642,9 +1764,18 @@ impl MySqlConnection<InlinedConnection> {
                     .read_in_task_if(in_task, *connection_id)
                     .await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
+                // Ensure any ssh-bastion host we connect to is resolved to an external address.
+                let resolved = resolve_address(
+                    &connection.host,
+                    ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                )
+                .await?;
                 mz_mysql_util::TunnelConfig::Ssh {
                     config: SshTunnelConfig {
-                        host: connection.host.clone(),
+                        host: resolved
+                            .iter()
+                            .map(|a| a.to_string())
+                            .collect::<BTreeSet<_>>(),
                         port: connection.port,
                         user: connection.user.clone(),
                         key_pair,
@@ -1924,12 +2055,21 @@ impl SshTunnel<InlinedConnection> {
         remote_port: u16,
         in_task: InTask,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
+        // Ensure any ssh-bastion host we connect to is resolved to an external address.
+        let resolved = resolve_address(
+            &self.connection.host,
+            ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+        )
+        .await?;
         storage_configuration
             .connection_context
             .ssh_tunnel_manager
             .connect(
                 SshTunnelConfig {
-                    host: self.connection.host.clone(),
+                    host: resolved
+                        .iter()
+                        .map(|a| a.to_string())
+                        .collect::<BTreeSet<_>>(),
                     port: self.connection.port,
                     user: self.connection.user.clone(),
                     key_pair: SshKeyPair::from_bytes(
@@ -1997,8 +2137,19 @@ impl SshConnection {
             )
             .await?;
         let key_pair = SshKeyPair::from_bytes(&secret)?;
+
+        // Ensure any ssh-bastion host we connect to is resolved to an external address.
+        let resolved = resolve_address(
+            &self.host,
+            ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+        )
+        .await?;
+
         let config = SshTunnelConfig {
-            host: self.host.clone(),
+            host: resolved
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<BTreeSet<_>>(),
             port: self.port,
             user: self.user.clone(),
             key_pair,

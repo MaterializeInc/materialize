@@ -98,6 +98,8 @@ Materialize bundles native connectors for the following external systems:
 - [Kafka](/sql/create-source/kafka)
 - [Redpanda](/sql/create-source/kafka)
 - [PostgreSQL](/sql/create-source/postgres)
+- [MySQL](/sql/create-source/mysql/)
+- [Webhooks](/sql/create-source/webhook/)
 
 For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.
 

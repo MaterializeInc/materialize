@@ -80,7 +80,10 @@ impl GtidReplicationPartitions {
     /// of all the active and future GTID partition timestamps.
     /// This call should usually be followed up by downgrading capabilities
     /// using the frontier returned by `self.frontier()`
-    pub(super) fn update(&mut self, new_part: GtidPartition) -> Result<(), DefiniteError> {
+    pub(super) fn advance_frontier(
+        &mut self,
+        new_part: GtidPartition,
+    ) -> Result<(), DefiniteError> {
         let source_id = new_part.interval().singleton().unwrap();
         // Check if we have an active partition for the GTID UUID
         match self.active.get_mut(source_id) {

@@ -354,6 +354,31 @@ impl Value for Duration {
     }
 }
 
+impl Value for serde_json::Value {
+    fn type_name() -> Cow<'static, str>
+    where
+        Self: Sized,
+    {
+        "jsonb".into()
+    }
+
+    fn parse(input: VarInput<'_>) -> Result<Self, VarParseError>
+    where
+        Self: Sized,
+    {
+        let s = extract_single_value(input)?;
+        serde_json::from_str(s).map_err(|_| VarParseError::InvalidParameterType)
+    }
+
+    fn box_clone(&self) -> Box<dyn Value> {
+        Box::new(self.clone())
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// This style should actually be some more complex struct, but we only support this configuration
 /// of it, so this is fine for the time being.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -1122,6 +1147,7 @@ macro_rules! impl_value_for_simple {
 
 impl_value_for_simple!(i32, "integer");
 impl_value_for_simple!(u32, "unsigned integer");
+impl_value_for_simple!(u64, "64-bit unsigned integer");
 impl_value_for_simple!(usize, "unsigned integer");
 impl_value_for_simple!(f64, "double-precision floating-point number");
 

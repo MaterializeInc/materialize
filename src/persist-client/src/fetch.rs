@@ -36,7 +36,7 @@ use crate::batch::{
     ProtoLeasedBatchPart,
 };
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{LazyPartStats, LazyProto, Schemas};
+use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::BlobKey;
@@ -120,6 +120,14 @@ where
                     part: x.clone(),
                 }
             }
+            BatchPart::Inline {
+                updates,
+                ts_rewrite,
+            } => FetchedBlobBuf::Inline {
+                desc: part.desc.clone(),
+                updates: updates.clone(),
+                ts_rewrite: ts_rewrite.clone(),
+            },
         };
         let fetched_blob = FetchedBlob {
             metrics: Arc::clone(&self.metrics),
@@ -324,7 +332,7 @@ where
         read_metrics.part_goodbytes.inc_by(u64::cast_from(
             parsed.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
         ));
-        EncodedPart::new(read_metrics.clone(), registered_desc, part, parsed)
+        EncodedPart::from_hollow(read_metrics.clone(), registered_desc, part, parsed)
     })
 }
 
@@ -475,6 +483,11 @@ enum FetchedBlobBuf<T> {
         buf: SegmentedBytes,
         part: HollowBatchPart<T>,
     },
+    Inline {
+        desc: Description<T>,
+        updates: LazyInlineBatchPart,
+        ts_rewrite: Option<Antichain<T>>,
+    },
 }
 
 impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
@@ -506,6 +519,20 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                 );
                 (parsed, part.stats.as_ref())
             }
+            FetchedBlobBuf::Inline {
+                desc,
+                updates,
+                ts_rewrite,
+            } => {
+                let parsed = EncodedPart::from_inline(
+                    &self.metrics,
+                    self.read_metrics.clone(),
+                    desc.clone(),
+                    updates,
+                    ts_rewrite.as_ref(),
+                );
+                (parsed, None)
+            }
         };
         FetchedPart::new(
             Arc::clone(&self.metrics),
@@ -515,6 +542,14 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
             self.filter_pushdown_audit,
             stats,
         )
+    }
+
+    /// Decodes and returns the pushdown stats for this part, if known.
+    pub fn stats(&self) -> Option<PartStats> {
+        match &self.buf {
+            FetchedBlobBuf::Hollow { part, .. } => part.stats.as_ref().map(|x| x.decode()),
+            FetchedBlobBuf::Inline { .. } => None,
+        }
     }
 }
 
@@ -602,16 +637,20 @@ pub(crate) struct EncodedPart<T> {
 
 impl<K, V, T, D> FetchedPart<K, V, T, D>
 where
-    K: Debug + Codec,
-    V: Debug + Codec,
+    K: Debug + Codec + Default,
+    V: Debug + Codec + Default,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// [Self::next] but optionally providing a `K` and `V` for alloc reuse.
+    ///
+    /// When `result_override` is specified, return it instead of decoding data.
+    /// This is used when we know the decoded result will be ignored.
     pub fn next_with_storage(
         &mut self,
         key: &mut Option<K>,
         val: &mut Option<V>,
+        result_override: Option<(K, V)>,
     ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
         while let Some((k, v, mut t, d)) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
@@ -645,21 +684,25 @@ where
                 continue;
             }
 
-            let k = self.metrics.codecs.key.decode(|| match key.take() {
-                Some(mut key) => match K::decode_from(&mut key, k, &mut self.key_storage) {
-                    Ok(()) => Ok(key),
-                    Err(err) => Err(err),
-                },
-                None => K::decode(k),
-            });
-            let v = self.metrics.codecs.val.decode(|| match val.take() {
-                Some(mut val) => match V::decode_from(&mut val, v, &mut self.val_storage) {
-                    Ok(()) => Ok(val),
-                    Err(err) => Err(err),
-                },
-                None => V::decode(v),
-            });
-            return Some(((k, v), t, d));
+            if let Some((key, val)) = result_override {
+                return Some(((Ok(key), Ok(val)), t, d));
+            } else {
+                let k = self.metrics.codecs.key.decode(|| match key.take() {
+                    Some(mut key) => match K::decode_from(&mut key, k, &mut self.key_storage) {
+                        Ok(()) => Ok(key),
+                        Err(err) => Err(err),
+                    },
+                    None => K::decode(k),
+                });
+                let v = self.metrics.codecs.val.decode(|| match val.take() {
+                    Some(mut val) => match V::decode_from(&mut val, v, &mut self.val_storage) {
+                        Ok(()) => Ok(val),
+                        Err(err) => Err(err),
+                    },
+                    None => V::decode(v),
+                });
+                return Some(((k, v), t, d));
+            }
         }
         None
     }
@@ -667,15 +710,15 @@ where
 
 impl<K, V, T, D> Iterator for FetchedPart<K, V, T, D>
 where
-    K: Debug + Codec,
-    V: Debug + Codec,
+    K: Debug + Codec + Default,
+    V: Debug + Codec + Default,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
     type Item = ((Result<K, String>, Result<V, String>), T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_with_storage(&mut None, &mut None)
+        self.next_with_storage(&mut None, &mut None, None)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -711,13 +754,50 @@ where
                 )
                 .await
             }
+            BatchPart::Inline {
+                updates,
+                ts_rewrite,
+            } => Ok(EncodedPart::from_inline(
+                metrics,
+                read_metrics.clone(),
+                registered_desc.clone(),
+                updates,
+                ts_rewrite.as_ref(),
+            )),
         }
+    }
+
+    pub(crate) fn from_inline(
+        metrics: &Metrics,
+        read_metrics: ReadMetrics,
+        desc: Description<T>,
+        x: &LazyInlineBatchPart,
+        ts_rewrite: Option<&Antichain<T>>,
+    ) -> Self {
+        let parsed = x.decode(&metrics.columnar).expect("valid inline part");
+        Self::new(read_metrics, desc, "inline", ts_rewrite, parsed)
+    }
+
+    pub(crate) fn from_hollow(
+        metrics: ReadMetrics,
+        registered_desc: Description<T>,
+        part: &HollowBatchPart<T>,
+        parsed: BlobTraceBatchPart<T>,
+    ) -> Self {
+        Self::new(
+            metrics,
+            registered_desc,
+            &part.key.0,
+            part.ts_rewrite.as_ref(),
+            parsed,
+        )
     }
 
     pub(crate) fn new(
         metrics: ReadMetrics,
         registered_desc: Description<T>,
-        part: &HollowBatchPart<T>,
+        printable_name: &str,
+        ts_rewrite: Option<&Antichain<T>>,
         parsed: BlobTraceBatchPart<T>,
     ) -> Self {
         // There are two types of batches in persist:
@@ -738,11 +818,11 @@ where
             assert!(
                 PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
                 "key={} inline={:?} registered={:?}",
-                part.key,
+                printable_name,
                 inline_desc,
                 registered_desc
             );
-            if part.ts_rewrite.is_none() {
+            if ts_rewrite.is_none() {
                 // The ts rewrite feature allows us to advance the registered
                 // upper of a batch that's already been staged (the inline
                 // upper), so if it's been used, then there's no useful
@@ -750,7 +830,7 @@ where
                 assert!(
                     PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
                     "key={} inline={:?} registered={:?}",
-                    part.key,
+                    printable_name,
                     inline_desc,
                     registered_desc
                 );
@@ -763,7 +843,7 @@ where
                 inline_desc.since(),
                 &Antichain::from_elem(T::minimum()),
                 "key={} inline={:?} registered={:?}",
-                part.key,
+                printable_name,
                 inline_desc,
                 registered_desc
             );
@@ -771,7 +851,7 @@ where
             assert_eq!(
                 inline_desc, &registered_desc,
                 "key={} inline={:?} registered={:?}",
-                part.key, inline_desc, registered_desc
+                printable_name, inline_desc, registered_desc
             );
         }
 
@@ -780,7 +860,7 @@ where
             registered_desc,
             part: Arc::new(parsed),
             needs_truncation,
-            ts_rewrite: part.ts_rewrite.clone(),
+            ts_rewrite: ts_rewrite.cloned(),
         }
     }
 

@@ -22,6 +22,7 @@ use std::fmt;
 
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
+use smallvec::{smallvec, SmallVec};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
@@ -305,7 +306,7 @@ impl_display_t!(InsertStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CopyRelation<T: AstInfo> {
-    Table {
+    Named {
         name: T::ItemName,
         columns: Vec<Ident>,
     },
@@ -418,7 +419,7 @@ impl<T: AstInfo> AstDisplay for CopyStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("COPY ");
         match &self.relation {
-            CopyRelation::Table { name, columns } => {
+            CopyRelation::Named { name, columns } => {
                 f.write_node(name);
                 if !columns.is_empty() {
                     f.write_str("(");
@@ -972,7 +973,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
-    pub referenced_subsources: Option<ReferencedSubsources<T>>,
+    pub referenced_subsources: Option<ReferencedSubsources>,
     pub progress_subsource: Option<DeferredItemName<T>>,
 }
 
@@ -1036,12 +1037,12 @@ impl_display_t!(CreateSourceStatement);
 
 /// A selected subsource in a FOR TABLES (..) statement
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct CreateSourceSubsource<T: AstInfo> {
+pub struct CreateSourceSubsource {
     pub reference: UnresolvedItemName,
-    pub subsource: Option<DeferredItemName<T>>,
+    pub subsource: Option<UnresolvedItemName>,
 }
 
-impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
+impl AstDisplay for CreateSourceSubsource {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.reference);
         if let Some(subsource) = &self.subsource {
@@ -1050,19 +1051,19 @@ impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
         }
     }
 }
-impl_display_t!(CreateSourceSubsource);
+impl_display!(CreateSourceSubsource);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ReferencedSubsources<T: AstInfo> {
+pub enum ReferencedSubsources {
     /// A subset defined with FOR TABLES (...)
-    SubsetTables(Vec<CreateSourceSubsource<T>>),
+    SubsetTables(Vec<CreateSourceSubsource>),
     /// A subset defined with FOR SCHEMAS (...)
     SubsetSchemas(Vec<Ident>),
     /// FOR ALL TABLES
     All,
 }
 
-impl<T: AstInfo> AstDisplay for ReferencedSubsources<T> {
+impl AstDisplay for ReferencedSubsources {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::SubsetTables(subsources) => {
@@ -1079,13 +1080,14 @@ impl<T: AstInfo> AstDisplay for ReferencedSubsources<T> {
         }
     }
 }
-impl_display_t!(ReferencedSubsources);
+impl_display!(ReferencedSubsources);
 
 /// An option in a `CREATE SUBSOURCE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateSubsourceOptionName {
     Progress,
-    References,
+    // Tracks which item this subsource references in the primary source.
+    ExternalReference,
 }
 
 impl AstDisplay for CreateSubsourceOptionName {
@@ -1094,8 +1096,8 @@ impl AstDisplay for CreateSubsourceOptionName {
             CreateSubsourceOptionName::Progress => {
                 f.write_str("PROGRESS");
             }
-            CreateSubsourceOptionName::References => {
-                f.write_str("REFERENCES");
+            CreateSubsourceOptionName::ExternalReference => {
+                f.write_str("EXTERNAL REFERENCE");
             }
         }
     }
@@ -1109,7 +1111,9 @@ impl WithOptionName for CreateSubsourceOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            CreateSubsourceOptionName::Progress | CreateSubsourceOptionName::References => false,
+            CreateSubsourceOptionName::Progress | CreateSubsourceOptionName::ExternalReference => {
+                false
+            }
         }
     }
 }
@@ -1126,6 +1130,9 @@ impl_display_for_with_option!(CreateSubsourceOption);
 pub struct CreateSubsourceStatement<T: AstInfo> {
     pub name: UnresolvedItemName,
     pub columns: Vec<ColumnDef<T>>,
+    /// Tracks the primary source of this subsource if an ingestion export (i.e.
+    /// not a progress subsource).
+    pub of_source: Option<T::ItemName>,
     pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
     pub with_options: Vec<CreateSubsourceOption<T>>,
@@ -1137,6 +1144,7 @@ impl<T: AstInfo> AstDisplay for CreateSubsourceStatement<T> {
         if self.if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }
+
         f.write_node(&self.name);
         f.write_str(" (");
         f.write_node(&display::comma_separated(&self.columns));
@@ -1145,6 +1153,11 @@ impl<T: AstInfo> AstDisplay for CreateSubsourceStatement<T> {
             f.write_node(&display::comma_separated(&self.constraints));
         }
         f.write_str(")");
+
+        if let Some(of_source) = &self.of_source {
+            f.write_str(" OF SOURCE ");
+            f.write_node(of_source);
+        }
 
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");
@@ -1787,8 +1800,8 @@ pub enum ClusterFeatureName {
     ReoptimizeImportedViews,
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
-    EnableEquivalencePropagation,
     EnableVariadicLeftJoinLowering,
+    EnableLetrecFixpointAnalysis,
 }
 
 impl WithOptionName for ClusterFeatureName {
@@ -1799,11 +1812,11 @@ impl WithOptionName for ClusterFeatureName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            ClusterFeatureName::ReoptimizeImportedViews
-            | ClusterFeatureName::EnableNewOuterJoinLowering
-            | ClusterFeatureName::EnableEagerDeltaJoins
-            | ClusterFeatureName::EnableEquivalencePropagation
-            | ClusterFeatureName::EnableVariadicLeftJoinLowering => false,
+            Self::ReoptimizeImportedViews
+            | Self::EnableNewOuterJoinLowering
+            | Self::EnableEagerDeltaJoins
+            | Self::EnableVariadicLeftJoinLowering
+            | Self::EnableLetrecFixpointAnalysis => false,
         }
     }
 }
@@ -2279,12 +2292,16 @@ impl<T: AstInfo> AstDisplay for AlterSinkStatement<T> {
 pub enum AlterSourceAddSubsourceOptionName {
     /// Columns whose types you want to unconditionally format as text
     TextColumns,
+    /// Updated `DETAILS` for an ingestion, e.g.
+    /// [`crate::ast::PgConfigOptionName::Details`].
+    Details,
 }
 
 impl AstDisplay for AlterSourceAddSubsourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             AlterSourceAddSubsourceOptionName::TextColumns => "TEXT COLUMNS",
+            AlterSourceAddSubsourceOptionName::Details => "DETAILS",
         })
     }
 }
@@ -2298,7 +2315,8 @@ impl WithOptionName for AlterSourceAddSubsourceOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            AlterSourceAddSubsourceOptionName::TextColumns => false,
+            AlterSourceAddSubsourceOptionName::Details
+            | AlterSourceAddSubsourceOptionName::TextColumns => false,
         }
     }
 }
@@ -2317,8 +2335,7 @@ pub enum AlterSourceAction<T: AstInfo> {
     SetOptions(Vec<CreateSourceOption<T>>),
     ResetOptions(Vec<CreateSourceOptionName>),
     AddSubsources {
-        subsources: Vec<CreateSourceSubsource<T>>,
-        details: Option<WithOptionValue<T>>,
+        subsources: Vec<CreateSourceSubsource>,
         options: Vec<AlterSourceAddSubsourceOption<T>>,
     },
     DropSubsources {
@@ -2328,23 +2345,12 @@ pub enum AlterSourceAction<T: AstInfo> {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterSourceStatement<T: AstInfo> {
-    pub source_name: UnresolvedItemName,
-    pub if_exists: bool,
-    pub action: AlterSourceAction<T>,
-}
-
-impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("ALTER SOURCE ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.source_name);
-        f.write_str(" ");
-
-        match &self.action {
+impl<T: AstInfo> AstDisplay for AlterSourceAction<T> {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        match &self {
             AlterSourceAction::SetOptions(options) => {
                 f.write_str("SET (");
                 f.write_node(&display::comma_separated(options));
@@ -2373,7 +2379,6 @@ impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
             }
             AlterSourceAction::AddSubsources {
                 subsources,
-                details: _,
                 options,
             } => {
                 f.write_str("ADD SUBSOURCE ");
@@ -2387,6 +2392,25 @@ impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSourceStatement<T: AstInfo> {
+    pub source_name: UnresolvedItemName,
+    pub if_exists: bool,
+    pub action: AlterSourceAction<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SOURCE ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.source_name);
+        f.write_str(" ");
+        f.write_node(&self.action)
     }
 }
 
@@ -3222,8 +3246,8 @@ pub enum ExplainPlanOptionName {
     ReoptimizeImportedViews,
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
-    EnableEquivalencePropagation,
     EnableVariadicLeftJoinLowering,
+    EnableLetrecFixpointAnalysis,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -3256,8 +3280,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::ReoptimizeImportedViews
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
-            | Self::EnableEquivalencePropagation
-            | Self::EnableVariadicLeftJoinLowering => false,
+            | Self::EnableVariadicLeftJoinLowering
+            | Self::EnableLetrecFixpointAnalysis => false,
         }
     }
 }
@@ -3577,11 +3601,14 @@ impl<T: AstInfo> AstDisplay for RefreshOptionValue<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
 pub enum ClusterScheduleOptionValue {
     Manual,
-    Refresh,
+    Refresh {
+        rehydration_time_estimate: Option<IntervalValue>,
+    },
 }
 
 impl Default for ClusterScheduleOptionValue {
     fn default() -> Self {
+        // (Has to be consistent with `impl Default for ClusterSchedule`.)
         ClusterScheduleOptionValue::Manual
     }
 }
@@ -3592,8 +3619,15 @@ impl AstDisplay for ClusterScheduleOptionValue {
             ClusterScheduleOptionValue::Manual => {
                 f.write_str("MANUAL");
             }
-            ClusterScheduleOptionValue::Refresh => {
+            ClusterScheduleOptionValue::Refresh {
+                rehydration_time_estimate,
+            } => {
                 f.write_str("ON REFRESH");
+                if let Some(rehydration_time_estimate) = rehydration_time_estimate {
+                    f.write_str(" (REHYDRATION TIME ESTIMATE = '");
+                    f.write_node(rehydration_time_estimate);
+                    f.write_str(")");
+                }
             }
         }
     }
@@ -3739,19 +3773,22 @@ pub enum ExplainStage {
     PhysicalPlan,
     /// The complete trace of the plan through the optimizer
     Trace,
+    /// Insights about the plan
+    PlanInsights,
 }
 
 impl ExplainStage {
     /// Return the tracing path that corresponds to a given stage.
-    pub fn path(&self) -> Option<&'static str> {
+    pub fn paths(&self) -> Option<SmallVec<[NamedPlan; 4]>> {
         use NamedPlan::*;
         match self {
-            Self::RawPlan => Some(Raw.path()),
-            Self::DecorrelatedPlan => Some(Decorrelated.path()),
-            Self::LocalPlan => Some(Local.path()),
-            Self::GlobalPlan => Some(Global.path()),
-            Self::PhysicalPlan => Some(Physical.path()),
+            Self::RawPlan => Some(smallvec![Raw]),
+            Self::DecorrelatedPlan => Some(smallvec![Decorrelated]),
+            Self::LocalPlan => Some(smallvec![Local]),
+            Self::GlobalPlan => Some(smallvec![Global]),
+            Self::PhysicalPlan => Some(smallvec![Physical]),
             Self::Trace => None,
+            Self::PlanInsights => Some(smallvec![Raw, Global, FastPath]),
         }
     }
 
@@ -3765,6 +3802,7 @@ impl ExplainStage {
             Self::GlobalPlan => true,
             Self::PhysicalPlan => true,
             Self::Trace => false,
+            Self::PlanInsights => false,
         }
     }
 }
@@ -3778,6 +3816,7 @@ impl AstDisplay for ExplainStage {
             Self::GlobalPlan => f.write_str("OPTIMIZED PLAN"),
             Self::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
             Self::Trace => f.write_str("OPTIMIZER TRACE"),
+            Self::PlanInsights => f.write_str("PLAN INSIGHTS"),
         }
     }
 }
@@ -3785,6 +3824,7 @@ impl_display!(ExplainStage);
 
 /// An enum of named plans that identifies specific stages in an optimizer trace
 /// where these plans can be found.
+#[derive(Clone)]
 pub enum NamedPlan {
     Raw,
     Decorrelated,

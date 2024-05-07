@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::Ordering;
 use std::num::TryFromIntError;
 use std::time::Duration;
 
-use mz_repr::Timestamp;
+use mz_repr::{Timestamp, TimestampManipulation};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use timely::progress::frontier::MutableAntichain;
@@ -20,7 +21,10 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 /// The default is set to a second to track the default timestamp frequency for sources.
 const DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS: u64 = 1000;
 
-/// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION: Duration =
+    Duration::from_millis(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
+
+/// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp.
 const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: Timestamp =
     Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
 
@@ -32,7 +36,7 @@ pub const SINCE_GRANULARITY: mz_repr::Timestamp = mz_repr::Timestamp::new(1000);
 
 // A common type (that is usable by the sql crate and also can implement various methods on types in
 // storage) to express compaction windows.
-#[derive(Clone, Default, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Default, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum CompactionWindow {
     /// Unspecified by the user, use a system-provided default.
     #[default]
@@ -43,6 +47,19 @@ pub enum CompactionWindow {
     Duration(Timestamp),
 }
 
+impl Ord for CompactionWindow {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.comparable_timestamp()
+            .cmp(&other.comparable_timestamp())
+    }
+}
+
+impl PartialOrd for CompactionWindow {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl CompactionWindow {
     pub fn lag_from(&self, from: Timestamp) -> Timestamp {
         let lag = match self {
@@ -51,6 +68,15 @@ impl CompactionWindow {
             CompactionWindow::Duration(d) => *d,
         };
         from.saturating_sub(lag)
+    }
+
+    /// Returns self as a Timestamp that can be used for comparisons.
+    pub fn comparable_timestamp(&self) -> Timestamp {
+        match self {
+            CompactionWindow::Default => DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+            CompactionWindow::DisableCompaction => Timestamp::maximum(),
+            CompactionWindow::Duration(d) => *d,
+        }
     }
 }
 

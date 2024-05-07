@@ -1,6 +1,16 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.7.8 - 2024-05-06
+
+* Fix permission management in blue/green automation macros for non-admin users
+  ([#26733](https://github.com/MaterializeInc/materialize/pull/26773)).
+
+## 1.7.7 - 2024-04-19
+
+* Tweak [`deploy_permission_validation]`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_permission_validation.sql)
+  macro to work around [#26738](https://github.com/MaterializeInc/materialize/issues/26738).
+
+## 1.7.6 - 2024-04-18
 
 * **Breaking change.** The `source` and `sink` materialization types no longer
     accept arbitrary SQL statements, and now accept the `cluster` configuration

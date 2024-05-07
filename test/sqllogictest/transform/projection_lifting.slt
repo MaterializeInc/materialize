@@ -55,6 +55,8 @@ Explained Query:
 Source materialize.public.edges
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -112,5 +114,7 @@ Explained Query:
 
 Source materialize.public.edges
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF

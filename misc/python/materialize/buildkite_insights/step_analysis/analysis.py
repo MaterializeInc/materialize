@@ -19,6 +19,7 @@ from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_BUILD_STEP_STATES,
     BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
 )
+from materialize.buildkite_insights.buildkite_api.generic_api import RateLimitExceeded
 from materialize.buildkite_insights.cache import builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
@@ -40,32 +41,51 @@ def print_data(
     job_outcomes: list[BuildJobOutcome],
     build_steps: list[BuildStepMatcher],
     output_type: str,
+    data_is_incomplete: bool,
+    include_commit_hash: bool,
 ) -> None:
     if output_type == OUTPUT_TYPE_CSV:
-        print("step_key,build_number,created_at,duration_in_min,passed,retry_count")
+        _print_outcome_entry_csv_header(include_commit_hash)
 
     for entry in job_outcomes:
         if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
-            formatted_duration = (
-                f"{entry.duration_in_min:.2f}"
-                if entry.duration_in_min is not None
-                else "None"
-            )
-            url = (
-                ""
-                if output_type == OUTPUT_TYPE_TXT_SHORT
-                else f"{entry.web_url_to_build}, "
-            )
-            print(
-                f"{entry.step_key}, #{entry.build_number}, {entry.formatted_date()}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
-            )
+            _print_outcome_entry_as_txt(entry, output_type, include_commit_hash)
         elif output_type == OUTPUT_TYPE_CSV:
-            print(
-                f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min},{1 if entry.passed else 0},{entry.retry_count}"
-            )
+            _print_outcome_entry_as_csv(entry, include_commit_hash)
 
     if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
         print_stats(job_outcomes, build_steps)
+
+    if data_is_incomplete:
+        print("Warning! Data is incomplete due to exceeded rate limit!")
+
+
+def _print_outcome_entry_as_txt(
+    entry: BuildJobOutcome, output_type: str, include_commit_hash: bool
+) -> None:
+    formatted_duration = (
+        f"{entry.duration_in_min:.2f}".rjust(6)
+        if entry.duration_in_min is not None
+        else "None"
+    )
+    url = "" if output_type == OUTPUT_TYPE_TXT_SHORT else f"{entry.web_url_to_build}, "
+    commit_hash = f"{entry.commit_hash}, " if include_commit_hash else ""
+    print(
+        f"{entry.step_key}, #{entry.build_number}, {entry.formatted_date()}, {formatted_duration} min, {url}{commit_hash}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
+    )
+
+
+def _print_outcome_entry_csv_header(include_commit_hash: bool) -> None:
+    f"step_key,build_number,created_at,duration_in_min,passed,{'commit,' if include_commit_hash else ''}retry_count"
+
+
+def _print_outcome_entry_as_csv(
+    entry: BuildJobOutcome, include_commit_hash: bool
+) -> None:
+    commit_hash = f"{entry.commit_hash}," if include_commit_hash else ""
+    print(
+        f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min},{1 if entry.passed else 0},{commit_hash}{entry.retry_count}"
+    )
 
 
 def print_stats(
@@ -116,17 +136,30 @@ def main(
     build_states: list[str],
     build_step_states: list[str],
     output_type: str,
+    include_commit_hash: bool,
 ) -> None:
-    builds_data = builds_cache.get_or_query_builds(
-        pipeline_slug, fetch_mode, max_fetches, branch, build_states
-    )
+    try:
+        builds_data = builds_cache.get_or_query_builds(
+            pipeline_slug, fetch_mode, max_fetches, branch, build_states
+        )
+        data_is_incomplete = False
+    except RateLimitExceeded as e:
+        builds_data = e.partial_result
+        data_is_incomplete = True
+
     step_outcomes = extract_build_step_outcomes(
         builds_data=builds_data,
         selected_build_steps=build_steps,
         build_step_states=build_step_states,
     )
     job_outcomes = step_outcomes_to_job_outcomes(step_outcomes)
-    print_data(job_outcomes, build_steps, output_type)
+    print_data(
+        job_outcomes,
+        build_steps,
+        output_type,
+        data_is_incomplete=data_is_incomplete,
+        include_commit_hash=include_commit_hash,
+    )
 
 
 if __name__ == "__main__":
@@ -135,8 +168,13 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
+    parser.add_argument("pipeline", choices=MZ_PIPELINES, type=str)
     parser.add_argument("--build-step-key", action="append", default=[], type=str)
+    parser.add_argument(
+        "--build-step-parallel-index",
+        type=int,
+        help="This is only applied if exactly one build-step-key is specified",
+    )
     parser.add_argument(
         "--fetch",
         type=lambda mode: FetchMode[mode.upper()],
@@ -166,6 +204,11 @@ if __name__ == "__main__":
         default=OUTPUT_TYPE_TXT,
         type=str,
     )
+    parser.add_argument(
+        "--include-commit-hash",
+        action="store_true",
+    )
+
     args = parser.parse_args()
 
     selected_build_states = args.build_state
@@ -176,7 +219,12 @@ if __name__ == "__main__":
     main(
         args.pipeline,
         [
-            BuildStepMatcher(build_step_key, None)
+            BuildStepMatcher(
+                build_step_key,
+                args.build_step_parallel_index
+                if len(args.build_step_key) == 1
+                else None,
+            )
             for build_step_key in args.build_step_key
         ],
         args.fetch,
@@ -185,4 +233,5 @@ if __name__ == "__main__":
         selected_build_states,
         selected_build_step_states,
         args.output_type,
+        args.include_commit_hash,
     )

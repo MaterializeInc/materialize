@@ -128,6 +128,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 861  current_database
 870  lower
 871  upper
+872  initcap
 873  lpad
 875  ltrim
 876  rtrim
@@ -792,7 +793,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16678  mz_compute_exports_per_worker
 16679  mz_compute_frontiers_per_worker
 16680  mz_compute_import_frontiers_per_worker
-16681  mz_compute_delays_histogram_raw
 16682  mz_compute_error_counts_raw
 16683  mz_active_peeks_per_worker
 16684  mz_peek_durations_histogram_raw
@@ -938,8 +938,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16824  mz_compute_operator_durations_histogram
 16825  mz_scheduling_parks_histogram_per_worker
 16826  mz_scheduling_parks_histogram
-16827  mz_compute_delays_histogram_per_worker
-16828  mz_compute_delays_histogram
 16829  mz_compute_error_counts_per_worker
 16830  mz_compute_error_counts
 16831  mz_compute_operator_hydration_statuses
@@ -1055,3 +1053,11 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16941  mz_notices
 16942  mz_notices_redacted
 16943  mz_notices_ind
+16945  mz_role_parameters
+16946  mz_materialized_view_refresh_strategies
+16947  mz_cluster_schedules
+16948  mz_postgres_source_tables
+16949  mz_mysql_source_tables
+16950  mz_kafka_sources_ind
+16951  mz_webhook_sources_ind
+16952  mz_history_retention_strategies

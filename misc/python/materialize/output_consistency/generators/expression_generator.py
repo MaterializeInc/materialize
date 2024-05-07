@@ -88,10 +88,12 @@ class ExpressionGenerator:
 
     def _initialize_operations(self) -> None:
         self.operation_weights = self._get_operation_weights(
-            self.input_data.all_operation_types
+            self.input_data.operations_input.all_operation_types
         )
 
-        for index, operation in enumerate(self.input_data.all_operation_types):
+        for index, operation in enumerate(
+            self.input_data.operations_input.all_operation_types
+        ):
             self.selectable_operations.append(operation)
             self.operation_weights_no_aggregates.append(
                 0 if operation.is_aggregation else self.operation_weights[index]
@@ -107,7 +109,9 @@ class ExpressionGenerator:
             ] = operations_with_return_category
 
     def _initialize_types(self) -> None:
-        for data_type_with_values in self.input_data.all_data_types_with_values:
+        for (
+            data_type_with_values
+        ) in self.input_data.types_input.all_data_types_with_values:
             category = data_type_with_values.data_type.category
             types_with_values = self.types_with_values_by_category.get(category, [])
             types_with_values.append(data_type_with_values)
@@ -399,7 +403,7 @@ class ExpressionGenerator:
     ) -> list[DataTypeWithValues]:
         category = param.resolve_type_category(arg_context.args)
         if category == DataTypeCategory.ANY:
-            return self.input_data.all_data_types_with_values
+            return self.input_data.types_input.all_data_types_with_values
 
         self._assert_valid_type_category_for_param(param, category)
 
@@ -441,7 +445,7 @@ class ExpressionGenerator:
         self, param: OperationParam, category: DataTypeCategory
     ) -> list[DbOperationOrFunction]:
         if category == DataTypeCategory.ANY:
-            return self.input_data.all_operation_types
+            return self.input_data.operations_input.all_operation_types
 
         self._assert_valid_type_category_for_param(param, category)
 
@@ -511,7 +515,9 @@ class ExpressionGenerator:
     def find_data_type_with_values_by_type_identifier(
         self, type_identifier: str
     ) -> DataTypeWithValues:
-        for data_type_with_values in self.input_data.all_data_types_with_values:
+        for (
+            data_type_with_values
+        ) in self.input_data.types_input.all_data_types_with_values:
             if data_type_with_values.data_type.internal_identifier == type_identifier:
                 return data_type_with_values
 

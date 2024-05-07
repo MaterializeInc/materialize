@@ -64,7 +64,9 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for i, name in enumerate(c.workflows):
+    for name in buildkite.shard_list(
+        list(c.workflows.keys()), lambda workflow: workflow
+    ):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
         # refresh-mv-restart: Reenable when #25821 is fixed
@@ -77,9 +79,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "test-index-source-stuck",
         ):
             continue
-        if buildkite.accepted_by_shard(name):
-            with c.test_case(name):
-                c.workflow(name)
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1764,6 +1765,11 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
         return reused, replaced
 
+    # Run a slow-path SELECT to allocate a transient ID. This ensures that
+    # after the restart dataflows get different internal transient IDs
+    # assigned, which is something we want reconciliation to be able to handle.
+    c.sql("SELECT * FROM mz_views JOIN mz_indexes USING (id)")
+
     # Set up a cluster and a number of dataflows that can be reconciled.
     c.sql(
         """
@@ -2500,7 +2506,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count > 0, f"got {count}"
 
     # mz_compute_responses_total
-    count = metrics.get_responses_total("frontier_upper")
+    count = metrics.get_responses_total("frontiers")
     assert count > 0, f"got {count}"
     count = metrics.get_responses_total("peek_response")
     assert count == 2, f"got {count}"
@@ -2508,7 +2514,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count == 0, f"got {count}"
 
     # mz_compute_response_message_bytes_total
-    count = metrics.get_response_bytes_total("frontier_upper")
+    count = metrics.get_response_bytes_total("frontiers")
     assert count > 0, f"got {count}"
     count = metrics.get_response_bytes_total("peek_response")
     assert count > 0, f"got {count}"
@@ -2519,6 +2525,8 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count == 1, f"got {count}"
     count = metrics.get_value("mz_compute_controller_collection_count")
     assert count > 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_collection_unscheduled_count")
+    assert count == 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_peek_count")
     assert count == 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_subscribe_count")
@@ -2527,6 +2535,8 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count < 10, f"got {count}"
     count = metrics.get_value("mz_compute_controller_response_queue_size")
     assert count < 10, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_hydration_queue_size")
+    assert count == 0, f"got {count}"
 
     # mz_compute_controller_history_command_count
     count = metrics.get_controller_history_command_count("create_timely")
@@ -3387,17 +3397,26 @@ def workflow_test_refresh_mv_restart(
     1a. Restart just after a refresh, and then check after the next refresh that things still work.
     1b. Same as above, but turn off the replica before the restart, and then turn it back on after the restart.
     1c. Same as 1a, but with the MV reading from an index.
+    1i. Same as 1a, but on an auto-scheduled cluster.
+    1j. Same as 1a, but there is an index on the MV, and the refresh interval is large, so we are still before the next
+        refresh after the restart.
 
-    2a. Kill envd, sleep through a refresh time, then bring up envd and check that we recover.
+    2a. Sleep through a refresh time after killing envd, then bring up envd and check that we recover.
     2b. Same as 2a, but manipulate replicas as in 1b.
-    2c. Same as 2a but with the MV reading from an index.
+    2c. Same as 2a, but with the MV reading from an index.
+    2i. Same as 2a, but on an auto-scheduled cluster.
+    2j. Same as 1j, but with the long sleep of 2a.
 
     3d. No replica while creating the MV, restart envd, and then create a replica
-    3e. Same as 3d but with the MV reading from an index.
+    3e. Same as 3d, but with an MV reading from an index.
     3f. Same as 3d, but with an MV that has a last refresh.
     3g. Same as 3e, but with an MV that has a last refresh.
     3h. Same as 3d, but with an MV that has a short refresh interval, so we miss several refreshes by the time we get a
         replica.
+
+    When querying MVs after the restarts, perform the same queries with all combinations of
+     - SERIALIZABLE / STRICT SERIALIZABLE,
+     - with / without indexes on MVs.
 
     After each of 1., 2., and 3., check that the input table's read frontier keeps advancing.
     """
@@ -3419,6 +3438,7 @@ def workflow_test_refresh_mv_restart(
         Materialized(
             additional_system_parameter_defaults={
                 "enable_refresh_every_mvs": "true",
+                "enable_cluster_schedule_refresh": "true",
             },
         ),
         Testdrive(no_reset=True),
@@ -3430,11 +3450,12 @@ def workflow_test_refresh_mv_restart(
             > CREATE TABLE t (x int);
             > INSERT INTO t VALUES (100);
 
-            > CREATE CLUSTER cluster_ac SIZE '1';
+            > CREATE CLUSTER cluster_acj SIZE '1';
             > CREATE CLUSTER cluster_b SIZE '1';
+            > CREATE CLUSTER cluster_auto_scheduled (SIZE '1', SCHEDULE = ON REFRESH);
 
             > CREATE MATERIALIZED VIEW mv_a
-              IN CLUSTER cluster_ac
+              IN CLUSTER cluster_acj
               WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
               SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
@@ -3444,20 +3465,67 @@ def workflow_test_refresh_mv_restart(
               SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
             > CREATE DEFAULT INDEX
-              IN CLUSTER cluster_ac
+              IN CLUSTER cluster_acj
               ON t;
             > CREATE MATERIALIZED VIEW mv_c
-              IN CLUSTER cluster_ac
+              IN CLUSTER cluster_acj
               WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
               SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
+            > CREATE MATERIALIZED VIEW mv_i
+              IN CLUSTER cluster_auto_scheduled
+              WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
+              SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+            > CREATE MATERIALIZED VIEW mv_j
+              IN CLUSTER cluster_acj
+              WITH (REFRESH EVERY '1000000 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
+              SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+            > CREATE CLUSTER serving SIZE '1';
+            > CREATE CLUSTER serving_indexed SIZE '1';
+
+            > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_a;
+            > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_b;
+            > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_c;
+            > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_i;
+            > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_j;
+
             # Let's wait for the MVs' initial refresh to complete.
+
+            > SET cluster = 'serving';
             > SELECT * FROM mv_a;
             100
             > SELECT * FROM mv_b;
             100
             > SELECT * FROM mv_c;
             100
+            > SELECT * FROM mv_i;
+            100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
+
+            > SET cluster = 'serving_indexed';
+            > SELECT * FROM mv_a;
+            100
+            > SELECT * FROM mv_b;
+            100
+            > SELECT * FROM mv_c;
+            100
+            > SELECT * FROM mv_i;
+            100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
 
             > INSERT INTO t VALUES (1000);
 
@@ -3469,12 +3537,85 @@ def workflow_test_refresh_mv_restart(
             """
             > ALTER CLUSTER cluster_b SET (REPLICATION FACTOR 1);
 
+            > SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
+
+            > SET cluster = 'serving';
+
             > SELECT * FROM mv_a;
             1100
             > SELECT * FROM mv_b;
             1100
             > SELECT * FROM mv_c;
             1100
+            > SELECT * FROM mv_i;
+            1100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
+            1001
+
+            > SET cluster = 'serving_indexed';
+
+            > SELECT * FROM mv_a;
+            1100
+            > SELECT * FROM mv_b;
+            1100
+            > SELECT * FROM mv_c;
+            1100
+            > SELECT * FROM mv_i;
+            1100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
+            1001
+
+            > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+
+            > SET cluster = 'serving';
+
+            > SELECT * FROM mv_a;
+            1100
+            > SELECT * FROM mv_b;
+            1100
+            > SELECT * FROM mv_c;
+            1100
+            > SELECT * FROM mv_i;
+            1100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
+            1001
+
+            > SET cluster = 'serving_indexed';
+
+            > SELECT * FROM mv_a;
+            1100
+            > SELECT * FROM mv_b;
+            1100
+            > SELECT * FROM mv_c;
+            1100
+            > SELECT * FROM mv_i;
+            1100
+            > SELECT * FROM mv_j;
+            100
+            > (SELECT * FROM mv_j)
+              UNION
+              (SELECT x + 1 FROM t);
+            100
+            101
+            1001
             """
         )
 
@@ -3514,38 +3655,44 @@ def workflow_test_refresh_mv_restart(
                 > CREATE TABLE t (x int);
                 > INSERT INTO t VALUES (100);
 
-                > CREATE CLUSTER cluster_defg (SIZE '1', REPLICATION FACTOR 0);
+                > CREATE CLUSTER cluster_defgh (SIZE '1', REPLICATION FACTOR 0);
 
                 > CREATE MATERIALIZED VIEW mv_3h
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   WITH (REFRESH EVERY '1600 ms') AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
                 > CREATE MATERIALIZED VIEW mv_3d
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   WITH (REFRESH EVERY '100000 sec') AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
                 > CREATE MATERIALIZED VIEW mv_3f
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   WITH (REFRESH AT CREATION) AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
                 > CREATE DEFAULT INDEX
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   ON t;
 
                 > CREATE MATERIALIZED VIEW mv_3e
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   WITH (REFRESH EVERY '100000 sec') AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
                 > CREATE MATERIALIZED VIEW mv_3g
-                  IN CLUSTER cluster_defg
+                  IN CLUSTER cluster_defgh
                   WITH (REFRESH AT CREATION) AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
-                # This won't be visible, because the refresh interval is very long.
+                > CREATE CLUSTER serving_indexed SIZE '1';
+                > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3d;
+                > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3e;
+                > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3f;
+                > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3g;
+                > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3h;
+
                 > INSERT INTO t VALUES (1000);
                 """
             )
@@ -3556,7 +3703,13 @@ def workflow_test_refresh_mv_restart(
         c.testdrive(
             input=dedent(
                 """
-                > ALTER CLUSTER cluster_defg SET (REPLICATION FACTOR 1);
+                > ALTER CLUSTER cluster_defgh SET (REPLICATION FACTOR 1);
+
+                > CREATE CLUSTER serving SIZE '1';
+
+                > SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
+
+                > SET cluster = 'serving';
 
                 > SELECT * FROM mv_3d
                 100
@@ -3574,6 +3727,65 @@ def workflow_test_refresh_mv_restart(
 
                 > SELECT * FROM mv_3h;
                 11100
+
+                > SET cluster = 'serving_indexed';
+
+                > SELECT * FROM mv_3d
+                100
+                > SELECT * FROM mv_3e
+                100
+                > SELECT * FROM mv_3f
+                100
+                > SELECT * FROM mv_3g
+                100
+
+                > SELECT * FROM mv_3h;
+                11100
+
+                > INSERT INTO t VALUES (10000);
+
+                > SELECT * FROM mv_3h;
+                21100
+
+                > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+
+                > SET cluster = 'serving';
+
+                > SELECT * FROM mv_3d
+                100
+                > SELECT * FROM mv_3e
+                100
+                > SELECT * FROM mv_3f
+                100
+                > SELECT * FROM mv_3g
+                100
+
+                > SELECT * FROM mv_3h;
+                21100
+
+                > INSERT INTO t VALUES (10000);
+
+                > SELECT * FROM mv_3h;
+                31100
+
+                > SET cluster = 'serving_indexed';
+
+                > SELECT * FROM mv_3d
+                100
+                > SELECT * FROM mv_3e
+                100
+                > SELECT * FROM mv_3f
+                100
+                > SELECT * FROM mv_3g
+                100
+
+                > SELECT * FROM mv_3h;
+                31100
+
+                > INSERT INTO t VALUES (10000);
+
+                > SELECT * FROM mv_3h;
+                41100
                 """
             )
         )
@@ -3713,3 +3925,91 @@ def workflow_test_http_race_condition(
         )
     else:
         assert False, "Sessions did not clean up after 30s"
+
+
+def workflow_test_read_frontier_advancement(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that in a set of dependent healthy compute collections all read
+    frontiers keep advancing continually. This is to protect against
+    regressions in downgrading read holds.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # Create various dataflows on a cluster with multiple replicas, to also
+    # test tracking of per-replica read holds.
+    c.sql(
+        """
+        CREATE CLUSTER test SIZE '2-2', REPLICATION FACTOR 4;
+        SET cluster = test;
+
+        CREATE TABLE t1 (x int);
+        CREATE TABLE t2 (y int);
+
+        CREATE VIEW v1 AS SELECT * FROM t1 JOIN t2 ON (x = y);
+        CREATE DEFAULT INDEX ON v1;
+
+        CREATE VIEW v2 AS SELECT x + 1 AS a, y + 2 AS b FROM v1;
+        CREATE DEFAULT INDEX ON v2;
+
+        CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM v2;
+        CREATE DEFAULT INDEX ON mv1;
+
+        CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv1, t1;
+
+        -- wait for dataflows to hydrate
+        SELECT 1 FROM v1, v2, mv1, mv2;
+        """,
+    )
+
+    # Run a subscribe in a different thread.
+    def subscribe():
+        cursor = c.sql_cursor()
+        cursor.execute("SET cluster = test")
+        cursor.execute("BEGIN")
+        cursor.execute("DECLARE sub CURSOR FOR SUBSCRIBE (SELECT * FROM mv2)")
+        try:
+            # This should hang until the cluster is dropped. The timeout is
+            # only a failsafe.
+            cursor.execute("FETCH ALL sub WITH (timeout = '30s')")
+        except DatabaseError as exc:
+            assert (
+                exc.args[0]["M"]
+                == 'subscribe has been terminated because underlying relation "materialize.public.mv2" was dropped'
+            )
+
+    subscribe_thread = Thread(target=subscribe)
+    subscribe_thread.start()
+
+    # Wait for the subscribe to start and frontier introspection to be refreshed.
+    time.sleep(3)
+
+    # Check that read frontiers advance.
+    def collect_read_frontiers() -> dict[str, int]:
+        output = c.sql_query(
+            """
+            SELECT object_id, read_frontier
+            FROM mz_internal.mz_frontiers
+            WHERE object_id LIKE 'u%'
+            """
+        )
+        frontiers = {}
+        for row in output:
+            name, frontier = row
+            frontiers[name] = int(frontier)
+        return frontiers
+
+    frontiers1 = collect_read_frontiers()
+    time.sleep(3)
+    frontiers2 = collect_read_frontiers()
+
+    for id_ in frontiers1:
+        a, b = frontiers1[id_], frontiers2[id_]
+        assert a < b, f"read frontier of {id_} has not advanced: {a} -> {b}"
+
+    # Drop the cluster to cancel the subscribe.
+    c.sql("DROP CLUSTER test CASCADE")
+    subscribe_thread.join()

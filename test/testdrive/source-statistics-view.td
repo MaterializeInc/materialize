@@ -9,6 +9,10 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 2000
+
 > CREATE SOURCE counter
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER;
@@ -35,4 +39,4 @@ $ set-arg-default single-replica-cluster=quickstart
   WHERE s.name IN ('counter')
 counter true true true true true true true true true true true true
 
-> DROP SOURCE counter
+> DROP SOURCE counter CASCADE

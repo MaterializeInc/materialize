@@ -9,6 +9,12 @@
 
 mode cockroach
 
+# Disable persist inline writes so we get real part numbers below
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_inline_writes_single_max_bytes = 0
+----
+COMPLETE 0
+
 # EXPLAIN FILTER PUSHDOWN statements are blocked by a feature flag
 statement ok
 CREATE TABLE numbers (
@@ -24,6 +30,8 @@ Explained Query:
 
 Source materialize.public.numbers
   filter=((#0 > 10))
+
+Target cluster: quickstart
 
 EOF
 
@@ -61,6 +69,31 @@ query TIIII
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value < 10;
 ----
 materialize.public.numbers  1039  1039  1  1
+
+# Verify that pushdown of jsonb_get_string is infallible. Before this was
+# fixed, a filter expression on a jsonb field that is not present in all parts
+# would cause those parts to be fetched, even when AND'ed together with an
+# expression that would definitely filter out the part otherwise.
+
+statement ok
+CREATE TABLE jsonb_fields (
+    timestamp int,
+    payload jsonb
+);
+
+statement ok
+INSERT INTO jsonb_fields VALUES (1, '{ "field": "value" }');
+
+statement ok
+INSERT INTO jsonb_fields VALUES (2, '{ "other-field": "value" }');
+
+# The `timestamp > 1000` part filters out everything, regardless of whether the
+# referenced field exists in the payload or not.
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM jsonb_fields where timestamp > 1000 AND payload->>'field' = 'not-value';
+----
+materialize.public.jsonb_fields  2011  0  2  0
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = false

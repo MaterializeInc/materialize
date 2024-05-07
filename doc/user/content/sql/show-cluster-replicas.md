@@ -24,17 +24,17 @@ SHOW CLUSTER REPLICAS;
     cluster    | replica |  size  | ready |
 ---------------+---------|--------|-------|
  auction_house | bigger  | 1600cc | t     |
- quickstart    | r1      | 100cc  | t     |
+ quickstart    | r1      | 25cc   | t     |
 ```
 
 ```sql
-SHOW CLUSTER REPLICAS WHERE cluster='quickstart';
+SHOW CLUSTER REPLICAS WHERE cluster = 'quickstart';
 ```
 
 ```nofmt
     cluster    | replica |  size  | ready|
 ---------------+---------|--------|-------
- quickstart    | r1      | 100cc  | t    |
+ quickstart    | r1      | 25cc   | t    |
 ```
 
 

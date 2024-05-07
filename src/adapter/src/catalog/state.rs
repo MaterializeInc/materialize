@@ -38,7 +38,7 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
     CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
-    Role, Schema, Secret, Sink, Source, StateUpdate, StateUpdateKind, Table, Type, View,
+    Role, Schema, Secret, Sink, Source, Table, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -50,8 +50,8 @@ use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
+use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
-use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
@@ -59,13 +59,13 @@ use mz_repr::namespaces::{
     PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc};
+use mz_repr::{GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole,
-    CatalogSchema, CatalogTypeDetails, EnvironmentId, IdReference, NameReference, SessionCatalog,
-    SystemObjectType, TypeReference,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId,
+    IdReference, NameReference, SessionCatalog, SystemObjectType, TypeReference,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
@@ -79,7 +79,7 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{SystemVars, Var, VarError, VarInput, DEFAULT_DATABASE_NAME};
+use mz_sql::session::vars::{SystemVars, Var, VarInput, DEFAULT_DATABASE_NAME};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageMetadata;
 use mz_storage_types::connections::inline::{
@@ -489,13 +489,17 @@ impl CatalogState {
         let object_id = ObjectId::Item(item_id);
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
-            for dependent_id in self.get_entry(&item_id).used_by() {
+            let entry = self.get_entry(&item_id);
+            for dependent_id in entry.used_by() {
                 dependents.extend_from_slice(&self.item_dependents(*dependent_id, seen));
             }
-            for subsource_id in self.get_entry(&item_id).subsources() {
-                dependents.extend_from_slice(&self.item_dependents(subsource_id, seen));
-            }
             dependents.push(object_id);
+            // We treat the progress collection as if it depends on the source
+            // for dropping. We have additional code in planning to create a
+            // kind of special-case "CASCADE" for this dependency.
+            if let Some(progress_id) = entry.progress_id() {
+                dependents.extend_from_slice(&self.item_dependents(progress_id, seen));
+            }
         }
         dependents
     }
@@ -810,23 +814,17 @@ impl CatalogState {
 
     pub(crate) fn deserialize_plan(
         &self,
-        id: GlobalId,
         create_sql: &str,
         force_if_exists_skip: bool,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        // TODO - The `None` needs to be changed if we ever allow custom
-        // logical compaction windows in user-defined objects.
-        let pcx = PlanContext::zero()
-            .with_planning_id(id)
-            .with_ignore_if_exists_errors(force_if_exists_skip);
+        let pcx = PlanContext::zero().with_ignore_if_exists_errors(force_if_exists_skip);
         let mut session_catalog = self.for_system_session();
-        self.parse_plan(create_sql, Some(&pcx), &mut session_catalog)
+        Self::parse_plan(create_sql, Some(&pcx), &mut session_catalog)
     }
 
     /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds)`.
     #[mz_ore::instrument]
     pub(crate) fn parse_plan(
-        &self,
         create_sql: &str,
         pcx: Option<&PlanContext>,
         catalog: &mut ConnCatalog,
@@ -850,22 +848,14 @@ impl CatalogState {
         return Ok((plan, resolved_ids));
     }
 
-    pub(crate) fn deserialize_item(
-        &self,
-        id: GlobalId,
-        create_sql: &str,
-    ) -> Result<CatalogItem, AdapterError> {
-        // TODO - The `None` needs to be changed if we ever allow custom
-        // logical compaction windows in user-defined objects.
-        let pcx = PlanContext::zero().with_planning_id(id);
-        self.parse_item(id, create_sql, Some(&pcx), false, None)
+    pub(crate) fn deserialize_item(&self, create_sql: &str) -> Result<CatalogItem, AdapterError> {
+        self.parse_item(create_sql, None, false, None)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
     #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
-        id: GlobalId,
         create_sql: &str,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
@@ -873,7 +863,7 @@ impl CatalogState {
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = self.parse_plan(create_sql, pcx, &mut session_catalog)?;
+        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &mut session_catalog)?;
 
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
@@ -894,11 +884,10 @@ impl CatalogState {
             }) => CatalogItem::Source(Source {
                 create_sql: Some(source.create_sql),
                 data_source: match source.data_source {
-                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
-                        DataSourceDesc::ingestion(
-                            id,
-                            ingestion,
-                            match in_cluster {
+                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion_desc) => {
+                        DataSourceDesc::Ingestion {
+                            ingestion_desc,
+                            cluster_id: match in_cluster {
                                 Some(id) => id,
                                 None => {
                                     return Err(AdapterError::Unstructured(anyhow::anyhow!(
@@ -906,10 +895,16 @@ impl CatalogState {
                                     )))
                                 }
                             },
-                        )
+                        }
                     }
+                    mz_sql::plan::DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                    } => DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                    },
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
-                    mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
                     mz_sql::plan::DataSourceDesc::Webhook {
                         validate_using,
                         body_format,
@@ -1229,50 +1224,7 @@ impl CatalogState {
     ) {
         let mut log_indexes = BTreeMap::new();
         for (log, index_id, oid) in introspection_source_indexes {
-            let source_name = FullItemName {
-                database: RawDatabaseSpecifier::Ambient,
-                schema: log.schema.into(),
-                item: log.name.into(),
-            };
-            let index_name = format!("{}_{}_primary_idx", log.name, id);
-            let mut index_name = QualifiedItemName {
-                qualifiers: ItemQualifiers {
-                    database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
-                },
-                item: index_name.clone(),
-            };
-            index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
-            let index_item_name = index_name.item.clone();
-            let log_id = self.resolve_builtin_log(log);
-            self.insert_item(
-                index_id,
-                oid,
-                index_name,
-                CatalogItem::Index(Index {
-                    on: log_id,
-                    keys: log
-                        .variant
-                        .index_by()
-                        .into_iter()
-                        .map(MirScalarExpr::Column)
-                        .collect(),
-                    create_sql: index_sql(
-                        index_item_name,
-                        id,
-                        source_name,
-                        &log.variant.desc(),
-                        &log.variant.index_by(),
-                    ),
-                    conn_id: None,
-                    resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
-                    cluster_id: id,
-                    is_retained_metrics_object: false,
-                    custom_logical_compaction_window: None,
-                }),
-                MZ_SYSTEM_ROLE_ID,
-                PrivilegeMap::default(),
-            );
+            self.insert_introspection_source_index(id, log, index_id, oid);
             log_indexes.insert(log.variant.clone(), index_id);
         }
 
@@ -1291,6 +1243,59 @@ impl CatalogState {
             },
         );
         assert!(self.clusters_by_name.insert(name, id).is_none());
+    }
+
+    pub(super) fn insert_introspection_source_index(
+        &mut self,
+        cluster_id: ClusterId,
+        log: &'static BuiltinLog,
+        index_id: GlobalId,
+        oid: u32,
+    ) {
+        let source_name = FullItemName {
+            database: RawDatabaseSpecifier::Ambient,
+            schema: log.schema.into(),
+            item: log.name.into(),
+        };
+        let index_name = format!("{}_{}_primary_idx", log.name, cluster_id);
+        let mut index_name = QualifiedItemName {
+            qualifiers: ItemQualifiers {
+                database_spec: ResolvedDatabaseSpecifier::Ambient,
+                schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
+            },
+            item: index_name.clone(),
+        };
+        index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
+        let index_item_name = index_name.item.clone();
+        let log_id = self.resolve_builtin_log(log);
+        self.insert_item(
+            index_id,
+            oid,
+            index_name,
+            CatalogItem::Index(Index {
+                on: log_id,
+                keys: log
+                    .variant
+                    .index_by()
+                    .into_iter()
+                    .map(MirScalarExpr::Column)
+                    .collect(),
+                create_sql: index_sql(
+                    index_item_name,
+                    cluster_id,
+                    source_name,
+                    &log.variant.desc(),
+                    &log.variant.index_by(),
+                ),
+                conn_id: None,
+                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
+                cluster_id,
+                is_retained_metrics_object: false,
+                custom_logical_compaction_window: None,
+            }),
+            MZ_SYSTEM_ROLE_ID,
+            PrivilegeMap::default(),
+        );
     }
 
     pub(super) fn rename_cluster(&mut self, id: ClusterId, to_name: String) {
@@ -1655,7 +1660,104 @@ impl CatalogState {
     pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> GlobalId {
         let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
         let schema = &self.ambient_schemas_by_id[schema_id];
-        schema.items[builtin.name()].clone()
+        match builtin.catalog_item_type() {
+            CatalogItemType::Type => schema.types[builtin.name()].clone(),
+            CatalogItemType::Func => schema.functions[builtin.name()].clone(),
+            CatalogItemType::Table
+            | CatalogItemType::Source
+            | CatalogItemType::Sink
+            | CatalogItemType::View
+            | CatalogItemType::MaterializedView
+            | CatalogItemType::Index
+            | CatalogItemType::Secret
+            | CatalogItemType::Connection => schema.items[builtin.name()].clone(),
+        }
+    }
+
+    /// Resolve a [`BuiltinType<NameReference>`] to a [`BuiltinType<IdReference>`].
+    pub fn resolve_builtin_type_references(
+        &self,
+        builtin: &BuiltinType<NameReference>,
+    ) -> BuiltinType<IdReference> {
+        let typ: CatalogType<IdReference> = match &builtin.details.typ {
+            CatalogType::AclItem => CatalogType::AclItem,
+            CatalogType::Array { element_reference } => CatalogType::Array {
+                element_reference: self.get_system_type(element_reference).id,
+            },
+            CatalogType::List {
+                element_reference,
+                element_modifiers,
+            } => CatalogType::List {
+                element_reference: self.get_system_type(element_reference).id,
+                element_modifiers: element_modifiers.clone(),
+            },
+            CatalogType::Map {
+                key_reference,
+                value_reference,
+                key_modifiers,
+                value_modifiers,
+            } => CatalogType::Map {
+                key_reference: self.get_system_type(key_reference).id,
+                value_reference: self.get_system_type(value_reference).id,
+                key_modifiers: key_modifiers.clone(),
+                value_modifiers: value_modifiers.clone(),
+            },
+            CatalogType::Range { element_reference } => CatalogType::Range {
+                element_reference: self.get_system_type(element_reference).id,
+            },
+            CatalogType::Record { fields } => CatalogType::Record {
+                fields: fields
+                    .into_iter()
+                    .map(|f| CatalogRecordField {
+                        name: f.name.clone(),
+                        type_reference: self.get_system_type(f.type_reference).id,
+                        type_modifiers: f.type_modifiers.clone(),
+                    })
+                    .collect(),
+            },
+            CatalogType::Bool => CatalogType::Bool,
+            CatalogType::Bytes => CatalogType::Bytes,
+            CatalogType::Char => CatalogType::Char,
+            CatalogType::Date => CatalogType::Date,
+            CatalogType::Float32 => CatalogType::Float32,
+            CatalogType::Float64 => CatalogType::Float64,
+            CatalogType::Int16 => CatalogType::Int16,
+            CatalogType::Int32 => CatalogType::Int32,
+            CatalogType::Int64 => CatalogType::Int64,
+            CatalogType::UInt16 => CatalogType::UInt16,
+            CatalogType::UInt32 => CatalogType::UInt32,
+            CatalogType::UInt64 => CatalogType::UInt64,
+            CatalogType::MzTimestamp => CatalogType::MzTimestamp,
+            CatalogType::Interval => CatalogType::Interval,
+            CatalogType::Jsonb => CatalogType::Jsonb,
+            CatalogType::Numeric => CatalogType::Numeric,
+            CatalogType::Oid => CatalogType::Oid,
+            CatalogType::PgLegacyChar => CatalogType::PgLegacyChar,
+            CatalogType::PgLegacyName => CatalogType::PgLegacyName,
+            CatalogType::Pseudo => CatalogType::Pseudo,
+            CatalogType::RegClass => CatalogType::RegClass,
+            CatalogType::RegProc => CatalogType::RegProc,
+            CatalogType::RegType => CatalogType::RegType,
+            CatalogType::String => CatalogType::String,
+            CatalogType::Time => CatalogType::Time,
+            CatalogType::Timestamp => CatalogType::Timestamp,
+            CatalogType::TimestampTz => CatalogType::TimestampTz,
+            CatalogType::Uuid => CatalogType::Uuid,
+            CatalogType::VarChar => CatalogType::VarChar,
+            CatalogType::Int2Vector => CatalogType::Int2Vector,
+            CatalogType::MzAclItem => CatalogType::MzAclItem,
+        };
+
+        BuiltinType {
+            name: builtin.name,
+            schema: builtin.schema,
+            oid: builtin.oid,
+            details: CatalogTypeDetails {
+                array_id: builtin.details.array_id,
+                typ,
+                pg_metadata: builtin.details.pg_metadata.clone(),
+            },
+        }
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -2184,7 +2286,7 @@ impl CatalogState {
         };
         let id = tx.allocate_audit_log_id()?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
-        builtin_table_updates.push(self.pack_audit_log_update(&event)?);
+        builtin_table_updates.push(self.pack_audit_log_update(&event, 1)?);
         audit_events.push(event.clone());
         tx.insert_audit_log_event(event);
         Ok(())
@@ -2202,7 +2304,7 @@ impl CatalogState {
             tx.get_and_increment_id(mz_catalog::durable::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
-        builtin_table_updates.push(self.pack_storage_usage_update(&details)?);
+        builtin_table_updates.push(self.pack_storage_usage_update(&details, 1));
         tx.insert_storage_usage_event(details);
         Ok(())
     }
@@ -2247,202 +2349,6 @@ impl CatalogState {
         }
     }
 
-    /// Update in-memory catalog state from a list of updates made to the durable catalog state.
-    ///
-    /// This is meant specifically for bootstrapping because it does not produce builtin table
-    /// updates. The builtin tables need to be loaded before we can produce builtin table updates
-    /// which creates a bootstrapping problem.
-    // TODO(jkosh44) It is very IMPORTANT that per timestamp, the updates are sorted retractions
-    // then additions. Within the retractions the objects should be sorted in reverse dependency
-    // order (objects->schema->database, replica->cluster, etc.). Within the additions the objects
-    // should be sorted in dependency order (database->schema->objects, cluster->replica, etc.).
-    // Objects themselves also need to be sorted by dependency order, this will be tricky but we can
-    // look at the existing bootstrap code for ways of doing this. For now we rely on the caller
-    // providing objects in dependency order.
-    #[instrument]
-    pub(crate) fn apply_updates_for_bootstrap(&mut self, updates: Vec<StateUpdate>) {
-        for StateUpdate { kind, diff } in updates {
-            assert_eq!(
-                diff, 1,
-                "initial catalog updates should be consolidated: ({kind:?}, {diff:?})"
-            );
-            self.apply_update(kind, diff);
-        }
-    }
-
-    #[instrument(level = "debug")]
-    fn apply_update(&mut self, kind: StateUpdateKind, diff: Diff) {
-        fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: impl FnOnce() -> V, diff: Diff)
-        where
-            K: Ord + Debug,
-            V: PartialEq + Eq + Debug,
-        {
-            if diff == 1 {
-                let prev = map.insert(key, value());
-                assert_eq!(
-                    prev, None,
-                    "values must be explicitly retracted before inserting a new value"
-                );
-            } else if diff == -1 {
-                let prev = map.remove(&key);
-                // We can't assert the exact contents of the previous value, since we don't know
-                // what it should look like.
-                assert!(
-                    prev.is_some(),
-                    "retraction does not match existing value: {key:?}"
-                );
-            }
-        }
-
-        assert!(
-            diff == 1 || diff == -1,
-            "invalid update in catalog updates: ({kind:?}, {diff:?})"
-        );
-        match kind {
-            StateUpdateKind::Role(role) => {
-                apply(
-                    &mut self.roles_by_id,
-                    role.id,
-                    || Role {
-                        name: role.name.clone(),
-                        id: role.id,
-                        oid: role.oid,
-                        attributes: role.attributes,
-                        membership: role.membership,
-                        vars: role.vars,
-                    },
-                    diff,
-                );
-                apply(&mut self.roles_by_name, role.name, || role.id, diff);
-            }
-            StateUpdateKind::Database(database) => {
-                apply(
-                    &mut self.database_by_id,
-                    database.id.clone(),
-                    || Database {
-                        name: database.name.clone(),
-                        id: database.id.clone(),
-                        oid: database.oid,
-                        schemas_by_id: BTreeMap::new(),
-                        schemas_by_name: BTreeMap::new(),
-                        owner_id: database.owner_id,
-                        privileges: PrivilegeMap::from_mz_acl_items(database.privileges),
-                    },
-                    diff,
-                );
-                apply(
-                    &mut self.database_by_name,
-                    database.name,
-                    || database.id.clone(),
-                    diff,
-                );
-            }
-            StateUpdateKind::Schema(schema) => {
-                let (schemas_by_id, schemas_by_name, database_spec) = match &schema.database_id {
-                    Some(database_id) => {
-                        let db = self
-                            .database_by_id
-                            .get_mut(database_id)
-                            .expect("catalog out of sync");
-                        (
-                            &mut db.schemas_by_id,
-                            &mut db.schemas_by_name,
-                            ResolvedDatabaseSpecifier::Id(*database_id),
-                        )
-                    }
-                    None => (
-                        &mut self.ambient_schemas_by_id,
-                        &mut self.ambient_schemas_by_name,
-                        ResolvedDatabaseSpecifier::Ambient,
-                    ),
-                };
-                apply(
-                    schemas_by_id,
-                    schema.id.clone(),
-                    || Schema {
-                        name: QualifiedSchemaName {
-                            database: database_spec,
-                            schema: schema.name.clone(),
-                        },
-                        id: SchemaSpecifier::Id(schema.id.clone()),
-                        oid: schema.oid,
-                        items: BTreeMap::new(),
-                        functions: BTreeMap::new(),
-                        types: BTreeMap::new(),
-                        owner_id: schema.owner_id,
-                        privileges: PrivilegeMap::from_mz_acl_items(schema.privileges),
-                    },
-                    diff,
-                );
-                apply(schemas_by_name, schema.name.clone(), || schema.id, diff);
-            }
-            StateUpdateKind::DefaultPrivilege(default_privilege) => match diff {
-                1 => self
-                    .default_privileges
-                    .grant(default_privilege.object, default_privilege.acl_item),
-                -1 => self
-                    .default_privileges
-                    .revoke(&default_privilege.object, &default_privilege.acl_item),
-                _ => unreachable!("invalid diff: {diff}"),
-            },
-            StateUpdateKind::SystemPrivilege(system_privilege) => match diff {
-                1 => self.system_privileges.grant(system_privilege),
-                -1 => self.system_privileges.revoke(&system_privilege),
-                _ => unreachable!("invalid diff: {diff}"),
-            },
-            StateUpdateKind::SystemConfiguration(system_configuration) => {
-                let res = match diff {
-                    1 => self.insert_system_configuration(
-                        &system_configuration.name,
-                        VarInput::Flat(&system_configuration.value),
-                    ),
-                    -1 => self.remove_system_configuration(&system_configuration.name),
-                    _ => unreachable!("invalid diff: {diff}"),
-                };
-                match res {
-                    Ok(_) => (),
-                    // When system variables are deleted, nothing deletes them from the underlying
-                    // durable catalog, which isn't great. Still, we need to be able to ignore
-                    // unknown variables.
-                    Err(Error {
-                        kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
-                    }) => {
-                        warn!(%name, "unknown system parameter from catalog storage");
-                    }
-                    Err(e) => panic!("unable to update system variable: {e:?}"),
-                }
-            }
-            StateUpdateKind::Comment(comment) => match diff {
-                1 => {
-                    let prev = self.comments.update_comment(
-                        comment.object_id,
-                        comment.sub_component,
-                        Some(comment.comment),
-                    );
-                    assert_eq!(
-                        prev, None,
-                        "values must be explicitly retracted before inserting a new value"
-                    );
-                }
-                -1 => {
-                    let prev = self.comments.update_comment(
-                        comment.object_id,
-                        comment.sub_component,
-                        None,
-                    );
-                    assert_eq!(
-                        prev,
-                        Some(comment.comment),
-                        "retraction does not match existing value: ({:?}, {:?})",
-                        comment.object_id,
-                        comment.sub_component,
-                    );
-                }
-                _ => unreachable!("invalid diff: {diff}"),
-            },
-        }
-    }
-
     /// Synchronizes the local view of the [`StorageMetadata`] with the
     /// [`Transaction`]'s.
     ///
@@ -2469,6 +2375,54 @@ impl CatalogState {
     /// call to `update_storage_metadata`.
     pub fn storage_metadata(&self) -> &StorageMetadata {
         &self.storage_metadata
+    }
+
+    /// For the Sources ids in `ids`, return the compaction windows for all `ids` and additional ids
+    /// that propagate from them. Specifically, if `ids` contains a source, it and all of its
+    /// subsources will be added to the result.
+    pub fn source_compaction_windows(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> BTreeMap<CompactionWindow, BTreeSet<GlobalId>> {
+        let mut cws: BTreeMap<CompactionWindow, BTreeSet<GlobalId>> = BTreeMap::new();
+        let mut ids = VecDeque::from_iter(ids);
+        let mut seen = BTreeSet::new();
+        while let Some(id) = ids.pop_front() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let entry = self.get_entry(&id);
+            let Some(source) = entry.source() else {
+                // Views could depend on sources, so ignore them if added by used_by below.
+                continue;
+            };
+            let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
+            match source.data_source {
+                DataSourceDesc::Ingestion { .. } => {
+                    // For sources, look up each dependent subsource and propagate.
+                    cws.entry(source_cw).or_default().insert(id);
+                    ids.extend(entry.used_by());
+                }
+                DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                    // For subsources, look up the parent source and propagate the compaction
+                    // window.
+                    let ingestion = self
+                        .get_entry(&ingestion_id)
+                        .source()
+                        .expect("must be source");
+                    let cw = ingestion
+                        .custom_logical_compaction_window
+                        .unwrap_or(source_cw);
+                    cws.entry(cw).or_default().insert(id);
+                }
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Webhook { .. } => {
+                    cws.entry(source_cw).or_default().insert(id);
+                }
+            }
+        }
+        cws
     }
 }
 

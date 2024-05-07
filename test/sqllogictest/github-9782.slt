@@ -21,13 +21,7 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM table_f1 , LATERAL ( SEL
 Explained Query (fast path):
   Constant <empty>
 
-EOF
-
-query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
-----
-Explained Query (fast path):
-  Constant <empty>
+Target cluster: quickstart
 
 EOF
 
@@ -37,13 +31,7 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM table_f1 , LATERAL ( SEL
 Explained Query (fast path):
   Constant <empty>
 
-EOF
-
-query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
-----
-Explained Query (fast path):
-  Constant <empty>
+Target cluster: quickstart
 
 EOF
 
@@ -52,6 +40,28 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM table_f1 , LATERAL ( SEL
 ----
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN WITH(arity, join implementations) SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN WITH(arity, join implementations) SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
 
 EOF
 
@@ -110,5 +120,7 @@ Source materialize.public.table_f4_f5_f6
   filter=((#1 = #2))
 Source materialize.public.table_f5_f6
   filter=((#0 = #1))
+
+Target cluster: quickstart
 
 EOF

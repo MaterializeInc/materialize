@@ -46,6 +46,7 @@ SERVICES = [
     Materialized(
         depends_on=["localstack"],
         environment_extra=[
+            f"AWS_REGION={DEFAULT_CLOUD_REGION}",
             f"AWS_ENDPOINT_URL={AWS_ENDPOINT_URL_MZ}",
             f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}",
             f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}",

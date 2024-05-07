@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
+use mz_persist_client::cfg::TXN_USE_CRITICAL_SINCE;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{Cursor, LazyPartStats, ListenEvent, ReadHandle, Since, Subscribe};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -39,8 +40,9 @@ use crate::TxnsCodecDefault;
 /// A token exchangeable for a data shard snapshot.
 ///
 /// - Invariant: `latest_write <= as_of < empty_to`
-/// - Invariant: `(latest_write, empty_to)` has no committed writes (which means
-///   we can do an empty CaA of those times if we like).
+/// - Invariant: `(latest_write, empty_to)` and `(as_of, empty_to)` have no
+///   unapplied writes (which means we can do an empty CaA of those times if we
+///   like).
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct DataSnapshot<T> {
@@ -51,7 +53,7 @@ pub struct DataSnapshot<T> {
     pub(crate) latest_write: Option<T>,
     /// The as_of asked for.
     pub(crate) as_of: T,
-    /// An upper bound on the times known to be empty of writes via txns.
+    /// An upper bound on the times known to be empty of unapplied writes via txns.
     pub(crate) empty_to: T,
 }
 
@@ -180,8 +182,8 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         data_read: &mut ReadHandle<K, V, T, D>,
     ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
     where
-        K: Debug + Codec + Ord,
-        V: Debug + Codec + Ord,
+        K: Debug + Codec + Ord + Default,
+        V: Debug + Codec + Ord + Default,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
@@ -267,7 +269,7 @@ pub enum DataListenNext<T> {
     /// Read the data shard normally, until this timestamp is less_equal what
     /// has been read.
     ReadDataTo(T),
-    /// It is known there there are no writes between the progress given to the
+    /// It is known that there are no writes between the progress given to the
     /// `data_listen_next` call and this timestamp. Advance the data shard
     /// listen progress to this (exclusive) frontier.
     EmitLogicalProgress(T),
@@ -679,6 +681,7 @@ where
                     shard_name: "txns".to_owned(),
                     handle_purpose: "read txns".to_owned(),
                 },
+                TXN_USE_CRITICAL_SINCE.get(client.dyncfgs()),
             )
             .await
             .expect("txns schema shouldn't change");

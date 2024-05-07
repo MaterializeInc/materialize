@@ -9,8 +9,9 @@
 
 //! Implementations of [Codec] for stdlib types.
 
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use arrow2::array::{
     Array, BinaryArray, BooleanArray, MutableArray, MutableBinaryArray, MutableBooleanArray,
@@ -22,12 +23,14 @@ use arrow2::datatypes::DataType as ArrowLogicalType;
 use arrow2::io::parquet::write::Encoding;
 use arrow2::types::NativeType;
 use bytes::BufMut;
+use timely::order::Product;
 
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{
     ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData, PartDecoder,
     PartEncoder, Schema,
 };
+use crate::dyn_col::DynColumnMut;
 use crate::dyn_struct::{
     ColumnsMut, ColumnsRef, DynStruct, DynStructCfg, DynStructCol, DynStructMut, DynStructRef,
 };
@@ -38,30 +41,42 @@ use crate::{Codec, Codec64, Opaque, ShardId};
 #[derive(Debug, Default)]
 pub struct UnitSchema;
 
-impl PartEncoder<'_, ()> for UnitSchema {
-    fn encode(&mut self, _val: &()) {}
+/// [`PartEncoder`] for [`UnitSchema`].
+#[derive(Debug)]
+pub struct UnitSchemaEncoder {
+    len: usize,
 }
 
-impl PartDecoder<'_, ()> for UnitSchema {
+impl PartEncoder<()> for UnitSchemaEncoder {
+    fn encode(&mut self, _val: &()) {
+        self.len += 1;
+    }
+
+    fn finish(self) -> (usize, Vec<DynColumnMut>) {
+        (self.len, vec![])
+    }
+}
+
+impl PartDecoder<()> for UnitSchema {
     fn decode(&self, _idx: usize, _val: &mut ()) {}
 }
 
 impl Schema<()> for UnitSchema {
-    type Encoder<'a> = Self;
-    type Decoder<'a> = Self;
+    type Encoder = UnitSchemaEncoder;
+    type Decoder = Self;
 
     fn columns(&self) -> DynStructCfg {
         DynStructCfg::from(Vec::new())
     }
 
-    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+    fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
         let () = cols.finish()?;
         Ok(UnitSchema)
     }
 
-    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        let (_len, ()) = cols.finish()?;
-        Ok(UnitSchema)
+    fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
+        let (len, ()) = cols.finish()?;
+        Ok(UnitSchemaEncoder { len })
     }
 }
 
@@ -89,38 +104,61 @@ impl Codec for () {
 }
 
 /// An implementation of [PartEncoder] for a single column.
-pub struct SimpleEncoder<'a, X, T: Data>(&'a mut usize, SimpleEncoderFn<'a, X, T>);
+pub struct SimpleEncoder<X, T: Data>(usize, SimpleEncoderFn<X, T>);
 
-enum SimpleEncoderFn<'a, X, T: Data> {
+impl<X, T: Data> fmt::Debug for SimpleEncoder<X, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SimpleEncoder").finish()
+    }
+}
+
+enum SimpleEncoderFn<X, T: Data> {
     Cast {
-        col: &'a mut T::Mut,
+        col: Box<T::Mut>,
         encode: for<'b> fn(&'b X) -> T::Ref<'b>,
     },
     Push {
-        col: &'a mut T::Mut,
+        col: Box<T::Mut>,
         encode: fn(&mut T::Mut, &X),
     },
 }
 
-impl<'a, X, T: Data> PartEncoder<'a, X> for SimpleEncoder<'a, X, T> {
+impl<X, T: Data> PartEncoder<X> for SimpleEncoder<X, T> {
     fn encode(&mut self, val: &X) {
-        *self.0 += 1;
+        self.0 += 1;
         match &mut self.1 {
-            SimpleEncoderFn::Cast { col, encode } => ColumnPush::<T>::push(*col, encode(val)),
+            SimpleEncoderFn::Cast { col, encode } => {
+                ColumnPush::<T>::push(col.as_mut(), encode(val))
+            }
             SimpleEncoderFn::Push { col, encode } => encode(col, val),
         }
+    }
+
+    fn finish(self) -> (usize, Vec<DynColumnMut>) {
+        let col = match self.1 {
+            SimpleEncoderFn::Cast { col, .. } | SimpleEncoderFn::Push { col, .. } => col,
+        };
+        (self.0, vec![DynColumnMut::new::<T>(col)])
     }
 }
 
 /// An implementation of [PartDecoder] for a single column.
-pub struct SimpleDecoder<'a, X, T: Data> {
-    col: &'a T::Col,
-    decode: fn(T::Ref<'a>, &mut X),
+pub struct SimpleDecoder<X, T: Data> {
+    col: Arc<T::Col>,
+    decode: for<'a> fn(T::Ref<'a>, &mut X),
 }
 
-impl<'a, X, T: Data> PartDecoder<'a, X> for SimpleDecoder<'a, X, T> {
+impl<X: Default, T: Data> PartDecoder<X> for SimpleDecoder<X, T> {
     fn decode(&self, idx: usize, val: &mut X) {
-        (self.decode)(ColumnGet::<T>::get(self.col, idx), val)
+        (self.decode)(ColumnGet::<T>::get(self.col.as_ref(), idx), val)
+    }
+}
+
+impl<X, T: Data> fmt::Debug for SimpleDecoder<X, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SimpleDecoder")
+            .field("col", &std::any::type_name::<T::Col>())
+            .finish()
     }
 }
 
@@ -138,30 +176,30 @@ impl<X, T: Data> SimpleSchema<X, T> {
     }
 
     /// A helper for [Schema::decoder] impls of a single column.
-    pub fn decoder<'a>(
-        mut cols: ColumnsRef<'a>,
-        decode: fn(T::Ref<'a>, &mut X),
-    ) -> Result<SimpleDecoder<'a, X, T>, String> {
+    pub fn decoder(
+        mut cols: ColumnsRef,
+        decode: for<'a> fn(T::Ref<'a>, &mut X),
+    ) -> Result<SimpleDecoder<X, T>, String> {
         let col = cols.col::<T>("")?;
         let () = cols.finish()?;
         Ok(SimpleDecoder { col, decode })
     }
 
     /// A helper for [Schema::encoder] impls of a single column.
-    pub fn encoder<'a>(
-        mut cols: ColumnsMut<'a>,
+    pub fn encoder(
+        mut cols: ColumnsMut,
         encode: for<'b> fn(&'b X) -> T::Ref<'b>,
-    ) -> Result<SimpleEncoder<'a, X, T>, String> {
+    ) -> Result<SimpleEncoder<X, T>, String> {
         let col = cols.col::<T>("")?;
         let (len, ()) = cols.finish()?;
         Ok(SimpleEncoder(len, SimpleEncoderFn::Cast { col, encode }))
     }
 
     /// A helper for [Schema::encoder] impls of a single column.
-    pub fn push_encoder<'a>(
-        mut cols: ColumnsMut<'a>,
+    pub fn push_encoder(
+        mut cols: ColumnsMut,
         encode: fn(&mut T::Mut, &X),
-    ) -> Result<SimpleEncoder<'a, X, T>, String> {
+    ) -> Result<SimpleEncoder<X, T>, String> {
         let col = cols.col::<T>("")?;
         let (len, ()) = cols.finish()?;
         Ok(SimpleEncoder(len, SimpleEncoderFn::Push { col, encode }))
@@ -173,19 +211,19 @@ impl<X, T: Data> SimpleSchema<X, T> {
 pub struct StringSchema;
 
 impl Schema<String> for StringSchema {
-    type Encoder<'a> = SimpleEncoder<'a, String, String>;
+    type Encoder = SimpleEncoder<String, String>;
 
-    type Decoder<'a> = SimpleDecoder<'a, String, String>;
+    type Decoder = SimpleDecoder<String, String>;
 
     fn columns(&self) -> DynStructCfg {
         SimpleSchema::<String, String>::columns(&())
     }
 
-    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+    fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
         SimpleSchema::<String, String>::decoder(cols, |val, ret| val.clone_into(ret))
     }
 
-    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+    fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
         SimpleSchema::<String, String>::encoder(cols, |val| val.as_str())
     }
 }
@@ -215,19 +253,19 @@ impl Codec for String {
 pub struct VecU8Schema;
 
 impl Schema<Vec<u8>> for VecU8Schema {
-    type Encoder<'a> = SimpleEncoder<'a, Vec<u8>, Vec<u8>>;
+    type Encoder = SimpleEncoder<Vec<u8>, Vec<u8>>;
 
-    type Decoder<'a> = SimpleDecoder<'a, Vec<u8>, Vec<u8>>;
+    type Decoder = SimpleDecoder<Vec<u8>, Vec<u8>>;
 
     fn columns(&self) -> DynStructCfg {
         SimpleSchema::<Vec<u8>, Vec<u8>>::columns(&())
     }
 
-    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+    fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
         SimpleSchema::<Vec<u8>, Vec<u8>>::decoder(cols, |val, ret| val.clone_into(ret))
     }
 
-    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+    fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
         SimpleSchema::<Vec<u8>, Vec<u8>>::encoder(cols, |val| val.as_slice())
     }
 }
@@ -272,21 +310,20 @@ impl Codec for ShardId {
 pub struct ShardIdSchema;
 
 impl Schema<ShardId> for ShardIdSchema {
-    type Encoder<'a> = SimpleEncoder<'a, ShardId, String>;
-
-    type Decoder<'a> = SimpleDecoder<'a, ShardId, String>;
+    type Encoder = SimpleEncoder<ShardId, String>;
+    type Decoder = SimpleDecoder<ShardId, String>;
 
     fn columns(&self) -> DynStructCfg {
         SimpleSchema::<ShardId, String>::columns(&())
     }
 
-    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+    fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
         SimpleSchema::<ShardId, String>::decoder(cols, |val, ret| {
             *ret = val.parse().expect("should be valid ShardId")
         })
     }
 
-    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+    fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
         SimpleSchema::<ShardId, String>::push_encoder(cols, |col, val| {
             ColumnPush::<String>::push(col, &val.to_string())
         })
@@ -324,6 +361,24 @@ impl Codec64 for u64 {
 impl Opaque for u64 {
     fn initial() -> Self {
         u64::MIN
+    }
+}
+
+impl Codec64 for Product<u32, u32> {
+    fn codec_name() -> String {
+        "Product<u32, u32>".to_owned()
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        let o = self.outer.to_le_bytes();
+        let i = self.inner.to_le_bytes();
+        [o[0], o[1], o[2], o[3], i[0], i[1], i[2], i[3]]
+    }
+
+    fn decode(buf: [u8; 8]) -> Self {
+        let outer = [buf[0], buf[1], buf[2], buf[3]];
+        let inner = [buf[4], buf[5], buf[6], buf[7]];
+        Product::new(u32::from_le_bytes(outer), u32::from_le_bytes(inner))
     }
 }
 
@@ -864,31 +919,35 @@ impl<T> Default for TodoSchema<T> {
     }
 }
 
-impl<T> PartEncoder<'_, T> for TodoSchema<T> {
+impl<T> PartEncoder<T> for TodoSchema<T> {
     fn encode(&mut self, _val: &T) {
+        panic!("TODO")
+    }
+
+    fn finish(self) -> (usize, Vec<DynColumnMut>) {
         panic!("TODO")
     }
 }
 
-impl<T> PartDecoder<'_, T> for TodoSchema<T> {
+impl<T> PartDecoder<T> for TodoSchema<T> {
     fn decode(&self, _idx: usize, _val: &mut T) {
         panic!("TODO")
     }
 }
 
 impl<T: Debug + Send + Sync> Schema<T> for TodoSchema<T> {
-    type Encoder<'a> = Self;
-    type Decoder<'a> = Self;
+    type Encoder = Self;
+    type Decoder = Self;
 
     fn columns(&self) -> DynStructCfg {
         panic!("TODO")
     }
 
-    fn decoder<'a>(&self, _cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+    fn decoder(&self, _cols: ColumnsRef) -> Result<Self::Decoder, String> {
         panic!("TODO")
     }
 
-    fn encoder<'a>(&self, _cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+    fn encoder(&self, _cols: ColumnsMut) -> Result<Self::Encoder, String> {
         panic!("TODO")
     }
 }

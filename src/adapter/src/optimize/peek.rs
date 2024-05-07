@@ -100,6 +100,10 @@ impl Optimizer {
     pub fn index_id(&self) -> GlobalId {
         self.index_id
     }
+
+    pub fn config(&self) -> &OptimizerConfig {
+        &self.config
+    }
 }
 
 // A bogey `Debug` implementation that hides fields. This is needed to make the
@@ -275,7 +279,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // Set the `as_of` and `until` timestamps for the dataflow.
         df_desc.set_as_of(timestamp_ctx.antichain());
 
-        // Use the the opportunity to name an `until` frontier that will prevent
+        // Use the opportunity to name an `until` frontier that will prevent
         // work we needn't perform. By default, `until` will be
         // `Antichain::new()`, which prevents no updates and is safe.
         //
@@ -365,7 +369,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             _ => {
                 // Ensure all expressions are normalized before finalizing.
                 for build in df_desc.objects_to_build.iter_mut() {
-                    normalize_lets(&mut build.plan.0)?
+                    normalize_lets(&mut build.plan.0, &self.config.features)?
                 }
 
                 // Finalize the dataflow. This includes:

@@ -57,6 +57,7 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
+use serde::{Serialize, Serializer};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -100,11 +101,7 @@ impl<T: PartialEq> PartialEq for Trace<T> {
 
         // Intentionally use HollowBatches for this comparison so we ignore
         // differences in spine layers.
-        let (mut self_batches, mut other_batches) = (Vec::new(), Vec::new());
-        self.map_batches(|b| self_batches.push(b));
-        other.map_batches(|b| other_batches.push(b));
-
-        self_batches == other_batches
+        self.batches().eq(other.batches())
     }
 }
 
@@ -117,11 +114,21 @@ impl<T: Timestamp + Lattice> Default for Trace<T> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ThinSpineBatch<T> {
     pub(crate) level: usize,
     pub(crate) desc: Description<T>,
     pub(crate) parts: Vec<SpineId>,
+    /// NB: this exists to validate legacy batch bounds during the migration;
+    /// it can be deleted once the roundtrip_structure flag is permanently rolled out.
+    pub(crate) descs: Vec<Description<T>>,
+}
+
+impl<T: PartialEq> PartialEq for ThinSpineBatch<T> {
+    fn eq(&self, other: &Self) -> bool {
+        // Ignore the temporary descs vector when comparing for equality.
+        (self.level, &self.desc, &self.parts).eq(&(other.level, &other.desc, &other.parts))
+    }
 }
 
 /// This is a "flattened" representation of a Trace. Goals:
@@ -181,6 +188,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                         level,
                         desc: id_batch.batch.desc.clone(),
                         parts: vec![push_hollow_batch(id_batch)],
+                        descs: vec![id_batch.batch.desc.clone()],
                     },
                 ),
                 SpineBatch::Fueled {
@@ -193,7 +201,8 @@ impl<T: Timestamp + Lattice> Trace<T> {
                     ThinSpineBatch {
                         level,
                         desc: desc.clone(),
-                        parts: parts.into_iter().map(&mut push_hollow_batch).collect(),
+                        parts: parts.iter().map(&mut push_hollow_batch).collect(),
+                        descs: parts.iter().map(|b| b.batch.desc.clone()).collect(),
                     },
                 ),
             };
@@ -259,23 +268,81 @@ impl<T: Timestamp + Lattice> Trace<T> {
         let mut legacy_batches: Vec<_> = legacy_batches.into_iter().map(|(k, _)| k).collect();
         legacy_batches.sort_by(|a, b| compare_chains(a.desc.lower(), b.desc.lower()).reverse());
 
-        let mut pop_batch = |id: SpineId, spine_desc: &Description<T>| -> Result<_, String> {
-            let batch = hollow_batches
-                .remove(&id)
-                .or_else(|| legacy_batches.pop())
-                .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
+        let mut pop_batch =
+            |id: SpineId, expected_desc: Option<&Description<T>>| -> Result<_, String> {
+                let mut batch = hollow_batches
+                    .remove(&id)
+                    .or_else(|| legacy_batches.pop())
+                    .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
 
-            if !PartialOrder::less_equal(spine_desc.lower(), batch.desc.lower())
-                || !PartialOrder::less_equal(batch.desc.upper(), spine_desc.upper())
-            {
-                return Err(format!(
-                    "hollow batch desc {:?} did not fall within spine batch desc {:?}",
-                    batch.desc, spine_desc
-                ));
-            }
+                let Some(expected_desc) = expected_desc else {
+                    return Ok(IdHollowBatch { id, batch });
+                };
 
-            Ok(IdHollowBatch { id, batch })
-        };
+                if expected_desc.lower() != batch.desc.lower() {
+                    return Err(format!(
+                        "hollow batch lower {:?} did not match expected lower {:?}",
+                        batch.desc.lower().elements(),
+                        expected_desc.lower().elements()
+                    ));
+                }
+
+                // Empty legacy batches are not deterministic: different nodes may split them up
+                // in different ways. For now, we rearrange them such to match the spine data.
+                if batch.parts.is_empty() && batch.runs.is_empty() && batch.len == 0 {
+                    let mut new_upper = batch.desc.upper().clone();
+
+                    // While our current batch is too small, and there's another empty batch
+                    // in the list, roll it in.
+                    while PartialOrder::less_than(&new_upper, expected_desc.upper()) {
+                        let Some(next_batch) = legacy_batches.pop() else {
+                            break;
+                        };
+                        if next_batch.parts.is_empty() {
+                            new_upper = next_batch.desc.upper().clone();
+                        } else {
+                            legacy_batches.push(next_batch);
+                            break;
+                        }
+                    }
+
+                    // If our current batch is too large, split it by the expected upper
+                    // and preserve the remainder.
+                    if PartialOrder::less_than(expected_desc.upper(), &new_upper) {
+                        legacy_batches.push(Arc::new(HollowBatch {
+                            desc: Description::new(
+                                expected_desc.upper().clone(),
+                                new_upper.clone(),
+                                batch.desc.since().clone(),
+                            ),
+                            parts: vec![],
+                            len: 0,
+                            runs: vec![],
+                        }));
+                        new_upper = expected_desc.upper().clone();
+                    }
+                    batch = Arc::new(HollowBatch {
+                        desc: Description::new(
+                            batch.desc.lower().clone(),
+                            new_upper,
+                            expected_desc.since().clone(),
+                        ),
+                        parts: vec![],
+                        len: 0,
+                        runs: vec![],
+                    })
+                }
+
+                if expected_desc.upper() != batch.desc.upper() {
+                    return Err(format!(
+                        "hollow batch upper {:?} did not match expected upper {:?}",
+                        batch.desc.upper().elements(),
+                        expected_desc.upper().elements()
+                    ));
+                }
+
+                Ok(IdHollowBatch { id, batch })
+            };
 
         let (upper, next_id) = if let Some((id, batch)) = spine_batches.last_key_value() {
             (batch.desc.upper().clone(), id.1)
@@ -291,12 +358,13 @@ impl<T: Timestamp + Lattice> Trace<T> {
             let level = batch.level;
             let batch = if batch.parts.len() == 1 {
                 let id = batch.parts.pop().expect("popping from nonempty vec");
-                SpineBatch::Merged(pop_batch(id, &batch.desc)?)
+                SpineBatch::Merged(pop_batch(id, Some(&batch.desc))?)
             } else {
                 let parts = batch
                     .parts
                     .into_iter()
-                    .map(|id| pop_batch(id, &batch.desc))
+                    .zip(batch.descs.iter().map(Some).chain(std::iter::repeat(None)))
+                    .map(|(id, desc)| pop_batch(id, desc))
                     .collect::<Result<Vec<_>, _>>()?;
                 let len = parts.iter().map(|p| (*p).batch.len).sum();
                 SpineBatch::Fueled {
@@ -359,6 +427,13 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SpineMetrics {
+    pub compact_batches: u64,
+    pub compacting_batches: u64,
+    pub noncompact_batches: u64,
+}
+
 impl<T> Trace<T> {
     pub fn since(&self) -> &Antichain<T> {
         &self.spine.since
@@ -369,42 +444,33 @@ impl<T> Trace<T> {
     }
 
     pub fn map_batches<'a, F: FnMut(&'a HollowBatch<T>)>(&'a self, mut f: F) {
-        self.spine.map_batches(move |b| match b {
-            SpineBatch::Merged(b) => f(&b.batch),
-            SpineBatch::Fueled { parts, .. } => {
-                for b in parts.iter() {
-                    f(&b.batch);
-                }
-            }
-        })
+        for batch in self.batches() {
+            f(batch);
+        }
     }
 
-    #[must_use]
-    pub fn batches(&self) -> impl IntoIterator<Item = &HollowBatch<T>> {
-        // It should be possible to do this without the Vec.
-        let mut batches = Vec::new();
-        self.map_batches(|b| batches.push(b));
-        batches
+    pub fn batches(&self) -> impl Iterator<Item = &HollowBatch<T>> {
+        self.spine
+            .spine_batches()
+            .flat_map(|b| match b {
+                SpineBatch::Merged(b) => std::slice::from_ref(b),
+                SpineBatch::Fueled { parts, .. } => parts.as_slice(),
+            })
+            .map(|b| &*b.batch)
     }
 
     pub fn num_spine_batches(&self) -> usize {
-        let mut ret = 0;
-        self.spine.map_batches(|_| ret += 1);
-        ret
+        self.spine.spine_batches().count()
     }
 
     #[cfg(test)]
     pub fn num_hollow_batches(&self) -> usize {
-        let mut ret = 0;
-        self.map_batches(|_| ret += 1);
-        ret
+        self.batches().count()
     }
 
     #[cfg(test)]
     pub fn num_updates(&self) -> usize {
-        let mut ret = 0;
-        self.map_batches(|b| ret += b.len);
-        ret
+        self.batches().map(|b| b.len).sum()
     }
 }
 
@@ -471,15 +537,16 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     pub(crate) fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
-        let mut reqs = Vec::new();
-        self.spine.map_batches(|b| match b {
-            SpineBatch::Merged(_) => {} // No-op.
-            SpineBatch::Fueled { desc, parts, .. } => reqs.push(FueledMergeReq {
-                desc: desc.clone(),
-                inputs: parts.clone(),
-            }),
-        });
-        reqs
+        self.spine
+            .spine_batches()
+            .filter_map(|b| match b {
+                SpineBatch::Merged(_) => None, // No-op.
+                SpineBatch::Fueled { desc, parts, .. } => Some(FueledMergeReq {
+                    desc: desc.clone(),
+                    inputs: parts.clone(),
+                }),
+            })
+            .collect()
     }
 
     // This is only called with the results of one `insert` and so the length of
@@ -514,6 +581,20 @@ impl<T: Timestamp + Lattice> Trace<T> {
         }
         ret
     }
+
+    pub fn spine_metrics(&self) -> SpineMetrics {
+        let mut metrics = SpineMetrics::default();
+        for batch in self.spine.spine_batches() {
+            if batch.is_compact() {
+                metrics.compact_batches += 1;
+            } else if batch.is_merging() {
+                metrics.compacting_batches += 1;
+            } else {
+                metrics.noncompact_batches += 1;
+            }
+        }
+        metrics
+    }
 }
 
 /// A log of what transitively happened during a Spine operation: e.g.
@@ -528,6 +609,16 @@ enum SpineLog<'a, T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SpineId(pub usize, pub usize);
 
+impl Serialize for SpineId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let SpineId(lo, hi) = self;
+        serializer.serialize_str(&format!("{lo}-{hi}"))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct IdHollowBatch<T> {
     pub id: SpineId,
@@ -535,7 +626,7 @@ pub struct IdHollowBatch<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum SpineBatch<T> {
+pub(crate) enum SpineBatch<T> {
     Merged(IdHollowBatch<T>),
     Fueled {
         id: SpineId,
@@ -589,6 +680,24 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 debug_assert_eq!(parts.last().map(|x| x.id.1), Some(id.1));
                 *id
             }
+        }
+    }
+
+    pub fn is_compact(&self) -> bool {
+        // This definition is extremely likely to change, but for now, we consider a batch
+        // "compact" if it's a merged batch of a single run.
+        match self {
+            SpineBatch::Merged(b) => b.batch.runs.is_empty(),
+            SpineBatch::Fueled { .. } => false,
+        }
+    }
+
+    pub fn is_merging(&self) -> bool {
+        // We can't currently tell if a fueled merge is in progress or dropped on the floor,
+        // but for now we assume that it is active.
+        match self {
+            SpineBatch::Merged(_) => false,
+            SpineBatch::Fueled { .. } => true,
         }
     }
 
@@ -812,7 +921,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FuelingMerge<T> {
     pub(crate) since: Antichain<T>,
     pub(crate) remaining_work: usize,
@@ -983,17 +1092,12 @@ struct Spine<T> {
 }
 
 impl<T> Spine<T> {
-    pub fn map_batches<'a, F: FnMut(&'a SpineBatch<T>)>(&'a self, mut f: F) {
-        for batch in self.merging.iter().rev() {
-            match batch {
-                MergeState::Double(batch1, batch2, _) => {
-                    f(batch1);
-                    f(batch2);
-                }
-                MergeState::Single(batch) => f(batch),
-                _ => {}
-            }
-        }
+    pub fn spine_batches(&self) -> impl Iterator<Item = &SpineBatch<T>> {
+        self.merging.iter().rev().flat_map(|m| match m {
+            MergeState::Vacant => None.into_iter().chain(None.into_iter()),
+            MergeState::Single(a) => Some(a).into_iter().chain(None.into_iter()),
+            MergeState::Double(a, b, _) => Some(a).into_iter().chain(Some(b).into_iter()),
+        })
     }
 }
 
@@ -1541,10 +1645,10 @@ pub mod datadriven {
 
     pub fn batches(datadriven: &TraceState, _args: DirectiveArgs) -> Result<String, anyhow::Error> {
         let mut s = String::new();
-        datadriven.trace.spine.map_batches(|b| {
+        for b in datadriven.trace.spine.spine_batches() {
             s.push_str(b.describe(true).as_str());
             s.push('\n');
-        });
+        }
         Ok(s)
     }
 
@@ -1634,8 +1738,9 @@ pub(crate) mod tests {
             (
                 any::<Option<T>>(),
                 proptest::collection::vec(any_hollow_batch::<T>(), num_batches),
+                any::<bool>(),
             ),
-            |(since, mut batches)| {
+            |(since, mut batches, roundtrip_structure)| {
                 let mut trace = Trace::<T>::default();
                 trace.downgrade_since(&since.map_or_else(Antichain::new, Antichain::from_elem));
 
@@ -1656,6 +1761,7 @@ pub(crate) mod tests {
                     lower = batch.desc.upper().clone();
                     let _merge_req = trace.push_batch(batch);
                 }
+                trace.roundtrip_structure = roundtrip_structure;
                 trace
             },
         )

@@ -34,7 +34,7 @@ pub async fn run_compile_descriptors(
         }
     }
     let protoc = match env::var_os("PROTOC") {
-        None => protobuf_src::protoc(),
+        None => mz_build_tools::protoc(),
         Some(protoc) => PathBuf::from(protoc),
     };
     let output_path = state.temp_path.join(&output);

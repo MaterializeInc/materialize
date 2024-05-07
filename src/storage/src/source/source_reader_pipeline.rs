@@ -57,6 +57,7 @@ use mz_timely_util::builder_async::{
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
@@ -293,14 +294,14 @@ where
     let name = format!("SourceGenericStats({})", source_id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let (mut data_output, data) = builder.new_output();
-    let (progress_output, derived_progress) = builder.new_output();
+    let (mut data_output, data) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (progress_output, derived_progress) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut data_input = builder.new_input_for_many(
         &input_data.inner,
         Pipeline,
         [&data_output, &progress_output],
     );
-    let (mut health_output, derived_health) = builder.new_output();
+    let (mut health_output, derived_health) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     builder.build(move |mut caps| async move {
         let health_cap = caps.pop().unwrap();
@@ -420,7 +421,7 @@ impl futures::Stream for RemapClock {
 fn remap_operator<G, FromTime, M>(
     scope: &G,
     config: RawSourceCreationConfig,
-    mut source_upper_rx: InstrumentedUnboundedReceiver<Event<FromTime, Infallible>, M>,
+    mut source_upper_rx: InstrumentedUnboundedReceiver<Event<FromTime, Vec<Infallible>>, M>,
     remap_relation_desc: RelationDesc,
 ) -> (Collection<G, FromTime, Diff>, PressOnDropButton)
 where
@@ -453,7 +454,7 @@ where
 
     let operator_name = format!("remap({})", id);
     let mut remap_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut remap_output, remap_stream) = remap_op.new_output();
+    let (mut remap_output, remap_stream) = remap_op.new_output::<CapacityContainerBuilder<_>>();
 
     let button = remap_op.build(move |capabilities| async move {
         if !active_worker {
@@ -567,11 +568,11 @@ fn reclock_operator<G, FromTime, D, M>(
     mut source_rx: InstrumentedUnboundedReceiver<
         Event<
             FromTime,
-            (
+            Vec<(
                 (usize, Result<SourceMessage, SourceReaderError>),
                 FromTime,
                 D,
-            ),
+            )>,
         >,
         M,
     >,
@@ -896,15 +897,60 @@ where
             if as_of.iter().all(|t| !upper.less_equal(t)) {
                 let committed_upper = frontiers[1].frontier();
                 if as_of.iter().all(|t| !committed_upper.less_equal(t)) {
-                    // Compute the frontier of the binding that is *less than* the committed upper.
-                    let idx =
-                        ready_times.partition_point(|(_, t, _)| !committed_upper.less_than(t));
-                    let updates = ready_times
-                        .drain(0..idx)
-                        .map(|(from_time, _, diff)| (from_time, diff));
-                    source_upper.update_iter(updates);
-
-                    tx.send_replace(source_upper.frontier().to_owned());
+                    // We have committed this source up until `committed_upper`. Because we have
+                    // required that IntoTime is a total order this will be either a singleton set
+                    // or the empty set.
+                    //
+                    // * Case 1: committed_upper is the empty set {}
+                    //
+                    // There won't be any future IntoTime timestamps that we will produce so we can
+                    // provide feedback to the source that it can forget about everything.
+                    //
+                    // * Case 2: committed_upper is a singleton set {t_next}
+                    //
+                    // We know that t_next cannot be the minimum timestamp because we have required
+                    // that all times of the as_of frontier are not beyond some time of
+                    // committed_upper. Therefore t_next has a predecessor timestamp t_prev.
+                    //
+                    // We don't know what remap[t_next] is yet, but we do know that we will have to
+                    // emit all source updates `u: remap[t_prev] <= time(u) <= remap[t_next]`.
+                    // Since `t_next` is the minimum undetermined timestamp and we know that t1 <=
+                    // t2 => remap[t1] <= remap[t2] we know that we will never need any source
+                    // updates `u: !(remap[t_prev] <= time(u))`.
+                    //
+                    // Therefore we can provide feedback to the source that it can forget about any
+                    // updates that are not beyond remap[t_prev].
+                    //
+                    // Important: We are *NOT* saying that the source can *compact* its data using
+                    // remap[t_prev] as the compaction frontier. If the source were to compact its
+                    // collection to remap[t_prev] we would lose the distinction between updates
+                    // that happened *at* t_prev versus updates that happened ealier and were
+                    // advanced to t_prev. If the source needs to communicate a compaction frontier
+                    // upstream then the specific source implementation needs to further adjust the
+                    // reclocked committed_upper and calculate a suitable compaction frontier in
+                    // the same way we adjust uppers of collections in the controller with the
+                    // LagWriteFrontier read policy.
+                    //
+                    // == What about IntoTime times that are general lattices?
+                    //
+                    // Reversing the upper for a general lattice is much more involved but it boils
+                    // down to computing the meet of all the times in `committed_upper` and then
+                    // treating that as `t_next` (I think). Until we need to deal with that though
+                    // we can just assume TotalOrder.
+                    let reclocked_upper = match committed_upper.as_option() {
+                        Some(t_next) => {
+                            let idx = ready_times.partition_point(|(_, t, _)| t < t_next);
+                            let updates = ready_times
+                                .drain(0..idx)
+                                .map(|(from_time, _, diff)| (from_time, diff));
+                            source_upper.update_iter(updates);
+                            // At this point source_upper contains all updates that are less than
+                            // t_next, which is equal to remap[t_prev]
+                            source_upper.frontier().to_owned()
+                        }
+                        None => Antichain::new(),
+                    };
+                    tx.send_replace(reclocked_upper);
                 }
             }
 

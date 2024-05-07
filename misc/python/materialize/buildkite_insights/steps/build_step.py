@@ -22,6 +22,7 @@ from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
 class BuildItemOutcomeBase:
     step_key: str
     build_number: int
+    commit_hash: str
     created_at: datetime
     duration_in_min: float | None
     passed: bool
@@ -108,6 +109,7 @@ def _extract_build_step_data_from_build(
 
         id = build_data["id"]
         build_number = build_data["number"]
+        commit_hash = build_data["commit"]
         created_at = datetime.fromisoformat(job["created_at"])
         build_step_key = job["step_key"]
         parallel_job_index = job.get("parallel_group_index")
@@ -133,6 +135,7 @@ def _extract_build_step_data_from_build(
             step_key=build_step_key,
             parallel_job_index=parallel_job_index,
             build_number=build_number,
+            commit_hash=commit_hash,
             created_at=created_at,
             duration_in_min=duration_in_min,
             passed=job_passed,
@@ -248,6 +251,7 @@ def _step_outcomes_to_job_outcome(
         ids=ids,
         step_key=any_execution.step_key,
         build_number=any_execution.build_number,
+        commit_hash=any_execution.commit_hash,
         created_at=min_created_at,
         duration_in_min=sum_duration_in_min,
         passed=all_passed,

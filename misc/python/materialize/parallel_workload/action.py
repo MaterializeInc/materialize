@@ -10,6 +10,7 @@
 import datetime
 import json
 import random
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -17,6 +18,9 @@ from typing import TYPE_CHECKING
 
 import pg8000
 import requests
+import websocket
+from pg8000 import Connection
+from pg8000.exceptions import InterfaceError
 from pg8000.native import identifier
 
 import materialize.parallel_workload.database
@@ -57,12 +61,52 @@ from materialize.parallel_workload.database import (
     View,
     WebhookSource,
 )
-from materialize.parallel_workload.executor import Executor
+from materialize.parallel_workload.executor import Executor, Http
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.sqlsmith import known_errors
 
 if TYPE_CHECKING:
     from materialize.parallel_workload.worker import Worker
+
+
+def ws_connect(ws: websocket.WebSocket, host, port, user: str) -> tuple[int, int]:
+    thread_name = threading.current_thread().getName()
+    ws.connect(f"ws://{host}:{port}/api/experimental/sql", origin=thread_name)
+    ws.send(
+        json.dumps(
+            {
+                "user": user,
+                "password": "",
+                "options": {
+                    "application_name": thread_name,
+                    "max_query_result_size": "1000000",
+                    "cluster": "quickstart",
+                    "database": "materialize",
+                    "search_path": "public",
+                },
+            }
+        )
+    )
+    ws_conn_id = -1
+    ws_secret_key = -1
+    ws_ready = False
+    while True:
+        result = json.loads(ws.recv())
+        if result["type"] == "ParameterStatus":
+            continue
+        elif result["type"] == "BackendKeyData":
+            ws_conn_id = result["payload"]["conn_id"]
+            ws_secret_key = result["payload"]["secret_key"]
+        elif result["type"] == "ReadyForQuery":
+            ws_ready = True
+        elif result["type"] == "Notice":
+            assert "connected to Materialize" in result["payload"]["message"], result
+            break
+        else:
+            assert False, result
+    assert ws_ready
+    return (ws_conn_id, ws_secret_key)
+
 
 # TODO: CASCADE in DROPs, keep track of what will be deleted
 class Action:
@@ -80,9 +124,10 @@ class Action:
         result = [
             "permission denied for",
             "must be owner of",
-            "network error",  # #21954, remove when fixed when fixed
+            "network error",  # TODO: Remove when #21954 is fixed
+            "HTTP read timeout",
         ]
-        if exe.db.complexity == Complexity.DDL:
+        if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
                 [
                     "query could not complete",
@@ -92,6 +137,7 @@ class Action:
                     "unknown catalog item",  # Expected, see #20381
                     "was concurrently dropped",  # role was dropped
                     "unknown cluster",  # cluster was dropped
+                    "unknown schema",  # schema was dropped
                     "the transaction's active cluster has been dropped",  # cluster was dropped
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see #24367
                 ]
@@ -109,9 +155,14 @@ class Action:
         ):
             result.extend(
                 [
+                    # pg8000
                     "network error",
                     "Can't create a connection to host",
                     "Connection refused",
+                    # websockets
+                    "Connection to remote host was lost.",
+                    "socket is already closed.",
+                    "Broken pipe",
                 ]
             )
         if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
@@ -127,6 +178,11 @@ class Action:
 class FetchAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                "is not of expected type",  # TODO(def-) Remove when #26549 is fixed
+            ]
+        )
         if exe.db.complexity == Complexity.DDL:
             result.extend(
                 [
@@ -138,26 +194,34 @@ class FetchAction(Action):
 
     def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
+        # Unsupported via this API
         # See https://github.com/MaterializeInc/materialize/issues/20474
-        exe.rollback() if self.rng.choice([True, False]) else exe.commit()
-        query = f"DECLARE c CURSOR FOR SUBSCRIBE {obj}"
-        exe.execute(query)
+        exe.rollback(http=Http.NO) if self.rng.choice([True, False]) else exe.commit(
+            http=Http.NO
+        )
+        query = f"SUBSCRIBE {obj}"
+        if self.rng.choice([True, False]):
+            envelope = "UPSERT" if self.rng.choice([True, False]) else "DEBEZIUM"
+            columns = self.rng.sample(obj.columns, len(obj.columns))
+            key = ", ".join(column.name(True) for column in columns)
+            query += f" ENVELOPE {envelope} (KEY ({key}))"
+        exe.execute(f"DECLARE c CURSOR FOR {query}", http=Http.NO)
         while True:
             rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
             timeout = self.rng.randrange(10)
             query = f"FETCH {rows} c WITH (timeout='{timeout}s')"
-            exe.execute(query)
-            exe.cur.fetchall()
+            exe.execute(query, http=Http.NO, fetch=True)
             if self.rng.choice([True, False]):
                 break
-        exe.rollback() if self.rng.choice([True, False]) else exe.commit()
+        exe.rollback(http=Http.NO) if self.rng.choice([True, False]) else exe.commit(
+            http=Http.NO
+        )
         return True
 
 
 class SelectOneAction(Action):
     def run(self, exe: Executor) -> bool:
-        exe.execute("SELECT 1", explainable=True)
-        exe.cur.fetchall()
+        exe.execute("SELECT 1", explainable=True, http=Http.RANDOM, fetch=True)
         return True
 
 
@@ -224,8 +288,7 @@ class SelectAction(Action):
 
         query += " LIMIT 1"
 
-        exe.execute(query, explainable=True)
-        exe.cur.fetchall()
+        exe.execute(query, explainable=True, http=Http.RANDOM, fetch=True)
         return True
 
 
@@ -297,87 +360,10 @@ class SQLsmithAction(Action):
             self.composition.silent = False
 
     def run(self, exe: Executor) -> bool:
-        if exe.db.fast_startup:
-            return False
-
         while not self.queries:
             self.refill_sqlsmith(exe)
         query = self.queries.pop()
-        exe.execute(query, explainable=True)
-        exe.cur.fetchall()
-        return True
-
-
-class HttpSelectAction(Action):
-    def run(self, exe: Executor) -> bool:
-        obj = self.rng.choice(exe.db.db_objects())
-        column = self.rng.choice(obj.columns)
-        obj2 = self.rng.choice(exe.db.db_objects_without_views())
-        obj_name = str(obj)
-        obj2_name = str(obj2)
-        columns = [
-            c
-            for c in obj2.columns
-            if c.data_type == column.data_type and c.data_type != TextTextMap
-        ]
-
-        join = obj_name != obj2_name and obj not in exe.db.views and columns
-
-        if join:
-            all_columns = list(obj.columns) + list(obj2.columns)
-        else:
-            all_columns = obj.columns
-
-        if self.rng.choice([True, False]):
-            expressions = ", ".join(
-                str(column)
-                for column in self.rng.sample(
-                    all_columns, k=self.rng.randint(1, len(all_columns))
-                )
-            )
-            if self.rng.choice([True, False]):
-                column1 = self.rng.choice(all_columns)
-                column2 = self.rng.choice(all_columns)
-                column3 = self.rng.choice(all_columns)
-                fns = ["COUNT"]
-                if column1.data_type in NUMBER_TYPES:
-                    fns.extend(["SUM", "AVG", "MAX", "MIN"])
-                window_fn = self.rng.choice(fns)
-                expressions += f", {window_fn}({column1}) OVER (PARTITION BY {column2} ORDER BY {column3})"
-        else:
-            expressions = "*"
-
-        query = f"SELECT {expressions} FROM {obj_name} "
-
-        if join:
-            column2 = self.rng.choice(columns)
-            query += f"JOIN {obj2_name} ON {column} = {column2}"
-
-        query += " LIMIT 1"
-
-        try:
-            result = requests.post(
-                f"http://{exe.db.host}:{exe.db.ports['http']}/api/sql",
-                data=json.dumps({"query": query}),
-                headers={"content-type": "application/json"},
-                timeout=self.rng.uniform(0, 10),
-            )
-            print(result.status_code)
-            if result.status_code != 200:
-                raise QueryError(
-                    f"{result.status_code}: {result.text}", f"HTTP query: {query}"
-                )
-        except requests.exceptions.ReadTimeout:
-            return False
-        except requests.exceptions.ConnectionError:
-            # Expected when Mz is killed
-            if exe.db.scenario not in (
-                Scenario.Kill,
-                Scenario.TogglePersistTxn,
-                Scenario.BackupRestore,
-            ):
-                raise
-
+        exe.execute(query, explainable=True, http=Http.RANDOM, fetch=True)
         return True
 
 
@@ -389,6 +375,8 @@ class CopyToS3Action(Action):
                 "in the same timedomain",
                 'is not allowed from the "mz_introspection" cluster',
                 "copy has been terminated because underlying relation",
+                "Relation contains unimplemented arrow types",
+                "Cannot encode the following columns/types",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -405,18 +393,14 @@ class CopyToS3Action(Action):
         with exe.db.lock:
             location = exe.db.s3_path
             exe.db.s3_path += 1
-        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv')"
+        format = "csv" if self.rng.choice([True, False]) else "parquet"
+        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
 
-        exe.execute(query, explainable=False)
+        exe.execute(query, explainable=False, http=Http.NO, fetch=False)
         return True
 
 
 class InsertAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "cannot be run inside a transaction block",
-        ] + super().errors_to_ignore(exe)
-
     def run(self, exe: Executor) -> bool:
         table = None
         if exe.insert_table is not None:
@@ -446,17 +430,52 @@ class InsertAction(Action):
             )
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        if self.rng.choice([True, False]):
-            returning_exprs = []
-            if self.rng.choice([True, False]):
-                returning_exprs.append("0")
-            elif self.rng.choice([True, False]):
-                returning_exprs.append("*")
+        exe.execute(query, http=Http.RANDOM)
+        table.num_rows += len(column_values)
+        exe.insert_table = table.table_id
+        return True
+
+
+class InsertReturningAction(Action):
+    def run(self, exe: Executor) -> bool:
+        table = None
+        if exe.insert_table is not None:
+            for t in exe.db.tables:
+                if t.table_id == exe.insert_table:
+                    table = t
+                    if table.num_rows >= MAX_ROWS:
+                        exe.commit() if self.rng.choice(
+                            [True, False]
+                        ) else exe.rollback()
+                        table = None
+                    break
             else:
-                returning_exprs.append(column_names)
-            if returning_exprs:
-                query += f" RETURNING {', '.join(returning_exprs)}"
-        exe.execute(query)
+                exe.commit() if self.rng.choice([True, False]) else exe.rollback()
+        if not table:
+            tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
+            if not tables:
+                return False
+            table = self.rng.choice(tables)
+
+        column_names = ", ".join(column.name(True) for column in table.columns)
+        column_values = []
+        max_rows = min(100, MAX_ROWS - table.num_rows)
+        for i in range(self.rng.randrange(1, max_rows + 1)):
+            column_values.append(
+                ", ".join(column.value(self.rng, True) for column in table.columns)
+            )
+        all_column_values = ", ".join(f"({v})" for v in column_values)
+        query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
+        returning_exprs = []
+        if self.rng.choice([True, False]):
+            returning_exprs.append("0")
+        elif self.rng.choice([True, False]):
+            returning_exprs.append("*")
+        else:
+            returning_exprs.append(column_names)
+        if returning_exprs:
+            query += f" RETURNING {', '.join(returning_exprs)}"
+        exe.execute(query, http=Http.RANDOM)
         table.num_rows += len(column_values)
         exe.insert_table = table.table_id
         return True
@@ -511,7 +530,7 @@ class UpdateAction(Action):
             query += f"map_length({column1.name(True)}) = map_length({column1.value(self.rng, True)})"
         else:
             query += f"{column1.name(True)} = {column1.value(self.rng, True)}"
-        exe.execute(query)
+        exe.execute(query, http=Http.RANDOM)
         exe.insert_table = table.table_id
         return True
 
@@ -535,7 +554,7 @@ class DeleteAction(Action):
                     query += (
                         f" AND {column.name(True)} = {column.value(self.rng, True)}"
                     )
-        exe.execute(query)
+        exe.execute(query, http=Http.RANDOM)
         exe.commit()
         result = exe.cur.rowcount
         table.num_rows -= result
@@ -552,7 +571,7 @@ class CommentAction(Action):
         else:
             query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng)}'"
 
-        exe.execute(query)
+        exe.execute(query, http=Http.RANDOM)
         return True
 
 
@@ -577,7 +596,7 @@ class CreateIndexAction(Action):
             index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
         query = f"CREATE INDEX {index} ON {obj} ({index_str})"
-        exe.execute(query)
+        exe.execute(query, http=Http.RANDOM)
         with exe.db.lock:
             exe.db.indexes.add(index)
         return True
@@ -594,7 +613,7 @@ class DropIndexAction(Action):
                 return False
 
             query = f"DROP INDEX {index}"
-            exe.execute(query)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.indexes.remove(index)
             return True
 
@@ -632,7 +651,7 @@ class DropTableAction(Action):
                 return False
 
             query = f"DROP TABLE {table}"
-            exe.execute(query)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.tables.remove(table)
         return True
 
@@ -650,7 +669,8 @@ class RenameTableAction(Action):
             table.rename += 1
             try:
                 exe.execute(
-                    f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}"
+                    f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}",
+                    # http=Http.RANDOM,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             except:
                 table.rename -= 1
@@ -674,7 +694,8 @@ class RenameViewAction(Action):
             view.rename += 1
             try:
                 exe.execute(
-                    f"ALTER {'MATERIALIZED VIEW' if view.materialized else 'VIEW'} {old_name} RENAME TO {identifier(view.name())}"
+                    f"ALTER {'MATERIALIZED VIEW' if view.materialized else 'VIEW'} {old_name} RENAME TO {identifier(view.name())}",
+                    # http=Http.RANDOM,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             except:
                 view.rename -= 1
@@ -698,7 +719,8 @@ class RenameSinkAction(Action):
             sink.rename += 1
             try:
                 exe.execute(
-                    f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}"
+                    f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}",
+                    # http=Http.RANDOM,  # Fails
                 )
             except:
                 sink.rename -= 1
@@ -736,7 +758,7 @@ class DropDatabaseAction(Action):
                 return False
 
             query = f"DROP DATABASE {db} RESTRICT"
-            exe.execute(query)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.dbs.remove(db)
         return True
 
@@ -771,7 +793,7 @@ class DropSchemaAction(Action):
                 return False
 
             query = f"DROP SCHEMA {schema}"
-            exe.execute(query)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.schemas.remove(schema)
         return True
 
@@ -794,7 +816,8 @@ class RenameSchemaAction(Action):
             schema.rename += 1
             try:
                 exe.execute(
-                    f"ALTER SCHEMA {old_name} RENAME TO {identifier(schema.name())}"
+                    f"ALTER SCHEMA {old_name} RENAME TO {identifier(schema.name())}",
+                    # http=Http.RANDOM,  # Fails
                 )
             except:
                 schema.rename -= 1
@@ -866,6 +889,66 @@ class CommitRollbackAction(Action):
         return True
 
 
+class FlipFlagsAction(Action):
+    def __init__(
+        self,
+        rng: random.Random,
+        composition: Composition | None,
+    ):
+        super().__init__(rng, composition)
+
+        BOOLEAN_FLAG_VALUES = ["TRUE", "FALSE"]
+
+        self.flags_with_values: dict[str, list[str]] = dict()
+        self.flags_with_values["persist_roundtrip_spine"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values[
+            "enable_variadic_left_join_lowering"
+        ] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
+
+    def run(self, exe: Executor) -> bool:
+        flag_name = self.rng.choice(list(self.flags_with_values.keys()))
+        flag_value = self.rng.choice(self.flags_with_values[flag_name])
+
+        conn = None
+
+        try:
+            conn = self.create_system_connection(exe)
+            self.flip_flag(conn, flag_name, flag_value)
+            return True
+        except InterfaceError:
+            if conn is not None:
+                conn.close()
+
+            # ignore it
+            return False
+
+    def create_system_connection(
+        self, exe: Executor, num_attempts: int = 10
+    ) -> Connection:
+        try:
+            conn = pg8000.connect(
+                host=exe.db.host,
+                port=exe.db.ports["mz_system"],
+                user="mz_system",
+                database="materialize",
+            )
+            conn.autocommit = True
+            return conn
+        except:
+            if num_attempts == 0:
+                raise
+            else:
+                time.sleep(1)
+                return self.create_system_connection(exe, num_attempts - 1)
+
+    def flip_flag(self, conn: Connection, flag_name: str, flag_value: str) -> None:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"ALTER SYSTEM SET {flag_name} = {flag_value};",
+            )
+
+
 class CreateViewAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
@@ -917,7 +1000,7 @@ class DropViewAction(Action):
                 query = f"DROP MATERIALIZED VIEW {view}"
             else:
                 query = f"DROP VIEW {view}"
-            exe.execute(query)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.views.remove(view)
         return True
 
@@ -954,7 +1037,7 @@ class DropRoleAction(Action):
 
             query = f"DROP ROLE {role}"
             try:
-                exe.execute(query)
+                exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1006,7 +1089,7 @@ class DropClusterAction(Action):
 
             query = f"DROP CLUSTER {cluster}"
             try:
-                exe.execute(query)
+                exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1039,7 +1122,8 @@ class SwapClusterAction(Action):
 
             if self.rng.choice([True, False]):
                 exe.execute(
-                    f"ALTER CLUSTER {cluster1} SWAP WITH {identifier(cluster2.name())}"
+                    f"ALTER CLUSTER {cluster1} SWAP WITH {identifier(cluster2.name())}",
+                    # http=Http.RANDOM,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             else:
                 try:
@@ -1074,7 +1158,7 @@ class SetClusterAction(Action):
                 return False
             cluster = self.rng.choice(exe.db.clusters)
         query = f"SET CLUSTER = {cluster}"
-        exe.execute(query)
+        exe.execute(query, http=Http.RANDOM)
         return True
 
 
@@ -1135,7 +1219,7 @@ class DropClusterReplicaAction(Action):
 
             query = f"DROP CLUSTER REPLICA {cluster}.{replica}"
             try:
-                exe.execute(query)
+                exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1164,7 +1248,7 @@ class GrantPrivilegesAction(Action):
 
             query = f"GRANT {privilege} ON {table} TO {role}"
             try:
-                exe.execute(query)
+                exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1193,7 +1277,7 @@ class RevokePrivilegesAction(Action):
 
             query = f"REVOKE {privilege} ON {table} FROM {role}"
             try:
-                exe.execute(query)
+                exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
                 # expected, see #20465
                 if (
@@ -1229,6 +1313,12 @@ class ReconnectAction(Action):
                 user = "materialize"
             conn = exe.cur._c
 
+        if exe.ws and exe.use_ws:
+            try:
+                exe.ws.close()
+            except:
+                pass
+
         try:
             exe.cur.close()
         except:
@@ -1239,6 +1329,23 @@ class ReconnectAction(Action):
             pass
 
         NUM_ATTEMPTS = 20
+        if exe.ws:
+            threading.current_thread().getName()
+            for i in range(NUM_ATTEMPTS):
+                exe.ws = websocket.WebSocket()
+                try:
+                    ws_conn_id, ws_secret_key = ws_connect(
+                        exe.ws, host, exe.db.ports["http"], user
+                    )
+                except Exception as e:
+                    if i < NUM_ATTEMPTS - 1:
+                        time.sleep(1)
+                        continue
+                    raise QueryError(str(e), "WS connect")
+                if exe.use_ws:
+                    exe.pg_pid = ws_conn_id
+                break
+
         for i in range(NUM_ATTEMPTS):
             try:
                 conn = pg8000.connect(
@@ -1249,7 +1356,8 @@ class ReconnectAction(Action):
                 exe.cur = cur
                 exe.set_isolation("SERIALIZABLE")
                 cur.execute("SELECT pg_backend_pid()")
-                exe.pg_pid = cur.fetchall()[0][0]
+                if not exe.use_ws:
+                    exe.pg_pid = cur.fetchall()[0][0]
             except Exception as e:
                 if i < NUM_ATTEMPTS - 1 and (
                     "network error" in str(e)
@@ -1293,7 +1401,9 @@ class CancelAction(Action):
                 break
         assert worker
         exe.execute(
-            f"SELECT pg_cancel_backend({pid})", extra_info=f"Canceling {worker}"
+            f"SELECT pg_cancel_backend({pid})",
+            extra_info=f"Canceling {worker}",
+            http=Http.RANDOM,
         )
         # Sleep less often to work around #22228 / #2392
         time.sleep(self.rng.uniform(1, 10))
@@ -1441,7 +1551,7 @@ class DropWebhookSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source}"
-            exe.execute(query)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.webhook_sources.remove(source)
         return True
 
@@ -1503,7 +1613,7 @@ class DropKafkaSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source}"
-            exe.execute(query)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.kafka_sources.remove(source)
             source.executor.mz_conn.close()
         return True
@@ -1570,7 +1680,7 @@ class DropMySqlSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source.executor.source}"
-            exe.execute(query)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.mysql_sources.remove(source)
             source.executor.mz_conn.close()
         return True
@@ -1637,7 +1747,7 @@ class DropPostgresSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source.executor.source}"
-            exe.execute(query)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.postgres_sources.remove(source)
             source.executor.mz_conn.close()
         return True
@@ -1694,7 +1804,7 @@ class DropKafkaSinkAction(Action):
                 return False
 
             query = f"DROP SINK {sink}"
-            exe.execute(query)
+            exe.execute(query, http=Http.RANDOM)
             exe.db.kafka_sinks.remove(sink)
         return True
 
@@ -1802,12 +1912,12 @@ read_action_list = ActionList(
     [
         (SelectAction, 100),
         (SelectOneAction, 1),
-        (SQLsmithAction, 30),
-        (HttpSelectAction, 100),
+        # (SQLsmithAction, 30),  # Questionable use
         (CopyToS3Action, 100),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
+        (FlipFlagsAction, 2),
     ],
     autocommit=False,
 )
@@ -1817,6 +1927,7 @@ fetch_action_list = ActionList(
         (FetchAction, 30),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (ReconnectAction, 1),
+        (FlipFlagsAction, 2),
     ],
     autocommit=False,
 )
@@ -1830,6 +1941,7 @@ write_action_list = ActionList(
         (CommitRollbackAction, 10),
         (ReconnectAction, 1),
         (SourceInsertAction, 50),
+        (FlipFlagsAction, 2),
     ],
     autocommit=False,
 )
@@ -1838,9 +1950,11 @@ dml_nontrans_action_list = ActionList(
     [
         (DeleteAction, 10),
         (UpdateAction, 10),
+        (InsertReturningAction, 10),
         (CommentAction, 5),
         (SetClusterAction, 1),
         (ReconnectAction, 1),
+        (FlipFlagsAction, 2),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,  # deletes can't be inside of transactions
@@ -1884,6 +1998,7 @@ ddl_action_list = ActionList(
         (RenameViewAction, 10),
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
+        (FlipFlagsAction, 2),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,

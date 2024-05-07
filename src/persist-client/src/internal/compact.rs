@@ -28,7 +28,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
-use tracing::{debug, debug_span, trace, warn, Instrument, Span};
+use tracing::{debug, debug_span, error, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, PartDeletes};
@@ -40,7 +40,7 @@ use crate::internal::machine::Machine;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::iter::Consolidator;
+use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.
@@ -72,6 +72,7 @@ pub struct CompactRes<T> {
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
     pub(crate) compaction_yield_after_n_updates: usize,
+    pub(crate) split_old_runs: bool,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
 }
@@ -79,12 +80,19 @@ pub struct CompactConfig {
 impl CompactConfig {
     /// Initialize the compaction config from Persist configuration.
     pub fn new(value: &PersistConfig, writer_id: &WriterId) -> Self {
-        CompactConfig {
+        let mut ret = CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
+            split_old_runs: SPLIT_OLD_RUNS.get(&value.configs),
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, writer_id),
-        }
+        };
+        // Use compaction as a method of getting inline writes out of state, to
+        // make room for more inline writes. We could instead do this at the end
+        // of compaction by flushing out the batch, but doing it here based on
+        // the config allows BatchBuilder to do its normal pipelining of writes.
+        ret.batch.inline_writes_single_max_bytes = 0;
+        ret
     }
 }
 
@@ -263,7 +271,7 @@ where
         // writer that generated the compaction request / maintenance. this machine has a
         // spine structure that generated the request, so it has a much better chance of
         // merging and committing the result than a machine kept up-to-date through state
-        // diffs, which may have a different spine structure less amendable to merging.
+        // diffs, which may have a different spine structure less amenable to merging.
         let send = new_compaction_sender.try_send((
             Instant::now(),
             req,
@@ -379,7 +387,11 @@ where
                             part_deletes.add(&part);
                         }
                         let () = part_deletes
-                            .delete(&blob, &metrics.retries.external.compaction_noop_delete)
+                            .delete(
+                                &blob,
+                                machine.shard_id(),
+                                &metrics.retries.external.compaction_noop_delete,
+                            )
                             .await;
                         Ok(apply_merge_result)
                     }
@@ -685,7 +697,7 @@ where
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
             Arc::clone(&blob),
-            isolated_runtime,
+            Arc::clone(&isolated_runtime),
             shard_id.clone(),
             cfg.version.clone(),
             desc.since().clone(),
@@ -694,11 +706,18 @@ where
         );
 
         let mut consolidator = Consolidator::new(
+            format!(
+                "{}[lower={:?},upper={:?}]",
+                shard_id,
+                desc.lower().elements(),
+                desc.upper().elements()
+            ),
             Arc::clone(&metrics),
             FetchBatchFilter::Compaction {
                 since: desc.since().clone(),
             },
             prefetch_budget_bytes,
+            cfg.split_old_runs,
         );
 
         for (desc, parts) in runs {
@@ -736,12 +755,31 @@ where
             }
             tokio::task::yield_now().await;
         }
-        let batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
-        let hollow_batch = batch.into_hollow_batch();
+        let mut batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
+
+        // We use compaction as a method of getting inline writes out of state,
+        // to make room for more inline writes. This happens in
+        // `CompactConfig::new` by overriding the inline writes threshold
+        // config. This is a bit action-at-a-distance, so defensively detect if
+        // this breaks here and log and correct it if so.
+        let has_inline_parts = batch.batch.parts.iter().any(|x| match x {
+            BatchPart::Hollow(_) => false,
+            BatchPart::Inline { .. } => true,
+        });
+        if has_inline_parts {
+            error!(%shard_id, ?cfg, "compaction result unexpectedly had inline writes");
+            let () = batch
+                .flush_to_blob(
+                    &cfg.batch,
+                    &metrics.compaction.batch,
+                    &isolated_runtime,
+                    &real_schemas,
+                )
+                .await;
+        }
 
         timings.record(&metrics);
-
-        Ok(hollow_batch)
+        Ok(batch.into_hollow_batch())
     }
 
     fn validate_req(req: &CompactReq<T>) -> Result<(), anyhow::Error> {
@@ -805,11 +843,12 @@ impl Timings {
 mod tests {
     use mz_dyncfg::ConfigUpdates;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+    use timely::order::Product;
     use timely::progress::Antichain;
 
     use crate::batch::BLOB_TARGET_SIZE;
 
-    use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache, CodecProduct};
+    use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
     use crate::PersistLocation;
 
     use super::*;
@@ -873,6 +912,7 @@ mod tests {
         assert_eq!(res.output.parts.len(), 1);
         let part = match &res.output.parts[0] {
             BatchPart::Hollow(x) => x,
+            BatchPart::Inline { .. } => panic!("test outputs a hollow part"),
         };
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
@@ -888,16 +928,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compaction_partial_order(dyncfgs: ConfigUpdates) {
         let data = vec![
-            (
-                ("0".to_owned(), "zero".to_owned()),
-                CodecProduct::new(0, 10),
-                1,
-            ),
-            (
-                ("1".to_owned(), "one".to_owned()),
-                CodecProduct::new(10, 0),
-                1,
-            ),
+            (("0".to_owned(), "zero".to_owned()), Product::new(0, 10), 1),
+            (("1".to_owned(), "one".to_owned()), Product::new(10, 0), 1),
         ];
 
         let cache = new_test_client_cache(&dyncfgs);
@@ -906,13 +938,13 @@ mod tests {
             .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed")
-            .expect_open::<String, String, CodecProduct, i64>(ShardId::new())
+            .expect_open::<String, String, Product<u32, u32>, i64>(ShardId::new())
             .await;
         let b0 = write
             .batch(
                 &data[..1],
-                Antichain::from_elem(CodecProduct::new(0, 0)),
-                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 0)]),
+                Antichain::from_elem(Product::new(0, 0)),
+                Antichain::from_iter([Product::new(0, 11), Product::new(10, 0)]),
             )
             .await
             .expect("invalid usage")
@@ -921,8 +953,8 @@ mod tests {
         let b1 = write
             .batch(
                 &data[1..],
-                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 0)]),
-                Antichain::from_elem(CodecProduct::new(10, 1)),
+                Antichain::from_iter([Product::new(0, 11), Product::new(10, 0)]),
+                Antichain::from_elem(Product::new(10, 1)),
             )
             .await
             .expect("invalid usage")
@@ -933,7 +965,7 @@ mod tests {
             desc: Description::new(
                 b0.desc.lower().clone(),
                 b1.desc.upper().clone(),
-                Antichain::from_elem(CodecProduct::new(10, 0)),
+                Antichain::from_elem(Product::new(10, 0)),
             ),
             inputs: vec![b0, b1],
         };
@@ -941,7 +973,7 @@ mod tests {
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
         };
-        let res = Compactor::<String, (), CodecProduct, i64>::compact(
+        let res = Compactor::<String, (), Product<u32, u32>, i64>::compact(
             CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
@@ -958,6 +990,7 @@ mod tests {
         assert_eq!(res.output.parts.len(), 1);
         let part = match &res.output.parts[0] {
             BatchPart::Hollow(x) => x,
+            BatchPart::Inline { .. } => panic!("test outputs a hollow part"),
         };
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
@@ -966,6 +999,6 @@ mod tests {
         )
         .await;
         assert_eq!(part.desc, res.output.desc);
-        assert_eq!(updates, all_ok(&data, CodecProduct::new(10, 0)));
+        assert_eq!(updates, all_ok(&data, Product::new(10, 0)));
     }
 }

@@ -11,15 +11,12 @@ from dataclasses import dataclass
 from textwrap import dedent
 
 import pytest
+from pytest import fail
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.mzcompose.test_result import (
-    FailedTestExecutionError,
-    TestFailureDetails,
-)
 
-TD_TIMEOUT_SHORT = 45
-TD_TIMEOUT_FULL_RECOVERY = 600
+TD_TIMEOUT_SHORT = 60
+TD_TIMEOUT_FULL_RECOVERY = 660
 
 
 @dataclass
@@ -92,7 +89,7 @@ def populate(
         input=dedent(
             """
             > DROP MATERIALIZED VIEW IF EXISTS mv;
-            > DROP SOURCE IF EXISTS source;
+            > DROP SOURCE IF EXISTS source CASCADE;
             """
         )
         + dedent(drop_cluster_statement_sql)
@@ -167,24 +164,22 @@ def validate_state(
             validation_succeeded = True
             break
         except Exception as e:
-            run_info = f"{run}/{max_run_count}"
+            try_info = f"{run + 1}/{max_run_count} with isolation {isolation_level}"
             # arbitrary error can occur if envd is not yet ready after restart
             if is_last_run:
-                print(f"Error occurred in run {run_info}, aborting!")
+                print(f"Validation failed in try {try_info}, aborting!")
+                if last_error_message is not None:
+                    print(f"Last error message was: {last_error_message}")
             else:
-                print(f"Error occurred in run {run_info}, retrying.")
+                print(f"Validation failed in try {try_info}, retrying.")
             last_error_message = str(e)
 
     end_time = time.time()
 
     if not validation_succeeded:
-        raise FailedTestExecutionError(
-            [
-                TestFailureDetails(
-                    message=f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s!",
-                    details=last_error_message,
-                )
-            ]
+        # do not raise an FailedTestExecutionError because we are not in mzcompose
+        fail(
+            f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s!",
         )
 
     duration = round(end_time - start_time, 1)

@@ -12,10 +12,11 @@
 use mz_audit_log::{
     AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
     CreateClusterReplicaV1, CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3,
-    DropClusterReplicaV1, EventDetails, EventType, EventV1, FullNameV1, GrantRoleV1, GrantRoleV2,
-    IdFullNameV1, IdNameV1, RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1,
-    RevokeRoleV1, RevokeRoleV2, SchemaV1, SchemaV2, StorageUsageV1, UpdateItemV1, UpdateOwnerV1,
-    UpdatePrivilegeV1, VersionedEvent, VersionedStorageUsage,
+    DropClusterReplicaV1, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
+    GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RenameClusterReplicaV1, RenameClusterV1,
+    RenameItemV1, RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, SchemaV1, SchemaV2, StorageUsageV1,
+    ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
+    VersionedStorageUsage,
 };
 use mz_compute_client::controller::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
@@ -28,12 +29,14 @@ use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembershi
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
+use mz_sql::plan::ClusterSchedule;
 use mz_sql::session::vars::OwnedVarInput;
-use mz_sql_parser::ast::ClusterScheduleOptionValue;
 use mz_storage_types::instances::StorageInstanceId;
 use std::time::Duration;
 
-use crate::durable::objects::serialization::proto::{cluster_schedule_option_value, Empty};
+use crate::durable::objects::serialization::proto::{
+    cluster_schedule, ClusterScheduleRefreshOptions, Empty,
+};
 use crate::durable::objects::state_update::StateUpdateKindRaw;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
@@ -80,27 +83,33 @@ impl ProtoMapEntry<String, String> for proto::OptimizerFeatureOverride {
     }
 }
 
-impl RustType<proto::ClusterScheduleOptionValue> for ClusterScheduleOptionValue {
-    fn into_proto(&self) -> proto::ClusterScheduleOptionValue {
+impl RustType<proto::ClusterSchedule> for ClusterSchedule {
+    fn into_proto(&self) -> proto::ClusterSchedule {
         match self {
-            ClusterScheduleOptionValue::Manual => proto::ClusterScheduleOptionValue {
-                value: Some(cluster_schedule_option_value::Value::Manual(Empty {})),
+            ClusterSchedule::Manual => proto::ClusterSchedule {
+                value: Some(cluster_schedule::Value::Manual(Empty {})),
             },
-            ClusterScheduleOptionValue::Refresh => proto::ClusterScheduleOptionValue {
-                value: Some(cluster_schedule_option_value::Value::Refresh(Empty {})),
+            ClusterSchedule::Refresh {
+                rehydration_time_estimate,
+            } => proto::ClusterSchedule {
+                value: Some(cluster_schedule::Value::Refresh(
+                    ClusterScheduleRefreshOptions {
+                        rehydration_time_estimate: Some(rehydration_time_estimate.into_proto()),
+                    },
+                )),
             },
         }
     }
 
-    fn from_proto(proto: proto::ClusterScheduleOptionValue) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: proto::ClusterSchedule) -> Result<Self, TryFromProtoError> {
         match proto.value {
             None => Ok(Default::default()),
-            Some(cluster_schedule_option_value::Value::Manual(Empty {})) => {
-                Ok(ClusterScheduleOptionValue::Manual)
-            }
-            Some(cluster_schedule_option_value::Value::Refresh(Empty {})) => {
-                Ok(ClusterScheduleOptionValue::Refresh)
-            }
+            Some(cluster_schedule::Value::Manual(Empty {})) => Ok(ClusterSchedule::Manual),
+            Some(cluster_schedule::Value::Refresh(csro)) => Ok(ClusterSchedule::Refresh {
+                rehydration_time_estimate: csro
+                    .rehydration_time_estimate
+                    .into_rust_if_some("rehydration_time_estimate")?,
+            }),
         }
     }
 }
@@ -2057,6 +2066,40 @@ impl RustType<proto::audit_log_event_v1::AlterRetainHistoryV1> for AlterRetainHi
     }
 }
 
+impl RustType<proto::audit_log_event_v1::ToNewIdV1> for ToNewIdV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::ToNewIdV1 {
+        proto::audit_log_event_v1::ToNewIdV1 {
+            id: self.id.to_string(),
+            new_id: self.new_id.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::ToNewIdV1) -> Result<Self, TryFromProtoError> {
+        Ok(ToNewIdV1 {
+            id: proto.id,
+            new_id: proto.new_id,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::FromPreviousIdV1> for FromPreviousIdV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::FromPreviousIdV1 {
+        proto::audit_log_event_v1::FromPreviousIdV1 {
+            id: self.id.to_string(),
+            previous_id: self.previous_id.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::FromPreviousIdV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(FromPreviousIdV1 {
+            id: proto.id,
+            previous_id: proto.previous_id,
+        })
+    }
+}
+
 impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
     fn into_proto(&self) -> proto::audit_log_event_v1::Details {
         use proto::audit_log_event_v1::Details::*;
@@ -2096,6 +2139,8 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             EventDetails::AlterRetainHistoryV1(details) => {
                 AlterRetainHistoryV1(details.into_proto())
             }
+            EventDetails::ToNewIdV1(details) => ToNewIdV1(details.into_proto()),
+            EventDetails::FromPreviousIdV1(details) => FromPreviousIdV1(details.into_proto()),
         }
     }
 
@@ -2143,6 +2188,8 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             AlterRetainHistoryV1(details) => {
                 Ok(EventDetails::AlterRetainHistoryV1(details.into_rust()?))
             }
+            ToNewIdV1(details) => Ok(EventDetails::ToNewIdV1(details.into_rust()?)),
+            FromPreviousIdV1(details) => Ok(EventDetails::FromPreviousIdV1(details.into_rust()?)),
         }
     }
 }

@@ -30,6 +30,7 @@ Aggregate
 Aligned
 All
 Alter
+Analysis
 And
 Any
 Arity
@@ -138,9 +139,9 @@ End
 Endpoint
 Enforced
 Envelope
-Equivalence
 Error
 Escape
+Estimate
 Every
 Except
 Execute
@@ -149,6 +150,7 @@ Expected
 Explain
 Expose
 Expressions
+External
 Extract
 Factor
 False
@@ -159,6 +161,7 @@ Fields
 File
 Filter
 First
+Fixpoint
 Float
 Following
 For
@@ -201,6 +204,7 @@ Inline
 Inner
 Input
 Insert
+Insights
 Inspect
 Int
 Integer
@@ -225,6 +229,7 @@ Leading
 Least
 Left
 Legacy
+Letrec
 Level
 Like
 Limit
@@ -311,7 +316,6 @@ Primary
 Privatelink
 Privileges
 Progress
-Propagation
 Protobuf
 Protocol
 Publication
@@ -328,11 +332,13 @@ Reassign
 Recursion
 Recursive
 Redacted
+Reference
 References
 Refresh
 Regex
 Region
 Registry
+Rehydration
 Rename
 Reoptimize
 Repeatable

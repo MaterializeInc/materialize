@@ -146,6 +146,14 @@ impl Interval {
         }
     }
 
+    pub fn from_duration(duration: Duration) -> Result<Interval, anyhow::Error> {
+        Ok(Interval {
+            months: 0,
+            days: 0,
+            micros: duration.as_micros().try_into()?,
+        })
+    }
+
     pub fn checked_add(&self, other: &Self) -> Option<Self> {
         let months = match self.months.checked_add(other.months) {
             Some(m) => m,

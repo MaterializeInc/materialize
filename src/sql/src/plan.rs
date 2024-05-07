@@ -45,12 +45,11 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ClusterScheduleOptionValue, ConnectionOptionName,
-    CreateSourceSubsource, QualifiedReplica, TransactionIsolationLevel, TransactionMode, Value,
-    WithOptionValue,
+    AlterSourceAddSubsourceOption, ConnectionOptionName, QualifiedReplica,
+    TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{SourceDesc, Timeline};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -97,7 +96,10 @@ pub use notice::PlanNotice;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
-pub use statement::ddl::{PlannedAlterRoleOption, PlannedRoleVariable};
+pub use statement::ddl::{
+    AlterSourceAddSubsourceOptionExtracted, PgConfigOptionExtracted, PlannedAlterRoleOption,
+    PlannedRoleVariable,
+};
 pub use statement::{
     describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementContext,
     StatementDesc,
@@ -114,7 +116,7 @@ pub enum Plan {
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
     CreateSource(CreateSourcePlan),
-    CreateSources(Vec<CreateSourcePlans>),
+    CreateSources(Vec<CreateSourcePlanBundle>),
     CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
@@ -154,12 +156,6 @@ pub enum Plan {
     AlterSetCluster(AlterSetClusterPlan),
     AlterConnection(AlterConnectionPlan),
     AlterSource(AlterSourcePlan),
-    PurifiedAlterSource {
-        // The `ALTER SOURCE` plan
-        alter_source: AlterSourcePlan,
-        // The plan to create any subsources added in the `ALTER SOURCE` statement.
-        subsources: Vec<CreateSourcePlans>,
-    },
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
@@ -378,7 +374,7 @@ impl Plan {
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterConnection(_) => "alter connection",
-            Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
+            Plan::AlterSource(_) => "alter source",
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterItemSwap(_) => "swap item",
             Plan::AlterSchemaRename(_) => "alter rename schema",
@@ -506,7 +502,7 @@ pub struct CreateClusterManagedPlan {
     pub compute: ComputeReplicaConfig,
     pub disk: bool,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
-    pub schedule: ClusterScheduleOptionValue,
+    pub schedule: ClusterSchedule,
 }
 
 #[derive(Debug)]
@@ -550,6 +546,23 @@ pub enum ReplicaConfig {
     },
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub enum ClusterSchedule {
+    /// The system won't automatically turn the cluster On or Off.
+    Manual,
+    /// The cluster will be On when a REFRESH materialized view on it needs to refresh.
+    /// `rehydration_time_estimate` determines how much time before a refresh to turn the
+    /// cluster On, so that it can rehydrate already before the refresh time.
+    Refresh { rehydration_time_estimate: Duration },
+}
+
+impl Default for ClusterSchedule {
+    fn default() -> Self {
+        // (Has to be consistent with `impl Default for ClusterScheduleOptionValue`.)
+        ClusterSchedule::Manual
+    }
+}
+
 #[derive(Debug)]
 pub struct CreateSourcePlan {
     pub name: QualifiedItemName,
@@ -560,8 +573,9 @@ pub struct CreateSourcePlan {
     pub in_cluster: Option<ClusterId>,
 }
 
+/// A [`CreateSourcePlan`] and the metadata necessary to sequence it.
 #[derive(Debug)]
-pub struct CreateSourcePlans {
+pub struct CreateSourcePlanBundle {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
     pub resolved_ids: ResolvedIds,
@@ -794,7 +808,7 @@ pub struct CopyToPlan {
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
     /// The ID of the connection.
     pub connection_id: GlobalId,
-    pub format_params: CopyFormatParams<'static>,
+    pub format: S3SinkFormat,
     pub max_file_size: u64,
 }
 
@@ -999,12 +1013,8 @@ pub struct AlterConnectionPlan {
 
 #[derive(Debug)]
 pub enum AlterSourceAction {
-    DropSubsourceExports {
-        to_drop: BTreeSet<GlobalId>,
-    },
     AddSubsourceExports {
-        subsources: Vec<CreateSourceSubsource<Aug>>,
-        details: Option<WithOptionValue<Aug>>,
+        subsources: Vec<CreateSourcePlanBundle>,
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,
     },
 }
@@ -1254,8 +1264,12 @@ pub struct Source {
 pub enum DataSourceDesc {
     /// Receives data from an external system.
     Ingestion(Ingestion),
-    /// Receives data from some other source.
-    Source,
+    /// This source receives its data from the identified ingestion,
+    /// specifically the output identified by `external_reference`.
+    IngestionExport {
+        ingestion_id: GlobalId,
+        external_reference: UnresolvedItemName,
+    },
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP post requests.
@@ -1266,10 +1280,9 @@ pub enum DataSourceDesc {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Ingestion {
     pub desc: SourceDesc<ReferencedConnection>,
-    pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
 }
 
@@ -1513,6 +1526,7 @@ pub enum CopyFormat {
     Text,
     Csv,
     Binary,
+    Parquet,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1544,7 +1558,7 @@ pub struct PlanClusterOption {
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
     pub disk: AlterOptionParameter<bool>,
-    pub schedule: AlterOptionParameter<ClusterScheduleOptionValue>,
+    pub schedule: AlterOptionParameter<ClusterSchedule>,
 }
 
 impl Default for PlanClusterOption {
@@ -1584,7 +1598,6 @@ impl Params {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Copy)]
 pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
-    pub planning_id: Option<GlobalId>,
     pub ignore_if_exists_errors: bool,
 }
 
@@ -1592,7 +1605,6 @@ impl PlanContext {
     pub fn new(wall_time: DateTime<Utc>) -> Self {
         Self {
             wall_time,
-            planning_id: None,
             ignore_if_exists_errors: false,
         }
     }
@@ -1603,14 +1615,8 @@ impl PlanContext {
     pub fn zero() -> Self {
         PlanContext {
             wall_time: now::to_datetime(NOW_ZERO()),
-            planning_id: None,
             ignore_if_exists_errors: false,
         }
-    }
-
-    pub fn with_planning_id(mut self, id: GlobalId) -> Self {
-        self.planning_id = Some(id);
-        self
     }
 
     pub fn with_ignore_if_exists_errors(mut self, value: bool) -> Self {

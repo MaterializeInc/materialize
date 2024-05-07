@@ -26,12 +26,18 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
     EvaluationScenario,
 )
+from materialize.output_consistency.input_data.test_input_data import (
+    ConsistencyTestInputData,
+)
 from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.output_consistency_test import (
     OutputConsistencyTest,
     connect,
 )
 from materialize.output_consistency.validation.result_comparator import ResultComparator
+from materialize.postgres_consistency.custom.predefined_pg_queries import (
+    create_custom_pg_consistency_queries,
+)
 from materialize.postgres_consistency.execution.pg_evaluation_strategy import (
     PgEvaluation,
 )
@@ -87,6 +93,11 @@ class PostgresConsistencyTest(OutputConsistencyTest):
             # Postgres
             PgEvaluation(),
         ]
+
+    def create_input_data(self) -> ConsistencyTestInputData:
+        input_data = super().create_input_data()
+        input_data.predefined_queries.extend(create_custom_pg_consistency_queries())
+        return input_data
 
 
 def main() -> int:

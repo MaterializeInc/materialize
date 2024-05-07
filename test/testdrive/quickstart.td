@@ -23,13 +23,13 @@
 > SHOW SOURCES
 name                   type           size                         cluster
 --------------------------------------------------------------------------
-accounts               subsource      <null>                       <null>
-bids                   subsource      <null>                       <null>
+accounts               subsource      <null>                       quickstart_tutorial
+bids                   subsource      <null>                       quickstart_tutorial
 auction_house          load-generator <null>                       quickstart_tutorial
 auction_house_progress progress       <null>                       <null>
-auctions               subsource      <null>                       <null>
-organizations          subsource      <null>                       <null>
-users                  subsource      <null>                       <null>
+auctions               subsource      <null>                       quickstart_tutorial
+organizations          subsource      <null>                       quickstart_tutorial
+users                  subsource      <null>                       quickstart_tutorial
 
 > SELECT id, seller, item FROM auctions WHERE id = 1
 1 1824 "Best Pizza in Town"
@@ -63,6 +63,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.wins_by_item (lookup)
+
+Target cluster: quickstart_tutorial
 
 > SELECT id, buyer, auction_id, amount, item, seller FROM winning_bids WHERE item = 'Best Pizza in Town' AND id < 100 ORDER BY bid_time DESC
 62 3016 6 77 "Best Pizza in Town" 2500

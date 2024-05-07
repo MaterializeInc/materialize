@@ -55,13 +55,19 @@ impl RefreshSchedule {
         next_every.into_iter().chain(next_at).min()
     }
 
-    /// Returns the time of the last refresh. Returns None if there is no last refresh (e.g., for a periodic refresh).
+    /// Returns the time of the last refresh. Returns None if there is no last refresh (e.g., for a
+    /// periodic refresh).
     pub fn last_refresh(&self) -> Option<Timestamp> {
         if self.everies.is_empty() {
             self.ats.iter().max().cloned()
         } else {
             None
         }
+    }
+
+    /// Returns whether the schedule is empty, i.e., no `EVERY` or `AT`.
+    pub fn is_empty(&self) -> bool {
+        self.everies.is_empty() && self.ats.is_empty()
     }
 }
 
@@ -78,6 +84,7 @@ impl RefreshEvery {
     /// # Panics
     /// - if the refresh interval converted to milliseconds cast to u64 overflows;
     /// - if the interval is 0.
+    /// (These should be checked in HIR planning.)
     pub fn round_up_timestamp(&self, timestamp: Timestamp) -> Timestamp {
         let RefreshEvery {
             interval,

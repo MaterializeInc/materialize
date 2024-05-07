@@ -15,7 +15,6 @@ use mz_compute_types::plan::LirId;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
-use mz_storage_client::client::ProtoTrace;
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary, Just};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
@@ -37,51 +36,37 @@ include!(concat!(
 /// [`ComputeCommand`]: super::command::ComputeCommand
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeResponse<T = mz_repr::Timestamp> {
-    /// `FrontierUpper` announces the advancement of the upper frontier of the specified compute
-    /// collection. The response contain a collection ID and that collection's new upper frontier.
+    /// `Frontiers` announces the advancement of the various frontiers of the specified compute
+    /// collection.
     ///
-    /// Upon receiving a `FrontierUpper` response, the controller may assume that the replica has
-    /// finished computing the given collection up to at least the given frontier. It may also
-    /// assume that the replica has finished reading from the collection’s inputs up to that
-    /// frontier.
-    ///
-    /// Replicas must send `FrontierUpper` responses for compute collections that are indexes or
-    /// storage sinks. Replicas must not send `FrontierUpper` responses for subscribes.
+    /// Replicas must send `Frontiers` responses for compute collections that are indexes or
+    /// storage sinks. Replicas must not send `Frontiers` responses for subscribes ([#16274]).
     ///
     /// Replicas must never report regressing frontiers. Specifically:
     ///
-    ///   * The first frontier reported for a collection must not be less than that collection's
-    ///     initial `as_of` frontier.
-    ///   * Subsequent reported frontiers for a collection must not be less than any frontier
-    ///     reported previously for the same collection.
+    ///   * The first frontier of any kind reported for a collection must not be less than that
+    ///     collection's initial `as_of` frontier.
+    ///   * Subsequent reported frontiers for a collection must not be less than any frontier of
+    ///     the same kind reported previously for the same collection.
     ///
-    /// Replicas must send a `FrontierUpper` response reporting advancement to the empty frontier
-    /// for a collection in two cases:
+    /// Replicas must send `Frontiers` responses that report each frontier kind to have advanced to
+    /// the empty frontier in response to an [`AllowCompaction` command] that allows compaction of
+    /// the collection to to the empty frontier, unless the frontier has previously advanced to the
+    /// empty frontier as part of the regular dataflow computation. ([#16271])
     ///
-    ///   * The collection has advanced to the empty frontier (e.g. because its inputs have advanced
-    ///     to the empty frontier).
-    ///   * The collection was dropped in response to an [`AllowCompaction` command] that advanced
-    ///     its read frontier to the empty frontier. ([#16275])
+    /// Once a frontier was reported to have been advanced to the empty frontier, the replica must
+    /// not send further `Frontiers` responses with non-`None` values for that frontier kind.
     ///
-    /// Once a collection was reported to have been advanced to the empty upper frontier:
-    ///
-    ///   * It must no longer read from its inputs.
-    ///   * The replica must not send further `FrontierUpper` responses for that collection.
-    ///
-    /// The replica must not send `FrontierUpper` responses for collections that have not
+    /// The replica must not send `Frontiers` responses for collections that have not
     /// been created previously by a [`CreateDataflow` command] or by a [`CreateInstance`
     /// command].
     ///
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
-    /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
-    FrontierUpper {
-        /// TODO(#25239): Add documentation.
-        id: GlobalId,
-        /// TODO(#25239): Add documentation.
-        upper: Antichain<T>,
-    },
+    /// [#16271]: https://github.com/MaterializeInc/materialize/issues/16271
+    /// [#16274]: https://github.com/MaterializeInc/materialize/issues/16274
+    Frontiers(GlobalId, FrontiersResponse<T>),
 
     /// `PeekResponse` reports the result of a previous [`Peek` command]. The peek is identified by
     /// a `Uuid` that matches the command's [`Peek::uuid`].
@@ -167,9 +152,9 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
         use proto_compute_response::*;
         ProtoComputeResponse {
             kind: Some(match self {
-                ComputeResponse::FrontierUpper { id, upper } => FrontierUpper(ProtoTrace {
+                ComputeResponse::Frontiers(id, resp) => Frontiers(ProtoFrontiersKind {
                     id: Some(id.into_proto()),
-                    upper: Some(upper.into_proto()),
+                    resp: Some(resp.into_proto()),
                 }),
                 ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
                     PeekResponse(ProtoPeekResponseKind {
@@ -198,10 +183,10 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
     fn from_proto(proto: ProtoComputeResponse) -> Result<Self, TryFromProtoError> {
         use proto_compute_response::Kind::*;
         match proto.kind {
-            Some(FrontierUpper(trace)) => Ok(ComputeResponse::FrontierUpper {
-                id: trace.id.into_rust_if_some("ProtoTrace::id")?,
-                upper: trace.upper.into_rust_if_some("ProtoTrace::upper")?,
-            }),
+            Some(Frontiers(resp)) => Ok(ComputeResponse::Frontiers(
+                resp.id.into_rust_if_some("ProtoFrontiersKind::id")?,
+                resp.resp.into_rust_if_some("ProtoFrontiersKind::resp")?,
+            )),
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
                 resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
                 resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
@@ -232,8 +217,8 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            (any::<GlobalId>(), any_antichain())
-                .prop_map(|(id, upper)| ComputeResponse::FrontierUpper { id, upper })
+            (any::<GlobalId>(), any::<FrontiersResponse>())
+                .prop_map(|(id, resp)| ComputeResponse::Frontiers(id, resp))
                 .boxed(),
             (any_uuid(), any::<PeekResponse>())
                 .prop_map(|(id, resp)| {
@@ -247,6 +232,65 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
                 .prop_map(ComputeResponse::Status)
                 .boxed(),
         ])
+    }
+}
+
+/// A response reporting advancement of frontiers of a compute collection.
+///
+/// All contained frontier fields are optional. `None` values imply that the respective frontier
+/// has not advanced and the previously reported value is still current.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FrontiersResponse<T = mz_repr::Timestamp> {
+    /// The collection's new write frontier, if any.
+    ///
+    /// Upon receiving an updated `write_frontier`, the controller may assume that the contents of the
+    /// collection are sealed for all times less than that frontier. Once it has reported the
+    /// `write_frontier` as the empty frontier, the replica must no longer change the contents of the
+    /// collection.
+    pub write_frontier: Option<Antichain<T>>,
+    /// The collection's new input frontier, if any.
+    ///
+    /// Upon receiving an updated `input_frontier`, the controller may assume that the replica has
+    /// finished reading from the collection’s inputs up to that frontier. Once it has reported the
+    /// `input_frontier` as the empty frontier, the replica must no longer read from the
+    /// collection's inputs.
+    pub input_frontier: Option<Antichain<T>>,
+}
+
+impl<T> FrontiersResponse<T> {
+    /// Returns whether there are any contained updates.
+    pub fn has_updates(&self) -> bool {
+        self.write_frontier.is_some() || self.input_frontier.is_some()
+    }
+}
+
+impl RustType<ProtoFrontiersResponse> for FrontiersResponse {
+    fn into_proto(&self) -> ProtoFrontiersResponse {
+        ProtoFrontiersResponse {
+            write_frontier: self.write_frontier.into_proto(),
+            input_frontier: self.input_frontier.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoFrontiersResponse) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            write_frontier: proto.write_frontier.into_rust()?,
+            input_frontier: proto.input_frontier.into_rust()?,
+        })
+    }
+}
+
+impl Arbitrary for FrontiersResponse {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (any_antichain(), any_antichain())
+            .prop_map(|(write, input)| Self {
+                write_frontier: Some(write),
+                input_frontier: Some(input),
+            })
+            .boxed()
     }
 }
 

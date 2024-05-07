@@ -32,6 +32,10 @@ breaking:
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v54.proto
     # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v55.proto
+    # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v56.proto
+    # reason: does currently not require backward-compatibility
     - cluster-client/src/client.proto
     # reason: does currently not require backward-compatibility
     - compute-client/src/logging.proto
@@ -49,16 +53,14 @@ breaking:
     - compute-types/src/sinks.proto
     # reason: Ignore because plans are currently not persisted.
     - expr/src/relation.proto
-    # reason: not yet released
-    - mysql-util/src/desc.proto
-    # reason: working around a false positive in buf's breaking change lint
-    - persist-client/src/internal/state.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/statistics.proto
     # reason: currently does not require backward-compatibility
     - storage-types/src/connections/aws.proto
+    # reason: copy-to-s3 not yet released
+    - storage-types/src/sinks.proto
 lint:
   use:
     - DEFAULT

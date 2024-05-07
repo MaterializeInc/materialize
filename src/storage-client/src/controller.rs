@@ -27,19 +27,25 @@ use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
+use mz_ore::collections::CollectionExt;
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_types::{Codec64, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
+use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceData};
+use mz_storage_types::sources::{
+    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc,
+};
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::MutableAntichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
@@ -87,6 +93,18 @@ pub enum IntrospectionType {
 pub enum DataSource {
     /// Ingest data from some external source.
     Ingestion(IngestionDescription),
+    /// This source receives its data from the identified ingestion,
+    /// specifically the output identified by `external_reference`.
+    ///
+    /// The referenced ingestion must be created before all of its exports.
+    IngestionExport {
+        ingestion_id: GlobalId,
+        // This is an `UnresolvedItemName` because the structure works for PG,
+        // MySQL, and load generator sources. However, in the future, it should
+        // be sufficiently genericized to support all multi-output sources we
+        // support.
+        external_reference: UnresolvedItemName,
+    },
     /// Data comes from introspection sources, which the controller itself is
     /// responsible for generating.
     Introspection(IntrospectionType),
@@ -96,8 +114,30 @@ pub enum DataSource {
     Webhook,
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
-    // TODO? Add a means to track some data sources' GlobalIds.
     Other(DataSourceOther),
+}
+
+impl DataSource {
+    /// If this data source depends on the frontier of another collection,
+    /// return it.
+    ///
+    /// Dependencies offer the ability to tie the frontiers of collections
+    /// together, e.g. we expect that you cannot drop a collection with any
+    /// dependents that have not been dropped yet.
+    pub fn collection_dependency(&self) -> Option<GlobalId> {
+        match self {
+            DataSource::Introspection(_)
+            | DataSource::Webhook
+            | DataSource::Other(DataSourceOther::TableWrites)
+            | DataSource::Progress
+            | DataSource::Other(DataSourceOther::Compute) => None,
+            // Exports depend on their ingestion. n.b. we expect this dependency
+            // to carry transitively to the ingestion's remap collection.
+            DataSource::IngestionExport { ingestion_id, .. } => Some(*ingestion_id),
+            // Ingestions depend on their remap collection.
+            DataSource::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
+        }
+    }
 }
 
 /// Describes how data is written to a collection maintained outside of the
@@ -108,8 +148,6 @@ pub enum DataSourceOther {
     TableWrites,
     /// Compute maintains, i.e. it is a `MATERIALIZED VIEW`.
     Compute,
-    /// Some other sources writes this data, i.e. a subsource.
-    Source,
 }
 
 /// Describes a request to create a source.
@@ -127,32 +165,6 @@ pub struct CollectionDescription<T> {
 }
 
 impl<T> CollectionDescription<T> {
-    /// Returns IDs for all storage objects that this `CollectionDescription`
-    /// depends on.
-    pub fn get_storage_dependencies(&self) -> Vec<GlobalId> {
-        let mut result = Vec::new();
-
-        // NOTE: Exhaustive match for future proofing.
-        match &self.data_source {
-            DataSource::Ingestion(ingestion) => {
-                result.push(ingestion.remap_collection_id);
-            }
-            DataSource::Webhook | DataSource::Introspection(_) | DataSource::Progress => {
-                // Introspection, Progress, and Webhook sources have no dependencies, for now.
-                //
-                // TODO(parkmycar): Once webhook sources support validation, then they will have
-                // dependencies.
-                //
-                // See <https://github.com/MaterializeInc/materialize/issues/20211>.
-            }
-            DataSource::Other(_) => {
-                // We don't know anything about it's dependencies.
-            }
-        }
-
-        result
-    }
-
     pub fn from_desc(desc: RelationDesc, source: DataSourceOther) -> Self {
         Self {
             desc,
@@ -160,6 +172,14 @@ impl<T> CollectionDescription<T> {
             since: None,
             status_collection_id: None,
         }
+    }
+
+    /// Returns true if `self` is a table, false otherwise.
+    pub fn is_table(&self) -> bool {
+        matches!(
+            self.data_source,
+            DataSource::Other(DataSourceOther::TableWrites)
+        )
     }
 }
 
@@ -269,7 +289,7 @@ pub trait StorageTxn<T> {
 
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
-    type Timestamp;
+    type Timestamp: TimelyTimestamp;
 
     /// Marks the end of any initialization commands.
     ///
@@ -284,11 +304,51 @@ pub trait StorageController: Debug {
     /// Get the current configuration, including parameters updated with `update_parameters`.
     fn config(&self) -> &StorageConfiguration;
 
-    /// Acquire an immutable reference to the collection state, should it exist.
-    fn collection(
+    /// Returns the [CollectionMetadata] of the collection identified by `id`.
+    fn collection_metadata(
         &self,
         id: GlobalId,
-    ) -> Result<&CollectionState<Self::Timestamp>, StorageError<Self::Timestamp>>;
+    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>>;
+
+    /// Returns the since/upper frontiers of the identified collection.
+    fn collection_frontiers(
+        &self,
+        id: GlobalId,
+    ) -> Result<
+        (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
+        StorageError<Self::Timestamp>,
+    >;
+
+    /// Returns the since/upper frontiers of the identified collections.
+    ///
+    /// Having a method that returns both frontiers at the same time, for all
+    /// requested collections, ensures that we can get a consistent "snapshot"
+    /// of collection state. If we had separate methods instead, and/or would
+    /// allow getting frontiers for collections one at a time, it could happen
+    /// that collection state changes concurrently, while information is
+    /// gathered.
+    fn collections_frontiers(
+        &self,
+        id: Vec<GlobalId>,
+    ) -> Result<
+        Vec<(
+            GlobalId,
+            Antichain<Self::Timestamp>,
+            Antichain<Self::Timestamp>,
+        )>,
+        StorageError<Self::Timestamp>,
+    >;
+
+    /// Acquire an iterator over [CollectionMetadata] for all active
+    /// collections.
+    ///
+    /// A collection is "active" when it has a non empty frontier of read
+    /// capabilties.
+    fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
+
+    /// Checks whether a collection exists under the given `GlobalId`. Returns
+    /// an error if the collection does not exist.
+    fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Creates a storage instance with the specified ID.
     ///
@@ -324,17 +384,6 @@ pub trait StorageController: Debug {
     /// Disconnects the storage instance from the specified replica.
     fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId);
 
-    /// Acquire a mutable reference to the collection state, should it exist.
-    fn collection_mut(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError<Self::Timestamp>>;
-
-    /// Acquire an iterator over all collection states.
-    fn collections(
-        &self,
-    ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_>;
-
     /// Create the sources described in the individual RunIngestionCommand commands.
     ///
     /// Each command carries the source id, the source description, and any associated metadata
@@ -360,20 +409,29 @@ pub trait StorageController: Debug {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Check that the collection associated with `id` can be altered to represent the given
-    /// `ingestion`.
+    /// Check that the ingestion associated with `id` can use the provided
+    /// [`SourceDesc`].
     ///
-    /// Note that this check is optimistic and its return of `Ok(())` does not guarantee that
-    /// subsequent calls to `alter_collection` are guaranteed to succeed.
-    fn check_alter_collection(
+    /// Note that this check is optimistic and its return of `Ok(())` does not
+    /// guarantee that subsequent calls to `alter_ingestion_source_desc` are
+    /// guaranteed to succeed.
+    fn check_alter_ingestion_source_desc(
         &mut self,
-        collections: &BTreeMap<GlobalId, IngestionDescription>,
+        ingestion_id: GlobalId,
+        source_desc: &SourceDesc,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Alter the identified collection to use the described ingestion.
-    async fn alter_collection(
+    /// Alters the identified collection to use the provided [`SourceDesc`].
+    async fn alter_ingestion_source_desc(
         &mut self,
-        collections: BTreeMap<GlobalId, IngestionDescription>,
+        ingestion_id: GlobalId,
+        source_desc: SourceDesc,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Alters each identified collection to use the correlated [`GenericSourceConnection`].
+    async fn alter_ingestion_connections(
+        &mut self,
+        source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -394,10 +452,17 @@ pub trait StorageController: Debug {
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// For each identified export, update its `StorageSinkConnection`.
-    async fn update_export_connection(
+    /// For each identified export, alter its [`StorageSinkConnection`].
+    async fn alter_export_connections(
         &mut self,
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Drops the read capability for the tables and allows their resources to be reclaimed.
+    fn drop_tables(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+        ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -439,7 +504,7 @@ pub trait StorageController: Debug {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
-    );
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///
@@ -520,6 +585,40 @@ pub trait StorageController: Debug {
     /// Identifiers not present in `policies` retain their existing read policies.
     fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>);
 
+    /// Acquires and returns the desired read holds, advancing them to the since
+    /// frontier when necessary.
+    fn acquire_read_holds(
+        &mut self,
+        desired_holds: Vec<GlobalId>,
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
+
+    /// Acquires and returns the earliest legal read hold.
+    fn acquire_read_hold(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<ReadHold<Self::Timestamp>, ReadHoldError> {
+        let hold = self.acquire_read_holds(vec![id])?.into_element();
+
+        Ok(hold)
+    }
+
+    /// Acquires and returns a read hold at `desired_time`. Returns
+    /// [ReadHoldError::SinceViolation] when that is not possible.
+    fn acquire_read_hold_at_time(
+        &mut self,
+        id: GlobalId,
+        desired_hold: Antichain<Self::Timestamp>,
+    ) -> Result<ReadHold<Self::Timestamp>, ReadHoldError> {
+        let mut hold = self.acquire_read_holds(vec![id])?.into_element();
+
+        let res = match hold.try_downgrade(desired_hold) {
+            Ok(()) => Ok(hold),
+            Err(_e) => Err(ReadHoldError::SinceViolation(id)),
+        };
+
+        res
+    }
+
     /// Ingests write frontier updates for collections that this controller
     /// maintains and potentially generates updates to read capabilities, which
     /// are passed on to [`StorageController::update_read_capabilities`].
@@ -567,7 +666,10 @@ pub trait StorageController: Debug {
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    async fn process(&mut self) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
+    async fn process(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+    ) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
 
     /// Exposes the internal state of the data shard for debugging and QA.
     ///
@@ -657,73 +759,6 @@ pub trait StorageController: Debug {
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
-}
-
-/// State maintained about individual collections.
-#[derive(Debug)]
-pub struct CollectionState<T> {
-    /// Description with which the collection was created
-    pub description: CollectionDescription<T>,
-
-    /// Accumulation of read capabilities for the collection.
-    ///
-    /// This accumulation will always contain `self.implied_capability`, but may also contain
-    /// capabilities held by others who have read dependencies on this collection.
-    pub read_capabilities: MutableAntichain<T>,
-    /// The implicit capability associated with collection creation.  This should never be less
-    /// than the since of the associated persist collection.
-    pub implied_capability: Antichain<T>,
-    /// The policy to use to downgrade `self.implied_capability`.
-    pub read_policy: ReadPolicy<T>,
-
-    /// Storage identifiers on which this collection depends.
-    pub storage_dependencies: Vec<GlobalId>,
-
-    /// Reported write frontier.
-    pub write_frontier: Antichain<T>,
-
-    pub collection_metadata: CollectionMetadata,
-}
-
-impl<T: Timestamp> CollectionState<T> {
-    /// Creates a new collection state, with an initial read policy valid from `since`.
-    pub fn new(
-        description: CollectionDescription<T>,
-        since: Antichain<T>,
-        write_frontier: Antichain<T>,
-        storage_dependencies: Vec<GlobalId>,
-        metadata: CollectionMetadata,
-    ) -> Self {
-        let mut read_capabilities = MutableAntichain::new();
-        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
-        Self {
-            description,
-            read_capabilities,
-            implied_capability: since.clone(),
-            read_policy: ReadPolicy::NoPolicy {
-                initial_since: since,
-            },
-            storage_dependencies,
-            write_frontier,
-            collection_metadata: metadata,
-        }
-    }
-
-    /// Returns the cluster to which the collection is bound, if applicable.
-    pub fn cluster_id(&self) -> Option<StorageInstanceId> {
-        match &self.description.data_source {
-            DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
-            DataSource::Webhook
-            | DataSource::Introspection(_)
-            | DataSource::Other(_)
-            | DataSource::Progress => None,
-        }
-    }
-
-    /// Returns whether the collection was dropped.
-    pub fn is_dropped(&self) -> bool {
-        self.read_capabilities.is_empty()
-    }
 }
 
 /// State maintained about individual exports.

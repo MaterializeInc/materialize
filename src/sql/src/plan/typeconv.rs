@@ -30,6 +30,7 @@ use crate::plan::scope::Scope;
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
     let invoke = crate::func::sql_impl(expr);
     CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
+        // Oddly, this needs to be able to gracefully fail so we can detect unmet dependencies.
         let mut out = invoke(ecx.qcx, vec![from_type.clone()]).ok()?;
         Some(move |e| {
             out.splice_parameters(&[e], 0);
@@ -810,16 +811,16 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
                 FROM
                     (SELECT mz_internal.mz_aclitem_grantee($1) AS grantee_role_id),
                     (SELECT mz_internal.mz_aclitem_grantor($1) AS grantor_role_id)
-                LEFT JOIN mz_roles AS grantee_role ON grantee_role_id = grantee_role.id
-                LEFT JOIN mz_roles AS grantor_role ON grantor_role_id = grantor_role.id
+                LEFT JOIN mz_catalog.mz_roles AS grantee_role ON grantee_role_id = grantee_role.id
+                LEFT JOIN mz_catalog.mz_roles AS grantor_role ON grantor_role_id = grantor_role.id
             )"),
         (MzAclItem, AclItem) => Explicit: sql_impl_cast("(
                 SELECT makeaclitem(
                     (CASE mz_internal.mz_aclitem_grantee($1)
                         WHEN 'p' THEN 0
-                        ELSE (SELECT oid FROM mz_roles WHERE id = mz_internal.mz_aclitem_grantee($1))
+                        ELSE (SELECT oid FROM mz_catalog.mz_roles WHERE id = mz_internal.mz_aclitem_grantee($1))
                     END),
-                    (SELECT oid FROM mz_roles WHERE id = mz_internal.mz_aclitem_grantor($1)),
+                    (SELECT oid FROM mz_catalog.mz_roles WHERE id = mz_internal.mz_aclitem_grantor($1)),
                     (SELECT array_to_string(mz_internal.mz_format_privileges(mz_internal.mz_aclitem_privileges($1)), ',')),
                     -- GRANT OPTION isn't implemented so we hardcode false.
                     false
@@ -840,16 +841,16 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
                 FROM
                     (SELECT mz_internal.aclitem_grantee($1) AS grantee_oid),
                     (SELECT mz_internal.aclitem_grantor($1) AS grantor_oid)
-                LEFT JOIN mz_roles AS grantee_role ON grantee_oid = grantee_role.oid
-                LEFT JOIN mz_roles AS grantor_role ON grantor_oid = grantor_role.oid
+                LEFT JOIN mz_catalog.mz_roles AS grantee_role ON grantee_oid = grantee_role.oid
+                LEFT JOIN mz_catalog.mz_roles AS grantor_role ON grantor_oid = grantor_role.oid
             )"),
         (AclItem, MzAclItem) => Explicit: sql_impl_cast("(
                 SELECT mz_internal.make_mz_aclitem(
                     (CASE mz_internal.aclitem_grantee($1)
                         WHEN 0 THEN 'p'
-                        ELSE (SELECT id FROM mz_roles WHERE oid = mz_internal.aclitem_grantee($1))
+                        ELSE (SELECT id FROM mz_catalog.mz_roles WHERE oid = mz_internal.aclitem_grantee($1))
                     END),
-                    (SELECT id FROM mz_roles WHERE oid = mz_internal.aclitem_grantor($1)),
+                    (SELECT id FROM mz_catalog.mz_roles WHERE oid = mz_internal.aclitem_grantor($1)),
                     (SELECT array_to_string(mz_internal.mz_format_privileges(mz_internal.aclitem_privileges($1)), ','))
                 )
             )")
@@ -1171,17 +1172,12 @@ pub fn plan_cast(
     // face of intermediate expressions.
     let cast_inner = |from, to, expr| match get_cast(ecx, ccx, from, to) {
         Some(cast) => Ok(cast(expr)),
-        None => sql_bail!(
-            "{} does not support {}casting from {} to {}",
-            ecx.name,
-            if ccx == CastContext::Implicit {
-                "implicitly "
-            } else {
-                ""
-            },
-            ecx.humanize_scalar_type(from),
-            ecx.humanize_scalar_type(to),
-        ),
+        None => Err(PlanError::InvalidCast {
+            name: ecx.name.into(),
+            ccx,
+            from: ecx.humanize_scalar_type(from),
+            to: ecx.humanize_scalar_type(to),
+        }),
     };
 
     // Get cast which might include parameter rewrites + generating intermediate

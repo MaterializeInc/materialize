@@ -46,6 +46,7 @@ use mz_sql::session::vars::{
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateMaterializedViewStatement, ExplainPlanStatement, Explainee, InsertStatement,
+    WithOptionValue,
 };
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
@@ -57,7 +58,9 @@ use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
-use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
+use crate::coord::{
+    ConnMeta, Coordinator, Message, PendingTxn, PlanValidity, PurifiedStatementReady,
+};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
@@ -643,6 +646,7 @@ impl Coordinator {
                 let otel_ctx = OpenTelemetryContext::obtain();
                 let current_storage_configuration = self.controller.storage.config().clone();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
+                    let transient_revision = catalog.transient_revision();
                     let catalog = catalog.for_session(ctx.session());
 
                     // Checks if the session is authorized to purify a statement. Usually
@@ -657,21 +661,28 @@ impl Coordinator {
                         return ctx.retire(Err(e.into()));
                     }
 
-                    let result = mz_sql::pure::purify_statement(
+                    let (result, cluster_id) = mz_sql::pure::purify_statement(
                         catalog,
                         now,
                         stmt,
                         &current_storage_configuration,
                     )
-                    .await
-                    .map_err(|e| e.into());
+                    .await;
+                    let result = result.map_err(|e| e.into());
+                    let plan_validity = PlanValidity {
+                        transient_revision,
+                        dependency_ids: resolved_ids.0,
+                        cluster_id,
+                        replica_id: None,
+                        role_metadata: ctx.session().role_metadata().clone(),
+                    };
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
                     let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
                         PurifiedStatementReady {
                             ctx,
                             result,
                             params,
-                            resolved_ids,
+                            plan_validity,
                             original_stmt,
                             otel_ctx,
                         },
@@ -822,11 +833,16 @@ impl Coordinator {
         true
     }
 
-    /// Chooses a timestamp for `mz_now()`, if `mz_now()` occurs in the `with_options` of the materialized view.
-    /// If `acquire_read_holds` is true, it also grabs read holds on input collections that might possibly be involved
-    /// in the MV.
+    /// Chooses a timestamp for `mz_now()`, if `mz_now()` occurs in a REFRESH option of the
+    /// materialized view. Additionally, if `acquire_read_holds` is true and the MV has any REFRESH
+    /// option, this function grabs read holds at the earliest possible time on input collections
+    /// that might be involved in the MV.
     ///
-    /// Note that this is NOT what handles `mz_now()` in the query part of the MV. (handles it only in `with_options`).
+    /// Note that this is NOT what handles `mz_now()` in the query part of the MV. (handles it only
+    /// in `with_options`).
+    ///
+    /// (Note that the chosen timestamp won't be the same timestamp as the system table inserts,
+    /// unfortunately.)
     async fn resolve_mz_now_for_create_materialized_view<'a>(
         &mut self,
         cmvs: &CreateMaterializedViewStatement<Aug>,
@@ -834,62 +850,82 @@ impl Coordinator {
         session: &mut Session,
         acquire_read_holds: bool,
     ) -> Result<Option<Timestamp>, AdapterError> {
-        // (This won't be the same timestamp as the system table inserts, unfortunately.)
         if cmvs
             .with_options
             .iter()
-            .any(materialized_view_option_contains_temporal)
+            .any(|wo| matches!(wo.value, Some(WithOptionValue::Refresh(..))))
         {
-            let timeline_context = self.validate_timeline_context(resolved_ids.0.clone())?;
-
-            // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
-            // but even in the TimestampIndependent case.
-            // Note that we didn't accurately decide whether we are TimestampDependent
-            // or TimestampIndependent, because for this we'd need to also check whether
-            // `query.contains_temporal()`, similarly to how `peek_stage_validate` does.
-            // However, this doesn't matter here, as we are just going to default to
-            // EpochMilliseconds in both cases.
-            let timeline = timeline_context
-                .timeline()
-                .unwrap_or(&Timeline::EpochMilliseconds);
-
-            // Let's start with the timestamp oracle read timestamp.
-            let mut timestamp = self.get_timestamp_oracle(timeline).read_ts().await;
-
-            // If `least_valid_read` is later than the oracle, then advance to that time.
-            // If we didn't do this, then there would be a danger of missing the first refresh,
-            // which might cause the materialized view to be unreadable for hours. This might
-            // be what was happening here:
-            // https://github.com/MaterializeInc/materialize/issues/24288#issuecomment-1931856361
-            //
-            // In the long term, it would be good to actually block the MV creation statement
-            // until `least_valid_read`. https://github.com/MaterializeInc/materialize/issues/25127
-            // Without blocking, we have the problem that a REFRESH AT CREATION is not linearized
-            // with the CREATE MATERIALIZED VIEW statement, in the sense that a query from the MV
-            // after its creation might see input changes that happened after the CRATE MATERIALIZED
-            // VIEW statement returned.
             let catalog = self.catalog().for_session(session);
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
             let ids = self
                 .index_oracle(cluster)
                 .sufficient_collections(resolved_ids.0.iter());
-            let oracle_timestamp = timestamp;
 
-            // Acquire read holds _before_ we determine the least valid read.
+            // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
+            // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
+            // we want to check the AT times against the read holds that we acquire here. But
+            // we do it for any REFRESH option, to avoid having so many code paths doing different
+            // things.)
+            //
+            // It's important that we acquire read holds _before_ we determine the least valid read.
             // Otherwise, we're not guaranteed that the since frontier doesn't
             // advance forward from underneath us.
+            let read_holds = self.acquire_read_holds(&ids);
+
+            // Does `mz_now()` occur?
+            let mz_now_ts = if cmvs
+                .with_options
+                .iter()
+                .any(materialized_view_option_contains_temporal)
+            {
+                let timeline_context = self.validate_timeline_context(resolved_ids.0.clone())?;
+
+                // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
+                // but even in the TimestampIndependent case.
+                // Note that we didn't accurately decide whether we are TimestampDependent
+                // or TimestampIndependent, because for this we'd need to also check whether
+                // `query.contains_temporal()`, similarly to how `peek_stage_validate` does.
+                // However, this doesn't matter here, as we are just going to default to
+                // EpochMilliseconds in both cases.
+                let timeline = timeline_context
+                    .timeline()
+                    .unwrap_or(&Timeline::EpochMilliseconds);
+
+                // Let's start with the timestamp oracle read timestamp.
+                let mut timestamp = self.get_timestamp_oracle(timeline).read_ts().await;
+
+                // If `least_valid_read` is later than the oracle, then advance to that time.
+                // If we didn't do this, then there would be a danger of missing the first refresh,
+                // which might cause the materialized view to be unreadable for hours. This might
+                // be what was happening here:
+                // https://github.com/MaterializeInc/materialize/issues/24288#issuecomment-1931856361
+                //
+                // In the long term, it would be good to actually block the MV creation statement
+                // until `least_valid_read`. https://github.com/MaterializeInc/materialize/issues/25127
+                // Without blocking, we have the problem that a REFRESH AT CREATION is not linearized
+                // with the CREATE MATERIALIZED VIEW statement, in the sense that a query from the MV
+                // after its creation might see input changes that happened after the CRATE MATERIALIZED
+                // VIEW statement returned.
+                let oracle_timestamp = timestamp;
+                let least_valid_read = self.least_valid_read(&read_holds);
+                timestamp.advance_by(least_valid_read.borrow());
+
+                if oracle_timestamp != timestamp {
+                    warn!(%cmvs.name, %oracle_timestamp, %timestamp, "REFRESH MV's inputs are not readable at the oracle read ts");
+                }
+
+                Ok(Some(timestamp))
+            } else {
+                Ok(None)
+            };
+
+            // NOTE: The Drop impl of ReadHolds makes sure that the hold is
+            // released when we don't use it.
             if acquire_read_holds {
-                self.acquire_read_holds_auto_cleanup(session, timestamp, &ids, false)
-                    .expect("precise==false, so acquiring read holds always succeeds");
+                self.store_transaction_read_holds(session, read_holds);
             }
 
-            timestamp.advance_by(self.least_valid_read(&ids).borrow());
-
-            if oracle_timestamp != timestamp {
-                warn!(%cmvs.name, %oracle_timestamp, %timestamp, "REFRESH MV's inputs are not readable at the oracle read ts");
-            }
-
-            Ok(Some(timestamp))
+            mz_now_ts
         } else {
             Ok(None)
         }

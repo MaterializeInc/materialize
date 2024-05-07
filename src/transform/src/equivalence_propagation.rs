@@ -51,11 +51,11 @@ impl crate::Transform for EquivalencePropagation {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         // Perform bottom-up equivalence class analysis.
         use crate::analysis::DerivedBuilder;
-        let mut builder = DerivedBuilder::default();
+        let mut builder = DerivedBuilder::new(ctx.features);
         builder.require::<Equivalences>();
         let derived = builder.visit(relation);
         let derived = derived.as_view();

@@ -10,8 +10,6 @@ menu:
     weight: 40
 ---
 
-{{< public-preview />}}
-
 {{% create-source/intro %}}
 Webhook sources expose a [public URL](#webhook-url) that allows your applications to push webhook events into Materialize.
 {{% /create-source/intro %}}
@@ -50,7 +48,7 @@ Field                  | Type                | Description
 |<div style="width:290px">Body format</div> | Type      | Description       |
 --------------------------------------------| --------- |-------------------|
 | `BYTES`                                   | `bytea`   | Does **no parsing** of the request, and stores the body of a request as it was received. |
-| `JSON`                                    | `jsonb`   | Parses the body of a request as JSON. If the body is not valid JSON, a response of `400` Bad Request will be returned. |
+| `JSON`                                    | `jsonb`   | Parses the body of a request as JSON. Also accepts events batched as newline-delimited JSON (`NDJSON`). If the body is not valid JSON, a response of `400` Bad Request will be returned. |
 | `JSON ARRAY`                              | `jsonb`   | Parses the body of a request as a list of JSON objects, automatically expanding the list of objects to individual rows. Also accepts a single JSON object. If the body is not valid JSON, a response of `400` Bad Request will be returned. |
 | `TEXT`                                    | `text`    | Parses the body of a request as `UTF-8` text. If the body is not valid `UTF-8`, a response of `400` Bad Request will be returned. |
 
@@ -97,7 +95,7 @@ request header exists, you can map its fields to columns using the `INCLUDE
 HEADER` syntax.
 
 ```sql
-CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
+CREATE SOURCE my_webhook_source FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADER 'timestamp' as ts
   INCLUDE HEADER 'x-event-type' as event_type;
@@ -122,7 +120,7 @@ example, you need to accept a dynamic list of fields but want to exclude
 sensitive information like authorization.
 
 ```sql
-CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
+CREATE SOURCE my_webhook_source FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADERS ( NOT 'authorization', NOT 'x-api-key' );
 ```
@@ -154,7 +152,7 @@ hashing algorithm, and asserts the result is equal to the value provided in the
 `x-signature` header, decoded with `base64`.
 
 ```sql
-CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
+CREATE SOURCE my_webhook_source FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (
     WITH (
@@ -185,7 +183,7 @@ with your `CHECK` statement, we recommend creating a temporary source without
 `CHECK` and using that to iterate more quickly.
 
 ```sql
-CREATE SOURCE my_webhook_temporary_debug IN CLUSTER my_cluster FROM WEBHOOK
+CREATE SOURCE my_webhook_temporary_debug FROM WEBHOOK
   -- Specify the BODY FORMAT as TEXT or BYTES,
   -- which is how it's provided to CHECK.
   BODY FORMAT TEXT
@@ -215,10 +213,10 @@ provide these values as raw text for debugging.
 
 Given any number of conditions, e.g. a network hiccup, it's possible for your application to send
 an event more than once. If your event contains a unique identifier, you can de-duplicate these events
-using a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) and the `DISCINCT ON` clause.
+using a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) and the `DISTINCT ON` clause.
 
 ```sql
-CREATE MATERIALIZED VIEW my_webhook_idempotent IN CLUSTER my_compute_cluster AS (
+CREATE MATERIALIZED VIEW my_webhook_idempotent AS (
   SELECT DISTINCT ON (body->>'unique_id') *
   FROM my_webhook_source
   ORDER BY id
@@ -239,7 +237,7 @@ build finished, we'll receive a second event with the same _id_ but now a _finis
 To merge these events into a single row, we can again use the `DISTINCT ON` clause.
 
 ```sql
-CREATE MATERIALIZED VIEW my_build_jobs_merged IN CLUSTER my_compute_cluster AS (
+CREATE MATERIALIZED VIEW my_build_jobs_merged AS (
   SELECT DISTINCT ON (id) *
   FROM (
     SELECT
@@ -260,21 +258,26 @@ function, which enables [temporal filter pushdown](/transform-data/patterns/temp
 ### Handling batch events
 
 The application pushing events to your webhook source may batch multiple events
-into a single HTTP request. You can automatically expand this batch of requests
-into separate rows using `BODY FORMAT JSON ARRAY`.
+into a single HTTP request. The webhook source supports parsing batched events
+in the following formats:
+
+#### JSON arrays
+
+You can automatically expand a batch of requests formatted as a JSON array into
+separate rows using `BODY FORMAT JSON ARRAY`.
 
 ```sql
 -- Webhook source that parses request bodies as a JSON array.
-CREATE SOURCE webhook_source_json_batch IN CLUSTER my_cluster FROM WEBHOOK
+CREATE SOURCE webhook_source_json_array FROM WEBHOOK
   BODY FORMAT JSON ARRAY
   INCLUDE HEADERS;
 ```
 
-If you `POST` a JSON array of three elements to `webhook_source_json_batch`,
+If you `POST` a JSON array of three elements to `webhook_source_json_array`,
 three rows will get appended to the source.
 
 ```bash
-POST webhook_source_json_batch
+POST webhook_source_json_array
 [
   { "event_type": "a" },
   { "event_type": "b" },
@@ -283,7 +286,7 @@ POST webhook_source_json_batch
 ```
 
 ```sql
-SELECT COUNT(body) FROM webhook_source_json_batch;
+SELECT COUNT(body) FROM webhook_source_json_array;
 ----
 3
 ```
@@ -292,17 +295,43 @@ You can also post a single object to the source, which will get appended as one
 row.
 
 ```bash
-POST webhook_source_json_batch
+POST webhook_source_json_array
 { "event_type": "d" }
 ```
 
 ```sql
-SELECT body FROM webhook_source_json_batch;
+SELECT body FROM webhook_source_json_array;
 ----
 { "event_type": "a" }
 { "event_type": "b" }
 { "event_type": "c" }
 { "event_type": "d" }
+```
+
+#### Newline-delimited JSON (NDJSON)
+
+You can automatically expand a batch of requests formatted as NDJSON into
+separate rows using `BODY FORMAT JSON`.
+
+```sql
+-- Webhook source that parses request bodies as NDJSON.
+CREATE SOURCE webhook_source_ndjson FROM WEBHOOK
+BODY FORMAT JSON;
+```
+
+If you `POST` two elements delimited by newlines to `webhook_source_ndjson`, two
+rows will get appended to the source.
+
+```bash
+POST 'webhook_source_ndjson'
+  { 'event_type': 'foo' }
+  { 'event_type': 'bar' }
+```
+
+```sql
+SELECT COUNT(body) FROM webhook_source_ndjson;
+----
+2
 ```
 
 ## Request limits
@@ -311,8 +340,8 @@ Webhook sources apply the following limits to received requests:
 
 * The maximum size of the request body is **`2MB`**. Requests larger than this
   will fail with `413 Payload Too Large`.
-* The maximum number of concurrent connections is **500**, across all webhook
-  sources. Trying to connect when the server is at the capacity will return
+* The rate of concurrent requests/second across **all** webhook sources
+  is **500**. Trying to connect when the server is at capacity will fail with
   `429 Too Many Requests`.
 * Requests that contain a header name specified more than once will be rejected
   with `401 Unauthorized`.
@@ -339,7 +368,7 @@ different webhooks with the same basic authentication to check if a request is
 valid.
 
 ```sql
-CREATE SOURCE webhook_with_basic_auth IN CLUSTER my_cluster
+CREATE SOURCE webhook_with_basic_auth
 FROM WEBHOOK
     BODY FORMAT JSON
     CHECK (

@@ -18,14 +18,14 @@ COPY t(a, b) FROM STDIN
 ----
 COPY t(a, b) FROM STDIN
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("a"), Ident("b")] }, direction: From, target: Stdin, options: [] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("a"), Ident("b")] }, direction: From, target: Stdin, options: [] })
 
 parse-statement
 COPY t FROM STDIN
 ----
 COPY t FROM STDIN
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: From, target: Stdin, options: [] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: From, target: Stdin, options: [] })
 
 parse-statement
 COPY (select 1) TO STDOUT
@@ -46,35 +46,35 @@ COPY t(a, b) TO STDOUT
 ----
 COPY t(a, b) TO STDOUT
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("a"), Ident("b")] }, direction: To, target: Stdout, options: [] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("a"), Ident("b")] }, direction: To, target: Stdout, options: [] })
 
 parse-statement
 COPY t TO STDOUT WITH (FORMAT TEXT)
 ----
 COPY t TO STDOUT WITH (FORMAT = text)
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Stdout, options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("text")]))) }] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Stdout, options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("text")]))) }] })
 
 parse-statement
 COPY t TO STDOUT WITH (FORMAT CSV)
 ----
 COPY t TO STDOUT WITH (FORMAT = csv)
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Stdout, options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Stdout, options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }] })
 
 parse-statement
 COPY t FROM STDIN WITH (FORMAT CSV, DELIMITER '|', NULL 'NULL', QUOTE '"', ESCAPE '\\', HEADER false)
 ----
 COPY t FROM STDIN WITH (FORMAT = csv, DELIMITER = '|', NULL = 'NULL', QUOTE = '"', ESCAPE = '\\', HEADER = false)
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: From, target: Stdin, options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }, CopyOption { name: Delimiter, value: Some(Value(String("|"))) }, CopyOption { name: Null, value: Some(Value(String("NULL"))) }, CopyOption { name: Quote, value: Some(Value(String("\""))) }, CopyOption { name: Escape, value: Some(Value(String("\\\\"))) }, CopyOption { name: Header, value: Some(Value(Boolean(false))) }] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: From, target: Stdin, options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }, CopyOption { name: Delimiter, value: Some(Value(String("|"))) }, CopyOption { name: Null, value: Some(Value(String("NULL"))) }, CopyOption { name: Quote, value: Some(Value(String("\""))) }, CopyOption { name: Escape, value: Some(Value(String("\\\\"))) }, CopyOption { name: Header, value: Some(Value(Boolean(false))) }] })
 
 parse-statement
 COPY t TO STDOUT (format = text)
 ----
 COPY t TO STDOUT WITH (FORMAT = text)
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Stdout, options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("text")]))) }] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Stdout, options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("text")]))) }] })
 
 parse-statement
 COPY t TO STDOUT ()
@@ -88,7 +88,7 @@ COPY t TO STDIN
 ----
 COPY t TO stdin
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Identifier([Ident("stdin")])), options: [] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Identifier([Ident("stdin")])), options: [] })
 
 parse-statement
 COPY (select 1) FROM STDIN
@@ -111,7 +111,7 @@ COPY t TO 's3://path/' WITH (FORMAT = csv, MAX FILE SIZE = 10240, AWS CONNECTION
 ----
 COPY t TO 's3://path/' WITH (FORMAT = csv, MAX FILE SIZE = 10240, AWS CONNECTION = aws_conn)
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Value(String("s3://path/"))), options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }, CopyOption { name: MaxFileSize, value: Some(Value(Number("10240"))) }, CopyOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("aws_conn")])))) }] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Value(String("s3://path/"))), options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }, CopyOption { name: MaxFileSize, value: Some(Value(Number("10240"))) }, CopyOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("aws_conn")])))) }] })
 
 # S3 path can be a scalar expression
 parse-statement
@@ -119,14 +119,21 @@ COPY t TO 's3://path/' || mz_now() WITH (FORMAT = csv, MAX FILE SIZE = '100MB', 
 ----
 COPY t TO 's3://path/' || mz_now() WITH (FORMAT = csv, MAX FILE SIZE = '100MB', AWS CONNECTION = aws_conn)
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }, CopyOption { name: MaxFileSize, value: Some(Value(String("100MB"))) }, CopyOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("aws_conn")])))) }] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }, CopyOption { name: MaxFileSize, value: Some(Value(String("100MB"))) }, CopyOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("aws_conn")])))) }] })
+
+parse-statement
+COPY t TO 's3://path/' || mz_now() WITH (FORMAT = parquet, MAX FILE SIZE = '100MB', AWS CONNECTION = aws_conn)
+----
+COPY t TO 's3://path/' || mz_now() WITH (FORMAT = parquet, MAX FILE SIZE = '100MB', AWS CONNECTION = aws_conn)
+=>
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("parquet")]))) }, CopyOption { name: MaxFileSize, value: Some(Value(String("100MB"))) }, CopyOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("aws_conn")])))) }] })
 
 parse-statement
 COPY t TO 's3://path/' || repeat('1', 2)
 ----
 COPY t TO 's3://path/' || repeat('1', 2)
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })
 
 parse-statement
 COPY (select * from t) TO 's3://path/' || repeat('1', 2)
@@ -148,14 +155,14 @@ COPY t(column1, column2) TO 's3://path/'
 ----
 COPY t(column1, column2) TO 's3://path/'
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("column1"), Ident("column2")] }, direction: To, target: Expr(Value(String("s3://path/"))), options: [] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("column1"), Ident("column2")] }, direction: To, target: Expr(Value(String("s3://path/"))), options: [] })
 
 parse-statement
 COPY t(column1, column2) TO '/any/path/'
 ----
 COPY t(column1, column2) TO '/any/path/'
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("column1"), Ident("column2")] }, direction: To, target: Expr(Value(String("/any/path/"))), options: [] })
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("column1"), Ident("column2")] }, direction: To, target: Expr(Value(String("/any/path/"))), options: [] })
 
 parse-statement
 COPY (select * from t order by 1) TO 's3://path/' || repeat('1', 2)

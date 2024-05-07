@@ -91,17 +91,17 @@ class SourceErrors(Check):
     def validate(self) -> Testdrive:
         return Testdrive(
             dedent(
+                # This could also check that the error propagates to subsources,
+                # but the GlobalId migration that occurrs in v0.98 means that we
+                # lose historical data for source errors and this check is not
+                # so crucial that it's imperative that we correlate the original
+                # IDs to these errors.
                 """
                 > SELECT bool_and(error ~* 'publication .+ does not exist')
                     FROM mz_internal.mz_source_statuses
                     WHERE
                     name
-                    IN (
-                    SELECT name FROM (SHOW SUBSOURCES ON source_errors_sourceA WHERE type = 'subsource')
-                    UNION ALL (SELECT name FROM (SHOW SUBSOURCES ON source_errors_sourceB WHERE type = 'subsource'))
-                    UNION ALL SELECT 'source_errors_sourceA'
-                    UNION ALL SELECT 'source_errors_sourceB'
-                    );
+                    IN ('source_errors_sourcea', 'source_errors_sourceb');
                 true
                 """
             )

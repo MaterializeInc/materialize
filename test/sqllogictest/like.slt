@@ -29,6 +29,8 @@ Explained Query:
 Source materialize.public.t
   filter=(like["a%"](#0))
 
+Target cluster: quickstart
+
 EOF
 
 query T
@@ -47,6 +49,8 @@ Explained Query:
 
 Source materialize.public.t
   filter=(ilike["a%"](#0))
+
+Target cluster: quickstart
 
 EOF
 
@@ -68,6 +72,8 @@ Explained Query:
 Source materialize.public.t
   filter=(NOT(ilike["a%"](#0)))
 
+Target cluster: quickstart
+
 EOF
 
 query T
@@ -88,6 +94,8 @@ Explained Query:
 Source materialize.public.t
   filter=(NOT(ilike["a%"](#0)))
 
+Target cluster: quickstart
+
 EOF
 
 # Binary versions (MirScalarExpr::reduce changes them into unary when the pattern is a constant, which we prevent here.)
@@ -103,6 +111,8 @@ Explained Query:
 
 Source materialize.public.t
   filter=((#0 like #1))
+
+Target cluster: quickstart
 
 EOF
 
@@ -122,6 +132,8 @@ Explained Query:
 
 Source materialize.public.t
   filter=((#0 ilike #1))
+
+Target cluster: quickstart
 
 EOF
 

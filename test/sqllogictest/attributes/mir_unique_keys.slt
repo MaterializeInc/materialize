@@ -41,6 +41,8 @@ Explained Query:
         Project (#0) // { keys: "()" }
           ReadStorage materialize.public.t // { keys: "()" }
 
+Target cluster: quickstart
+
 EOF
 
 # all columns that have unique values are unique keys of an ok constant
@@ -52,6 +54,8 @@ Explained Query:
   Constant // { keys: "([0], [2])" }
     - (1, 2, 3)
     - (4, 2, 4)
+
+Target cluster: quickstart
 
 EOF
 
@@ -87,6 +91,8 @@ Source materialize.public.t
 
 Used Indexes:
   - materialize.public.v_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -134,6 +140,8 @@ Source materialize.public.u
 Used Indexes:
   - materialize.public.v_primary_idx (*** full scan ***)
 
+Target cluster: quickstart
+
 Notices:
   - Notice: Index materialize.public.v_primary_idx on v(c, d) is too wide to use for literal equalities `c = 1`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (c).
@@ -173,5 +181,7 @@ Explained Query:
         FlatMap generate_series(1, 100000, 1) // { keys: "()" }
           Constant // { keys: "([])" }
             - ()
+
+Target cluster: quickstart
 
 EOF

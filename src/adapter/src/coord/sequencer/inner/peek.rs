@@ -7,11 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use futures::stream::FuturesOrdered;
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use futures::stream::FuturesOrdered;
 use http::Uri;
 use itertools::Either;
 use maplit::btreemap;
@@ -21,8 +21,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, task};
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::optimize::OverrideFrom;
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, GlobalId, Row, RowArena, Timestamp};
+use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::{CatalogCluster, SessionCatalog};
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
@@ -75,6 +76,13 @@ impl Coordinator {
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
+        let explain_ctx = if ctx.session().vars().emit_plan_insights_notice() {
+            let optimizer_trace = OptimizerTrace::new(ExplainStage::PlanInsights.paths());
+            ExplainContext::PlanInsightsNotice(optimizer_trace)
+        } else {
+            ExplainContext::None
+        };
+
         self.execute_peek_stage(
             ctx,
             OpenTelemetryContext::obtain(),
@@ -82,7 +90,7 @@ impl Coordinator {
                 plan,
                 target_cluster,
                 copy_to_ctx: None,
-                explain_ctx: ExplainContext::None,
+                explain_ctx,
             }),
         )
         .await;
@@ -98,7 +106,7 @@ impl Coordinator {
             to,
             connection,
             connection_id,
-            format_params,
+            format,
             max_file_size,
         }: plan::CopyToPlan,
         target_cluster: TargetCluster,
@@ -141,7 +149,7 @@ impl Coordinator {
                     uri,
                     connection,
                     connection_id,
-                    format_params,
+                    format,
                     max_file_size,
                     // This will be set in `peek_stage_validate` stage below.
                     output_batch_count: None,
@@ -177,7 +185,7 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         self.execute_peek_stage(
             ctx,
@@ -603,10 +611,22 @@ impl Coordinator {
                                 let (_, df_meta, _) = global_lir_plan.unapply();
                                 PeekStage::ExplainPlan(PeekStageExplainPlan {
                                     validity,
-                                    select_id: optimizer.select_id(),
-                                    finishing: optimizer.finishing().clone(),
+                                    optimizer,
                                     df_meta,
                                     explain_ctx,
+                                })
+                            }
+                            ExplainContext::PlanInsightsNotice(optimizer_trace) => {
+                                PeekStage::Finish(PeekStageFinish {
+                                    validity,
+                                    plan,
+                                    id_bundle,
+                                    target_replica,
+                                    source_ids,
+                                    determination,
+                                    optimizer,
+                                    plan_insights_optimizer_trace: Some(optimizer_trace),
+                                    global_lir_plan,
                                 })
                             }
                             ExplainContext::None => PeekStage::Finish(PeekStageFinish {
@@ -617,6 +637,7 @@ impl Coordinator {
                                 source_ids,
                                 determination,
                                 optimizer,
+                                plan_insights_optimizer_trace: None,
                                 global_lir_plan,
                             }),
                             ExplainContext::Pushdown => {
@@ -669,8 +690,7 @@ impl Coordinator {
                             tracing::error!("error while handling EXPLAIN statement: {}", err);
                             PeekStage::ExplainPlan(PeekStageExplainPlan {
                                 validity,
-                                select_id: optimizer.select_id(),
-                                finishing: optimizer.finishing().clone(),
+                                optimizer,
                                 df_meta: Default::default(),
                                 explain_ctx,
                             })
@@ -769,6 +789,7 @@ impl Coordinator {
             source_ids,
             determination,
             optimizer,
+            plan_insights_optimizer_trace,
             global_lir_plan,
         }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -779,6 +800,22 @@ impl Coordinator {
         let source_arity = typ.arity();
 
         self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
+
+        let target_cluster = self.catalog().get_cluster(optimizer.cluster_id());
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features());
+
+        if let Some(trace) = plan_insights_optimizer_trace {
+            let insights = trace.into_plan_insights(
+                &features,
+                &self.catalog().for_session(session),
+                Some(plan.finishing),
+                Some(target_cluster.name.as_str()),
+                df_meta,
+            )?;
+            session.add_notice(AdapterNotice::PlanInsights(insights));
+        }
 
         let planned_peek = PlannedPeek {
             plan: peek_plan,
@@ -815,16 +852,16 @@ impl Coordinator {
                     _ => {}
                 }
             }
-            self.controller.install_watch_set(
+            self.controller.install_storage_watch_set(
                 transitive_storage_deps,
                 ts,
                 Box::new((uuid, StatementLifecycleEvent::StorageDependenciesFinished)),
             );
-            self.controller.install_watch_set(
+            self.controller.install_compute_watch_set(
                 transitive_compute_deps,
                 ts,
                 Box::new((uuid, StatementLifecycleEvent::ComputeDependenciesFinished)),
-            );
+            )
         }
         let max_query_result_size = std::cmp::min(
             ctx.session().vars().max_query_result_size(),
@@ -901,12 +938,10 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         PeekStageExplainPlan {
+            optimizer,
             df_meta,
-            select_id,
-            finishing,
             explain_ctx:
                 ExplainPlanContext {
-                    broken,
                     config,
                     format,
                     stage,
@@ -922,34 +957,34 @@ impl Coordinator {
         let session_catalog = self.catalog().for_session(ctx.session());
         let expr_humanizer = {
             let transient_items = btreemap! {
-                select_id => TransientItem::new(
-                    Some(GlobalId::Explain.to_string()),
-                    Some(GlobalId::Explain.to_string()),
+                optimizer.select_id() => TransientItem::new(
+                    Some(vec![GlobalId::Explain.to_string()]),
                     Some(desc.iter_names().map(|c| c.to_string()).collect()),
                 )
             };
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
-        let finishing = if finishing.is_trivial(desc.arity()) {
+        let finishing = if optimizer.finishing().is_trivial(desc.arity()) {
             None
         } else {
-            Some(finishing)
+            Some(optimizer.finishing().clone())
         };
+
+        let target_cluster = self.catalog().get_cluster(optimizer.cluster_id());
+        let features = optimizer.config().features.clone();
 
         let rows = optimizer_trace.into_rows(
             format,
             &config,
+            &features,
             &expr_humanizer,
             finishing,
+            Some(target_cluster.name.as_str()),
             df_meta,
             stage,
             plan::ExplaineeStatementKind::Select,
         )?;
-
-        if broken {
-            tracing_core::callsite::rebuild_interest_cache();
-        }
 
         Ok(Self::send_immediate_rows(rows))
     }
@@ -1122,9 +1157,6 @@ impl Coordinator {
         // returns to the coordinator.
 
         if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
-            assert_eq!(txn_reads.len(), 1);
-            let txn_reads = &txn_reads[0];
-
             // Find referenced ids not in the read hold. A reference could be caused by a
             // user specifying an object in a different schema than the first query. An
             // index could be caused by a CREATE INDEX after the transaction started.
@@ -1146,10 +1178,7 @@ impl Coordinator {
                 });
             }
         } else if let Some(read_holds) = read_holds {
-            self.txn_read_holds
-                .entry(session.conn_id().clone())
-                .or_insert_with(Vec::new)
-                .push(read_holds);
+            self.store_transaction_read_holds(session, read_holds);
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems

@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use mz_dyncfg::{Config, ConfigSet};
 use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_persist_types::columnar::{PartEncoder, Schema};
 use mz_persist_types::part::PartBuilder;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec;
@@ -67,38 +66,41 @@ pub(crate) const STATS_BUDGET_BYTES: Config<usize> = Config::new(
     "The budget (in bytes) of how many stats to maintain per batch part.",
 );
 
-pub(crate) const STATS_UNTRIMMABLE_COLUMNS_EQUALS: Config<String> = Config::new(
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_EQUALS: Config<fn() -> String> = Config::new(
     "persist_stats_untrimmable_columns_equals",
-    concat!(
-        // If we trim the "err" column, then we can't ever use pushdown on a
-        // part (because it could have >0 errors).
-        "err,",
-        "ts,",
-        "receivedat,",
-        "createdat,",
-        // Fivetran created tables track deleted rows by setting this column.
-        //
-        // See <https://fivetran.com/docs/using-fivetran/features#capturedeletes>.
-        "_fivetran_deleted,",
-    ),
+    || {
+        [
+            // If we trim the "err" column, then we can't ever use pushdown on a
+            // part (because it could have >0 errors).
+            "err",
+            "ts",
+            "receivedat",
+            "createdat",
+            // Fivetran created tables track deleted rows by setting this column.
+            //
+            // See <https://fivetran.com/docs/using-fivetran/features#capturedeletes>.
+            "_fivetran_deleted",
+        ]
+        .join(",")
+    },
     "\
     Which columns to always retain during persist stats trimming. Any column \
     with a name exactly equal (case-insensitive) to one of these will be kept. \
     Comma separated list.",
 );
 
-pub(crate) const STATS_UNTRIMMABLE_COLUMNS_PREFIX: Config<String> = Config::new(
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_PREFIX: Config<fn() -> String> = Config::new(
     "persist_stats_untrimmable_columns_prefix",
-    concat!("last_,",),
+    || ["last_"].join(","),
     "\
     Which columns to always retain during persist stats trimming. Any column \
     with a name starting with (case-insensitive) one of these will be kept. \
     Comma separated list.",
 );
 
-pub(crate) const STATS_UNTRIMMABLE_COLUMNS_SUFFIX: Config<String> = Config::new(
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_SUFFIX: Config<fn() -> String> = Config::new(
     "persist_stats_untrimmable_columns_suffix",
-    concat!("timestamp,", "time,", "_at,", "_tstamp,"),
+    || ["timestamp", "time", "_at", "_tstamp"].join(","),
     "\
     Which columns to always retain during persist stats trimming. Any column \
     with a name ending with (case-insensitive) one of these will be kept. \
@@ -126,24 +128,20 @@ pub(crate) fn part_stats_for_legacy_part<K: Codec, V: Codec>(
     // This is a laughably inefficient placeholder implementation of stats
     // on the old part format. We don't intend to make this fast, rather we
     // intend to compute stats on the new part format.
-    let mut new_format = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref());
-    let mut builder = new_format.get_mut();
-    let mut key = schemas.key.encoder(builder.key)?;
-    let mut val = schemas.val.encoder(builder.val)?;
+    let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
     for x in part {
         for ((k, v), t, d) in x.iter() {
             let k = K::decode(k)?;
             let v = V::decode(v)?;
-            key.encode(&k);
-            val.encode(&v);
-            builder.ts.push(i64::from_le_bytes(t));
-            builder.diff.push(i64::from_le_bytes(d));
+            let t = i64::from_le_bytes(t);
+            let d = i64::from_le_bytes(d);
+
+            builder.push(&k, &v, t, d);
         }
     }
-    drop(key);
-    drop(val);
-    let new_format = new_format.finish()?;
-    PartStats::new(&new_format)
+    let part = builder.finish();
+
+    PartStats::new(&part)
 }
 
 /// Statistics about the contents of a shard as_of some time.

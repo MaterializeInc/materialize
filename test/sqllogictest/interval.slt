@@ -630,7 +630,7 @@ statement error Expected end of statement, found left parenthesis
 SELECT INTERVAL '2-3 3:4' DAY(1)
 
 # Only allow positive integer nanosecond precision
-statement error Expected literal unsigned integer, found operator
+statement error Expected end of statement, found string literal
 SELECT INTERVAL '1 day 2-3 4' SECOND(-1);
 
 # Arbitrary punctuation delimiters
@@ -1185,7 +1185,7 @@ SELECT INTERVAL '1.5 second 43 microseconds'
 statement error Cannot set MILLISECONDS or MICROSECONDS field if SECOND field has a fraction component
 SELECT INTERVAL '1.5 second 42 milliseconds 43 microseconds'
 
-statement error Expected one of YEAR or MONTH or DAY or HOUR or MINUTE or SECOND or YEARS or MONTHS or DAYS or HOURS or MINUTES or SECONDS, found identifier "milliseconds"
+statement error Expected end of statement, found string literal
 SELECT INTERVAL '6 days 1.5 second 42 milliseconds' HOURS to MILLISECONDS
 
 ## Millennium/Century/Decade parsing

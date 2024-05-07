@@ -53,6 +53,8 @@ Explained Query:
 Source materialize.public.data
   filter=((#0 = 1) AND (#3 = 3))
 
+Target cluster: quickstart
+
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 1 2 2 3
@@ -71,6 +73,8 @@ Explained Query:
 
 Source materialize.public.data
   filter=((#1 = 1))
+
+Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
@@ -95,6 +99,8 @@ Explained Query:
 Source materialize.public.data
   filter=((#0 = 1) AND (#3 = 4))
 
+Target cluster: quickstart
+
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 1
@@ -113,6 +119,8 @@ Explained Query:
 
 Source materialize.public.data
   filter=((#0 = 1) AND (#3 = 4))
+
+Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
@@ -134,6 +142,8 @@ Explained Query:
         Project (#1)
           Filter (#3 = 4) AND (#1) IS NOT NULL
             ReadStorage materialize.public.data
+
+Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
@@ -164,6 +174,8 @@ Explained Query:
 Source materialize.public.data
   filter=((#3 = 4))
 
+Target cluster: quickstart
+
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 1
@@ -191,6 +203,8 @@ Explained Query:
 
 Source materialize.public.data
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
@@ -221,6 +235,8 @@ Explained Query:
 
 Source materialize.public.data
   filter=((#0 = 1))
+
+Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
@@ -258,6 +274,8 @@ Explained Query:
 
 Source materialize.public.data2
   filter=((#3) IS NULL)
+
+Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v

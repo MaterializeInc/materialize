@@ -900,6 +900,17 @@ impl MapFilterProject {
             // We have an annoying pattern of mapping literals that already exist as columns (by filters).
             // Try to identify this pattern, of a map that introduces an expression equated to a prior column,
             // and then replace the mapped expression by a column reference.
+            //
+            // We think this is due to `LiteralLifting`, and we might investigate removing the introduciton in
+            // the first place. The tell-tale that we see when we fix is a diff that look likes
+            //
+            // - Project (#0, #2)
+            // -   Filter (#1 = 1)
+            // -     Map (1)
+            // -       Get l0
+            // + Filter (#1 = 1)
+            // +   Get l0
+            //
             for (index, expr) in self.expressions.iter_mut().enumerate() {
                 // If `expr` matches a filter equating it to a column < index + input_arity, rewrite it
                 for (_, predicate) in self.predicates.iter() {
@@ -1941,6 +1952,17 @@ pub mod plan {
             self.mfp.could_error()
                 || self.lower_bounds.iter().any(|e| e.could_error())
                 || self.upper_bounds.iter().any(|e| e.could_error())
+        }
+
+        /// Indicates that `Self` ignores its input to the extent that it can be evaluated on `&[]`.
+        ///
+        /// At the moment, this is only true if it projects away all columns and applies no filters,
+        /// but it could be extended to plans that produce literals independent of the input.
+        pub fn ignores_input(&self) -> bool {
+            self.lower_bounds.is_empty()
+                && self.upper_bounds.is_empty()
+                && self.mfp.mfp.projection.is_empty()
+                && self.mfp.mfp.predicates.is_empty()
         }
     }
 }

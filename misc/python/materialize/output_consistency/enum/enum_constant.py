@@ -65,7 +65,7 @@ class EnumConstant(Expression):
         return self.own_characteristics
 
     def __str__(self) -> str:
-        return self.to_sql(SqlDialectAdjuster(), False)
+        return f"EnumConstant (value={self.value})"
 
     def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
         sql_value = self.data_type.value_to_sql(self.value, sql_adjuster)
@@ -76,3 +76,12 @@ class EnumConstant(Expression):
 
     def collect_leaves(self) -> list[LeafExpression]:
         return []
+
+
+class StringConstant(EnumConstant):
+    def __init__(
+        self,
+        value: str,
+        characteristics: set[ExpressionCharacteristics] = set(),
+    ):
+        super().__init__(value, add_quotes=True, characteristics=characteristics)

@@ -77,13 +77,13 @@ include!(concat!(env!("OUT_DIR"), "/mz_dyncfg.rs"));
 /// The supported types are [bool], [usize], [Duration], and [String], as well as [Option]
 /// variants of these as necessary.
 #[derive(Clone, Debug)]
-pub struct Config<T: ConfigType> {
+pub struct Config<D: ConfigDefault> {
     name: &'static str,
     desc: &'static str,
-    default: T::Default,
+    default: D,
 }
 
-impl<T: ConfigType> Config<T> {
+impl<D: ConfigDefault> Config<D> {
     /// Constructs a handle for a config of type `T`.
     ///
     /// It is best practice, but not strictly required, for the name to be
@@ -98,7 +98,7 @@ impl<T: ConfigType> Config<T> {
     /// TODO(cfg): See if we can make this more Rust-y and take these params as
     /// a struct (the obvious thing hits some issues with const combined with
     /// Drop).
-    pub const fn new(name: &'static str, default: T::Default, desc: &'static str) -> Self {
+    pub const fn new(name: &'static str, default: D, desc: &'static str) -> Self {
         Config {
             name,
             default,
@@ -117,7 +117,7 @@ impl<T: ConfigType> Config<T> {
     }
 
     /// The default value of this config.
-    pub fn default(&self) -> &T::Default {
+    pub fn default(&self) -> &D {
         &self.default
     }
 
@@ -130,14 +130,14 @@ impl<T: ConfigType> Config<T> {
     /// this initially because it was thought that the `Config` definition was
     /// the more important "noun" and also that rustfmt would maybe work better
     /// on this ordering.
-    pub fn get(&self, set: &ConfigSet) -> T {
-        T::from_val(self.shared(set).load())
+    pub fn get(&self, set: &ConfigSet) -> D::ConfigType {
+        D::ConfigType::from_val(self.shared(set).load())
     }
 
     /// Returns a handle to the value of this config in the given set.
     ///
     /// This allows users to amortize the cost of the name lookup.
-    pub fn handle(&self, set: &ConfigSet) -> ConfigValHandle<T> {
+    pub fn handle(&self, set: &ConfigSet) -> ConfigValHandle<D::ConfigType> {
         ConfigValHandle {
             val: self.shared(set).clone(),
             _type: PhantomData,
@@ -148,21 +148,41 @@ impl<T: ConfigType> Config<T> {
     fn shared<'a>(&self, set: &'a ConfigSet) -> &'a ConfigValAtomic {
         &set.configs
             .get(self.name)
-            .expect("config should be registered to set")
+            .unwrap_or_else(|| panic!("config {} should be registered to set", self.name))
             .val
     }
 }
 
 /// A type usable as a [Config].
 pub trait ConfigType: Into<ConfigVal> + Clone + Sized {
-    /// A const-compatible type suitable for use as the default value of configs
-    /// of this type.
-    type Default: Into<Self> + Clone;
-
     /// Converts a type-erased enum value to this type.
     ///
     /// Panics if the enum's variant does not match this type.
     fn from_val(val: ConfigVal) -> Self;
+}
+
+/// A trait for a type that can be used as a default for a [`Config`].
+pub trait ConfigDefault: Clone {
+    type ConfigType: ConfigType;
+
+    /// Converts into the config type.
+    fn into_config_type(self) -> Self::ConfigType;
+}
+
+impl<T: ConfigType> ConfigDefault for T {
+    type ConfigType = T;
+
+    fn into_config_type(self) -> T {
+        self
+    }
+}
+
+impl<T: ConfigType> ConfigDefault for fn() -> T {
+    type ConfigType = T;
+
+    fn into_config_type(self) -> T {
+        (self)()
+    }
 }
 
 /// An set of [Config]s with values independent of other [ConfigSet]s (even if
@@ -182,8 +202,8 @@ impl ConfigSet {
     ///
     /// Panics if a config with the same name has been previously registered
     /// to this set.
-    pub fn add<T: ConfigType>(mut self, config: &Config<T>) -> Self {
-        let default = Into::<T>::into(config.default.clone());
+    pub fn add<D: ConfigDefault>(mut self, config: &Config<D>) -> Self {
+        let default = config.default.clone().into_config_type();
         let default = Into::<ConfigVal>::into(default);
         let config = ConfigEntry {
             name: config.name,
@@ -271,6 +291,8 @@ pub enum ConfigVal {
     String(String),
     /// A `Duration` value.
     Duration(Duration),
+    /// A JSON value.
+    Json(serde_json::Value),
 }
 
 /// An atomic version of [`ConfigVal`] to allow configuration values to be
@@ -288,6 +310,7 @@ enum ConfigValAtomic {
     OptUsize(Arc<RwLock<Option<usize>>>),
     String(Arc<RwLock<String>>),
     Duration(Arc<RwLock<Duration>>),
+    Json(Arc<RwLock<serde_json::Value>>),
 }
 
 impl From<ConfigVal> for ConfigValAtomic {
@@ -299,6 +322,7 @@ impl From<ConfigVal> for ConfigValAtomic {
             ConfigVal::OptUsize(x) => ConfigValAtomic::OptUsize(Arc::new(RwLock::new(x))),
             ConfigVal::String(x) => ConfigValAtomic::String(Arc::new(RwLock::new(x))),
             ConfigVal::Duration(x) => ConfigValAtomic::Duration(Arc::new(RwLock::new(x))),
+            ConfigVal::Json(x) => ConfigValAtomic::Json(Arc::new(RwLock::new(x))),
         }
     }
 }
@@ -314,6 +338,7 @@ impl ConfigValAtomic {
                 ConfigVal::String(x.read().expect("lock poisoned").clone())
             }
             ConfigValAtomic::Duration(x) => ConfigVal::Duration(*x.read().expect("lock poisoned")),
+            ConfigValAtomic::Json(x) => ConfigVal::Json(x.read().expect("lock poisoned").clone()),
         }
     }
 
@@ -331,12 +356,16 @@ impl ConfigValAtomic {
             (ConfigValAtomic::Duration(x), ConfigVal::Duration(val)) => {
                 *x.write().expect("lock poisoned") = val
             }
+            (ConfigValAtomic::Json(x), ConfigVal::Json(val)) => {
+                *x.write().expect("lock poisoned") = val
+            }
             (ConfigValAtomic::Bool(_), val)
             | (ConfigValAtomic::U32(_), val)
             | (ConfigValAtomic::Usize(_), val)
             | (ConfigValAtomic::OptUsize(_), val)
             | (ConfigValAtomic::String(_), val)
-            | (ConfigValAtomic::Duration(_), val) => {
+            | (ConfigValAtomic::Duration(_), val)
+            | (ConfigValAtomic::Json(_), val) => {
                 panic!("attempted to store {val:?} value in {self:?} parameter")
             }
         }
@@ -348,8 +377,12 @@ impl ConfigUpdates {
     ///
     /// If a value of the same config has previously been added to these
     /// updates, replaces it.
-    pub fn add<T: ConfigType>(&mut self, config: &Config<T>, val: T) {
-        self.add_dynamic(config.name, val.into());
+    pub fn add<T, U>(&mut self, config: &Config<T>, val: U)
+    where
+        T: ConfigDefault,
+        U: ConfigDefault<ConfigType = T::ConfigType>,
+    {
+        self.add_dynamic(config.name, val.into_config_type().into());
     }
 
     /// Adds an update for the given configuration name and value.
@@ -406,11 +439,11 @@ mod impls {
     use mz_ore::cast::CastFrom;
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
-    use crate::{proto_config_val, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64};
+    use crate::{
+        proto_config_val, ConfigDefault, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64,
+    };
 
     impl ConfigType for bool {
-        type Default = bool;
-
         fn from_val(val: ConfigVal) -> Self {
             match val {
                 ConfigVal::Bool(x) => x,
@@ -426,8 +459,6 @@ mod impls {
     }
 
     impl ConfigType for u32 {
-        type Default = u32;
-
         fn from_val(val: ConfigVal) -> Self {
             match val {
                 ConfigVal::U32(x) => x,
@@ -443,8 +474,6 @@ mod impls {
     }
 
     impl ConfigType for usize {
-        type Default = usize;
-
         fn from_val(val: ConfigVal) -> Self {
             match val {
                 ConfigVal::Usize(x) => x,
@@ -460,8 +489,6 @@ mod impls {
     }
 
     impl ConfigType for Option<usize> {
-        type Default = Option<usize>;
-
         fn from_val(val: ConfigVal) -> Self {
             match val {
                 ConfigVal::OptUsize(x) => x,
@@ -477,8 +504,6 @@ mod impls {
     }
 
     impl ConfigType for String {
-        type Default = &'static str;
-
         fn from_val(val: ConfigVal) -> Self {
             match val {
                 ConfigVal::String(x) => x,
@@ -493,9 +518,15 @@ mod impls {
         }
     }
 
-    impl ConfigType for Duration {
-        type Default = Duration;
+    impl ConfigDefault for &str {
+        type ConfigType = String;
 
+        fn into_config_type(self) -> String {
+            self.into()
+        }
+    }
+
+    impl ConfigType for Duration {
         fn from_val(val: ConfigVal) -> Self {
             match val {
                 ConfigVal::Duration(x) => x,
@@ -507,6 +538,21 @@ mod impls {
     impl From<Duration> for ConfigVal {
         fn from(val: Duration) -> ConfigVal {
             ConfigVal::Duration(val)
+        }
+    }
+
+    impl ConfigType for serde_json::Value {
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::Json(x) => x,
+                x => panic!("expected JSON value got {:?}", x),
+            }
+        }
+    }
+
+    impl From<serde_json::Value> for ConfigVal {
+        fn from(val: serde_json::Value) -> ConfigVal {
+            ConfigVal::Json(val)
         }
     }
 
@@ -522,6 +568,7 @@ mod impls {
                 }),
                 ConfigVal::String(x) => Val::String(x.into_proto()),
                 ConfigVal::Duration(x) => Val::Duration(x.into_proto()),
+                ConfigVal::Json(x) => Val::Json(x.to_string()),
             };
             Some(val)
         }
@@ -536,6 +583,7 @@ mod impls {
                 }
                 Some(proto_config_val::Val::String(x)) => ConfigVal::String(x),
                 Some(proto_config_val::Val::Duration(x)) => ConfigVal::Duration(x.into_rust()?),
+                Some(proto_config_val::Val::Json(x)) => ConfigVal::Json(serde_json::from_str(&x)?),
                 None => {
                     return Err(TryFromProtoError::unknown_enum_variant(
                         "ProtoConfigVal::Val",
@@ -563,8 +611,10 @@ mod tests {
     const BOOL: Config<bool> = Config::new("bool", true, "");
     const USIZE: Config<usize> = Config::new("usize", 1, "");
     const OPT_USIZE: Config<Option<usize>> = Config::new("opt_usize", Some(2), "");
-    const STRING: Config<String> = Config::new("string", "a", "");
+    const STRING: Config<&str> = Config::new("string", "a", "");
     const DURATION: Config<Duration> = Config::new("duration", Duration::from_nanos(3), "");
+    const JSON: Config<fn() -> serde_json::Value> =
+        Config::new("json", || serde_json::json!({}), "");
 
     #[mz_ore::test]
     fn all_types() {
@@ -573,19 +623,22 @@ mod tests {
             .add(&USIZE)
             .add(&OPT_USIZE)
             .add(&STRING)
-            .add(&DURATION);
+            .add(&DURATION)
+            .add(&JSON);
         assert_eq!(BOOL.get(&configs), true);
         assert_eq!(USIZE.get(&configs), 1);
         assert_eq!(OPT_USIZE.get(&configs), Some(2));
         assert_eq!(STRING.get(&configs), "a");
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(3));
+        assert_eq!(JSON.get(&configs), serde_json::json!({}));
 
         let mut updates = ConfigUpdates::default();
         updates.add(&BOOL, false);
         updates.add(&USIZE, 2);
         updates.add(&OPT_USIZE, None);
-        updates.add(&STRING, "b".to_owned());
+        updates.add(&STRING, "b");
         updates.add(&DURATION, Duration::from_nanos(4));
+        updates.add(&JSON, serde_json::json!({"a": 1}));
         updates.apply(&configs);
 
         assert_eq!(BOOL.get(&configs), false);
@@ -593,6 +646,20 @@ mod tests {
         assert_eq!(OPT_USIZE.get(&configs), None);
         assert_eq!(STRING.get(&configs), "b");
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(4));
+        assert_eq!(JSON.get(&configs), serde_json::json!({"a": 1}));
+    }
+
+    #[mz_ore::test]
+    fn fn_default() {
+        const BOOL_FN_DEFAULT: Config<fn() -> bool> = Config::new("bool", || !true, "");
+        const STRING_FN_DEFAULT: Config<fn() -> String> =
+            Config::new("string", || "x".repeat(3), "");
+
+        let configs = ConfigSet::default()
+            .add(&BOOL_FN_DEFAULT)
+            .add(&STRING_FN_DEFAULT);
+        assert_eq!(BOOL_FN_DEFAULT.get(&configs), false);
+        assert_eq!(STRING_FN_DEFAULT.get(&configs), "xxx");
     }
 
     #[mz_ore::test]

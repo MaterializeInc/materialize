@@ -232,6 +232,15 @@ impl SessionVar {
         }
     }
 
+    /// Checks if the provided [`VarInput`] is valid for the current session variable, returning
+    /// the formatted output if it's valid.
+    pub fn check(&self, input: VarInput) -> Result<String, VarError> {
+        let v = self.definition.parse(input)?;
+        self.validate_constraints(v.as_ref())?;
+
+        Ok(v.format())
+    }
+
     /// Parse the input and update the stored value to match.
     pub fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
         let v = self.definition.parse(input)?;
@@ -370,6 +379,7 @@ impl SessionVars {
             &SERVER_VERSION_NUM,
             &SQL_SAFE_UPDATES,
             &REAL_TIME_RECENCY,
+            &EMIT_PLAN_INSIGHTS_NOTICE,
             &EMIT_TIMESTAMP_NOTICE,
             &EMIT_TRACE_ID_NOTICE,
             &AUTO_ROUTE_INTROSPECTION_QUERIES,
@@ -489,8 +499,10 @@ impl SessionVars {
     ///
     /// Note: If you're trying to determine the value of the variable with `name` you should
     /// instead use the named accessor, or [`SessionVars::get`].
-    pub fn inspect(&self, name: &str) -> Option<&SessionVar> {
-        self.vars.get(UncasedStr::new(name))
+    pub fn inspect(&self, name: &str) -> Result<&SessionVar, VarError> {
+        self.vars
+            .get(UncasedStr::new(name))
+            .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
     }
 
     /// Sets the configuration parameter named `name` to the value represented
@@ -727,6 +739,11 @@ impl SessionVars {
     /// Returns the value of `real_time_recency` configuration parameter.
     pub fn real_time_recency(&self) -> bool {
         *self.expect_value(&REAL_TIME_RECENCY)
+    }
+
+    /// Returns the value of `emit_plan_insights_notice` configuration parameter.
+    pub fn emit_plan_insights_notice(&self) -> bool {
+        *self.expect_value(&EMIT_PLAN_INSIGHTS_NOTICE)
     }
 
     /// Returns the value of `emit_timestamp_notice` configuration parameter.
@@ -1133,6 +1150,7 @@ impl SystemVars {
             &PG_SOURCE_KEEPALIVES_RETRIES,
             &PG_SOURCE_TCP_USER_TIMEOUT,
             &PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT,
+            &PG_SOURCE_WAL_SENDER_TIMEOUT,
             &PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT,
             &PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT,
             &PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT,
@@ -1181,6 +1199,7 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
             &cluster_scheduling::CLUSTER_ALWAYS_USE_DISK,
+            &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
             &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
             &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
@@ -1218,6 +1237,9 @@ impl SystemVars {
                     VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
                 }
                 ConfigVal::Duration(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
+                }
+                ConfigVal::Json(default) => {
                     VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
                 }
             })
@@ -1699,6 +1721,11 @@ impl SystemVars {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
     }
 
+    /// Returns the `pg_source_wal_sender_timeout` configuration parameter.
+    pub fn pg_source_wal_sender_timeout(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_WAL_SENDER_TIMEOUT)
+    }
+
     /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
     pub fn pg_source_snapshot_collect_strict_count(&self) -> bool {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
@@ -1849,6 +1876,9 @@ impl SystemVars {
                 }
                 ConfigVal::Duration(_) => {
                     ConfigVal::from(*self.expect_config_value::<Duration>(name))
+                }
+                ConfigVal::Json(_) => {
+                    ConfigVal::from(self.expect_config_value::<serde_json::Value>(name).clone())
                 }
             };
             updates.add_dynamic(entry.name(), val);
@@ -2007,6 +2037,10 @@ impl SystemVars {
         *self.expect_value(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
     }
 
+    pub fn cluster_check_scheduling_policies_interval(&self) -> Duration {
+        *self.expect_value(&cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL)
+    }
+
     /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
     pub fn privatelink_status_update_quota_per_minute(&self) -> u32 {
         *self.expect_value(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
@@ -2089,6 +2123,7 @@ impl SystemVars {
             || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
             || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
             || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
+            || name == PG_SOURCE_WAL_SENDER_TIMEOUT.name()
             || name == PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT.name()
             || name == PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT.name()
             || name == PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT.name()

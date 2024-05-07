@@ -12,14 +12,14 @@
     USER 'mz',
     PORT 22
   ) WITH (VALIDATE);
-contains:failed to connect to the remote host: Could not resolve hostname
+contains:failed to lookup address information
 
 ! CREATE CONNECTION IF NOT EXISTS invalid_port TO SSH TUNNEL (
     HOST 'ssh-bastion-host',
     USER 'mz',
     PORT 23
   ) WITH (VALIDATE);
-contains:failed to connect to the remote host: connect to host ssh-bastion-host port 23: Connection refused
+regex:failed to connect to the remote host: connect to host .* port 23: Connection refused
 
 > CREATE CONNECTION IF NOT EXISTS invalid_user TO SSH TUNNEL (
     HOST 'ssh-bastion-host',
@@ -28,9 +28,9 @@ contains:failed to connect to the remote host: connect to host ssh-bastion-host 
   );
 
 ! VALIDATE CONNECTION invalid_user;
-contains:failed to connect to the remote host: invalid@ssh-bastion-host: Permission denied (publickey,keyboard-interactive).
+regex:failed to connect to the remote host: invalid@.*: Permission denied \(publickey,keyboard-interactive\)\.
 
 > DROP CONNECTION invalid_user;
 
 ! VALIDATE CONNECTION thancred;
-contains:failed to connect to the remote host: mz@ssh-bastion-host: Permission denied (publickey,keyboard-interactive).
+regex:failed to connect to the remote host: mz@.*: Permission denied \(publickey,keyboard-interactive\)\.

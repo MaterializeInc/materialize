@@ -16,6 +16,8 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
@@ -478,56 +480,89 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        let any_batch_rewrite = batches
-            .iter()
-            .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
-        let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
-        for batch in batches.iter() {
-            let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
-            for run in batch.batch.runs() {
-                // Mark the boundary if this is not the first run in the batch.
-                let start_index = parts.len();
-                if start_index != 0 {
-                    runs.push(start_index);
+        let mut received_inline_backpressure = false;
+        let maintenance = loop {
+            let any_batch_rewrite = batches
+                .iter()
+                .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
+            let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
+            for batch in batches.iter() {
+                let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
+                for run in batch.batch.runs() {
+                    // Mark the boundary if this is not the first run in the batch.
+                    let start_index = parts.len();
+                    if start_index != 0 {
+                        runs.push(start_index);
+                    }
+                    parts.extend_from_slice(run);
                 }
-                parts.extend_from_slice(run);
+                num_updates += batch.batch.len;
             }
-            num_updates += batch.batch.len;
-        }
 
-        let heartbeat_timestamp = (self.cfg.now)();
-        let res = self
-            .machine
-            .compare_and_append(
-                &HollowBatch {
-                    desc: desc.clone(),
-                    parts,
-                    len: num_updates,
-                    runs,
-                },
-                &self.writer_id,
-                &self.debug_state,
-                heartbeat_timestamp,
-            )
-            .await;
+            let heartbeat_timestamp = (self.cfg.now)();
+            let res = self
+                .machine
+                .compare_and_append(
+                    &HollowBatch {
+                        desc: desc.clone(),
+                        parts,
+                        len: num_updates,
+                        runs,
+                    },
+                    &self.writer_id,
+                    &self.debug_state,
+                    heartbeat_timestamp,
+                )
+                .await;
 
-        let maintenance = match res {
-            CompareAndAppendRes::Success(_seqno, maintenance) => {
-                self.upper = desc.upper().clone();
-                for batch in batches.iter_mut() {
-                    batch.mark_consumed();
+            match res {
+                CompareAndAppendRes::Success(_seqno, maintenance) => {
+                    self.upper = desc.upper().clone();
+                    for batch in batches.iter_mut() {
+                        batch.mark_consumed();
+                    }
+                    break maintenance;
                 }
-                maintenance
-            }
-            CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
-            CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
-                // We tried to to a compare_and_append with the wrong expected upper, that
-                // won't work. Update the cached upper to the current upper.
-                self.upper = current_upper.clone();
-                return Ok(Err(UpperMismatch {
-                    current: current_upper,
-                    expected: expected_upper,
-                }));
+                CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
+                CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
+                    // We tried to to a compare_and_append with the wrong expected upper, that
+                    // won't work. Update the cached upper to the current upper.
+                    self.upper = current_upper.clone();
+                    return Ok(Err(UpperMismatch {
+                        current: current_upper,
+                        expected: expected_upper,
+                    }));
+                }
+                CompareAndAppendRes::InlineBackpressure => {
+                    // We tried to write an inline part, but there was already
+                    // too much in state. Flush it out to s3 and try again.
+                    assert_eq!(received_inline_backpressure, false);
+                    received_inline_backpressure = true;
+
+                    let cfg = BatchBuilderConfig::new(&self.cfg, &self.writer_id);
+                    // We could have a large number of inline parts (imagine the
+                    // sharded persist_sink), do this flushing concurrently.
+                    let flush_batches = batches
+                        .iter_mut()
+                        .map(|batch| async {
+                            batch
+                                .flush_to_blob(
+                                    &cfg,
+                                    &self.metrics.inline.backpressure,
+                                    &self.isolated_runtime,
+                                    &self.schemas,
+                                )
+                                .await
+                        })
+                        .collect::<FuturesUnordered<_>>();
+                    let () = flush_batches.collect::<()>().await;
+
+                    for batch in batches.iter() {
+                        assert_eq!(batch.batch.inline_bytes(), 0);
+                    }
+
+                    continue;
+                }
             }
         };
 
@@ -791,7 +826,7 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn empty_batches(dyncfgs: ConfigUpdates) {
-        let data = vec![
+        let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),

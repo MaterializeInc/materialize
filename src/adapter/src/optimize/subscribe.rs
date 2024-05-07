@@ -333,7 +333,7 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
 
         // Ensure all expressions are normalized before finalizing.
         for build in df_desc.objects_to_build.iter_mut() {
-            normalize_lets(&mut build.plan.0)?
+            normalize_lets(&mut build.plan.0, &self.config.features)?
         }
 
         // Finalize the dataflow. This includes:

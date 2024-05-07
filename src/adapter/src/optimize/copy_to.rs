@@ -235,10 +235,10 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             Connection::Aws(aws_connection) => {
                 ComputeSinkConnection::CopyToS3Oneshot(CopyToS3OneshotSinkConnection {
                     upload_info: S3UploadInfo {
-                        prefix: self.copy_to_context.uri.to_string(),
+                        uri: self.copy_to_context.uri.to_string(),
                         max_file_size: self.copy_to_context.max_file_size,
                         desc: self.copy_to_context.desc.clone(),
-                        format: self.copy_to_context.format_params.clone(),
+                        format: self.copy_to_context.format.clone(),
                     },
                     aws_connection: aws_connection.clone(),
                     connection_id: self.copy_to_context.connection_id,
@@ -286,7 +286,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // Set the `as_of` and `until` timestamps for the dataflow.
         df_desc.set_as_of(timestamp_ctx.antichain());
 
-        // Use the the opportunity to name an `until` frontier that will prevent
+        // Use the opportunity to name an `until` frontier that will prevent
         // work we needn't perform. By default, `until` will be
         // `Antichain::new()`, which prevents no updates and is safe.
         //
@@ -342,7 +342,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 
         // Ensure all expressions are normalized before finalizing.
         for build in df_desc.objects_to_build.iter_mut() {
-            normalize_lets(&mut build.plan.0)?
+            normalize_lets(&mut build.plan.0, &self.config.features)?
         }
 
         // Finalize the dataflow. This includes:

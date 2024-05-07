@@ -15,13 +15,17 @@ import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
-import "storage-client/src/client.proto";
 
 import "google/protobuf/empty.proto";
 
 package mz_compute_client.protocol.response;
 
 message ProtoComputeResponse {
+    message ProtoFrontiersKind {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        ProtoFrontiersResponse resp = 2;
+    }
+
     message ProtoPeekResponseKind {
         mz_proto.ProtoU128 id = 1;
         ProtoPeekResponse resp = 2;
@@ -39,12 +43,17 @@ message ProtoComputeResponse {
     }
 
     oneof kind {
-        mz_storage_client.client.ProtoTrace frontier_upper = 1;
+        ProtoFrontiersKind frontiers = 1;
         ProtoPeekResponseKind peek_response = 2;
         ProtoSubscribeResponseKind subscribe_response = 3;
         ProtoCopyToResponseKind copy_to_response = 4;
         ProtoStatusResponse status = 5;
     }
+}
+
+message ProtoFrontiersResponse {
+    mz_repr.antichain.ProtoU64Antichain write_frontier = 1;
+    mz_repr.antichain.ProtoU64Antichain input_frontier = 2;
 }
 
 message ProtoPeekResponse {

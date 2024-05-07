@@ -1,0 +1,23 @@
+[package]
+name = "mz-build-tools"
+description = "Provides access to tools required in build scripts."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cfg-if = "1.0.0"
+protobuf-src = { version = "1.1.0", optional = true }
+which = "4"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[lints]
+workspace = true
+
+[features]
+default = ["protobuf-src", "workspace-hack"]
+bazel = []
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

@@ -26,7 +26,7 @@ Additionally you can also download the full coverage report in HTML format from 
 
 ## Limitations
 
-The [Coverage](https://buildkite.com/materialize/coverage/builds) Buildkite pipeline runs a subset of tests from the [Tests](https://buildkite.com/materialize/tests) pipeline, which is already automatically run against each pull request. The excluded tests are marked with a `coverage: skip` in the [`pipeline.template.yml`](https://github.com/MaterializeInc/materialize/blob/main/ci/test/pipeline.template.yml):
+The [Coverage](https://buildkite.com/materialize/coverage/builds) Buildkite pipeline runs a subset of tests from the [Test](https://buildkite.com/materialize/test) pipeline, which is already automatically run against each pull request. The excluded tests are marked with a `coverage: skip` in the [`pipeline.template.yml`](https://github.com/MaterializeInc/materialize/blob/main/ci/test/pipeline.template.yml):
 
 - Miri test: Subset of cargo test, no additional use
 - Maelstrom coverage of persist: Randomized testing probably shouldn't count for coverage, not stable

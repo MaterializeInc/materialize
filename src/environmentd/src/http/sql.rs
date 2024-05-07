@@ -27,14 +27,14 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, ExecuteResponseKind,
-    PeekResponseUnary, SessionClient,
+    verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
+    ExecuteResponseKind, PeekResponseUnary, SessionClient,
 };
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
-use mz_repr::{Datum, RelationDesc, RowArena};
+use mz_repr::{Datum, RelationDesc, Row, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::parse::StatementParseResult;
@@ -309,6 +309,7 @@ async fn forward_notices(
     let ws_notices = notices.into_iter().map(|notice| {
         WebSocketResponse::Notice(Notice {
             message: notice.to_string(),
+            code: notice.code().code().to_string(),
             severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),
@@ -408,16 +409,36 @@ pub enum SqlResult {
 }
 
 impl SqlResult {
-    fn rows(
-        client: &mut SessionClient,
-        tag: String,
-        rows: Vec<Vec<serde_json::Value>>,
-        desc: RelationDesc,
-    ) -> SqlResult {
+    /// Convert adapter Row results into the web row result format. Error if the row format does not
+    /// match the expected descriptor.
+    fn rows(client: &mut SessionClient, sql_rows: Vec<Row>, desc: &RelationDesc) -> SqlResult {
+        if let Err(err) = verify_datum_desc(desc, &sql_rows) {
+            return SqlResult::Err {
+                error: err.into(),
+                notices: make_notices(client),
+            };
+        }
+        let mut rows: Vec<Vec<serde_json::Value>> = vec![];
+        let mut datum_vec = mz_repr::DatumVec::new();
+        let types = &desc.typ().column_types;
+        for row in sql_rows {
+            let datums = datum_vec.borrow_with(&row);
+            rows.push(
+                datums
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| {
+                        TypedDatum::new(*d, &types[i])
+                            .json(&JsonNumberPolicy::ConvertNumberToString)
+                    })
+                    .collect(),
+            );
+        }
+        let tag = format!("SELECT {}", rows.len());
         SqlResult::Rows {
             tag,
             rows,
-            desc: Description::from(&desc),
+            desc: Description::from(desc),
             notices: make_notices(client),
         }
     }
@@ -485,6 +506,7 @@ pub enum WebSocketResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Notice {
     message: String,
+    code: String,
     severity: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -578,7 +600,7 @@ trait ResultSender: Send {
     /// Emits a streaming notice if the sender supports it.
     ///
     /// Does nothing if `SUPPORTS_STREAMING_NOTICES` is false.
-    async fn emit_streaming_notice(&mut self, _: AdapterNotice) -> Result<(), Error> {
+    async fn emit_streaming_notices(&mut self, _: Vec<AdapterNotice>) -> Result<(), Error> {
         unreachable!("streaming notices marked as unsupported")
     }
 }
@@ -640,13 +662,11 @@ impl ResultSender for SqlResponse {
 impl ResultSender for WebSocket {
     const SUPPORTS_STREAMING_NOTICES: bool = true;
 
-    // The first component of the return value is
-    // Err if sending to the client
-    // produced an error and the server should disconnect. It is Ok(Err) if the statement
-    // produced an error and should error the transaction, but remain connected. It is Ok(Ok(()))
-    // if the statement succeeded.
-    // The second component of the return value is `Some` if execution still
-    // needs to be retired for statement logging purposes.
+    // The first component of the return value is Err if sending to the client produced an error and
+    // the server should disconnect. It is Ok(Err) if the statement produced an error and should
+    // error the transaction, but remain connected. It is Ok(Ok(())) if the statement succeeded. The
+    // second component of the return value is `Some` if execution still needs to be retired for
+    // statement logging purposes.
     async fn add_result(
         &mut self,
         client: &mut SessionClient,
@@ -736,6 +756,17 @@ impl ResultSender for WebSocket {
                     };
                     match res {
                         Some(PeekResponseUnary::Rows(rows)) => {
+                            if let Err(err) = verify_datum_desc(desc, &rows) {
+                                let error = err.to_string();
+                                break (
+                                    true,
+                                    vec![WebSocketResponse::Error(err.into())],
+                                    Some((
+                                        StatementEndedExecutionReason::Errored { error },
+                                        ctx_extra,
+                                    )),
+                                );
+                            }
                             rows_returned += rows.len();
                             for row in rows {
                                 let datums = datum_vec.borrow_with(&row);
@@ -831,8 +862,8 @@ impl ResultSender for WebSocket {
         true
     }
 
-    async fn emit_streaming_notice(&mut self, notice: AdapterNotice) -> Result<(), Error> {
-        forward_notices(self, [notice]).await
+    async fn emit_streaming_notices(&mut self, notices: Vec<AdapterNotice>) -> Result<(), Error> {
+        forward_notices(self, notices).await
     }
 }
 
@@ -845,7 +876,7 @@ where
     loop {
         tokio::select! {
             notice = client.session().recv_notice(), if S::SUPPORTS_STREAMING_NOTICES => {
-                sender.emit_streaming_notice(notice).await?;
+                sender.emit_streaming_notices(vec![notice]).await?;
             }
             e = sender.connection_error() => return Err(e),
             r = &mut f => return Ok(r),
@@ -1117,10 +1148,17 @@ async fn execute_stmt<S: ResultSender>(
         .map(|portal| portal.desc.clone())
         .expect("unnamed portal should be present");
 
-    let (res, execute_started) = match client
+    let res = client
         .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
-        .await
-    {
+        .await;
+
+    if S::SUPPORTS_STREAMING_NOTICES {
+        sender
+            .emit_streaming_notices(client.session().drain_notices())
+            .await?;
+    }
+
+    let (res, execute_started) = match res {
         Ok(res) => res,
         Err(e) => {
             return Ok(SqlResult::err(client, e).into());
@@ -1231,46 +1269,10 @@ async fn execute_stmt<S: ResultSender>(
                     return Ok(SqlResult::err(client, AdapterError::Canceled).into());
                 }
             };
-            let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
-            let mut datum_vec = mz_repr::DatumVec::new();
-            let desc = desc.relation_desc.expect("RelationDesc must exist");
-            let types = &desc.typ().column_types;
-            for row in rows {
-                let datums = datum_vec.borrow_with(&row);
-                sql_rows.push(
-                    datums
-                        .iter()
-                        .enumerate()
-                        .map(|(i, d)| {
-                            TypedDatum::new(*d, &types[i])
-                                .json(&JsonNumberPolicy::ConvertNumberToString)
-                        })
-                        .collect(),
-                );
-            }
-            let tag = format!("SELECT {}", sql_rows.len());
-            SqlResult::rows(client, tag, sql_rows, desc).into()
+            SqlResult::rows(client, rows, &desc.relation_desc.expect("RelationDesc must exist")).into()
         }
         ExecuteResponse::SendingRowsImmediate { rows } => {
-            let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
-            let mut datum_vec = mz_repr::DatumVec::new();
-            let desc = desc.relation_desc.expect("RelationDesc must exist");
-            let types = &desc.typ().column_types;
-            for row in rows {
-                let datums = datum_vec.borrow_with(&row);
-                sql_rows.push(
-                    datums
-                        .iter()
-                        .enumerate()
-                        .map(|(i, d)| {
-                            TypedDatum::new(*d, &types[i])
-                                .json(&JsonNumberPolicy::ConvertNumberToString)
-                        })
-                        .collect(),
-                );
-            }
-            let tag = format!("SELECT {}", sql_rows.len());
-            SqlResult::rows(client, tag, sql_rows, desc).into()
+            SqlResult::rows(client, rows, &desc.relation_desc.expect("RelationDesc must exist")).into()
         }
         ExecuteResponse::Subscribing { rx, ctx_extra } => StatementResult::Subscribe {
             tag: "SUBSCRIBE".into(),
@@ -1303,6 +1305,7 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
         .into_iter()
         .map(|notice| Notice {
             message: notice.to_string(),
+            code: notice.code().code().to_string(),
             severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),

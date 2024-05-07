@@ -56,7 +56,7 @@ use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, TransactionId,
 };
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
+use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse};
 
@@ -475,13 +475,16 @@ impl SessionClient {
         );
         segment_client.environment_track(
             &self.environment_id,
-            session.application_name(),
-            user_id,
             event_name,
             json!({
                 "statement_kind": statement_kind,
                 "error": &parse_error.error,
             }),
+            EventDetails {
+                user_id: Some(user_id),
+                application_name: Some(session.application_name()),
+                ..Default::default()
+            },
         );
     }
 

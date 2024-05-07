@@ -47,7 +47,8 @@ Field           | Type                         | Meaning
 
 {{< public-preview />}}
 
-The `mz_aws_privatelink_connections` table contains a row for each AWS PrivateLink connection in the system.
+The `mz_aws_privatelink_connections` table contains a row for each AWS
+PrivateLink connection in the system.
 
 <!-- RELATION_SPEC mz_catalog.mz_aws_privatelink_connections -->
 Field       | Type      | Meaning
@@ -204,8 +205,8 @@ Field        | Type        | Meaning
 ### `mz_index_columns`
 
 The `mz_index_columns` table contains a row for each column in each index in the
-system. For example, an index on `(a, b + 1)` would have two rows in this table,
-one for each of the two columns in the index.
+system. For example, an index on `(a, b + 1)` would have two rows in this
+table, one for each of the two columns in the index.
 
 For a given row, if `field_number` is null then `expression` will be nonnull, or
 vice-versa.
@@ -267,7 +268,8 @@ Field          | Type       | Meaning
 
 ### `mz_materialized_views`
 
-The `mz_materialized_views` table contains a row for each materialized view in the system.
+The `mz_materialized_views` table contains a row for each materialized view in
+the system.
 
 <!-- RELATION_SPEC mz_catalog.mz_materialized_views -->
 Field          | Type                 | Meaning
@@ -285,12 +287,12 @@ Field          | Type                 | Meaning
 
 ### `mz_objects`
 
-The `mz_objects` view contains a row for each table, source, view, materialized view, sink,
-index, connection, secret, type, and function in the system.
+The `mz_objects` view contains a row for each table, source, view, materialized
+view, sink, index, connection, secret, type, and function in the system.
 
-IDs for all objects represented in `mz_objects` share a namespace. If there is a view
-with ID u1, there will never be a table, source, view, materialized view, sink, index,
-connection, secret, type, or function with ID u1.
+IDs for all objects represented in `mz_objects` share a namespace. If there is a
+view with ID `u1`, there will never be a table, source, view, materialized view,
+sink, index, connection, secret, type, or function with ID `u1`.
 
 <!-- RELATION_SPEC mz_catalog.mz_objects -->
 Field       | Type                 | Meaning
@@ -342,14 +344,28 @@ Field            | Type       | Meaning
 
 ### `mz_role_members`
 
-The `mz_role_members` table contains a row for role membership in the system.
+The `mz_role_members` table contains a row for each role membership in the
+system.
 
 <!-- RELATION_SPEC mz_catalog.mz_role_members -->
 Field     | Type       | Meaning
 ----------|------------|--------
-`role_id` | [`text`]   | The role id of the role that `member` is a meber of. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
-`member`  | [`text`]   | The role id that is a member of `role_id`. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
-`grantor` | [`text`]   | The role id that granted membership of `member` to `role_id`. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`role_id` | [`text`]   | The ID of the role the `member` is a member of. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`member`  | [`text`]   | The ID of the role that is a member of `role_id`. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`grantor` | [`text`]   | The ID of the role that granted membership of `member` to `role_id`. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+
+### `mz_role_parameters`
+
+The `mz_role_parameters` table contains a row for each configuration parameter
+whose default value has been altered for a given role. See [ALTER ROLE ... SET](/sql/alter-role/#alter_role_set)
+on setting default configuration parameter values per role.
+
+<!-- RELATION_SPEC mz_catalog.mz_role_parameters -->
+Field     | Type       | Meaning
+----------|------------|--------
+`role_id` | [`text`]   | The ID of the role whose configuration parameter default is set. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`parameter_name`  | [`text`]   | The configuration paramater name. One of the supported [configuration parameters](/sql/set/#key-configuration-parameters).
+`parameter_value` | [`text`]   | The default value of the parameter for the given role. Can be either a single value, or a comma-separated list of values for configuration parameters that accept a list.
 
 ### `mz_schemas`
 
@@ -437,9 +453,9 @@ Field            | Type                 | Meaning
 
 ### `mz_storage_usage`
 
-The `mz_storage_usage` table describes the storage utilization of each
-table, source, and materialized view in the system. Storage utilization is
-assessed approximately every hour.
+The `mz_storage_usage` table describes the storage utilization of each table,
+source, and materialized view in the system. Storage utilization is assessed
+approximately every hour.
 
 <!-- RELATION_SPEC mz_catalog.mz_storage_usage -->
 Field                  | Type                         | Meaning
@@ -475,10 +491,13 @@ Field        | Type                 | Meaning
 
 ### `mz_timezone_abbreviations`
 
-The `mz_timezone_abbreviations` view contains a row for each supported timezone abbreviation.
-A "fixed" abbreviation does not change its offset or daylight status based on the current time.
-A non-"fixed" abbreviation is dependent on the current time for its offset, and must use the [`timezone_offset`](/sql/functions/#timezone_offset) function to find its properties.
-These correspond to the `pg_catalog.pg_timezone_abbrevs` table, but can be materialized as they do not depend on the current time.
+The `mz_timezone_abbreviations` view contains a row for each supported timezone
+abbreviation. A "fixed" abbreviation does not change its offset or daylight
+status based on the current time. A non-"fixed" abbreviation is dependent on
+the current time for its offset, and must use the [`timezone_offset`](/sql/functions/#timezone_offset)
+function to find its properties. These correspond to the
+`pg_catalog.pg_timezone_abbrevs` table, but can be materialized as they do not
+depend on the current time.
 
 <!-- RELATION_SPEC mz_catalog.mz_timezone_abbreviations -->
 Field           | Type         | Meaning
@@ -490,9 +509,11 @@ Field           | Type         | Meaning
 
 ### `mz_timezone_names`
 
-The `mz_timezone_names` view contains a row for each supported timezone.
-Use the [`timezone_offset`](/sql/functions/#timezone_offset) function for properties of a timezone at a certain timestamp.
-These correspond to the `pg_catalog.pg_timezone_names` table, but can be materialized as they do not depend on the current time.
+The `mz_timezone_names` view contains a row for each supported timezone. Use
+the [`timezone_offset`](/sql/functions/#timezone_offset) function for
+properties of a timezone at a certain timestamp. These correspond to the
+`pg_catalog.pg_timezone_names` table, but can be materialized as they do not
+depend on the current time.
 
 <!-- RELATION_SPEC mz_catalog.mz_timezone_names -->
 Field        | Type                 | Meaning

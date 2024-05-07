@@ -30,8 +30,15 @@ CREATE SCHEMA public;
 
 CREATE TABLE regtype_table (f1 REGTYPE);
 ALTER TABLE regtype_table REPLICA IDENTITY FULL;
-
 INSERT INTO regtype_table VALUES (1::regtype),(0::regtype);
+
+CREATE TABLE regclass_table (f1 REGCLASS);
+ALTER TABLE regclass_table REPLICA IDENTITY FULL;
+INSERT INTO regclass_table VALUES (1::regclass),(0::regclass);
+
+CREATE TABLE regproc_table (f1 REGPROC);
+ALTER TABLE regproc_table REPLICA IDENTITY FULL;
+INSERT INTO regproc_table VALUES (1::regproc),(2::regproc);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
@@ -40,26 +47,10 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
   FOR TABLES (regtype_table);
 contains:publication mz_source contains column regtype_table.f1 of type regtype which Materialize cannot currently ingest
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-DROP TABLE regtype_table CASCADE;
-
-CREATE TABLE regclass_table (f1 REGCLASS);
-ALTER TABLE regclass_table REPLICA IDENTITY FULL;
-
-INSERT INTO regclass_table VALUES (1::regclass),(0::regclass);
-
 !CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (regclass_table);
 contains:publication mz_source contains column regclass_table.f1 of type regclass which Materialize cannot currently ingest
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-DROP TABLE regclass_table CASCADE;
-
-CREATE TABLE regproc_table (f1 REGPROC);
-ALTER TABLE regproc_table REPLICA IDENTITY FULL;
-
-INSERT INTO regproc_table VALUES (1::regproc),(2::regproc);
 
 !CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')

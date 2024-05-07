@@ -37,6 +37,10 @@ message ProtoConfigVal {
         ProtoOptionU64 opt_usize = 7;
         string string = 4;
         mz_proto.ProtoDuration duration = 5;
+        // Switch to Protobuf's native JSON representation,
+        // google.protobuf.Value, once prost supports it.
+        // See: https://github.com/tokio-rs/prost/issues/404
+        string json = 8;
     }
     reserved 1;
 }

@@ -103,6 +103,13 @@ pub mod operators {
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",
     );
+
+    // TODO(cfg): Move this next to the use.
+    pub(crate) const OPTIMIZE_IGNORED_DATA_DECODE: Config<bool> = Config::new(
+        "persist_optimize_ignored_data_decode",
+        true,
+        "CYA to allow opt-out of a performance optimization to skip decoding ignored data",
+    );
 }
 pub mod iter;
 pub mod read;
@@ -311,7 +318,7 @@ impl PersistClient {
                 diagnostics.clone(),
             )
             .await?,
-            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics)
+            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics, false)
                 .await?,
         ))
     }
@@ -331,6 +338,7 @@ impl PersistClient {
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
         diagnostics: Diagnostics,
+        use_critical_since: bool,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -349,6 +357,7 @@ impl PersistClient {
                 &diagnostics.handle_purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
                 heartbeat_ts,
+                use_critical_since,
             )
             .await;
         maintenance.start_performing(&machine, &gc);
@@ -451,9 +460,10 @@ impl PersistClient {
     ///
     /// In contrast to the time-leased [ReadHandle] returned by [Self::open] and
     /// [Self::open_leased_reader], this handle and its associated capability
-    /// are not leased. A [SinceHandle] only releases its since capability when
-    /// [SinceHandle::expire] is called. Also unlike `ReadHandle`, expire is not
-    /// called on drop. This is less ergonomic, but useful for "critical" since
+    /// are not leased. A [SinceHandle] does not release its since capability;
+    /// downgrade to the empty antichain to hold back the since.
+    /// Also unlike `ReadHandle`, the handle is not expired on drop.
+    /// This is less ergonomic, but useful for "critical" since
     /// holds which must survive even lease timeouts.
     ///
     /// **IMPORTANT**: The above means that if a SinceHandle is registered and
@@ -672,9 +682,7 @@ mod tests {
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
-    use serde::{Deserialize, Serialize};
-    use timely::order::{PartialOrder, Product};
-    use timely::progress::timestamp::PathSummary;
+    use timely::order::PartialOrder;
     use timely::progress::Antichain;
 
     use crate::batch::BLOB_TARGET_SIZE;
@@ -684,68 +692,6 @@ mod tests {
     use crate::read::ListenEvent;
 
     use super::*;
-
-    /// A product type that fits in Codec64. Used to test persist on partial orders
-    #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-    pub(crate) struct CodecProduct(Product<u32, u32>);
-
-    impl CodecProduct {
-        pub(crate) fn new(outer: u32, inner: u32) -> Self {
-            Self(Product::new(outer, inner))
-        }
-    }
-
-    impl Timestamp for CodecProduct {
-        type Summary = <Product<u32, u32> as Timestamp>::Summary;
-
-        fn minimum() -> Self {
-            Self(Product::minimum())
-        }
-    }
-
-    impl PathSummary<CodecProduct> for <Product<u32, u32> as Timestamp>::Summary {
-        fn results_in(&self, src: &CodecProduct) -> Option<CodecProduct> {
-            self.results_in(&src.0).map(CodecProduct)
-        }
-
-        fn followed_by(&self, other: &Self) -> Option<Self> {
-            PathSummary::<Product<u32, u32>>::followed_by(self, other)
-        }
-    }
-
-    impl PartialOrder for CodecProduct {
-        fn less_equal(&self, other: &Self) -> bool {
-            self.0.less_equal(&other.0)
-        }
-    }
-
-    impl Codec64 for CodecProduct {
-        fn codec_name() -> String {
-            "CodecProduct".to_owned()
-        }
-
-        fn encode(&self) -> [u8; 8] {
-            let [a, b, c, d] = u32::to_le_bytes(self.0.outer);
-            let [e, f, g, h] = u32::to_le_bytes(self.0.inner);
-            [a, b, c, d, e, f, g, h]
-        }
-
-        fn decode([a, b, c, d, e, f, g, h]: [u8; 8]) -> Self {
-            let outer = u32::from_le_bytes([a, b, c, d]);
-            let inner = u32::from_le_bytes([e, f, g, h]);
-            Self(Product::new(outer, inner))
-        }
-    }
-
-    impl Lattice for CodecProduct {
-        fn join(&self, other: &Self) -> Self {
-            Self(self.0.join(&other.0))
-        }
-
-        fn meet(&self, other: &Self) -> Self {
-            Self(self.0.meet(&other.0))
-        }
-    }
 
     pub fn new_test_client_cache(dyncfgs: &ConfigUpdates) -> PersistClientCache {
         // Configure an aggressively small blob_target_size so we get some
@@ -825,7 +771,7 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn sanity_check(dyncfgs: ConfigUpdates) {
-        let data = vec![
+        let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),
@@ -896,6 +842,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
+                false,
             )
             .await
             .expect("codec mismatch");
@@ -905,6 +852,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
+                false,
             )
             .await
             .expect("codec mismatch");
@@ -1030,6 +978,7 @@ mod tests {
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
+                        false,
                     )
                     .await
                     .unwrap_err(),
@@ -1189,12 +1138,12 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn multiple_shards(dyncfgs: ConfigUpdates) {
-        let data1 = vec![
+        let data1 = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
-        let data2 = vec![(("1".to_owned(), ()), 1, 1), (("2".to_owned(), ()), 2, 1)];
+        let data2 = [(("1".to_owned(), ()), 1, 1), (("2".to_owned(), ()), 2, 1)];
 
         let client = new_test_client(&dyncfgs).await;
 
@@ -1230,7 +1179,7 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn fetch_upper(dyncfgs: ConfigUpdates) {
-        let data = vec![
+        let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
@@ -1262,7 +1211,7 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn append_with_invalid_upper(dyncfgs: ConfigUpdates) {
-        let data = vec![
+        let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
@@ -1279,7 +1228,7 @@ mod tests {
             .expect_append(&data[..], write.upper().clone(), vec![3])
             .await;
 
-        let data = vec![
+        let data = [
             (("5".to_owned(), "fünf".to_owned()), 5, 1),
             (("6".to_owned(), "sechs".to_owned()), 6, 1),
         ];
@@ -1718,7 +1667,7 @@ mod tests {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
-        let data = vec![
+        let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),

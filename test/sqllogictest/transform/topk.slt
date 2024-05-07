@@ -39,6 +39,8 @@ Explained Query:
             Map ((#0 + #1), (#4 + #2), (#4 + #3)) // { arity: 7 }
               ReadStorage materialize.public.test1 // { arity: 4 }
 
+Target cluster: quickstart
+
 EOF
 
 # check that TopK elision is recursive
@@ -61,6 +63,8 @@ Explained Query:
       Reduce group_by=[((#0 + #1) + #2), ((#0 + #1) + #3)] aggregates=[sum(#3), count(#3)] // { arity: 4 }
         ReadStorage materialize.public.test1 // { arity: 4 }
 
+Target cluster: quickstart
+
 EOF
 
 # Test that chained unions get planned with a single union operator.
@@ -72,6 +76,8 @@ Explained Query:
     ReadStorage materialize.public.test1 // { arity: 4 }
     ReadStorage materialize.public.test1 // { arity: 4 }
     ReadStorage materialize.public.test1 // { arity: 4 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -85,6 +91,8 @@ explain with(types) select * from (select * from with_primary_key limit 0);
 ----
 Explained Query (fast path):
   Constant <empty>
+
+Target cluster: quickstart
 
 EOF
 
@@ -103,5 +111,7 @@ explain with(arity, join implementations) materialized view mv1;
 materialize.public.mv1:
   TopK order_by=[#0 asc nulls_last] limit=3 offset=3 // { arity: 2 }
     ReadStorage materialize.public.t1 // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF

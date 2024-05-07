@@ -19,8 +19,8 @@ from materialize.output_consistency.execution.value_storage_layout import (
     ROW_INDEX_COL_NAME,
     ValueStorageLayout,
 )
-from materialize.output_consistency.input_data.test_input_data import (
-    ConsistencyTestInputData,
+from materialize.output_consistency.input_data.test_input_types import (
+    ConsistencyTestTypesInput,
 )
 from materialize.output_consistency.selection.selection import (
     ALL_ROWS_SELECTION,
@@ -62,11 +62,14 @@ class EvaluationStrategy:
         self.simple_db_object_name = simple_db_object_name
         self.sql_adjuster = sql_adjuster
 
-    def generate_sources(self, input_data: ConsistencyTestInputData) -> list[str]:
+    def generate_sources(
+        self,
+        types_input: ConsistencyTestTypesInput,
+    ) -> list[str]:
         statements = []
         statements.extend(
             self.generate_source_for_storage_layout(
-                input_data,
+                types_input,
                 ValueStorageLayout.HORIZONTAL,
                 ALL_ROWS_SELECTION,
                 ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
@@ -74,7 +77,7 @@ class EvaluationStrategy:
         )
         statements.extend(
             self.generate_source_for_storage_layout(
-                input_data,
+                types_input,
                 ValueStorageLayout.VERTICAL,
                 ALL_ROWS_SELECTION,
                 ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
@@ -84,7 +87,7 @@ class EvaluationStrategy:
 
     def generate_source_for_storage_layout(
         self,
-        input_data: ConsistencyTestInputData,
+        types_input: ConsistencyTestTypesInput,
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
@@ -113,7 +116,7 @@ class EvaluationStrategy:
 
     def _create_column_specs(
         self,
-        input_data: ConsistencyTestInputData,
+        types_input: ConsistencyTestTypesInput,
         storage_layout: ValueStorageLayout,
         include_type: bool,
         table_column_selection: TableColumnByNameSelection,
@@ -125,7 +128,7 @@ class EvaluationStrategy:
         type_info = f" {int_type_name}" if include_type else ""
         column_specs.append(f"{ROW_INDEX_COL_NAME}{type_info}")
 
-        for type_with_values in input_data.all_data_types_with_values:
+        for type_with_values in types_input.all_data_types_with_values:
             type_name = self.sql_adjuster.adjust_type(
                 type_with_values.data_type.type_name
             )
@@ -151,7 +154,7 @@ class EvaluationStrategy:
 
     def _create_value_rows(
         self,
-        input_data: ConsistencyTestInputData,
+        types_input: ConsistencyTestTypesInput,
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
@@ -159,13 +162,13 @@ class EvaluationStrategy:
         if storage_layout == ValueStorageLayout.HORIZONTAL:
             return [
                 self.__create_horizontal_value_row(
-                    input_data.all_data_types_with_values, table_column_selection
+                    types_input.all_data_types_with_values, table_column_selection
                 )
             ]
         elif storage_layout == ValueStorageLayout.VERTICAL:
             return self.__create_vertical_value_rows(
-                input_data.all_data_types_with_values,
-                input_data.max_value_count,
+                types_input.all_data_types_with_values,
+                types_input.max_value_count,
                 row_selection,
                 table_column_selection,
             )
@@ -225,7 +228,7 @@ class DummyEvaluation(EvaluationStrategy):
 
     def generate_sources(
         self,
-        input_data: ConsistencyTestInputData,
+        types_input: ConsistencyTestTypesInput,
     ) -> list[str]:
         return []
 
@@ -241,7 +244,7 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
 
     def generate_source_for_storage_layout(
         self,
-        input_data: ConsistencyTestInputData,
+        types_input: ConsistencyTestTypesInput,
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
@@ -254,13 +257,13 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         statements = []
 
         column_specs = self._create_column_specs(
-            input_data, storage_layout, True, table_column_selection
+            types_input, storage_layout, True, table_column_selection
         )
         statements.append(f"DROP TABLE IF EXISTS {db_object_name};")
         statements.append(f"CREATE TABLE {db_object_name} ({', '.join(column_specs)});")
 
         value_rows = self._create_value_rows(
-            input_data, storage_layout, row_selection, table_column_selection
+            types_input, storage_layout, row_selection, table_column_selection
         )
 
         for value_row in value_rows:
@@ -280,7 +283,7 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
 
     def generate_source_for_storage_layout(
         self,
-        input_data: ConsistencyTestInputData,
+        types_input: ConsistencyTestTypesInput,
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
@@ -291,11 +294,11 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         )
 
         column_specs = self._create_column_specs(
-            input_data, storage_layout, False, table_column_selection
+            types_input, storage_layout, False, table_column_selection
         )
 
         value_rows = self._create_value_rows(
-            input_data, storage_layout, row_selection, table_column_selection
+            types_input, storage_layout, row_selection, table_column_selection
         )
         value_specification = "\n    UNION SELECT ".join(value_rows)
 

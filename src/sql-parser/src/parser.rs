@@ -583,9 +583,6 @@ impl<'a> Parser<'a> {
             Token::Keyword(NULLIF) => self.parse_nullif_expr(),
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
-            Token::Keyword(INTERVAL) => {
-                Ok(Expr::Value(Value::Interval(self.parse_interval_value()?)))
-            }
             Token::Keyword(NOT) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
@@ -2595,6 +2592,13 @@ impl<'a> Parser<'a> {
 
         let (columns, constraints) = self.parse_columns(Mandatory)?;
 
+        let of_source = if self.parse_keyword(OF) {
+            self.expect_keyword(SOURCE)?;
+            Some(self.parse_raw_name()?)
+        } else {
+            None
+        };
+
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
             let options = self.parse_comma_separated(Parser::parse_create_subsource_option)?;
@@ -2608,24 +2612,28 @@ impl<'a> Parser<'a> {
             name,
             if_not_exists,
             columns,
+            of_source,
             constraints,
             with_options,
         }))
     }
 
-    /// Parse the name of a CREATE SINK optional parameter
+    /// Parse the name of a CREATE SUBSOURCE optional parameter
     fn parse_create_subsource_option_name(
         &mut self,
     ) -> Result<CreateSubsourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[PROGRESS, REFERENCES])? {
+        let name = match self.expect_one_of_keywords(&[EXTERNAL, PROGRESS])? {
+            EXTERNAL => {
+                self.expect_keyword(REFERENCE)?;
+                CreateSubsourceOptionName::ExternalReference
+            }
             PROGRESS => CreateSubsourceOptionName::Progress,
-            REFERENCES => CreateSubsourceOptionName::References,
             _ => unreachable!(),
         };
         Ok(name)
     }
 
-    /// Parse a NAME = VALUE parameter for CREATE SINK
+    /// Parse a NAME = VALUE parameter for CREATE SUBSOURCE
     fn parse_create_subsource_option(&mut self) -> Result<CreateSubsourceOption<Raw>, ParserError> {
         Ok(CreateSubsourceOption {
             name: self.parse_create_subsource_option_name()?,
@@ -2717,10 +2725,10 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_subsource_references(&mut self) -> Result<CreateSourceSubsource<Raw>, ParserError> {
+    fn parse_subsource_references(&mut self) -> Result<CreateSourceSubsource, ParserError> {
         let reference = self.parse_item_name()?;
         let subsource = if self.parse_one_of_keywords(&[AS, INTO]).is_some() {
-            Some(self.parse_deferred_item_name()?)
+            Some(self.parse_item_name()?)
         } else {
             None
         };
@@ -3289,10 +3297,17 @@ impl<'a> Parser<'a> {
                 None
             };
 
+        let headers = if self.parse_keyword(HEADERS) {
+            Some(self.parse_identifier()?)
+        } else {
+            None
+        };
+
         Ok(CreateSinkConnection::Kafka {
             connection,
             options,
             key,
+            headers,
         })
     }
 
@@ -3700,7 +3715,7 @@ impl<'a> Parser<'a> {
         let paren = self.consume_token(&Token::LParen);
         let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
         if paren {
-            let _ = self.consume_token(&Token::RParen);
+            self.expect_token(&Token::RParen)?;
         }
 
         let features = if self.parse_keywords(&[FEATURES]) {
@@ -3796,7 +3811,19 @@ impl<'a> Parser<'a> {
             MANUAL => ClusterScheduleOptionValue::Manual,
             ON => {
                 self.expect_keyword(REFRESH)?;
-                ClusterScheduleOptionValue::Refresh
+                // Parse optional `(REHYDRATION TIME ESTIMATE ...)`
+                let rehydration_time_estimate = if self.consume_token(&Token::LParen) {
+                    self.expect_keywords(&[REHYDRATION, TIME, ESTIMATE])?;
+                    let _ = self.consume_token(&Token::Eq);
+                    let interval = self.parse_interval_value()?;
+                    self.expect_token(&Token::RParen)?;
+                    Some(interval)
+                } else {
+                    None
+                };
+                ClusterScheduleOptionValue::Refresh {
+                    rehydration_time_estimate,
+                }
             }
             _ => unreachable!(),
         };
@@ -4614,7 +4641,6 @@ impl<'a> Parser<'a> {
                         if_exists,
                         action: AlterSourceAction::AddSubsources {
                             subsources,
-                            details: None,
                             options,
                         },
                     })
@@ -5362,14 +5388,14 @@ impl<'a> Parser<'a> {
             let columns = self
                 .parse_parenthesized_column_list(Optional)
                 .map_parser_err(StatementKind::Copy)?;
-            CopyRelation::Table { name, columns }
+            CopyRelation::Named { name, columns }
         };
         let (direction, target) = match self
             .expect_one_of_keywords(&[FROM, TO])
             .map_parser_err(StatementKind::Copy)?
         {
             FROM => {
-                if let CopyRelation::Table { .. } = relation {
+                if let CopyRelation::Named { .. } = relation {
                     // Ok.
                 } else {
                     return parser_err!(
@@ -7517,8 +7543,12 @@ impl<'a> Parser<'a> {
                 (true, Some(ExplainStage::Trace))
             }
             Some(PLAN) => {
-                // Use the default plan for the explainee.
-                (true, None)
+                if self.parse_keyword(INSIGHTS) {
+                    (true, Some(ExplainStage::PlanInsights))
+                } else {
+                    // Use the default plan for the explainee.
+                    (true, None)
+                }
             }
             None => {
                 // Use the default plan for the explainee.

@@ -23,6 +23,8 @@ Explained Query:
   TopK limit=1 monotonic
     ReadStorage materialize.public.counter
 
+Target cluster: quickstart
+
 EOF
 
 # Infer monotonic Reduce operator
@@ -32,6 +34,8 @@ EXPLAIN SELECT counter % 3, MAX(counter) as sum FROM counter GROUP BY counter % 
 Explained Query:
   Reduce group_by=[(#0 % 3)] aggregates=[max(#0)] monotonic
     ReadStorage materialize.public.counter
+
+Target cluster: quickstart
 
 EOF
 
@@ -54,6 +58,8 @@ Explained Query:
           ReadStorage materialize.public.v1
         ArrangeBy keys=[[]]
           ReadStorage materialize.public.v2
+
+Target cluster: quickstart
 
 EOF
 
@@ -108,6 +114,8 @@ Explained Query:
           - (3, 4)
           - (5, 6)
 
+Target cluster: quickstart
+
 EOF
 
 # Negative example: c2 (and consequently c2 and the WMR block body) are not
@@ -159,5 +167,7 @@ Explained Query:
           - (1, 2)
           - (3, 4)
           - (5, 6)
+
+Target cluster: quickstart
 
 EOF

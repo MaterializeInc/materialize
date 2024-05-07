@@ -92,7 +92,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_client::sink::{TopicCleanupPolicy, TopicConfig};
 use mz_storage_types::configuration::StorageConfiguration;
@@ -141,7 +141,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         self.relation_key_indices.as_deref()
     }
 
-    fn render_continuous_sink(
+    fn render_sink(
         &self,
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
@@ -234,7 +234,11 @@ impl TransactionalProducer {
         metrics: Arc<KafkaSinkMetrics>,
         statistics: SinkStatistics,
     ) -> Result<Self, ContextCreationError> {
-        let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
+        let client_id = connection.client_id(
+            storage_configuration.config_set(),
+            &storage_configuration.connection_context,
+            sink_id,
+        );
         let transactional_id =
             connection.transactional_id(&storage_configuration.connection_context, sink_id);
 
@@ -343,29 +347,48 @@ impl TransactionalProducer {
     /// the system.
     async fn send(
         &mut self,
-        key: Option<&[u8]>,
-        value: Option<&[u8]>,
+        message: &KafkaMessage,
         time: Timestamp,
         diff: Diff,
     ) -> Result<(), ContextCreationError> {
         assert_eq!(diff, 1, "invalid sink update");
 
-        let headers = OwnedHeaders::new().insert(Header {
+        let mut headers = OwnedHeaders::new().insert(Header {
             key: "materialize-timestamp",
             value: Some(time.to_string().as_bytes()),
         });
+        for header in &message.headers {
+            // Headers that start with `materialize-` are reserved for our
+            // internal use, so we silently drop any such user-specified
+            // headers. While this behavior is documented, it'd be a nicer UX to
+            // send a warning or error somewhere. Unfortunately sinks don't have
+            // anywhere user-visible to send errors. See #17672.
+            if header.key.starts_with("materialize-") {
+                continue;
+            }
+
+            headers = headers.insert(Header {
+                key: header.key.as_str(),
+                value: header.value.as_ref(),
+            });
+        }
         let record = BaseRecord {
             topic: &self.data_topic,
-            key,
-            payload: value,
+            key: message.key.as_ref(),
+            payload: message.value.as_ref(),
             headers: Some(headers),
             partition: None,
             timestamp: None,
             delivery_opaque: (),
         };
-        let key_size = key.map(|k| k.len()).unwrap_or(0);
-        let value_size = value.map(|k| k.len()).unwrap_or(0);
-        let record_size = u64::cast_from(key_size + value_size);
+        let key_size = message.key.as_ref().map(|k| k.len()).unwrap_or(0);
+        let value_size = message.value.as_ref().map(|k| k.len()).unwrap_or(0);
+        let headers_size = message
+            .headers
+            .iter()
+            .map(|h| h.key.len() + h.value.as_ref().map(|v| v.len()).unwrap_or(0))
+            .sum::<usize>();
+        let record_size = u64::cast_from(key_size + value_size + headers_size);
         self.statistics.inc_messages_staged_by(1);
         self.staged_messages += 1;
         self.statistics.inc_bytes_staged_by(record_size);
@@ -492,6 +515,26 @@ async fn collect_statistics(
     }
 }
 
+/// A message to produce to Kafka.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct KafkaMessage {
+    /// The message key.
+    key: Option<Vec<u8>>,
+    /// The message value.
+    value: Option<Vec<u8>>,
+    /// Message headers.
+    headers: Vec<KafkaHeader>,
+}
+
+/// A header to attach to a Kafka message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct KafkaHeader {
+    /// The header key.
+    key: String,
+    /// The header value.
+    value: Option<Vec<u8>>,
+}
+
 /// Sinks a collection of encoded rows to Kafka.
 ///
 /// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
@@ -499,7 +542,7 @@ async fn collect_statistics(
 /// Updates are sent in ascending timestamp order.
 fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     name: String,
-    input: &Collection<G, (Option<Vec<u8>>, Option<Vec<u8>>), Diff>,
+    input: &Collection<G, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -540,24 +583,16 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             .await?;
             // Instantiating the transactional producer fences out all previous ones, making it
             // safe to determine the resume upper.
-            let resume_upper =
-                determine_sink_resume_upper(sink_id, &connection, &storage_configuration, metrics)
-                    .await?;
+            let resume_upper = determine_sink_resume_upper(
+                sink_id,
+                &connection,
+                &storage_configuration,
+                Arc::clone(&metrics),
+            )
+            .await?;
 
             let resume_upper = match resume_upper {
-                Some(upper) => {
-                    // If there are committed progress messages then we only check if the data
-                    // topic exists, because if it does not then it must have been deleted after
-                    // the fact, which is a bit of a problem.
-                    let meta = producer.fetch_metadata().await?;
-                    if !meta.topics().iter().any(|t| t.name() == &connection.topic) {
-                        return Err(anyhow!(
-                            "sink progress data exists, but sink data topic is missing"
-                        )
-                        .into());
-                    }
-                    upper
-                }
+                Some(upper) => upper,
                 None => {
                     mz_storage_client::sink::ensure_kafka_topic(
                         &connection,
@@ -577,6 +612,16 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                     Antichain::from_elem(Timestamp::minimum())
                 }
             };
+
+            // At this point the topic must exist and so we can query for its metadata.
+            let meta = producer.fetch_metadata().await?;
+            match meta.topics().iter().find(|t| t.name() == &connection.topic) {
+                Some(topic) => {
+                    let partition_count = u64::cast_from(topic.partitions().len());
+                    metrics.partition_count.set(partition_count);
+                }
+                None => return Err(anyhow!("sink data topic is missing").into()),
+            }
 
             // The input has overcompacted if
             let overcompacted =
@@ -618,7 +663,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             while let Some(event) = input.next().await {
                 match event {
                     Event::Data(_cap, batch) => {
-                        for ((key, value), time, diff) in batch {
+                        for (message, time, diff) in batch {
                             // We want to publish updates in time order and we know that we have
                             // already committed all times not beyond `upper`. Therefore, if this
                             // update happens *exactly* at upper then it is the minimum pending
@@ -630,15 +675,13 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                             // can be *exactly* at upper but we can't know ahead of time which one
                             // will be advanced in the next progress message.
                             match upper.cmp(&time) {
-                                Ordering::Less => deferred_updates.push(((key, value), time, diff)),
+                                Ordering::Less => deferred_updates.push((message, time, diff)),
                                 Ordering::Equal => {
                                     if !transaction_begun {
                                         producer.begin_transaction().await?;
                                         transaction_begun = true;
                                     }
-                                    producer
-                                        .send(key.as_deref(), value.as_deref(), time, diff)
-                                        .await?;
+                                    producer.send(&message, time, diff).await?;
                                 }
                                 Ordering::Greater => continue,
                             }
@@ -679,10 +722,8 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                                 .drain_filter_swapping(|(_, time, _)| !progress.less_equal(time)),
                         );
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-                        for ((key, value), time, diff) in extra_updates.drain(..) {
-                            producer
-                                .send(key.as_deref(), value.as_deref(), time, diff)
-                                .await?;
+                        for (message, time, diff) in extra_updates.drain(..) {
+                            producer.send(&message, time, diff).await?;
                         }
 
                         info!("{name}: committing transaction for {}", progress.pretty());
@@ -753,7 +794,11 @@ async fn determine_sink_resume_upper(
         ..
     } = storage_configuration.parameters.kafka_timeout_config;
 
-    let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
+    let client_id = connection.client_id(
+        storage_configuration.config_set(),
+        &storage_configuration.connection_context,
+        sink_id,
+    );
     let group_id = connection.progress_group_id(&storage_configuration.connection_context, sink_id);
     let progress_topic = connection
         .progress_topic(&storage_configuration.connection_context)
@@ -1076,7 +1121,7 @@ fn encode_collection<G: Scope>(
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
 ) -> (
-    Collection<G, (Option<Vec<u8>>, Option<Vec<u8>>), Diff>,
+    Collection<G, KafkaMessage, Diff>,
     Stream<G, HealthStatusMessage>,
     PressOnDropButton,
 ) {
@@ -1149,9 +1194,18 @@ fn encode_collection<G: Scope>(
             while let Some(event) = input.next().await {
                 if let Event::Data(cap, rows) = event {
                     for ((key, value), time, diff) in rows {
+                        let headers = match (connection.headers_index, &value) {
+                            (Some(i), Some(v)) => encode_headers(v.iter().nth(i).unwrap()),
+                            _ => vec![],
+                        };
                         let key = key.map(|key| encoder.encode_key_unchecked(key));
                         let value = value.map(|value| encoder.encode_value_unchecked(value));
-                        output.give(&cap, ((key, value), time, diff)).await;
+                        let message = KafkaMessage {
+                            key,
+                            value,
+                            headers,
+                        };
+                        output.give(&cap, (message, time, diff)).await;
                     }
                 }
             }
@@ -1166,6 +1220,25 @@ fn encode_collection<G: Scope>(
     });
 
     (stream.as_collection(), statuses, button.press_on_drop())
+}
+
+fn encode_headers(datum: Datum) -> Vec<KafkaHeader> {
+    let mut out = vec![];
+    if datum.is_null() {
+        return out;
+    }
+    for (key, value) in datum.unwrap_map().iter() {
+        out.push(KafkaHeader {
+            key: key.into(),
+            value: match value {
+                Datum::Null => None,
+                Datum::String(s) => Some(s.as_bytes().to_vec()),
+                Datum::Bytes(b) => Some(b.to_vec()),
+                _ => panic!("encode_headers called with unexpected header value {value:?}"),
+            },
+        })
+    }
+    out
 }
 
 #[cfg(test)]

@@ -567,22 +567,6 @@ DROP TABLE t CASCADE
 statement ok
 DROP CLUSTER other CASCADE
 
-# `ASSERT NOT NULL` in materialized views
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_assert_not_null to OFF;
-----
-COMPLETE 0
-
-## Feature flag should be off by default
-statement error ASSERT NOT NULL for materialized views is not supported
-CREATE MATERIALIZED VIEW mv_feature_off(x) WITH (ASSERT NOT NULL x) AS VALUES (1);
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_assert_not_null to ON;
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t2 (x int, y int, z int);
 
@@ -657,7 +641,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = false
 COMPLETE 0
 
 # Should be disabled
-query error db error: ERROR: REFRESH EVERY materialized views is not supported
+query error db error: ERROR: REFRESH EVERY and REFRESH AT materialized views is not supported
 CREATE MATERIALIZED VIEW mv_bad WITH (ASSERT NOT NULL x, REFRESH EVERY '8 seconds') AS SELECT * FROM t2;
 
 simple conn=mz_system,user=mz_system
@@ -1078,6 +1062,29 @@ NULL
 70
 100
 
+## REFRESH AT CREATION + REFRESH EVERY ALIGNED TO
+## We create an MV that would be first refreshed only much later, if it were not for the REFRESH AT CREATION.
+statement ok
+CREATE MATERIALIZED VIEW mv_multiple_refresh_options WITH (
+    REFRESH AT CREATION,
+    REFRESH EVERY '1 day' ALIGNED TO mz_now()::text::int8 + 1000000
+) AS
+SELECT DISTINCT 5*x FROM t2;
+
+# Should return quickly due to the creation refresh.
+query I
+SELECT * FROM mv_multiple_refresh_options;
+----
+NULL
+0
+5
+20
+35
+50
+150
+350
+500
+
 ## EXPLAIN shouldn't try to grab read holds in `create_materialized_view_validate`
 
 statement ok
@@ -1098,9 +1105,173 @@ SELECT mz_unsafe.mz_sleep(2);
 statement ok
 EXPLAIN REPLAN MATERIALIZED VIEW mv8;
 
+## Indexes on REFRESH MVs
+
+statement ok
+CREATE MATERIALIZED VIEW mvi1 WITH (REFRESH EVERY '8s' ALIGNED TO mz_now()::string::int8 + 2000) AS
+SELECT 5*x FROM t3;
+
+statement ok
+CREATE DEFAULT INDEX on mvi1;
+
+query I
+SELECT * FROM mvi1;
+----
+25
+30
+
+query I
+(SELECT * FROM mvi1)
+UNION ALL
+(SELECT * FROM t3);
+----
+5
+6
+25
+30
+
+statement ok
+INSERT INTO t3 values (7);
+
+# Not visible yet.
+query I
+SELECT * FROM mvi1;
+----
+25
+30
+
+query I
+(SELECT * FROM mvi1)
+UNION ALL
+(SELECT * FROM t3);
+----
+5
+6
+7
+25
+30
+
+statement ok
+SELECT mz_unsafe.mz_sleep(8+1);
+
+# Visible now.
+query I
+SELECT * FROM mvi1;
+----
+25
+30
+35
+
+query I
+(SELECT * FROM mvi1)
+UNION ALL
+(SELECT * FROM t3);
+----
+5
+6
+7
+25
+30
+35
+
+# First refresh immediately, next one much later.
+statement ok
+CREATE MATERIALIZED VIEW mvi2 WITH (REFRESH EVERY '10 hours') AS
+SELECT DISTINCT x+x+x FROM t3;
+
+statement ok
+CREATE DEFAULT INDEX on mvi2;
+
+query I
+SELECT * FROM mvi2;
+----
+15
+18
+21
+
+query I
+(SELECT * FROM mvi2)
+UNION ALL
+(SELECT * FROM t3);
+----
+5
+6
+7
+15
+18
+21
+
+# There is a last refresh.
+statement ok
+CREATE MATERIALIZED VIEW mvi3 WITH (REFRESH AT CREATION, REFRESH AT mz_now()::string::int8 + 2000) AS
+SELECT DISTINCT 5*x FROM t3;
+
+statement ok
+CREATE DEFAULT INDEX ON mvi3;
+
+query I
+SELECT * FROM mvi3
+----
+25
+30
+35
+
+query I
+(SELECT * FROM mvi3)
+UNION ALL
+(SELECT * FROM t3);
+----
+5
+6
+7
+25
+30
+35
+
+# Check that it's still queryable after the last refresh, but new input changes are not taken into account.
+statement ok
+SELECT mz_unsafe.mz_sleep(2+1);
+
+statement ok
+INSERT INTO t3 VALUES (-1);
+
+query I
+SELECT * FROM mvi3
+----
+25
+30
+35
+
+query I
+(SELECT * FROM mvi3)
+UNION ALL
+(SELECT * FROM t3);
+----
+-1
+5
+6
+7
+25
+30
+35
+
 # ----------------------------------------
 # Automated cluster scheduling for REFRESH
 # ----------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_schedule_refresh = false
+----
+COMPLETE 0
+
+# Should be disabled
+query error db error: ERROR: `SCHEDULE = ON REFRESH` cluster option is not supported
+CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = ON REFRESH);
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_schedule_refresh = true
+----
+COMPLETE 0
 
 statement error db error: ERROR: Expected one of MANUAL or ON, found identifier "aaaaaaaa"
 CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = AAAAAAAA);
@@ -1111,23 +1282,70 @@ CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = 42);
 statement error db error: ERROR: Expected one of MANUAL or ON, found REFRESH
 CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = REFRESH);
 
+statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
+CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1);
+
 statement ok
 CREATE CLUSTER c_schedule_1 (SIZE = '1', SCHEDULE = MANUAL);
 
 statement ok
 CREATE CLUSTER c_schedule_2 (SIZE = '1', SCHEDULE MANUAL);
 
-statement error db error: ERROR: cluster schedules other than MANUAL are not supported
+statement ok
 CREATE CLUSTER c_schedule_3 (SIZE = '1', SCHEDULE = ON REFRESH);
 
-statement ok
-ALTER cluster c_schedule_1 RESET (SCHEDULE);
+statement error db error: ERROR: REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL
+ALTER CLUSTER c_schedule_3 SET (REPLICATION FACTOR = 1);
 
 statement ok
-ALTER cluster c_schedule_1 SET (SCHEDULE = MANUAL);
+ALTER CLUSTER c_schedule_1 RESET (SCHEDULE);
 
-statement error db error: ERROR: cluster schedules other than MANUAL are not supported
-ALTER cluster c_schedule_1 SET (SCHEDULE = ON REFRESH);
+statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
+ALTER CLUSTER c_schedule_1 SET (REPLICATION FACTOR = 1, SCHEDULE = ON REFRESH);
+
+statement ok
+ALTER CLUSTER c_schedule_1 SET (SCHEDULE = MANUAL);
+
+statement ok
+ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(3+2);
+
+# Should turn off.
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_1';
+----
+0
+
+statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
+ALTER CLUSTER c_schedule_1 SET (MANAGED = false, SCHEDULE = ON REFRESH);
+
+# The SCHEDULE shouldn't simply "fall off" when switching to unmanaged,
+statement error db error: ERROR: when switching a cluster to unmanaged, if the managed cluster's SCHEDULE is anything other than MANUAL, you have to explicitly set the SCHEDULE to MANUAL
+ALTER CLUSTER c_schedule_1 SET (MANAGED = false);
+
+# ... but can be explicitly set to MANUAL in the same command.
+statement ok
+ALTER CLUSTER c_schedule_1 SET (MANAGED = false, SCHEDULE = MANUAL);
+
+statement ok
+ALTER CLUSTER c_schedule_1 SET (MANAGED = true, SIZE = '1');
+
+statement ok
+ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '0 seconds'));
+
+# Setting some other cluster option in ALTER CLUSTER shouldn't change the SCHEDULE.
+# (The sleep is needed so that if the following ALTER erroneously sets the SCHEDULE to MANUAL, then we should be in a
+# turned off state at that moment to trigger errors in later tests.)
+statement ok
+SELECT mz_unsafe.mz_sleep(3);
+
+statement ok
+ALTER CLUSTER c_schedule_1 SET (INTROSPECTION DEBUGGING = TRUE);
+
+statement ok
+ALTER CLUSTER c_schedule_1 RESET (INTROSPECTION DEBUGGING);
 
 statement ok
 CREATE CLUSTER unmanaged1 (SCHEDULE = MANUAL, REPLICAS (r1 (SIZE '1')))
@@ -1138,5 +1356,191 @@ ALTER cluster unmanaged1 SET (SCHEDULE = MANUAL);
 statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
 ALTER cluster unmanaged1 SET (SCHEDULE = ON REFRESH);
 
+statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
+ALTER cluster unmanaged1 SET (managed = true, SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1, SIZE = '1');
+
 statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
 CREATE CLUSTER unmanaged2 (SCHEDULE = ON REFRESH, REPLICAS (r1 (SIZE '1')))
+
+statement ok
+CREATE CLUSTER c_schedule_5 (SIZE = '1');
+
+statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found left parenthesis
+ALTER CLUSTER c_schedule_5 (MANAGED = false, SCHEDULE = REFRESH);
+
+statement ok
+CREATE MATERIALIZED VIEW mv9
+IN CLUSTER c_schedule_1
+WITH (REFRESH = EVERY '8 sec')
+AS SELECT sum(x*y*z) + count(*) FROM t2;
+
+query I
+SELECT * FROM mv9;
+----
+1371335
+
+statement ok
+INSERT INTO t2 VALUES (1, 0, 1);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(8+1);
+
+query I
+SELECT * FROM mv9;
+----
+1371336
+
+statement ok
+CREATE MATERIALIZED VIEW mv10
+IN CLUSTER c_schedule_1
+WITH (REFRESH AT CREATION)
+AS SELECT count(*) FROM t2;
+
+query I
+SELECT * FROM mv10
+----
+10
+
+# The other refresh cluster should be off, because there is no refresh MV on it yet.
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_3';
+----
+0
+
+# A `REFRESH AT CREATION` MV alone on a cluster should make the cluster turn on.
+statement ok
+CREATE MATERIALIZED VIEW mv11
+IN CLUSTER c_schedule_3
+WITH (REFRESH AT CREATION)
+AS SELECT count(*) FROM t2;
+
+query I
+SELECT * FROM mv11
+----
+10
+
+## Very short refresh interval.
+
+statement ok
+CREATE CLUSTER c_schedule_4 (SIZE = '1', SCHEDULE = ON REFRESH);
+
+statement ok
+CREATE MATERIALIZED VIEW mv12
+IN CLUSTER c_schedule_4
+WITH (REFRESH EVERY '1 millisecond')
+AS SELECT count(*) FROM t2;
+
+query I
+SELECT * FROM mv12
+----
+10
+
+statement ok
+INSERT INTO t2 VALUES (1, 1, 10);
+
+query I
+SELECT * FROM mv12
+----
+11
+
+# This should set the schedule back to manual.
+statement ok
+ALTER CLUSTER c_schedule_4 RESET (SCHEDULE);
+
+statement ok
+ALTER CLUSTER c_schedule_4 SET (REPLICATION FACTOR = 0);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(3);
+
+# Should stay off, because it was reset to manual.
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_4';
+----
+0
+
+## REHYDRATION TIME ESTIMATE
+
+statement error db error: ERROR: Expected literal string, found number "0"
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = 0));
+
+statement error db error: ERROR: REHYDRATION TIME ESTIMATE must be non\-negative; got: \-01:00:00
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '-1 hour'));
+
+statement error db error: ERROR: invalid input syntax for type interval: unknown units aaaa: "1 aaaa"
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 aaaa'));
+
+statement error db error: ERROR: REHYDRATION TIME ESTIMATE must not involve units larger than days
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 month'));
+
+statement error db error: ERROR: invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "1000000000000 days"
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1000000000000 days'));
+
+## Introspection
+
+query TTTBB
+SELECT
+  name,
+  type,
+  interval,
+  now() - aligned_to < INTERVAL '30 minutes',
+  now() - at < INTERVAL '30 minutes'
+FROM mz_internal.mz_materialized_view_refresh_strategies mvrs, mz_catalog.mz_materialized_views mv
+WHERE mv.id = mvrs.materialized_view_id
+ORDER BY name;
+----
+const_mv  every  24:00:00  true  NULL
+const_mv2  at  NULL  NULL  true
+mv  on-commit  NULL  NULL  NULL
+mv10  at  NULL  NULL  true
+mv11  at  NULL  NULL  true
+mv12  every  00:00:00.001  true  NULL
+mv3  at  NULL  NULL  true
+mv3  at  NULL  NULL  true
+mv4  at  NULL  NULL  true
+mv5  at  NULL  NULL  true
+mv6  at  NULL  NULL  true
+mv7  at  NULL  NULL  true
+mv8  at  NULL  NULL  true
+mv9  every  00:00:08  true  NULL
+mv_aligned_to_future  every  00:00:10  true  NULL
+mv_aligned_to_past  every  00:00:10  true  NULL
+mv_assertion_at_begin  on-commit  NULL  NULL  NULL
+mv_assertion_at_end  on-commit  NULL  NULL  NULL
+mv_assertion_plus_refresh_every  every  00:00:08  true  NULL
+mv_desugar1  at  NULL  NULL  true
+mv_desugar2  every  24:00:00  true  NULL
+mv_good_assertion_on_renamed_column  on-commit  NULL  NULL  NULL
+mv_greatest  at  NULL  NULL  true
+mv_misordered_assertions  on-commit  NULL  NULL  NULL
+mv_multiple_refresh_options  at  NULL  NULL  true
+mv_multiple_refresh_options  every  24:00:00  true  NULL
+mv_no_assertions  on-commit  NULL  NULL  NULL
+mv_no_creation_refresh  every  27:46:40  true  NULL
+mv_on_commit  on-commit  NULL  NULL  NULL
+mv_two_assertions  on-commit  NULL  NULL  NULL
+mvi1  every  00:00:08  true  NULL
+mvi2  every  10:00:00  true  NULL
+mvi3  at  NULL  NULL  true
+mvi3  at  NULL  NULL  true
+
+statement ok
+CREATE CLUSTER c_rehydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+
+query TTT
+SELECT name, cs.type, cs.refresh_rehydration_time_estimate
+FROM mz_internal.mz_cluster_schedules cs, mz_catalog.mz_clusters c
+WHERE c.id = cs.cluster_id
+ORDER BY name;
+----
+c_rehydration_time_estimate  on-refresh  00:16:35
+c_schedule_1  on-refresh  00:00:00
+c_schedule_2  manual  NULL
+c_schedule_3  on-refresh  00:00:00
+c_schedule_4  manual  NULL
+c_schedule_5  manual  NULL
+mz_introspection  manual  NULL
+mz_probe  manual  NULL
+mz_support  manual  NULL
+mz_system  manual  NULL
+quickstart  manual  NULL

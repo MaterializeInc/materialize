@@ -20,7 +20,6 @@ use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::AvailableCollections;
-use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
@@ -85,8 +84,6 @@ where
     pub(super) hydration_logger: Option<HydrationLogger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
-    /// Per-worker dynamic configuration.
-    pub(super) worker_config: ConfigSet,
 }
 
 impl<S: Scope> Context<S>
@@ -128,7 +125,6 @@ where
             shutdown_token: Default::default(),
             hydration_logger,
             linear_join_spec: compute_state.linear_join_spec,
-            worker_config: compute_state.worker_config.clone(),
         }
     }
 }
@@ -1047,7 +1043,6 @@ impl<C> PendingWork<C>
 where
     C: Cursor,
     C::KeyOwned: PartialEq + Sized,
-    C::ValOwned: Sized,
     C::Time: Timestamp,
 {
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
@@ -1068,7 +1063,7 @@ where
             '_,
             C::Time,
             I::Item,
-            timely::dataflow::channels::pushers::Tee<C::Time, I::Item>,
+            timely::dataflow::channels::pushers::Tee<C::Time, Vec<I::Item>>,
         >,
     ) where
         I: IntoIterator,

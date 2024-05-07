@@ -17,9 +17,10 @@ use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
+use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
     CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec,
-    GaugeVecExt, HistogramVec, HistogramVecExt, IntCounterVec, MetricsRegistry, UIntGaugeVec,
+    GaugeVecExt, HistogramVec, HistogramVecExt, IntCounterVec, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -35,7 +36,7 @@ type Gauge = DeleteOnDropGauge<'static, AtomicF64, Vec<String>>;
 pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
 type Histogram = DeleteOnDropHistogram<'static, Vec<String>>;
 
-/// Compute controller metrics
+/// Compute controller metrics.
 #[derive(Debug, Clone)]
 pub struct ComputeControllerMetrics {
     // compute protocol
@@ -47,11 +48,13 @@ pub struct ComputeControllerMetrics {
     // controller state
     replica_count: UIntGaugeVec,
     collection_count: UIntGaugeVec,
+    collection_unscheduled_count: UIntGaugeVec,
     peek_count: UIntGaugeVec,
     subscribe_count: UIntGaugeVec,
     copy_to_count: UIntGaugeVec,
     command_queue_size: UIntGaugeVec,
     response_queue_size: UIntGaugeVec,
+    hydration_queue_size: UIntGaugeVec,
 
     // command history
     history_command_count: UIntGaugeVec,
@@ -66,7 +69,7 @@ pub struct ComputeControllerMetrics {
 }
 
 impl ComputeControllerMetrics {
-    /// TODO(#25239): Add documentation.
+    /// Create a metrics instance registered into the given registry.
     pub fn new(metrics_registry: MetricsRegistry) -> Self {
         ComputeControllerMetrics {
             commands_total: metrics_registry.register(metric!(
@@ -99,6 +102,11 @@ impl ComputeControllerMetrics {
                 help: "The number of installed compute collections.",
                 var_labels: ["instance_id"],
             )),
+            collection_unscheduled_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_collection_unscheduled_count",
+                help: "The number of installed but unscheduled compute collections.",
+                var_labels: ["instance_id"],
+            )),
             peek_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_peek_count",
                 help: "The number of pending peeks.",
@@ -122,6 +130,11 @@ impl ComputeControllerMetrics {
             response_queue_size: metrics_registry.register(metric!(
                 name: "mz_compute_controller_response_queue_size",
                 help: "The size of the compute response queue.",
+                var_labels: ["instance_id", "replica_id"],
+            )),
+            hydration_queue_size: metrics_registry.register(metric!(
+                name: "mz_compute_controller_hydration_queue_size",
+                help: "The size of the compute hydration queue.",
                 var_labels: ["instance_id", "replica_id"],
             )),
             history_command_count: metrics_registry.register(metric!(
@@ -153,12 +166,15 @@ impl ComputeControllerMetrics {
         }
     }
 
-    /// TODO(#25239): Add documentation.
+    /// Return an object suitable for tracking metrics for the given compute instance.
     pub fn for_instance(&self, instance_id: ComputeInstanceId) -> InstanceMetrics {
         let labels = vec![instance_id.to_string()];
         let replica_count = self.replica_count.get_delete_on_drop_gauge(labels.clone());
         let collection_count = self
             .collection_count
+            .get_delete_on_drop_gauge(labels.clone());
+        let collection_unscheduled_count = self
+            .collection_unscheduled_count
             .get_delete_on_drop_gauge(labels.clone());
         let peek_count = self.peek_count.get_delete_on_drop_gauge(labels.clone());
         let subscribe_count = self
@@ -187,6 +203,7 @@ impl ComputeControllerMetrics {
             metrics: self.clone(),
             replica_count,
             collection_count,
+            collection_unscheduled_count,
             copy_to_count,
             peek_count,
             subscribe_count,
@@ -204,23 +221,25 @@ pub struct InstanceMetrics {
     instance_id: ComputeInstanceId,
     metrics: ComputeControllerMetrics,
 
-    /// TODO(#25239): Add documentation.
+    /// Gauge tracking the number of replicas.
     pub replica_count: UIntGauge,
-    /// TODO(#25239): Add documentation.
+    /// Gauge tracking the number of installed compute collections.
     pub collection_count: UIntGauge,
-    /// TODO(#25239): Add documentation.
+    /// Gauge tracking the number of installed but unscheduled compute collections.
+    pub collection_unscheduled_count: UIntGauge,
+    /// Gauge tracking the number of pending peeks.
     pub peek_count: UIntGauge,
-    /// TODO(#25239): Add documentation.
+    /// Gauge tracking the number of active subscribes.
     pub subscribe_count: UIntGauge,
-    /// A counter to keep track of the number of active COPY TO queries in progress.
+    /// Gauge tracking the number of active COPY TO queries.
     pub copy_to_count: UIntGauge,
-    /// TODO(#25239): Add documentation.
+    /// Gauges tracking the number of commands in the command history.
     pub history_command_count: CommandMetrics<UIntGauge>,
-    /// TODO(#25239): Add documentation.
+    /// Gauge tracking the number of dataflows in the command history.
     pub history_dataflow_count: UIntGauge,
-    /// TODO(#25239): Add documentation.
+    /// Counter tracking the total number of peeks served.
     pub peeks_total: PeekMetrics<IntCounter>,
-    /// TODO(#25239): Add documentation.
+    /// Histogram tracking peek durations.
     pub peek_duration_seconds: PeekMetrics<Histogram>,
 }
 
@@ -269,6 +288,10 @@ impl InstanceMetrics {
             .metrics
             .response_queue_size
             .get_delete_on_drop_gauge(labels.clone());
+        let hydration_queue_size = self
+            .metrics
+            .hydration_queue_size
+            .get_delete_on_drop_gauge(labels.clone());
 
         ReplicaMetrics {
             instance_id: self.instance_id,
@@ -281,6 +304,7 @@ impl InstanceMetrics {
                 response_message_bytes_total,
                 command_queue_size,
                 response_queue_size,
+                hydration_queue_size,
             }),
         }
     }
@@ -321,11 +345,11 @@ pub struct ReplicaMetrics {
     replica_id: ReplicaId,
     metrics: ComputeControllerMetrics,
 
-    /// TODO(#25239): Add documentation.
+    /// Metrics counters, wrapped in an `Arc` to be shareable between threads.
     pub inner: Arc<ReplicaMetricsInner>,
 }
 
-/// TODO(#25239): Add documentation.
+/// Per-replica metrics counters.
 #[derive(Debug)]
 pub struct ReplicaMetricsInner {
     commands_total: CommandMetrics<IntCounter>,
@@ -333,10 +357,12 @@ pub struct ReplicaMetricsInner {
     responses_total: ResponseMetrics<IntCounter>,
     response_message_bytes_total: ResponseMetrics<IntCounter>,
 
-    /// TODO(#25239): Add documentation.
+    /// Gauge tracking the size of the compute command queue.
     pub command_queue_size: UIntGauge,
-    /// TODO(#25239): Add documentation.
+    /// Gauge tracking the size of the compute response queue.
     pub response_queue_size: UIntGauge,
+    /// Gauge tracking the size of the hydration queue.
+    pub hydration_queue_size: UIntGauge,
 }
 
 impl ReplicaMetrics {
@@ -488,7 +514,7 @@ impl<M> CommandMetrics<M> {
 /// Metrics keyed by `ComputeResponse` type.
 #[derive(Debug)]
 struct ResponseMetrics<M> {
-    frontier_upper: M,
+    frontiers: M,
     peek_response: M,
     subscribe_response: M,
     copy_to_response: M,
@@ -501,7 +527,7 @@ impl<M> ResponseMetrics<M> {
         F: Fn(&str) -> M,
     {
         Self {
-            frontier_upper: build_metric("frontier_upper"),
+            frontiers: build_metric("frontiers"),
             peek_response: build_metric("peek_response"),
             subscribe_response: build_metric("subscribe_response"),
             copy_to_response: build_metric("copy_to_response"),
@@ -513,7 +539,7 @@ impl<M> ResponseMetrics<M> {
         use crate::protocol::response::proto_compute_response::Kind::*;
 
         match proto.kind.as_ref().unwrap() {
-            FrontierUpper(_) => &self.frontier_upper,
+            Frontiers(_) => &self.frontiers,
             PeekResponse(_) => &self.peek_response,
             SubscribeResponse(_) => &self.subscribe_response,
             CopyToResponse(_) => &self.copy_to_response,

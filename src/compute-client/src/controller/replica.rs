@@ -9,30 +9,32 @@
 
 //! A client for replicas of a compute instance.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
-use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_dyncfg::ConfigSet;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
-use timely::progress::Timestamp;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, info, trace, warn};
 
-use crate::controller::ReplicaId;
+use crate::controller::sequential_hydration::SequentialHydration;
+use crate::controller::{ComputeControllerTimestamp, ReplicaId};
 use crate::logging::LoggingConfig;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, InstanceConfig};
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-type Client<T> = Partitioned<ComputeGrpcClient, ComputeCommand<T>, ComputeResponse<T>>;
+type Client<T> =
+    SequentialHydration<Partitioned<ComputeGrpcClient, ComputeCommand<T>, ComputeResponse<T>>, T>;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]
@@ -64,7 +66,7 @@ pub(super) struct ReplicaClient<T> {
 
 impl<T> ReplicaClient<T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub(super) fn spawn(
@@ -73,6 +75,7 @@ where
         config: ReplicaConfig,
         epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
+        dyncfg: Arc<ConfigSet>,
     ) -> Self {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -90,6 +93,7 @@ where
                 response_tx,
                 epoch,
                 metrics: metrics.clone(),
+                dyncfg,
             }
             .run(),
         );
@@ -141,11 +145,13 @@ struct ReplicaTask<T> {
     epoch: ClusterStartupEpoch,
     /// Replica metrics.
     metrics: ReplicaMetrics,
+    /// Dynamic system configuration.
+    dyncfg: Arc<ConfigSet>,
 }
 
 impl<T> ReplicaTask<T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Asynchronously forwards commands to and responses from a single replica.
@@ -180,7 +186,11 @@ where
                     match ComputeGrpcClient::connect_partitioned(dests, version, client_params)
                         .await
                     {
-                        Ok(client) => Ok(client),
+                        Ok(client) => {
+                            let dyncfg = Arc::clone(&self.dyncfg);
+                            let metrics = self.metrics.clone();
+                            Ok(SequentialHydration::new(client, dyncfg, metrics))
+                        }
                         Err(e) => {
                             if state.i >= mz_service::retry::INFO_MIN_RETRIES {
                                 info!(
@@ -211,7 +221,7 @@ where
     /// the command channel, or the task is dropped.
     async fn run_message_loop(mut self, mut client: Client<T>) -> Result<(), anyhow::Error>
     where
-        T: Timestamp + Lattice,
+        T: ComputeControllerTimestamp,
         ComputeGrpcClient: ComputeClient<T>,
     {
         loop {

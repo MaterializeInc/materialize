@@ -291,8 +291,6 @@ pub enum ComputeLog {
     /// TODO(#25239): Add documentation.
     PeekDuration,
     /// TODO(#25239): Add documentation.
-    FrontierDelay,
-    /// TODO(#25239): Add documentation.
     ImportFrontierCurrent,
     /// TODO(#25239): Add documentation.
     ArrangementHeapSize,
@@ -315,7 +313,6 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::FrontierCurrent => FrontierCurrent(()),
                 ComputeLog::PeekCurrent => PeekCurrent(()),
                 ComputeLog::PeekDuration => PeekDuration(()),
-                ComputeLog::FrontierDelay => FrontierDelay(()),
                 ComputeLog::ImportFrontierCurrent => ImportFrontierCurrent(()),
                 ComputeLog::ArrangementHeapSize => ArrangementHeapSize(()),
                 ComputeLog::ArrangementHeapCapacity => ArrangementHeapCapacity(()),
@@ -333,7 +330,6 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(FrontierCurrent(())) => Ok(ComputeLog::FrontierCurrent),
             Some(PeekCurrent(())) => Ok(ComputeLog::PeekCurrent),
             Some(PeekDuration(())) => Ok(ComputeLog::PeekDuration),
-            Some(FrontierDelay(())) => Ok(ComputeLog::FrontierDelay),
             Some(ImportFrontierCurrent(())) => Ok(ComputeLog::ImportFrontierCurrent),
             Some(ArrangementHeapSize(())) => Ok(ComputeLog::ArrangementHeapSize),
             Some(ArrangementHeapCapacity(())) => Ok(ComputeLog::ArrangementHeapCapacity),
@@ -363,7 +359,6 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
         LogVariant::Compute(ComputeLog::DataflowCurrent),
         LogVariant::Compute(ComputeLog::FrontierCurrent),
         LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
-        LogVariant::Compute(ComputeLog::FrontierDelay),
         LogVariant::Compute(ComputeLog::PeekCurrent),
         LogVariant::Compute(ComputeLog::PeekDuration),
     ];
@@ -497,12 +492,6 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false))
                 .with_key(vec![0, 1, 2]),
-
-            LogVariant::Compute(ComputeLog::FrontierDelay) => RelationDesc::empty()
-                .with_column("export_id", ScalarType::String.nullable(false))
-                .with_column("import_id", ScalarType::String.nullable(false))
-                .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("delay_ns", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()
                 .with_column("id", ScalarType::Uuid.nullable(false))

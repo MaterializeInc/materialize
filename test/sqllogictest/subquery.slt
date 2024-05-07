@@ -262,6 +262,8 @@ Explained Query:
         Project () // { arity: 0 }
           ReadStorage materialize.public.t2 // { arity: 1 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -283,6 +285,8 @@ Explained Query:
           Project () // { arity: 0 }
             ReadStorage materialize.public.t2 // { arity: 1 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -302,6 +306,8 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 1 }
         Distinct project=[#0] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -338,6 +344,8 @@ Source materialize.public.likes
   filter=((#0) IS NOT NULL)
 Source materialize.public.age
   filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
 
 EOF
 
@@ -486,6 +494,8 @@ Explained Query:
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -523,6 +533,8 @@ Explained Query:
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -563,6 +575,8 @@ Explained Query:
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -667,5 +681,7 @@ Explained Query:
     Distinct project=[] // { arity: 0 }
       Project () // { arity: 0 }
         ReadStorage materialize.public.y // { arity: 1 }
+
+Target cluster: quickstart
 
 EOF

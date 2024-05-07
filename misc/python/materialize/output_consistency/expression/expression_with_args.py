@@ -38,8 +38,8 @@ class ExpressionWithArgs(Expression):
         self,
         operation: DbOperationOrFunction,
         args: list[Expression],
-        is_aggregate: bool,
-        is_expect_error: bool,
+        is_aggregate: bool = False,
+        is_expect_error: bool = False,
     ):
         super().__init__(
             operation.derive_characteristics(args),
@@ -52,8 +52,11 @@ class ExpressionWithArgs(Expression):
         self.return_type_spec = operation.return_type_spec
         self.args = args
 
+    def count_args(self) -> int:
+        return len(self.args)
+
     def has_args(self) -> bool:
-        return len(self.args) > 0
+        return self.count_args() > 0
 
     def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
         sql: str = self.pattern
@@ -100,7 +103,7 @@ class ExpressionWithArgs(Expression):
 
     def __str__(self) -> str:
         args_desc = ", ".join(arg.__str__() for arg in self.args)
-        return f"ExpressionWithArgs with pattern {self.pattern} and args {args_desc}"
+        return f"ExpressionWithArgs (pattern='{self.pattern}', args=[{args_desc}])"
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection

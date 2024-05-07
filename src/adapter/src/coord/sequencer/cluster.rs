@@ -31,7 +31,6 @@ use mz_sql::plan::{
 };
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
-use mz_sql_parser::ast::ClusterScheduleOptionValue;
 
 use crate::catalog::Op;
 use crate::coord::Coordinator;
@@ -109,7 +108,7 @@ impl Coordinator {
             size,
             disk,
             optimizer_feature_overrides: _,
-            schedule,
+            schedule: _,
         }: CreateClusterManagedPlan,
         cluster_id: ClusterId,
         mut ops: Vec<catalog::Op>,
@@ -118,12 +117,13 @@ impl Coordinator {
 
         self.ensure_valid_azs(availability_zones.iter())?;
 
-        let allowed_replica_sizes = &self
-            .catalog()
-            .system_config()
-            .allowed_cluster_replica_sizes();
-        self.catalog
-            .ensure_valid_replica_size(allowed_replica_sizes, &size)?;
+        let role_id = session.role_metadata().current_role;
+        self.catalog.ensure_valid_replica_size(
+            &self
+                .catalog()
+                .get_role_allowed_cluster_sizes(&Some(role_id)),
+            &size,
+        )?;
 
         // Eagerly validate the `max_replicas_per_cluster` limit.
         // `catalog_transact` will do this validation too, but allocating
@@ -136,14 +136,6 @@ impl Coordinator {
             "cluster replica",
             MAX_REPLICAS_PER_CLUSTER.name(),
         )?;
-
-        if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
-            // todo: remove this check once ClusterScheduleOptionValue::Refresh is
-            // actually implemented.
-            return Err(AdapterError::Unsupported(
-                "cluster schedules other than MANUAL",
-            ));
-        }
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
             let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
@@ -205,8 +197,7 @@ impl Coordinator {
                 location,
                 &self
                     .catalog()
-                    .system_config()
-                    .allowed_cluster_replica_sizes(),
+                    .get_role_allowed_cluster_sizes(&Some(owner_id)),
                 azs,
             )?,
             compute: ComputeReplicaConfig { logging },
@@ -330,13 +321,13 @@ impl Coordinator {
                 ReplicaLogging::default()
             };
 
+            let role_id = session.role_metadata().current_role;
             let config = ReplicaConfig {
                 location: self.catalog().concretize_replica_location(
                     location,
                     &self
                         .catalog()
-                        .system_config()
-                        .allowed_cluster_replica_sizes(),
+                        .get_role_allowed_cluster_sizes(&Some(role_id)),
                     None,
                 )?,
                 compute: ComputeReplicaConfig { logging },
@@ -459,13 +450,13 @@ impl Coordinator {
             ReplicaLogging::default()
         };
 
+        let role_id = session.role_metadata().current_role;
         let config = ReplicaConfig {
             location: self.catalog().concretize_replica_location(
                 location,
                 &self
                     .catalog()
-                    .system_config()
-                    .allowed_cluster_replica_sizes(),
+                    .get_role_allowed_cluster_sizes(&Some(role_id)),
                 // Planning ensures all replicas in this codepath
                 // are unmanaged.
                 None,
@@ -628,13 +619,6 @@ impl Coordinator {
                 }
                 match &options.schedule {
                     Set(new_schedule) => {
-                        if !matches!(new_schedule, ClusterScheduleOptionValue::Manual) {
-                            // todo: remove this check once ClusterScheduleOptionValue::Refresh is
-                            // actually implemented.
-                            return Err(AdapterError::Unsupported(
-                                "cluster schedules other than MANUAL",
-                            ));
-                        }
                         *schedule = new_schedule.clone();
                     }
                     Reset => *schedule = Default::default(),
@@ -671,7 +655,10 @@ impl Coordinator {
         match (&config.variant, new_config.variant) {
             (Managed(config), Managed(new_config)) => {
                 self.sequence_alter_cluster_managed_to_managed(
-                    session, cluster_id, config, new_config,
+                    Some(session),
+                    cluster_id,
+                    config,
+                    new_config,
                 )
                 .await?;
             }
@@ -697,9 +684,9 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster))
     }
 
-    async fn sequence_alter_cluster_managed_to_managed(
+    pub async fn sequence_alter_cluster_managed_to_managed(
         &mut self,
-        session: &Session,
+        session: Option<&Session>,
         cluster_id: ClusterId,
         config: &ClusterVariantManaged,
         new_config: ClusterVariantManaged,
@@ -730,12 +717,11 @@ impl Coordinator {
             },
         ) = (&config, &new_config);
 
-        let allowed_replica_sizes = &self
-            .catalog()
-            .system_config()
-            .allowed_cluster_replica_sizes();
-        self.catalog
-            .ensure_valid_replica_size(allowed_replica_sizes, new_size)?;
+        let role_id = session.map(|s| s.role_metadata().current_role);
+        self.catalog.ensure_valid_replica_size(
+            &self.catalog().get_role_allowed_cluster_sizes(&role_id),
+            new_size,
+        )?;
 
         let mut create_cluster_replicas = vec![];
 
@@ -837,7 +823,7 @@ impl Coordinator {
             config: ClusterConfig { variant },
         });
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact(session, ops).await?;
         self.create_cluster_replicas(&create_cluster_replicas).await;
         Ok(())
     }

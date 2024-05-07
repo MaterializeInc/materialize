@@ -60,7 +60,7 @@ INSERT INTO t1 SELECT * FROM t1;
 "{\"bar\":\"baz\",\"nest\":{\"birds\":[\"seagull\",\"robin\"]},\"active\":false,\"balance\":7.77}"
 "{\"bar\":\"baz\",\"nest\":{\"birds\":[\"seagull\",\"robin\"]},\"active\":false,\"balance\":7.77}"
 
-> DROP SOURCE da;
+> DROP SOURCE da CASCADE;
 
 #
 # Validate that unsupported types error even as TEXT COLUMNS

@@ -95,7 +95,7 @@ Currently, the optimization team is mostly concerned with the `HIR ⇒ MIR` and 
     * A PR can be merged if it passes Fast SLT.
     * A PR does not need to pass Full SLT tests (`test/sqllogictest/sqlite`) to be merged.
         * Full SLT tests take 2-3 hours.
-        * You can manually initiate full SLT tests on your branch [here](https://buildkite.com/materialize/sql-logic-tests).
+        * You can manually initiate full SLT tests on your branch [here](https://buildkite.com/materialize/slt).
 * [Testdrive](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/testdrive.md)
     * We generally do not use testdrive except to see [linear operators in action](https://github.com/MaterializeInc/materialize/blob/main/test/testdrive/source-linear-operators.td).
 

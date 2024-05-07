@@ -216,7 +216,7 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
             + dedent(initial_sql)
             + dedent(
                 """
-                > DROP SOURCE IF EXISTS s1;
+                > DROP SOURCE IF EXISTS s1 CASCADE;
                 """
             )
         )

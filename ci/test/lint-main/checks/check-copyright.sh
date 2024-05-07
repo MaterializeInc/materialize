@@ -21,12 +21,12 @@ files=$(git_files "$@")
 
 copyright_files=$(grep -vE \
     -e '(^|/)LICENSE$' \
-    -e '(^|/)\.(docker|git|vscode)ignore$' \
+    -e '(^|/)\.(docker|git|vscode|bazel)ignore$' \
     -e '(^|/)\.gitattributes$' \
     -e '(^|/)\.github/(dependabot\.yml|CODEOWNERS)$' \
     -e '(^|/)\.gitmodules$' \
     -e '(^|/)go\.sum$' \
-    -e '(^|/)(Cargo|askama)\.toml$' \
+    -e '(^|/)(Cargo|askama|config)\.toml$' \
     -e '^\.cargo/config$' \
     -e '^\.config/hakari.toml$' \
     -e '^.devcontainer/.*' \

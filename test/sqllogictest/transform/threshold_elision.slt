@@ -81,6 +81,8 @@ Explained Query:
         Filter (#0 = 5) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
 
+Target cluster: quickstart
+
 EOF
 
 # Simple case: EXCEPT ALL with an IS NOT NULL filter.
@@ -103,6 +105,8 @@ Explained Query:
         Filter (#3) IS NOT NULL // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
 
+Target cluster: quickstart
+
 EOF
 
 # Simple case: EXCEPT.
@@ -122,6 +126,8 @@ Explained Query:
         Project (#1) // { non_negative: true }
           Filter (#0 > 1) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
+
+Target cluster: quickstart
 
 EOF
 
@@ -146,6 +152,8 @@ Explained Query:
             Project (#0, #1) // { non_negative: true }
               Filter (#0 > 1) // { non_negative: true }
                 ReadStorage materialize.public.people // { non_negative: true }
+
+Target cluster: quickstart
 
 EOF
 
@@ -186,6 +194,8 @@ Explained Query:
       Project (#0, #1) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
 
+Target cluster: quickstart
+
 EOF
 
 # Complex example: EXCEPT.
@@ -225,6 +235,8 @@ Explained Query:
       Project (#0, #1) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
 
+Target cluster: quickstart
+
 EOF
 
 # Complex example: CTE with a join.
@@ -250,6 +262,8 @@ Explained Query:
           Project () // { non_negative: true }
             ReadStorage materialize.public.bands // { non_negative: true }
 
+Target cluster: quickstart
+
 EOF
 
 # Complex example: CTE with a DISTINCT.
@@ -270,6 +284,8 @@ Explained Query:
       Distinct project=[#0] // { non_negative: true }
         Project (#1) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
+
+Target cluster: quickstart
 
 EOF
 
@@ -295,6 +311,8 @@ Explained Query:
       Reduce group_by=[extract_year_d(#0)] aggregates=[count(*)] // { non_negative: true }
         Project (#2) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
+
+Target cluster: quickstart
 
 EOF
 
@@ -334,6 +352,8 @@ Explained Query:
             Filter like["J%"](#1) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
 
+Target cluster: quickstart
+
 EOF
 
 # Complex example (unsupported): A - (σ(p)(A) ⊎ σ(q)(A)).
@@ -360,6 +380,8 @@ Explained Query:
         Project (#1) // { non_negative: true }
           Filter (#0 = 2) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
+
+Target cluster: quickstart
 
 EOF
 
@@ -404,6 +426,8 @@ Explained Query:
           Project (#0, #2) // { non_negative: false }
             Map ((#1 || "_iter")) // { non_negative: false }
               Get l0 // { non_negative: false }
+
+Target cluster: quickstart
 
 EOF
 
@@ -454,6 +478,8 @@ Explained Query:
                   Filter (#0 > 1) // { non_negative: false }
                     Get l1 // { non_negative: false }
 
+Target cluster: quickstart
+
 EOF
 
 # WMR -- Threshold inside the cycle -- The Threshold could be eliminated only if we propagated non-negativity through
@@ -487,10 +513,12 @@ Explained Query:
           Threshold // { non_negative: true }
             Union // { non_negative: false }
               Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
-                Get l0 // { non_negative: false }
+                Get l0 // { non_negative: true }
               Negate // { non_negative: false }
                 Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
                   Filter (#0 > 1) // { non_negative: false }
-                    Get l0 // { non_negative: false }
+                    Get l0 // { non_negative: true }
+
+Target cluster: quickstart
 
 EOF

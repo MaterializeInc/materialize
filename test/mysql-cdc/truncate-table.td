@@ -47,4 +47,4 @@ TRUNCATE TABLE t1;
 ! SELECT count(*) FROM t1;
 contains: table was truncated
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;

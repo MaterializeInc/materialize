@@ -55,8 +55,6 @@ alter_source_drop_clause ::=
   'DROP' ('SUBSOURCE' | 'TABLE') subsrc_name ( ',' subsrc_name )* ('RESTRICT' | 'CASCADE')?
 alter_source_set_retain_history_clause ::=
   'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
-alter_set_cluster ::=
-  'ALTER' 'MATERIALIZED VIEW' 'IF EXISTS'? name 'SET' 'IN' 'CLUSTER' cluster_name
 alter_system_set_stmt ::=
   'ALTER' 'SYSTEM' 'SET' name ( 'TO' | '=' ) ( value | 'DEFAULT' )
 alter_system_reset_stmt ::=
@@ -166,6 +164,7 @@ sink_definition ::=
     'FROM' item_name
     'INTO' kafka_sink_connection
     ('KEY' '(' key_column ( ',' key_column )* ')' 'NOT ENFORCED'?)?
+    ('HEADERS' headers_column)?
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))
     ('WITH' with_options)?
@@ -311,16 +310,18 @@ execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain_plan ::=
   'EXPLAIN'
-  ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' )? 'PLAN' )?
+  ( ( 'RAW' | 'DECORRELATED' | 'LOCALLY'? 'OPTIMIZED' | 'PHYSICAL' )? 'PLAN' )?
   ( 'WITH (' ( output_modifier (',' output_modifier )* ) ')' )?
   ( 'AS' ( 'TEXT' | 'JSON' ) )?
   'FOR'?
   (
     select_stmt |
+    create_view |
     create_index |
     create_materialized_view |
-    'INDEX' index_name |
-    'MATERIALIZED VIEW' view_name
+    'VIEW' name |
+    'INDEX' name |
+    'MATERIALIZED VIEW' name
   )
 explain_timestamp ::=
   'EXPLAIN' 'TIMESTAMP'

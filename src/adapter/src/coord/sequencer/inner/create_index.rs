@@ -13,14 +13,13 @@ use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::optimize::OverrideFrom;
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
-use timely::progress::Timestamp as _;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -108,7 +107,7 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
         let resolved_ids = ResolvedIds(Default::default());
@@ -148,7 +147,7 @@ impl Coordinator {
         };
 
         let state = self.catalog().state();
-        let plan_result = state.deserialize_plan(id, &item.create_sql, true);
+        let plan_result = state.deserialize_plan(&item.create_sql, true);
         let (plan, resolved_ids) = return_if_err!(plan_result, ctx);
 
         let plan::Plan::CreateIndex(plan) = plan else {
@@ -161,7 +160,7 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,
@@ -193,7 +192,7 @@ impl Coordinator {
         let plan::Explainee::Index(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let CatalogItem::Index(_) = self.catalog().get_entry(&id).item() else {
+        let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
@@ -203,6 +202,12 @@ impl Coordinator {
             }
             coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
         };
+
+        let target_cluster = self.catalog().get_cluster(index.cluster_id);
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features())
+            .override_from(&config.features);
 
         let explain = match stage {
             ExplainStage::GlobalPlan => {
@@ -214,7 +219,9 @@ impl Coordinator {
                     plan,
                     format,
                     &config,
+                    &features,
                     &self.catalog().for_session(ctx.session()),
+                    Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
@@ -227,7 +234,9 @@ impl Coordinator {
                     plan,
                     format,
                     &config,
+                    &features,
                     &self.catalog().for_session(ctx.session()),
+                    Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
@@ -452,10 +461,8 @@ impl Coordinator {
                 //
                 // TODO: Maybe in the future, pass those holds on to compute, to
                 // hold on to them and downgrade when possible?
-                let read_holds = coord
-                    .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
-                    .expect("can acquire read holds");
-                let since = coord.least_valid_read(&id_bundle);
+                let read_holds = coord.acquire_read_holds(&id_bundle);
+                let since = coord.least_valid_read(&read_holds);
                 df_desc.set_as_of(since);
 
                 // Emit notices.
@@ -531,7 +538,6 @@ impl Coordinator {
             df_meta,
             explain_ctx:
                 ExplainPlanContext {
-                    broken,
                     config,
                     format,
                     stage,
@@ -551,27 +557,30 @@ impl Coordinator {
 
             let transient_items = btreemap! {
                 exported_index_id => TransientItem::new(
-                    Some(full_name.to_string()),
-                    Some(full_name.item.to_string()),
+                    Some(full_name.into_parts()),
                     Some(on_desc.iter_names().map(|c| c.to_string()).collect()),
                 )
             };
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
+        let target_cluster = self.catalog().get_cluster(index.cluster_id);
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features())
+            .override_from(&config.features);
+
         let rows = optimizer_trace.into_rows(
             format,
             &config,
+            &features,
             &expr_humanizer,
             None,
+            Some(target_cluster.name.as_str()),
             df_meta,
             stage,
             plan::ExplaineeStatementKind::CreateIndex,
         )?;
-
-        if broken {
-            tracing_core::callsite::rebuild_interest_cache();
-        }
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }

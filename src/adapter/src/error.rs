@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
+use std::time::Duration;
 
-use crate::CollectionIdBundle;
 use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER;
@@ -25,6 +25,7 @@ use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
 use mz_repr::{NotNullViolation, Timestamp};
+use mz_sql::ast::UnresolvedItemName;
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
@@ -143,7 +144,7 @@ pub enum AdapterError {
     IdleInTransactionSessionTimeout,
     /// The transaction is in single-subscribe mode.
     SubscribeOnlyTransaction,
-    /// An error occurred in the the optimizer.
+    /// An error occurred in the optimizer.
     Optimizer(OptimizerError),
     /// A query depends on items which are not allowed to be referenced from the current cluster.
     UnallowedOnCluster {
@@ -213,7 +214,17 @@ pub enum AdapterError {
     MaterializedViewWouldNeverRefresh(Timestamp, Timestamp),
     /// A CREATE MATERIALIZED VIEW statement tried to acquire a read hold at a REFRESH AT time,
     /// but was unable to get a precise read hold.
-    InputNotReadableAtRefreshAtTime(Timestamp, Vec<(Antichain<Timestamp>, CollectionIdBundle)>),
+    InputNotReadableAtRefreshAtTime(Timestamp, Antichain<Timestamp>),
+    /// A dependent index did not have a high enough retained history.
+    RequiredRetainHistory {
+        required: Duration,
+        found: Duration,
+        name: String,
+    },
+    /// An ALTER SOURCE referred to an upstream table that's already referred to.
+    SubsourceAlreadyReferredTo {
+        name: UnresolvedItemName,
+    },
 }
 
 impl AdapterError {
@@ -311,23 +322,17 @@ impl AdapterError {
             AdapterError::UnallowedOnCluster { cluster, .. } => (cluster == MZ_INTROSPECTION_CLUSTER.name).then(||
                 format!("The transaction is executing on the {cluster} cluster, maybe having been routed there by the first statement in the transaction.")
             ),
-            AdapterError::InputNotReadableAtRefreshAtTime(oracle_read_ts, earliest_possible) => {
+            AdapterError::InputNotReadableAtRefreshAtTime(oracle_read_ts, least_valid_read) => {
                 Some(format!(
                     "The requested REFRESH AT time is {}, \
-                    while the following input collections are readable at no earlier than the following times: [{}].",
+                    but not all input collections are readable earlier than [{}].",
                     oracle_read_ts,
-                    earliest_possible.iter().map(|(antichain, id_bundle)|
-                        format!(
-                            "[{}]: {}",
-                            id_bundle.iter().map(|id| format!("{}", id)).join(", "),
-                            if antichain.len() == 1 {
-                                format!("{}", antichain.as_option().expect("antichain contains exactly 1 timestamp"))
-                            } else {
-                                // This can't occur currently
-                                format!("{:?}", antichain)
-                            }
-                        )
-                    ).join("; "),
+                    if least_valid_read.len() == 1 {
+                        format!("{}", least_valid_read.as_option().expect("antichain contains exactly 1 timestamp"))
+                    } else {
+                        // This can't occur currently
+                        format!("{:?}", least_valid_read)
+                    }
                 ))
             }
             _ => None,
@@ -387,6 +392,17 @@ impl AdapterError {
             AdapterError::InvalidAlter(_, e) => e.hint(),
             AdapterError::Optimizer(e) => e.hint(),
             AdapterError::ConnectionValidation(e) => e.hint(),
+            AdapterError::RequiredRetainHistory { .. } => Some(format!(
+                "Use `ALTER INDEX <index-name> SET (RETAIN HISTORY FOR <duration>)` to change your index and re-run the statement."
+            )),
+            AdapterError::InputNotReadableAtRefreshAtTime(_, _) => Some(
+                "You can use `REFRESH AT greatest(mz_now(), <explicit timestamp>)` to refresh \
+                 either at the explicitly specified timestamp, or now if the given timestamp would \
+                 be in the past.".to_string()
+            ),
+            Self::SubsourceAlreadyReferredTo { .. } => {
+                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
+            },
             _ => None,
         }
     }
@@ -508,6 +524,10 @@ impl AdapterError {
             // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
             AdapterError::MaterializedViewWouldNeverRefresh(_, _) => SqlState::DATA_EXCEPTION,
             AdapterError::InputNotReadableAtRefreshAtTime(_, _) => SqlState::DATA_EXCEPTION,
+            AdapterError::RequiredRetainHistory { .. } => SqlState::INTERNAL_ERROR,
+            // Calling this `FEATURE_NOT_SUPPORTED` because we will eventually allow multiple
+            // references to the same subsource (albeit with different schemas).
+            AdapterError::SubsourceAlreadyReferredTo { .. } => SqlState::FEATURE_NOT_SUPPORTED,
         }
     }
 
@@ -722,6 +742,19 @@ impl fmt::Display for AdapterError {
                     f,
                     "REFRESH AT requested for a time where not all the inputs are readable"
                 )
+            }
+            AdapterError::RequiredRetainHistory {
+                required,
+                found,
+                name,
+            } => {
+                write!(
+                    f,
+                    "dependent index {name} has a RETAIN HISTORY of {found:?}, but must be at least {required:?}"
+                )
+            }
+            Self::SubsourceAlreadyReferredTo { name } => {
+                write!(f, "another subsource already refers to {}", name)
             }
         }
     }

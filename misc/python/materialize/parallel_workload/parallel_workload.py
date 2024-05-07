@@ -65,7 +65,6 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
-    fast_startup: bool,
     composition: Composition | None,
     sanity_restart: bool,
 ) -> None:
@@ -74,7 +73,7 @@ def run(
     rng = random.Random(random.randrange(SEED_RANGE))
 
     print(
-        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--fast-startup' if fast_startup else ''}(--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} (--host={host})"
     )
     initialize_logging()
 
@@ -83,7 +82,7 @@ def run(
     ).timestamp()
 
     database = Database(
-        rng, seed, host, ports, complexity, scenario, naughty_identifiers, fast_startup
+        rng, seed, host, ports, complexity, scenario, naughty_identifiers
     )
 
     system_conn = pg8000.connect(
@@ -91,7 +90,7 @@ def run(
     )
     system_conn.autocommit = True
     with system_conn.cursor() as system_cur:
-        system_exe = Executor(rng, system_cur, database)
+        system_exe = Executor(rng, system_cur, None, database)
         system_exe.execute(
             f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 10 + num_threads}"
         )
@@ -141,7 +140,7 @@ def run(
         conn.autocommit = True
         with conn.cursor() as cur:
             assert composition
-            database.create(Executor(rng, cur, database), composition)
+            database.create(Executor(rng, cur, None, database), composition)
         conn.close()
 
     workers = []
@@ -154,6 +153,8 @@ def run(
             weights = [60, 30, 30, 30, 0]
         elif complexity == Complexity.Read:
             weights = [60, 30, 0, 0, 0]
+        elif complexity == Complexity.DDLOnly:
+            weights = [0, 0, 0, 0, 100]
         else:
             raise ValueError(f"Unknown complexity {complexity}")
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
@@ -190,7 +191,7 @@ def run(
         thread = threading.Thread(
             name=thread_name,
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", database),
+            args=(host, ports["materialized"], ports["http"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -210,7 +211,7 @@ def run(
         thread = threading.Thread(
             name="cancel",
             target=worker.run,
-            args=(host, ports["mz_system"], "mz_system", database),
+            args=(host, ports["mz_system"], ports["http"], "mz_system", database),
         )
         thread.start()
         threads.append(thread)
@@ -230,7 +231,7 @@ def run(
         thread = threading.Thread(
             name="kill",
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", database),
+            args=(host, ports["materialized"], ports["http"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -262,7 +263,7 @@ def run(
         thread = threading.Thread(
             name="toggle-persist-txn",
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", database),
+            args=(host, ports["materialized"], ports["http"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -282,7 +283,7 @@ def run(
         thread = threading.Thread(
             name="kill",
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", database),
+            args=(host, ports["materialized"], ports["http"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -306,7 +307,7 @@ def run(
         thread = threading.Thread(
             name="statistics",
             target=worker.run,
-            args=(host, ports["mz_system"], "mz_system", database),
+            args=(host, ports["mz_system"], ports["http"], "mz_system", database),
         )
         thread.start()
         threads.append(thread)
@@ -364,7 +365,7 @@ def run(
     with conn.cursor() as cur:
         # Dropping the database also releases the long running connections
         # used by database objects.
-        database.drop(Executor(rng, cur, database))
+        database.drop(Executor(rng, cur, None, database))
 
         # Make sure all unreachable connections are closed too
         gc.collect()
@@ -450,7 +451,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         prog="parallel-workload",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Run a parallel workload againt Materialize",
+        description="Run a parallel workload against Materialize",
     )
 
     parser.add_argument("--host", default="localhost", type=str)
@@ -462,8 +463,8 @@ def main() -> int:
     args = parser.parse_args()
 
     ports: dict[str, int] = {
-        "materialized": 6875,
-        "mz_system": 6877,
+        "materialized": args.port,
+        "mz_system": args.system_port,
         "http": 6876,
         "kafka": 9092,
         "schema-registry": 8081,
@@ -494,7 +495,6 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
-        args.fast_startup,
         composition=None,  # only works in mzcompose
         sanity_restart=False,  # only works in mzcompose
     )

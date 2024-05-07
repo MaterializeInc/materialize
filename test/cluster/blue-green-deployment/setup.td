@@ -28,10 +28,10 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
 > DROP SCHEMA IF EXISTS prod_deploy CASCADE
 
 # For now sources are not considered in blue-green deployments, so create them separately
-> DROP SOURCE IF EXISTS counter
+> DROP SOURCE IF EXISTS counter CASCADE
 > CREATE SOURCE counter FROM LOAD GENERATOR counter (TICK INTERVAL '1s')
 
-> DROP SOURCE IF EXISTS tpch
+> DROP SOURCE IF EXISTS tpch CASCADE
 > CREATE SOURCE tpch
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1)
   FOR ALL TABLES

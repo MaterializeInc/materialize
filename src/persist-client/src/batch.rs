@@ -36,6 +36,7 @@ use mz_proto::RustType;
 use mz_timely_util::order::Reverse;
 use proptest_derive::Arbitrary;
 use semver::Version;
+use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, error, trace_span, warn, Instrument};
@@ -43,11 +44,13 @@ use tracing::{debug_span, error, trace_span, warn, Instrument};
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::MiB;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{LazyPartStats, Schemas};
+use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
-use crate::internal::state::{BatchPart, HollowBatch, HollowBatchPart};
+use crate::internal::state::{
+    BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, WRITE_DIFFS_SUM,
+};
 use crate::stats::{
     part_stats_for_legacy_part, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
 };
@@ -144,37 +147,6 @@ where
         self.batch.desc.lower()
     }
 
-    /// Efficiently rewrites the timestamps in this not-yet-committed batch.
-    ///
-    /// This [Batch] represents potentially large amounts of data, which may
-    /// have partly or entirely been spilled to s3. This call bulk edits the
-    /// timestamps of all data in this batch in a metadata-only operation (i.e.
-    /// without network calls).
-    ///
-    /// Specifically, every timestamp in the batch is logically advanced_by the
-    /// provided `frontier`.
-    ///
-    /// This method may be called multiple times, with later calls overriding
-    /// previous ones, but the rewrite frontier may not regress across calls.
-    ///
-    /// When this batch was created, it was given an `upper`, which bounds the
-    /// staged data it represents. To allow rewrite past this original `upper`,
-    /// this call accepts a new `upper` which replaces the previous one. Like
-    /// the rewrite frontier, the upper may not regress across calls.
-    ///
-    /// Multiple batches with various rewrite frontiers may be used in a single
-    /// [crate::write::WriteHandle::compare_and_append_batch] call. This is an
-    /// expected usage.
-    pub fn rewrite_ts(
-        &mut self,
-        frontier: &Antichain<T>,
-        new_upper: Antichain<T>,
-    ) -> Result<(), InvalidUsage<T>> {
-        self.batch
-            .rewrite_ts(frontier, new_upper)
-            .map_err(InvalidUsage::InvalidRewrite)
-    }
-
     /// Marks the blobs that this batch handle points to as consumed, likely
     /// because they were appended to a shard.
     ///
@@ -197,7 +169,11 @@ where
             deletes.add(part);
         }
         let () = deletes
-            .delete(&self.blob, &self.metrics.retries.external.batch_delete)
+            .delete(
+                &self.blob,
+                self.shard_id(),
+                &self.metrics.retries.external.batch_delete,
+            )
             .await;
     }
 
@@ -228,6 +204,112 @@ where
         self.mark_consumed();
         ret
     }
+
+    pub(crate) async fn flush_to_blob<StatsK: Codec, StatsV: Codec>(
+        &mut self,
+        cfg: &BatchBuilderConfig,
+        batch_metrics: &BatchWriteMetrics,
+        isolated_runtime: &Arc<IsolatedRuntime>,
+        stats_schemas: &Schemas<StatsK, StatsV>,
+    ) {
+        // It's necessary for correctness to keep the parts in the same order.
+        // We could introduce concurrency here with FuturesOrdered, but it would
+        // be pretty unexpected to have inline writes in more than one part, so
+        // don't bother.
+        let mut parts = Vec::new();
+        for part in self.batch.parts.drain(..) {
+            let (updates, ts_rewrite) = match part {
+                BatchPart::Hollow(x) => {
+                    parts.push(BatchPart::Hollow(x));
+                    continue;
+                }
+                BatchPart::Inline {
+                    updates,
+                    ts_rewrite,
+                } => (updates, ts_rewrite),
+            };
+            let updates = updates
+                .decode::<T>(&self.metrics.columnar)
+                .expect("valid inline part");
+            let key_lower = updates.key_lower().to_vec();
+            let diffs_sum = diffs_sum::<D>(&updates.updates).expect("inline parts are not empty");
+
+            let write_span =
+                debug_span!("batch::flush_to_blob", shard = %self.shard_metrics.shard_id)
+                    .or_current();
+            let handle = mz_ore::task::spawn(
+                || "batch::flush_to_blob",
+                BatchParts::write_hollow_part(
+                    cfg.clone(),
+                    Arc::clone(&self.blob),
+                    Arc::clone(&self.metrics),
+                    Arc::clone(&self.shard_metrics),
+                    batch_metrics.clone(),
+                    Arc::clone(isolated_runtime),
+                    updates,
+                    key_lower,
+                    ts_rewrite,
+                    D::encode(&diffs_sum),
+                    stats_schemas.clone(),
+                )
+                .instrument(write_span),
+            );
+            let part = handle.await.expect("part write task failed");
+            parts.push(part);
+        }
+        self.batch.parts = parts;
+    }
+}
+
+impl<K, V, T, D> Batch<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64 + TotalOrder,
+    D: Semigroup + Codec64,
+{
+    /// Efficiently rewrites the timestamps in this not-yet-committed batch.
+    ///
+    /// This [Batch] represents potentially large amounts of data, which may
+    /// have partly or entirely been spilled to s3. This call bulk edits the
+    /// timestamps of all data in this batch in a metadata-only operation (i.e.
+    /// without network calls).
+    ///
+    /// Specifically, every timestamp in the batch is logically advanced_by the
+    /// provided `frontier`.
+    ///
+    /// This method may be called multiple times, with later calls overriding
+    /// previous ones, but the rewrite frontier may not regress across calls.
+    ///
+    /// When this batch was created, it was given an `upper`, which bounds the
+    /// staged data it represents. To allow rewrite past this original `upper`,
+    /// this call accepts a new `upper` which replaces the previous one. Like
+    /// the rewrite frontier, the upper may not regress across calls.
+    ///
+    /// Multiple batches with various rewrite frontiers may be used in a single
+    /// [crate::write::WriteHandle::compare_and_append_batch] call. This is an
+    /// expected usage.
+    ///
+    /// This feature requires that the timestamp impls `TotalOrder`. This is
+    /// because we need to be able to verify that the contained data, after the
+    /// rewrite forward operation, still respects the new upper. It turns out
+    /// that, given the metadata persist currently collects during batch
+    /// collection, this is possible for totally ordered times, but it's known
+    /// to be _not possible_ for partially ordered times. It is believed that we
+    /// could fix this by collecting different metadata in batch creation (e.g.
+    /// the join of or an antichain of the original contained timestamps), but
+    /// the experience of #26384 has shaken our confidence in our own abilities
+    /// to reason about partially ordered times and anyway all the initial uses
+    /// have totally ordered times.
+    pub fn rewrite_ts(
+        &mut self,
+        frontier: &Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<(), InvalidUsage<T>> {
+        self.batch
+            .rewrite_ts(frontier, new_upper)
+            .map_err(InvalidUsage::InvalidRewrite)
+    }
 }
 
 /// Indicates what work was done in a call to [BatchBuilder::add]
@@ -248,9 +330,11 @@ pub struct BatchBuilderConfig {
     pub(crate) blob_target_size: usize,
     pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
+    pub(crate) inline_writes_single_max_bytes: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
+    pub(crate) write_diffs_sum: bool,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -272,6 +356,20 @@ pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
     "A target maximum size of persist blob payloads in bytes (Materialize).",
 );
 
+pub(crate) const INLINE_WRITES_SINGLE_MAX_BYTES: Config<usize> = Config::new(
+    "persist_inline_writes_single_max_bytes",
+    0,
+    "The (exclusive) maximum size of a write that persist will inline in metadata.",
+);
+
+pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
+    "persist_inline_writes_total_max_bytes",
+    0,
+    "\
+    The (exclusive) maximum total size of inline writes in metadata before \
+    persist will backpressure them by flushing out to s3.",
+);
+
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
     pub fn new(value: &PersistConfig, _writer_id: &WriterId) -> Self {
@@ -283,9 +381,11 @@ impl BatchBuilderConfig {
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
+            inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
             stats_untrimmable_columns: Arc::new(untrimmable_columns(value)),
+            write_diffs_sum: WRITE_DIFFS_SUM.get(value),
         }
     }
 }
@@ -590,6 +690,7 @@ where
         if num_updates == 0 {
             return;
         }
+        let diffs_sum = diffs_sum::<D>(std::iter::once(&columnar)).expect("part is non empty");
 
         if self.consolidate {
             // if our parts are consolidated, we can rely on their sorted order to
@@ -635,6 +736,7 @@ where
                 columnar,
                 self.inline_upper.clone(),
                 self.since.clone(),
+                diffs_sum,
             )
             .await;
         self.metrics
@@ -828,116 +930,67 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    pub(crate) async fn write<K: Codec, V: Codec>(
+    pub(crate) async fn write<K: Codec, V: Codec, D: Codec64>(
         &mut self,
         schemas: &Schemas<K, V>,
         key_lower: Vec<u8>,
         updates: ColumnarRecords,
         upper: Antichain<T>,
         since: Antichain<T>,
+        diffs_sum: D,
     ) {
         let desc = Description::new(self.lower.clone(), upper, since);
-        let metrics = Arc::clone(&self.metrics);
-        let shard_metrics = Arc::clone(&self.shard_metrics);
-        let blob = Arc::clone(&self.blob);
-        let isolated_runtime = Arc::clone(&self.isolated_runtime);
         let batch_metrics = self.batch_metrics.clone();
-        let partial_key = PartialBatchKey::new(&self.cfg.writer_key, &PartId::new());
-        let key = partial_key.complete(&self.shard_id);
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
-        let stats_collection_enabled = self.cfg.stats_collection_enabled;
-        let stats_budget = self.cfg.stats_budget;
-        let schemas = schemas.clone();
-        let untrimmable_columns = Arc::clone(&self.cfg.stats_untrimmable_columns);
+        let ts_rewrite = None;
 
-        let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
-        let handle = mz_ore::task::spawn(
-            || "batch::write_part",
-            async move {
-                let goodbytes = updates.goodbytes();
-                let batch = BlobTraceBatchPart {
-                    desc,
-                    updates: vec![updates],
-                    index,
-                };
-
-                let (stats, (buf, encode_time)) = isolated_runtime
-                    .spawn_named(|| "batch::encode_part", async move {
-                        let stats = if stats_collection_enabled {
-                            let stats_start = Instant::now();
-                            match part_stats_for_legacy_part(&schemas, &batch.updates) {
-                                Ok(x) => {
-                                    let mut trimmed_bytes = 0;
-                                    let x = LazyPartStats::encode(&x, |s| {
-                                        trimmed_bytes = trim_to_budget(s, stats_budget, |s| {
-                                            untrimmable_columns.should_retain(s)
-                                        });
-                                    });
-                                    Some((x, stats_start.elapsed(), trimmed_bytes))
-                                }
-                                Err(err) => {
-                                    error!("failed to construct part stats: {}", err);
-                                    None
-                                }
-                            }
-                        } else {
-                            None
-                        };
-
-                        let encode_start = Instant::now();
-                        let mut buf = Vec::new();
-                        batch.encode(&mut buf);
-
-                        // Drop batch as soon as we can to reclaim its memory.
-                        drop(batch);
-                        (stats, (Bytes::from(buf), encode_start.elapsed()))
-                    })
-                    .instrument(debug_span!("batch::encode_part"))
-                    .await
-                    .expect("part encode task failed");
-                // Can't use the `CodecMetrics::encode` helper because of async.
-                metrics.codecs.batch.encode_count.inc();
-                metrics
-                    .codecs
-                    .batch
-                    .encode_seconds
-                    .inc_by(encode_time.as_secs_f64());
-
-                let start = Instant::now();
-                let payload_len = buf.len();
-                let () = retry_external(&metrics.retries.external.batch_set, || async {
-                    shard_metrics.blob_sets.inc();
-                    blob.set(&key, Bytes::clone(&buf)).await
-                })
-                .instrument(trace_span!("batch::set", payload_len))
-                .await;
-                batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
-                batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
-                batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
-                let stats = stats.map(|(stats, stats_step_timing, trimmed_bytes)| {
+        let handle = if updates.goodbytes() < self.cfg.inline_writes_single_max_bytes {
+            let span = debug_span!("batch::inline_part", shard = %self.shard_id).or_current();
+            mz_ore::task::spawn(
+                || "batch::inline_part",
+                async move {
+                    let start = Instant::now();
+                    let updates = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
+                        desc: Some(desc.into_proto()),
+                        index: index.into_proto(),
+                        updates: Some(updates.into_proto()),
+                    });
                     batch_metrics
-                        .step_stats
-                        .inc_by(stats_step_timing.as_secs_f64());
-                    if trimmed_bytes > 0 {
-                        metrics.pushdown.parts_stats_trimmed_count.inc();
-                        metrics
-                            .pushdown
-                            .parts_stats_trimmed_bytes
-                            .inc_by(u64::cast_from(trimmed_bytes));
+                        .step_inline
+                        .inc_by(start.elapsed().as_secs_f64());
+                    BatchPart::Inline {
+                        updates,
+                        ts_rewrite,
                     }
-                    stats
-                });
-
-                BatchPart::Hollow(HollowBatchPart {
-                    key: partial_key,
-                    encoded_size_bytes: payload_len,
+                }
+                .instrument(span),
+            )
+        } else {
+            let part = BlobTraceBatchPart {
+                desc,
+                updates: vec![updates],
+                index,
+            };
+            let write_span =
+                debug_span!("batch::write_part", shard = %self.shard_metrics.shard_id).or_current();
+            mz_ore::task::spawn(
+                || "batch::write_part",
+                BatchParts::write_hollow_part(
+                    self.cfg.clone(),
+                    Arc::clone(&self.blob),
+                    Arc::clone(&self.metrics),
+                    Arc::clone(&self.shard_metrics),
+                    batch_metrics.clone(),
+                    Arc::clone(&self.isolated_runtime),
+                    part,
                     key_lower,
-                    stats,
-                    ts_rewrite: None,
-                })
-            }
-            .instrument(write_span),
-        );
+                    ts_rewrite,
+                    D::encode(&diffs_sum),
+                    schemas.clone(),
+                )
+                .instrument(write_span),
+            )
+        };
         self.writing_parts.push_back(handle);
 
         while self.writing_parts.len() > self.cfg.batch_builder_max_outstanding_parts {
@@ -952,6 +1005,100 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .await;
             self.finished_parts.push(part);
         }
+    }
+
+    async fn write_hollow_part<K: Codec, V: Codec>(
+        cfg: BatchBuilderConfig,
+        blob: Arc<dyn Blob + Send + Sync>,
+        metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
+        batch_metrics: BatchWriteMetrics,
+        isolated_runtime: Arc<IsolatedRuntime>,
+        updates: BlobTraceBatchPart<T>,
+        key_lower: Vec<u8>,
+        ts_rewrite: Option<Antichain<T>>,
+        diffs_sum: [u8; 8],
+        schemas: Schemas<K, V>,
+    ) -> BatchPart<T> {
+        let partial_key = PartialBatchKey::new(&cfg.writer_key, &PartId::new());
+        let key = partial_key.complete(&shard_metrics.shard_id);
+        let goodbytes = updates.updates.iter().map(|x| x.goodbytes()).sum::<usize>();
+
+        let (stats, (buf, encode_time)) = isolated_runtime
+            .spawn_named(|| "batch::encode_part", async move {
+                let stats = if cfg.stats_collection_enabled {
+                    let stats_start = Instant::now();
+                    match part_stats_for_legacy_part(&schemas, &updates.updates) {
+                        Ok(x) => {
+                            let mut trimmed_bytes = 0;
+                            let x = LazyPartStats::encode(&x, |s| {
+                                trimmed_bytes = trim_to_budget(s, cfg.stats_budget, |s| {
+                                    cfg.stats_untrimmable_columns.should_retain(s)
+                                });
+                            });
+                            Some((x, stats_start.elapsed(), trimmed_bytes))
+                        }
+                        Err(err) => {
+                            error!("failed to construct part stats: {}", err);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let encode_start = Instant::now();
+                let mut buf = Vec::new();
+                updates.encode(&mut buf);
+
+                // Drop batch as soon as we can to reclaim its memory.
+                drop(updates);
+                (stats, (Bytes::from(buf), encode_start.elapsed()))
+            })
+            .instrument(debug_span!("batch::encode_part"))
+            .await
+            .expect("part encode task failed");
+        // Can't use the `CodecMetrics::encode` helper because of async.
+        metrics.codecs.batch.encode_count.inc();
+        metrics
+            .codecs
+            .batch
+            .encode_seconds
+            .inc_by(encode_time.as_secs_f64());
+
+        let start = Instant::now();
+        let payload_len = buf.len();
+        let () = retry_external(&metrics.retries.external.batch_set, || async {
+            shard_metrics.blob_sets.inc();
+            blob.set(&key, Bytes::clone(&buf)).await
+        })
+        .instrument(trace_span!("batch::set", payload_len))
+        .await;
+        batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
+        batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
+        batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
+        let stats = stats.map(|(stats, stats_step_timing, trimmed_bytes)| {
+            batch_metrics
+                .step_stats
+                .inc_by(stats_step_timing.as_secs_f64());
+            if trimmed_bytes > 0 {
+                metrics.pushdown.parts_stats_trimmed_count.inc();
+                metrics
+                    .pushdown
+                    .parts_stats_trimmed_bytes
+                    .inc_by(u64::cast_from(trimmed_bytes));
+            }
+            stats
+        });
+
+        BatchPart::Hollow(HollowBatchPart {
+            key: partial_key,
+            encoded_size_bytes: payload_len,
+            key_lower,
+            stats,
+            ts_rewrite,
+            diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
+        })
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
@@ -1016,20 +1163,30 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 pub(crate) struct PartDeletes(BTreeSet<PartialBatchKey>);
 
 impl PartDeletes {
-    // Adds the part to the set to be deleted and returns true if it was already
-    // present.
+    // Adds the part to the set to be deleted and returns true if it was newly
+    // inserted.
     pub fn add<T>(&mut self, part: &BatchPart<T>) -> bool {
         match part {
             BatchPart::Hollow(x) => self.0.insert(x.key.clone()),
+            BatchPart::Inline { .. } => {
+                // Nothing to delete.
+                true
+            }
         }
     }
 
-    pub async fn delete(self, blob: &Arc<dyn Blob + Send + Sync>, metrics: &Arc<RetryMetrics>) {
+    pub async fn delete(
+        self,
+        blob: &Arc<dyn Blob + Send + Sync>,
+        shard_id: ShardId,
+        metrics: &Arc<RetryMetrics>,
+    ) {
         let deletes = FuturesUnordered::new();
         for key in self.0 {
             let metrics = Arc::clone(metrics);
             let blob = Arc::clone(blob);
             deletes.push(async move {
+                let key = key.complete(&shard_id);
                 retry_external(&metrics, || blob.delete(&key)).await;
             });
         }
@@ -1044,13 +1201,31 @@ impl Deref for PartDeletes {
     }
 }
 
+/// Returns the total sum of diffs or None if there were no updates.
+fn diffs_sum<'a, D: Semigroup + Codec64>(
+    updates: impl IntoIterator<Item = &'a ColumnarRecords>,
+) -> Option<D> {
+    let mut sum = None;
+    for updates in updates.into_iter() {
+        for (_kv, _t, d) in updates.iter() {
+            let d = D::decode(d);
+            match &mut sum {
+                None => sum = Some(d),
+                Some(x) => x.plus_equals(&d),
+            }
+        }
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     use mz_dyncfg::ConfigUpdates;
+    use timely::order::Product;
 
     use crate::cache::PersistClientCache;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
-    use crate::tests::{all_ok, new_test_client, CodecProduct};
+    use crate::tests::{all_ok, new_test_client};
     use crate::PersistLocation;
 
     use super::*;
@@ -1176,6 +1351,7 @@ mod tests {
         for part in &batch.batch.parts {
             let part = match part {
                 BatchPart::Hollow(x) => x,
+                BatchPart::Inline { .. } => panic!("batch unexpectedly used inline part"),
             };
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
@@ -1199,25 +1375,17 @@ mod tests {
             .expect("client construction failed");
         let shard_id = ShardId::new();
         let (mut write, _) = client
-            .expect_open::<String, String, CodecProduct, i64>(shard_id)
+            .expect_open::<String, String, Product<u32, u32>, i64>(shard_id)
             .await;
 
         let batch = write
             .batch(
                 &[
-                    (
-                        ("1".to_owned(), "one".to_owned()),
-                        CodecProduct::new(0, 10),
-                        1,
-                    ),
-                    (
-                        ("2".to_owned(), "two".to_owned()),
-                        CodecProduct::new(10, 0),
-                        1,
-                    ),
+                    (("1".to_owned(), "one".to_owned()), Product::new(0, 10), 1),
+                    (("2".to_owned(), "two".to_owned()), Product::new(10, 0), 1),
                 ],
-                Antichain::from_elem(CodecProduct::new(0, 0)),
-                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 1)]),
+                Antichain::from_elem(Product::new(0, 0)),
+                Antichain::from_iter([Product::new(0, 11), Product::new(10, 1)]),
             )
             .await
             .expect("invalid usage");
@@ -1226,6 +1394,7 @@ mod tests {
         for part in &batch.batch.parts {
             let part = match part {
                 BatchPart::Hollow(x) => x,
+                BatchPart::Inline { .. } => panic!("batch unexpectedly used inline part"),
             };
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {

@@ -42,8 +42,11 @@ criterion = { version = "0.4.0", features = ["async_tokio"] }
 tokio = { version = "1.32.0", features = ["macros"] }
 
 [build-dependencies]
+mz-build-tools = { path = "../build-tools", default-features = false }
 prost-build = "0.11.2"
-protobuf-src = "1.1.0"
+
+[features]
+default = ["mz-build-tools/default"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

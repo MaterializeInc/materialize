@@ -26,8 +26,8 @@ tag=$1
 shift
 
 for image in environmentd clusterd; do
-    bin/mzimage acquire --arch=x86_64 "$image" "$@"
-    docker tag "$(bin/mzimage spec --arch=x86_64 "$image" "$@")" "$username/$image:$tag"
+    bin/mzimage acquire --arch=aarch64 "$image" "$@"
+    docker tag "$(bin/mzimage spec --arch=aarch64 "$image" "$@")" "$username/$image:$tag"
     docker push "$username/$image:$tag"
 done
 

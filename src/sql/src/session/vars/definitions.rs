@@ -838,7 +838,7 @@ pub static LOGGING_FILTER: VarDefinition = VarDefinition::new_lazy(
 
 pub static OPENTELEMETRY_FILTER: VarDefinition = VarDefinition::new_lazy(
     "opentelemetry_filter",
-    lazy_value!(CloneableEnvFilter; || CloneableEnvFilter::from_str("off").expect("valid EnvFilter")),
+    lazy_value!(CloneableEnvFilter; || CloneableEnvFilter::from_str("info").expect("valid EnvFilter")),
     "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
     true,
 );
@@ -899,9 +899,8 @@ pub static WEBHOOKS_SECRETS_CACHING_TTL_SECS: VarDefinition = VarDefinition::new
 
 pub static COORD_SLOW_MESSAGE_WARN_THRESHOLD: VarDefinition = VarDefinition::new(
     "coord_slow_message_warn_threshold",
-    // Note(parkmycar): This value was chosen arbitrarily.
-    value!(Duration; Duration::from_secs(5)),
-    "Sets the threshold at which we will warn! for a coordinator message being slow.",
+    value!(Duration; Duration::from_secs(30)),
+    "Sets the threshold at which we will error! for a coordinator message being slow.",
     true,
 );
 
@@ -957,6 +956,15 @@ pub static PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: VarDefinition = VarDefinition::
     "pg_source_snapshot_statement_timeout",
     value!(Duration; mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT),
     "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
+    true,
+);
+
+/// Sets the `wal_sender_timeout` value to use during the replication phase of
+/// PG sources.
+pub static PG_SOURCE_WAL_SENDER_TIMEOUT: VarDefinition = VarDefinition::new(
+    "pg_source_wal_sender_timeout",
+    value!(Duration; mz_postgres_util::DEFAULT_WAL_SENDER_TIMEOUT),
+    "Sets the `wal_sender_timeout` value to use during the replication phase of PG sources (Materialize)",
     true,
 );
 
@@ -1203,6 +1211,13 @@ pub static REAL_TIME_RECENCY: VarDefinition = VarDefinition::new(
     false,
 )
 .with_feature_flag(&ALLOW_REAL_TIME_RECENCY);
+
+pub static EMIT_PLAN_INSIGHTS_NOTICE: VarDefinition = VarDefinition::new(
+    "emit_plan_insights_notice",
+    value!(bool; false),
+    "Boolean flag indicating whether to send a NOTICE with JSON-formatted plan insights before executing a SELECT statement (Materialize).",
+    false,
+);
 
 pub static EMIT_TIMESTAMP_NOTICE: VarDefinition = VarDefinition::new(
     "emit_timestamp_notice",
@@ -1538,6 +1553,16 @@ pub mod cluster_scheduling {
         "Always provisions a replica with disk, regardless of `DISK` DDL option.",
         true,
     );
+
+    const DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL: Duration = Duration::from_secs(3);
+
+    pub static CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL: VarDefinition = VarDefinition::new(
+        "cluster_check_scheduling_policies_interval",
+        value!(Duration; DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL),
+        "How often policies are invoked to automatically start/stop clusters, e.g., \
+            for REFRESH EVERY materialized views.",
+        true,
+    );
 }
 
 /// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
@@ -1759,13 +1784,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_mfp_pushdown_explain,
-        desc: "`filter_pushdown` explain",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_multi_worker_storage_persist_sink,
         desc: "multi-worker storage persist sink",
         default: true,
@@ -1864,13 +1882,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_try_parse_monotonic_iso8601_timestamp,
-        desc: "the try_parse_monotonic_iso8601_timestamp function",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_alter_set_cluster,
         desc: "ALTER ... SET CLUSTER syntax",
         default: false,
@@ -1920,31 +1931,10 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_explain_broken,
-        desc: "EXPLAIN ... BROKEN <query> syntax",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_comment,
         desc: "the COMMENT ON feature for objects",
         default: true,
         internal: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_sink_doc_on_option,
-        desc: "DOC ON option for sinks",
-        default: false,
-        internal: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_assert_not_null,
-        desc: "ASSERT NOT NULL for materialized views",
-        default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2020,7 +2010,14 @@ feature_flags!(
     },
     {
         name: enable_refresh_every_mvs,
-        desc: "REFRESH EVERY materialized views",
+        desc: "REFRESH EVERY and REFRESH AT materialized views",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_cluster_schedule_refresh,
+        desc: "`SCHEDULE = ON REFRESH` cluster option",
         default: false,
         internal: true,
         enable_for_item_parsing: true,
@@ -2061,13 +2058,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_equivalence_propagation,
-        desc: "Enable the EquivalencePropagation transform in the optimizer",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_variadic_left_join_lowering,
         desc: "Enable joint HIR ⇒ MIR lowering of stacks of left joins",
         default: false,
@@ -2081,6 +2071,20 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_letrec_fixpoint_analysis,
+        desc: "Enable Lattice-based fixpoint iteration on LetRec nodes in the Analysis framework",
+        default: true, // This is just a failsafe switch for the deployment of #25591.
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_kafka_sink_headers,
+        desc: "Enable the HEADERS option for Kafka sinks",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2088,10 +2092,10 @@ impl From<&super::SystemVars> for OptimizerFeatures {
         Self {
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
-            enable_equivalence_propagation: vars.enable_equivalence_propagation(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
+            enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }

@@ -248,21 +248,21 @@ EXPLAIN VALUE SCHEMA FOR CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOP
 ----
 EXPLAIN VALUE SCHEMA AS JSON FOR CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
 =>
-ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Value, statement: CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] } })
+ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Value, statement: CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] } })
 
 parse-statement
 EXPLAIN KEY SCHEMA FOR CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
 ----
 EXPLAIN KEY SCHEMA AS JSON FOR CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
 =>
-ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Key, statement: CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] } })
+ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Key, statement: CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] } })
 
 parse-statement
 EXPLAIN KEY SCHEMA FOR CREATE SINK FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
 ----
 EXPLAIN KEY SCHEMA AS JSON FOR CREATE SINK FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
 =>
-ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Key, statement: CreateSinkStatement { name: None, in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] } })
+ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Key, statement: CreateSinkStatement { name: None, in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] } })
 
 parse-statement
 EXPLAIN SELECT 665 AS OF 3
@@ -277,3 +277,10 @@ EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers WHERE value > 10
 =>
 ExplainPushdown(ExplainPushdownStatement { explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("numbers")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: None, op: ">" }, expr1: Identifier([Ident("value")]), expr2: Some(Value(Number("10"))) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+
+parse-statement
+EXPLAIN PLAN INSIGHTS FOR SELECT 1
+----
+EXPLAIN PLAN INSIGHTS AS TEXT FOR SELECT 1
+=>
+ExplainPlan(ExplainPlanStatement { stage: PlanInsights, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })

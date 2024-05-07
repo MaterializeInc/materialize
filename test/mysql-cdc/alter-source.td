@@ -63,10 +63,7 @@ INSERT INTO table_a VALUES (9, 'nine');
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 contains:mz_source is a mysql source, which does not support ALTER SOURCE.
 
-! ALTER SOURCE mz_source DROP SUBSOURCE table_a;
-contains:mz_source is a mysql source, which does not support ALTER SOURCE.
-
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 # Re-populate tables for rest of test.
 
@@ -118,7 +115,7 @@ table_g               subsource
 
 # Show all tablestodo this should be splittable
 > SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"mysql\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"mysql\".\"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"mysql\".\"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"mysql\".\"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"mysql\".\"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"mysql\".\"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"mysql\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
+"\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\""
@@ -129,22 +126,7 @@ table_g               subsource
 
 # TODO #24975 (support ALTER SOURCE)
 #
-# ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_progress
-# contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
-#
-# ! ALTER SOURCE mz_source DROP SUBSOURCE table_a, mz_source_progress
-# contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
-#
-# ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_progress, table_a
-# contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
-#
-# ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source;
-# contains:SOURCE "mz_source" is not a subsource of "mz_source"
-#
 # > CREATE TABLE mz_table (a int);
-#
-# ! ALTER SOURCE mz_source DROP SUBSOURCE mz_table;
-# contains:"materialize.public.mz_table" is a table not a source
 #
 # > DROP TABLE mz_table;
 #
@@ -152,31 +134,14 @@ table_g               subsource
 #   FROM MYSQL CONNECTION mysql_conn
 #   FOR TABLES (public.table_a AS t_a);
 #
-# ! ALTER SOURCE mz_source DROP SUBSOURCE t_a;
-# contains:SOURCE "t_a" is not a subsource of "mz_source"
-#
-# ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_too;
-# contains:SOURCE "mz_source_too" is not a subsource of "mz_source"
-#
-# > DROP SOURCE mz_source_too;
-#
-# ! ALTER SOURCE mz_source DROP SUBSOURCE dne;
-# contains:unknown catalog item 'dne'
-#
-# > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS dne;
-#
-# > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS dne, dne, dne;
-#
-# > ALTER SOURCE IF EXISTS dne DROP SUBSOURCE IF EXISTS dne;
-#
-# > ALTER SOURCE IF EXISTS mz_source DROP SUBSOURCE IF EXISTS dne, dne, dne;
+# > DROP SOURCE mz_source_too CASCADE;
 
 #
 # State checking
 #
 
 # TODO #24975 (support ALTER SOURCE)
-# > ALTER SOURCE mz_source DROP SUBSOURCE table_a
+# > DROP SOURCE table_a
 #
 # > SELECT * FROM table_b;
 # 1 one
@@ -204,13 +169,13 @@ table_g               subsource
 # 3 three
 #
 # # IF EXISTS works
-# > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_a;
+# > DROP SOURCE IF EXISTS table_a;
 #
 # # Multiple, repetitive tables work
-# > ALTER SOURCE mz_source DROP SUBSOURCE table_b, table_c, table_b, table_c, table_b, table_c;
+# > DROP SOURCE table_b, table_c, table_b, table_c, table_b, table_c;
 #
 # # IF EXISTS works with multiple tables
-# > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_c, table_d;
+# > DROP SOURCE IF EXISTS table_c, table_d;
 #
 # > CREATE MATERIALIZED VIEW mv_e AS SELECT pk + 1 FROM table_e;
 # > CREATE MATERIALIZED VIEW mv_f AS SELECT pk + 1 FROM table_f;
@@ -236,10 +201,10 @@ table_g               subsource
 # contains:cannot drop source "table_e": still depended upon by materialized view "mv_e"
 #
 # # CASCADE works
-# > ALTER SOURCE mz_source DROP SUBSOURCE table_e CASCADE;
+# > DROP SOURCE table_e CASCADE;
 #
 # # IF NOT EXISTS + CASCADE works
-# > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e, table_f CASCADE;
+# > DROP SOURCE IF EXISTS table_e, table_f CASCADE;
 #
 # TEXT COLUMNS removed from table_f
 # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
@@ -258,7 +223,7 @@ table_g               subsource
 
 # Show that all table definitions have been updated
 # > SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE') FROM (SHOW CREATE SOURCE mz_source);
-# "{\"mysql\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\"}"
+# "{\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\"}"
 
 #
 # Add subsources
@@ -322,7 +287,7 @@ table_g               subsource
 # > SELECT error IS NULL FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 # true
 #
-# > ALTER SOURCE mz_source DROP SUBSOURCE table_a;
+# > DROP SOURCE table_a;
 #
 # > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 #
@@ -341,7 +306,7 @@ table_g               subsource
 # 2
 # 3
 #
-# > ALTER SOURCE mz_source DROP SUBSOURCE table_a;
+# > DROP SOURCE table_a;
 # > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 #
 # > SELECT * FROM table_a;
@@ -355,7 +320,7 @@ table_g               subsource
 # ALTER TABLE table_a ADD COLUMN f3 int DEFAULT 1 NOT NULL;
 # INSERT INTO table_a VALUES (5, 'five', 5);
 #
-# > ALTER SOURCE mz_source DROP SUBSOURCE table_a;
+# > DROP SOURCE table_a;
 # > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 #
 # > SELECT * FROM table_a;
@@ -379,7 +344,7 @@ table_g               subsource
 # 2 var1
 #
 # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-# "\"mysql\".\"public\".\"table_f\".\"f2\""
+# \"public\".\"table_f\".\"f2\""
 #
 # # Drop a table that's in the publication, which shuffles the tables' output
 # # indexes, then add a table to the publication and ensure it can be added.
@@ -396,14 +361,14 @@ table_g               subsource
 # > ALTER SOURCE mz_source ADD SUBSOURCE table_i WITH (TEXT COLUMNS [table_i.f2]);
 #
 # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-# "\"mysql\".\"public\".\"table_f\".\"f2\", \"mysql\".\"public\".\"table_i\".\"f2\""
+# \"public\".\"table_f\".\"f2\", \"public\".\"table_i\".\"f2\""
 #
 # > SELECT * FROM table_f
 # 1 var0
 # 2 var1
 # 3 var1
 #
-# > ALTER SOURCE mz_source DROP SUBSOURCE table_f, table_i;
+# > DROP SOURCE table_f, table_i;
 #
 # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 # <null>
@@ -427,7 +392,7 @@ table_g               subsource
 # > ALTER SOURCE mz_source_wo_init_text_cols ADD SUBSOURCE table_f AS t_f WITH (TEXT COLUMNS [table_f.f2]);
 #
 # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
-# "\"mysql\".\"public\".\"table_f\".\"f2\""
+# \"public\".\"table_f\".\"f2\""
 
 # add a table after having created the source
 $ mysql-execute name=mysql

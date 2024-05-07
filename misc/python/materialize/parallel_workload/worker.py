@@ -13,10 +13,16 @@ import time
 from collections import Counter, defaultdict
 
 import pg8000
+import websocket
 
 from materialize.data_ingest.query_error import QueryError
 from materialize.mzcompose.composition import Composition
-from materialize.parallel_workload.action import Action, ActionList, ReconnectAction
+from materialize.parallel_workload.action import (
+    Action,
+    ActionList,
+    ReconnectAction,
+    ws_connect,
+)
 from materialize.parallel_workload.database import Database
 from materialize.parallel_workload.executor import Executor
 
@@ -59,17 +65,24 @@ class Worker:
         self.failed_query_error = None
         self.exe = None
 
-    def run(self, host: str, port: int, user: str, database: Database) -> None:
+    def run(
+        self, host: str, pg_port: int, http_port: int, user: str, database: Database
+    ) -> None:
         self.conn = pg8000.connect(
-            host=host, port=port, user=user, database="materialize"
+            host=host, port=pg_port, user=user, database="materialize"
         )
         self.conn.autocommit = self.autocommit
         cur = self.conn.cursor()
-        self.exe = Executor(self.rng, cur, database)
+        ws = websocket.WebSocket()
+        ws_conn_id, ws_secret_key = ws_connect(ws, host, http_port, user)
+        self.exe = Executor(self.rng, cur, ws, database)
         self.exe.set_isolation("SERIALIZABLE")
         cur.execute("SET auto_route_introspection_queries TO false")
-        cur.execute("SELECT pg_backend_pid()")
-        self.exe.pg_pid = cur.fetchall()[0][0]
+        if self.exe.use_ws:
+            self.exe.pg_pid = ws_conn_id
+        else:
+            cur.execute("SELECT pg_backend_pid()")
+            self.exe.pg_pid = cur.fetchall()[0][0]
 
         while time.time() < self.end_time:
             action = self.rng.choices(self.actions, self.weights)[0]
@@ -116,3 +129,5 @@ class Worker:
                     raise
 
         self.exe.cur._c.close()
+        if self.exe.ws:
+            self.exe.ws.close()

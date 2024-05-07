@@ -3,12 +3,14 @@ members = [
     "src/adapter",
     "src/adapter-types",
     "src/alloc",
+    "src/arrow-util",
     "src/audit-log",
     "src/avro",
     "src/aws-util",
     "src/aws-secrets-controller",
     "src/balancerd",
     "src/build-info",
+    "src/build-tools",
     "src/ccsr",
     "src/catalog",
     "src/catalog-debug",
@@ -119,6 +121,7 @@ default-members = [
     "src/sqllogictest",
     "src/testdrive",
     "test/metabase/smoketest",
+    "src/pgtest",
 ]
 
 exclude = [
@@ -188,6 +191,9 @@ postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
+
+# Waiting on https://github.com/blackbeam/mysql_async/pull/300
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", rev = "6afd2136181f2ec93b7ca7de524f6d02b6f10c1d" }
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
@@ -308,4 +314,5 @@ disallowed_methods = "warn"
 disallowed_macros = "warn"
 disallowed_types = "warn"
 from_over_into = "warn"
+mod_module_files = "warn"
 # END LINT CONFIG

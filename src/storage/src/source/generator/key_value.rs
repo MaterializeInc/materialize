@@ -18,6 +18,7 @@ use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::{Concat, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -44,9 +45,9 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (mut data_output, stream) = builder.new_output();
-    let (_progress_output, progress_stream) = builder.new_output();
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (mut data_output, stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let button = builder.build(move |caps| async move {
         let [mut cap, mut progress_cap, stats_cap]: [_; 3] = caps.try_into().unwrap();

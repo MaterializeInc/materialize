@@ -16,6 +16,7 @@ use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
+use mz_sql_parser::ast::UnresolvedItemName;
 use once_cell::sync::Lazy;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
@@ -103,9 +104,13 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
     }
+
+    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
+        self.publication_details.output_idx_for_name(name)
+    }
 }
 
-impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C> {
+impl<C: ConnectionAccess> AlterCompatible for PostgresSourceConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
@@ -280,6 +285,23 @@ pub struct PostgresSourcePublicationDetails {
     /// The None value indicates an unknown timeline, to account for sources that existed
     /// prior to this field being introduced
     pub timeline_id: Option<u64>,
+    pub database: String,
+}
+
+impl PostgresSourcePublicationDetails {
+    pub fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
+        let (namespace, name) = match &name.0[..] {
+            [database, namespace, name] if database.as_str() == self.database => {
+                (namespace.as_str(), name.as_str())
+            }
+            _ => return None,
+        };
+
+        self.tables
+            .iter()
+            .position(|t| t.namespace == namespace && t.name == name)
+            .map(|idx| idx + 1)
+    }
 }
 
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
@@ -288,6 +310,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
             tables: self.tables.iter().map(|t| t.into_proto()).collect(),
             slot: self.slot.clone(),
             timeline_id: self.timeline_id.clone(),
+            database: self.database.clone(),
         }
     }
 
@@ -300,6 +323,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
                 .collect::<Result<_, _>>()?,
             slot: proto.slot,
             timeline_id: proto.timeline_id,
+            database: proto.database,
         })
     }
 }
@@ -310,11 +334,21 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
             tables: _,
             slot,
             timeline_id,
+            database,
         } = self;
 
         let compatibility_checks = [
             (slot == &other.slot, "slot"),
-            (timeline_id == &other.timeline_id, "timeline_id"),
+            (
+                match (timeline_id, &other.timeline_id) {
+                    (Some(curr_id), Some(new_id)) => curr_id == new_id,
+                    (None, Some(_)) => true,
+                    // New values must always have timeline ID
+                    (_, None) => false,
+                },
+                "timeline_id",
+            ),
+            (database == &other.database, "database"),
         ];
 
         for (compatible, field) in compatibility_checks {

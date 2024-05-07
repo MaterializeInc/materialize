@@ -73,6 +73,7 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -85,6 +86,7 @@ use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
+use mz_postgres_util::simple_query_opt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
@@ -100,8 +102,9 @@ use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
 use serde::{Deserialize, Serialize};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -163,11 +166,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
-    let (mut data_output, data_stream) = builder.new_output();
-    let (upper_output, upper_stream) = builder.new_output();
-    let (mut definite_error_handle, definite_errors) = builder.new_output();
+    let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
 
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut rewind_input = builder.new_input_for_many(
         rewind_stream,
@@ -312,13 +316,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let mut stream = pin!(stream.peekable());
 
             let mut errored = HashSet::new();
-            let mut container = Vec::new();
-            let max_capacity = timely::container::buffer::default_capacity::<(
-                (u32, Result<Vec<Option<Bytes>>, DefiniteError>),
-                MzOffset,
-                Diff,
-            )>();
-
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
@@ -344,6 +341,18 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 "timely-{worker_id} extracting transaction \
                                     at {commit_lsn}"
                             );
+                            assert!(
+                                new_upper <= commit_lsn,
+                                "new_upper={new_upper} tx_lsn={commit_lsn}",
+                            );
+                            new_upper = commit_lsn + 1;
+                            // We are about to ingest a transaction which has the possiblity to be
+                            // very big and we certainly don't want to hold the data in memory. For
+                            // this reason we eagerly downgrade the upper capability in order for
+                            // the reclocking machinery to mint a binding that includes
+                            // this transaction and therefore be able to pass the data of the
+                            // transaction through as we stream it.
+                            upper_cap_set.downgrade([&new_upper]);
                             while let Some((oid, event, diff)) = tx.try_next().await? {
                                 if !table_info.contains_key(&oid) {
                                     continue;
@@ -357,21 +366,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                         data_output.give(data_cap, update).await;
                                     }
                                 }
-                                assert!(
-                                    new_upper <= commit_lsn,
-                                    "new_upper={} tx_lsn={}",
-                                    new_upper,
-                                    commit_lsn
-                                );
-                                container.push((data, commit_lsn, diff));
-                            }
-                            new_upper = commit_lsn + 1;
-                            if container.len() > max_capacity {
                                 data_output
-                                    .give_container(&data_cap_set[0], &mut container)
+                                    .give(&data_cap_set[0], (data, commit_lsn, diff))
                                     .await;
-                                upper_cap_set.downgrade([&new_upper]);
-                                data_cap_set.downgrade([&new_upper]);
                             }
                         }
                         _ => return Err(TransientError::BareTransactionEvent),
@@ -391,9 +388,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
                 if will_yield {
-                    data_output
-                        .give_container(&data_cap_set[0], &mut container)
-                        .await;
                     upper_cap_set.downgrade([&new_upper]);
                     data_cap_set.downgrade([&new_upper]);
                     rewinds.retain(|_, (_, req)| data_cap_set[0].time() <= &req.snapshot_lsn);
@@ -454,8 +448,8 @@ async fn raw_stream<'a>(
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
     stats_output: &'a mut AsyncOutputHandle<
         MzOffset,
-        Vec<ProgressStatisticsUpdate>,
-        TeeCore<MzOffset, Vec<ProgressStatisticsUpdate>>,
+        CapacityContainerBuilder<Vec<ProgressStatisticsUpdate>>,
+        Tee<MzOffset, Vec<ProgressStatisticsUpdate>>,
     >,
     stats_cap: &'a Capability<MzOffset>,
 ) -> Result<
@@ -482,6 +476,15 @@ async fn raw_stream<'a>(
             return Ok(Err(err));
         }
     }
+
+    // Configure wal_sender_timeout based on param. We want to be able to
+    // override the server value here in case it's set too low, respective to
+    // the size of the txns in the WAL.
+    set_wal_sender_timeout(
+        &replication_client,
+        config.config.parameters.pg_source_wal_sender_timeout,
+    )
+    .await?;
 
     // Postgres will return all transactions that commit *at or after* after the provided LSN,
     // following the timely upper semantics.
@@ -782,4 +785,34 @@ async fn ensure_replication_timeline_id(
             actual: timeline_id,
         }))
     }
+}
+
+async fn set_wal_sender_timeout(client: &Client, timeout: Duration) -> Result<(), TransientError> {
+    // Value is known to accept milliseconds w/o units.
+    // https://www.postgresql.org/docs/current/runtime-config-replication.html
+    client
+        .simple_query(&format!("SET wal_sender_timeout = {}", timeout.as_millis()))
+        .await?;
+
+    mz_ore::soft_assert_or_log! {
+        {
+            let row = simple_query_opt(client, "SHOW wal_sender_timeout;")
+                .await?
+                .unwrap();
+            let session_timeout = row.get("wal_sender_timeout").unwrap().to_owned();
+
+            // This only needs to be compatible for values we test; doesn't need to
+            // generalize all possible interval/duration mappings. This is also
+            // possible to fool if the value is set to the out-of-the-box default,
+            // so we have to ensure that our tests use a distinct value.
+            mz_repr::adt::interval::Interval::from_str(&session_timeout)
+                .map(|i| i.duration())
+                .unwrap()
+                .unwrap()
+                == timeout
+        },
+        "SET wal_sender_timeout in PG replication did not take effect"
+    };
+
+    Ok(())
 }

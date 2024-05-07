@@ -1,6 +1,20 @@
 # Test various NOTICE expectations.
 
 send
+Query {"query": "DROP TABLE IF EXISTS t CASCADE"}
+Query {"query": "DROP ROLE IF EXISTS joe"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP ROLE"}
+ReadyForQuery {"status":"I"}
+
+send
 Query {"query": "create table t(a int, b int)"}
 Query {"query": "create index t_idx_a on t(a)"}
 Query {"query": "create materialized view mv1 as select * from t where b=7"}
@@ -22,7 +36,8 @@ Query {"query": "drop index t_idx_a"}
 Query {"query": "drop index v1_idx_a"}
 ----
 
-until
+# Ignore the notice messages because they change sometimes based on when things are internally dropped.
+until err_field_typs=SC
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -55,7 +70,7 @@ CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.mv1. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP MATERIALIZED VIEW"}
@@ -72,14 +87,14 @@ CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE MATERIALIZED VIEW"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.mv2. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.v1_idx_a. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP INDEX"}
@@ -153,11 +168,11 @@ ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ----
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"database \"nonexistant\" does not exist"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ006"},{"typ":"M","value":"database \"nonexistant\" does not exist"}]}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"database"}]}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"database \"nonexistant\" does not exist"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ006"},{"typ":"M","value":"database \"nonexistant\" does not exist"}]}
 DataRow {"fields":["nonexistant"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
@@ -167,10 +182,10 @@ RowDescription {"fields":[{"name":"database"}]}
 DataRow {"fields":["materialize"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"database \"nonexistant2\" does not exist"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ006"},{"typ":"M","value":"database \"nonexistant2\" does not exist"}]}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"database \"nonexistant3\" does not exist"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ006"},{"typ":"M","value":"database \"nonexistant3\" does not exist"}]}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
@@ -194,7 +209,7 @@ ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"schema"}]}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"no schema on the search path exists: nonexistant"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ008"},{"typ":"M","value":"no schema on the search path exists: nonexistant"}]}
 DataRow {"fields":["NULL"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
@@ -226,19 +241,19 @@ RowDescription {"fields":[{"name":"schema"}]}
 DataRow {"fields":["public"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"cluster \"nonexistant\" does not exist"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ007"},{"typ":"M","value":"cluster \"nonexistant\" does not exist"}]}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"cluster"}]}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"cluster \"nonexistant\" does not exist"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ007"},{"typ":"M","value":"cluster \"nonexistant\" does not exist"}]}
 DataRow {"fields":["nonexistant"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"cluster \"nonexistant2\" does not exist"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ007"},{"typ":"M","value":"cluster \"nonexistant2\" does not exist"}]}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"cluster"}]}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"cluster \"nonexistant2\" does not exist"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ007"},{"typ":"M","value":"cluster \"nonexistant2\" does not exist"}]}
 DataRow {"fields":["nonexistant2"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
@@ -291,7 +306,7 @@ NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000
 CommandComplete {"tag":"DROP DATABASE"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"},{"typ":"M","value":"drop cascades to 1 other objects"}]}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active database \"d1\" has been dropped"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ002"},{"typ":"M","value":"active database \"d1\" has been dropped"}]}
 CommandComplete {"tag":"DROP DATABASE"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
@@ -301,7 +316,7 @@ DataRow {"fields":["db3"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"},{"typ":"M","value":"drop cascades to 1 other objects"}]}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active database \"db3\" has been dropped"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ002"},{"typ":"M","value":"active database \"db3\" has been dropped"}]}
 CommandComplete {"tag":"DROP DATABASE"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE DATABASE"}
@@ -312,7 +327,7 @@ NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"0100
 NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for DATABASE \"materialize\""}]}
 NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SCHEMA \"materialize.public\""}]}
 NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SYSTEM"}]}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active database \"d4\" has been dropped"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ002"},{"typ":"M","value":"active database \"d4\" has been dropped"}]}
 CommandComplete {"tag":"DROP OWNED"}
 ReadyForQuery {"status":"I"}
 
@@ -356,7 +371,7 @@ CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP CLUSTER"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active cluster \"c1\" has been dropped"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ003"},{"typ":"M","value":"active cluster \"c1\" has been dropped"}]}
 CommandComplete {"tag":"DROP CLUSTER"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
@@ -366,7 +381,7 @@ DataRow {"fields":["cl3"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"},{"typ":"M","value":"drop cascades to 1 other objects"}]}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active cluster \"cl3\" has been dropped"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ003"},{"typ":"M","value":"active cluster \"cl3\" has been dropped"}]}
 CommandComplete {"tag":"DROP CLUSTER"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE CLUSTER"}
@@ -377,7 +392,7 @@ NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"0100
 NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for DATABASE \"materialize\""}]}
 NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SCHEMA \"materialize.public\""}]}
 NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SYSTEM"}]}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active cluster \"c4\" has been dropped"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ003"},{"typ":"M","value":"active cluster \"c4\" has been dropped"}]}
 CommandComplete {"tag":"DROP OWNED"}
 ReadyForQuery {"status":"I"}
 

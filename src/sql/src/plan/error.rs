@@ -37,6 +37,7 @@ use crate::catalog::{
 use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
+use crate::plan::typeconv::CastContext;
 use crate::plan::ObjectType;
 use crate::pure::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
@@ -120,25 +121,16 @@ pub enum PlanError {
     InvalidTimestampPrecision(InvalidTimestampPrecisionError),
     InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
+    InvalidCast {
+        name: String,
+        ccx: CastContext,
+        from: String,
+        to: String,
+    },
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
     Parser(ParserError),
     DropViewOnMaterializedView(String),
-    DropSubsource {
-        subsource: String,
-        source: String,
-    },
-    DropProgressCollection {
-        progress_collection: String,
-        source: String,
-    },
-    DropNonSubsource {
-        non_subsource: String,
-        source: String,
-    },
-    DropLastSubsource {
-        source: String,
-    },
     DependentObjectsStillExist {
         object_type: String,
         object_name: String,
@@ -166,10 +158,6 @@ pub enum PlanError {
     SubsourceDuplicateReference {
         name: UnresolvedItemName,
         target_names: Vec<UnresolvedItemName>,
-    },
-    /// This is the ALTER SOURCE version of [`Self::SubsourceDuplicateReference`].
-    SubsourceAlreadyReferredTo {
-        name: UnresolvedItemName,
     },
     InvalidProtobufSchema {
         cause: protobuf_native::OperationFailedError,
@@ -350,12 +338,6 @@ impl PlanError {
             Self::DropViewOnMaterializedView(_) => {
                 Some("Use DROP MATERIALIZED VIEW to remove a materialized view.".into())
             }
-            Self::DropSubsource { source, subsource } => Some(format!(
-                "Use ALTER SOURCE {source} DROP SUBSOURCE {subsource}"
-            )),
-            Self::DropLastSubsource { source } | Self::DropProgressCollection { source, .. } => Some(format!(
-                "Use DROP SOURCE {source} to drop the primary source along with all subsources"
-            )),
             Self::DependentObjectsStillExist {..} => Some("Use DROP ... CASCADE to drop the dependent objects too.".into()),
             Self::AlterViewOnMaterializedView(_) => {
                 Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
@@ -434,9 +416,6 @@ impl PlanError {
             Self::InvalidRefreshAt
             | Self::InvalidRefreshEveryAlignedTo => {
                 Some("Calling `mz_now()` is allowed.".into())
-            },
-            Self::SubsourceNameConflict { .. } | Self::SubsourceAlreadyReferredTo { .. } => {
-                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
             },
             Self::PublicationContainsUningestableTypes { column,.. } => {
                 Some(format!("Remove the table from the publication or use TEXT COLUMNS ({column}, ..) to ingest this column as text"))
@@ -559,6 +538,17 @@ impl fmt::Display for PlanError {
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
             }
+            Self::InvalidCast { name, ccx, from, to } =>{
+                write!(
+                    f,
+                    "{name} does not support {ccx}casting from {from} to {to}",
+                    ccx = if matches!(ccx, CastContext::Implicit) {
+                        "implicitly "
+                    } else {
+                        ""
+                    },
+                )
+            }
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
@@ -583,16 +573,9 @@ impl fmt::Display for PlanError {
             } => {
                 write!(f, "multiple subsources refer to table {}", name)
             },
-            Self::SubsourceAlreadyReferredTo { name } => {
-                write!(f, "another subsource already refers to {}", name)
-            }
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
             }
-            Self::DropSubsource { subsource, source: _} => write!(f, "SOURCE {} is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE", subsource.quoted()),
-            Self::DropLastSubsource { source } => write!(f, "SOURCE {} must retain at least one non-progress subsource", source.quoted()),
-            Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
-            Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is not a subsource of {}", non_subsource.quoted(), source.quoted()),
             Self::DependentObjectsStillExist {object_type, object_name, dependents} => {
                 let reason = match &dependents[..] {
                     [] => " because other objects depend on it".to_string(),

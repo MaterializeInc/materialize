@@ -47,7 +47,7 @@ http
 {"query":"create view if not exists v as select 1"}
 ----
 200 OK
-{"results":[{"ok":"CREATE VIEW","notices":[{"message":"view \"v\" already exists, skipping","severity":"notice"}]}]}
+{"results":[{"ok":"CREATE VIEW","notices":[{"message":"view \"v\" already exists, skipping","code":"42710","severity":"notice"}]}]}
 
 # Multiple CREATEs do not work.
 http
@@ -239,7 +239,7 @@ http
 {"query":"EXPLAIN SELECT 1"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[["Explained Query (fast path):\n  Constant\n    - (1)\n"]],"desc":{"columns":[{"name":"Optimized Plan","type_oid":25,"type_len":-1,"type_mod":-1}]},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[["Explained Query (fast path):\n  Constant\n    - (1)\n\nTarget cluster: mz_introspection\n"]],"desc":{"columns":[{"name":"Optimized Plan","type_oid":25,"type_len":-1,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"query":"SHOW VIEWS"}

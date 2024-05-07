@@ -125,10 +125,12 @@ def run(args: argparse.Namespace) -> None:
         with open(MZ_ROOT / "misc" / "scratch" / f"{args.machine}.json") as f:
 
             print(f"Reading machine configs from {f.name}")
-            descs = [MachineDesc.parse_obj(obj) for obj in multi_json(f.read())]
+            descs = [MachineDesc.model_validate(obj) for obj in multi_json(f.read())]
     else:
         print("Reading machine configs from stdin...")
-        descs = [MachineDesc.parse_obj(obj) for obj in multi_json(sys.stdin.read())]
+        descs = [
+            MachineDesc.model_validate(obj) for obj in multi_json(sys.stdin.read())
+        ]
 
     if args.ssh and len(descs) != 1:
         raise RuntimeError(f"Cannot use `--ssh` with {len(descs)} instances")

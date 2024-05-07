@@ -10,8 +10,8 @@
 //! Parallelization contracts, describing requirements for data movement along dataflow edges.
 
 use timely::communication::{Data, Pull, Push};
-use timely::dataflow::channels::pact::{LogPuller, LogPusher, ParallelizationContractCore};
-use timely::dataflow::channels::{BundleCore, Message};
+use timely::dataflow::channels::pact::{LogPuller, LogPusher, ParallelizationContract};
+use timely::dataflow::channels::{Bundle, Message};
 use timely::logging::TimelyLogger;
 use timely::progress::Timestamp;
 use timely::worker::AsWorker;
@@ -21,9 +21,9 @@ use timely::Container;
 #[derive(Debug)]
 pub struct Distribute;
 
-impl<T: Timestamp, C: Container + Data> ParallelizationContractCore<T, C> for Distribute {
-    type Pusher = DistributePusher<LogPusher<T, C, Box<dyn Push<BundleCore<T, C>>>>>;
-    type Puller = LogPuller<T, C, Box<dyn Pull<BundleCore<T, C>>>>;
+impl<T: Timestamp, C: Container + Data> ParallelizationContract<T, C> for Distribute {
+    type Pusher = DistributePusher<LogPusher<T, C, Box<dyn Push<Bundle<T, C>>>>>;
+    type Puller = LogPuller<T, C, Box<dyn Pull<Bundle<T, C>>>>;
 
     fn connect<A: AsWorker>(
         self,
@@ -60,10 +60,8 @@ impl<P> DistributePusher<P> {
     }
 }
 
-impl<T: Eq + Data, C: Container, P: Push<BundleCore<T, C>>> Push<BundleCore<T, C>>
-    for DistributePusher<P>
-{
-    fn push(&mut self, message: &mut Option<BundleCore<T, C>>) {
+impl<T: Eq + Data, C: Container, P: Push<Bundle<T, C>>> Push<Bundle<T, C>> for DistributePusher<P> {
+    fn push(&mut self, message: &mut Option<Bundle<T, C>>) {
         let worker_idx = self.next;
         self.next = (self.next + 1) % self.pushers.len();
         self.pushers[worker_idx].push(message);

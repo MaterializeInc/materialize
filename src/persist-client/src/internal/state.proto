@@ -7,11 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// buf breaking: ignore (working around a false positive in buf's breaking change lint)
-
 syntax = "proto3";
 
 package mz_persist_client.internal.state;
+
+import "persist/src/persist.proto";
 
 message ProtoU64Antichain {
     repeated int64 elements = 1;
@@ -26,14 +26,23 @@ message ProtoU64Description {
 message ProtoHollowBatchPart {
    oneof kind {
         string key = 1;
+        bytes inline = 5;
     }
-    uint64 encoded_size_bytes = 2;
-
-    bytes key_lower = 3;
     ProtoU64Antichain ts_rewrite = 4;
 
+    // Only set when Kind is Key
+    uint64 encoded_size_bytes = 2;
+    bytes key_lower = 3;
+    optional int64 diffs_sum = 6;
     optional bytes key_stats = 536870906;
+
     reserved 536870907 to 536870911;
+}
+
+message ProtoInlineBatchPart {
+    ProtoU64Description desc = 1;
+    uint64 index = 2;
+    mz_persist.gen.persist.ProtoColumnarRecords updates = 3;
 }
 
 message ProtoHollowBatch {
@@ -59,6 +68,7 @@ message ProtoSpineBatch {
     uint64 level = 1;
     ProtoU64Description desc = 2;
     repeated ProtoSpineId parts = 3;
+    repeated ProtoU64Description descs = 4;
 }
 
 message ProtoIdSpineBatch {

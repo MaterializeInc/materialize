@@ -11,7 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
 
 use mysql_async::BinlogStream;
-use timely::dataflow::channels::pushers::TeeCore;
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::progress::Antichain;
 use tracing::trace;
@@ -37,8 +38,8 @@ pub(super) struct ReplContext<'a> {
     pub(super) ignore_columns: &'a Vec<MySqlColumnRef>,
     pub(super) data_output: &'a mut AsyncOutputHandle<
         GtidPartition,
-        Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
-        TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+        CapacityContainerBuilder<Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+        Tee<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
     >,
     pub(super) data_cap_set: &'a mut CapabilitySet<GtidPartition>,
     pub(super) upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
@@ -58,8 +59,10 @@ impl<'a> ReplContext<'a> {
         ignore_columns: &'a Vec<MySqlColumnRef>,
         data_output: &'a mut AsyncOutputHandle<
             GtidPartition,
-            Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
-            TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+            CapacityContainerBuilder<
+                Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
+            >,
+            Tee<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
         >,
         data_cap_set: &'a mut CapabilitySet<GtidPartition>,
         upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
@@ -81,15 +84,18 @@ impl<'a> ReplContext<'a> {
         }
     }
 
-    /// Advances the frontier of the data and upper capability sets to `new_upper`,
+    /// Advances the frontier of the data capability set to `new_upper`,
     /// and drops any existing rewind requests that are no longer applicable.
-    pub(super) fn advance(&mut self, reason: &str, new_upper: Antichain<GtidPartition>) {
+    pub(super) fn downgrade_data_cap_set(
+        &mut self,
+        reason: &str,
+        new_upper: Antichain<GtidPartition>,
+    ) {
         let (id, worker_id) = (self.config.id, self.config.worker_id);
 
-        trace!(%id, "timely-{worker_id} [{reason}] advancing frontier to {new_upper:?}");
+        trace!(%id, "timely-{worker_id} [{reason}] advancing data frontier to {new_upper:?}");
 
         self.data_cap_set.downgrade(&*new_upper);
-        self.upper_cap_set.downgrade(&*new_upper);
 
         self.metrics.gtid_txids.set(
             new_upper
@@ -111,5 +117,16 @@ impl<'a> ReplContext<'a> {
             }
             res
         });
+    }
+
+    /// Advances the frontier of the upper capability set to `new_upper`,
+    pub(super) fn downgrade_progress_cap_set(
+        &mut self,
+        reason: &str,
+        new_upper: Antichain<GtidPartition>,
+    ) {
+        let (id, worker_id) = (self.config.id, self.config.worker_id);
+        trace!(%id, "timely-{worker_id} [{reason}] advancing progress frontier to {new_upper:?}");
+        self.upper_cap_set.downgrade(&*new_upper);
     }
 }

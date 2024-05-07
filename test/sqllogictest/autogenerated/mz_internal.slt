@@ -93,6 +93,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  status  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_schedules' ORDER BY position
+----
+1  cluster_id  text
+2  type  text
+3  refresh_rehydration_time_estimate  interval
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
 ----
 1  object_id  text
@@ -196,6 +203,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  write_frontier  mz_timestamp
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_history_retention_strategies' ORDER BY position
+----
+1  id  text
+2  strategy  text
+3  value  jsonb
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_hydration_statuses' ORDER BY position
 ----
 1  object_id  text
@@ -219,6 +233,15 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  slowest_global_input_id  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refresh_strategies' ORDER BY position
+----
+1  materialized_view_id  text
+2  type  text
+3  interval  interval
+4  aligned_to  timestamp␠with␠time␠zone
+5  at  timestamp␠with␠time␠zone
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
 ----
 1  object_id  text
@@ -237,9 +260,10 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_lifetimes' ORDER BY position
 ----
 1  id  text
-2  object_type  text
-3  event_type  text
-4  occurred_at  timestamp␠with␠time␠zone
+2  previous_id  text
+3  object_type  text
+4  event_type  text
+5  occurred_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
@@ -280,6 +304,20 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  id  text
 2  replication_slot  text
 3  timeline_id  uint8
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_postgres_source_tables' ORDER BY position
+----
+1  id  text
+2  schema_name  text
+3  table_name  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mysql_source_tables' ORDER BY position
+----
+1  id  text
+2  schema_name  text
+3  table_name  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sessions' ORDER BY position
@@ -544,14 +582,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 6  allocations  numeric
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_delays_histogram' ORDER BY position
-----
-1  export_id  text
-2  import_id  text
-3  delay_ns  uint8
-4  count  numeric
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_error_counts' ORDER BY position
 ----
 1  export_id  text
@@ -745,10 +775,8 @@ mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
+mz_cluster_schedules
 mz_comments
-mz_compute_delays_histogram
-mz_compute_delays_histogram_per_worker
-mz_compute_delays_histogram_raw
 mz_compute_dependencies
 mz_compute_error_counts
 mz_compute_error_counts_per_worker
@@ -789,16 +817,19 @@ mz_dataflows_per_worker
 mz_expected_group_size_advice
 mz_frontiers
 mz_global_frontiers
+mz_history_retention_strategies
 mz_hydration_statuses
 mz_internal_cluster_replicas
 mz_kafka_sources
 mz_materialization_lag
+mz_materialized_view_refresh_strategies
 mz_message_batch_counts_received_raw
 mz_message_batch_counts_sent_raw
 mz_message_counts
 mz_message_counts_per_worker
 mz_message_counts_received_raw
 mz_message_counts_sent_raw
+mz_mysql_source_tables
 mz_notices
 mz_notices_redacted
 mz_object_dependencies
@@ -810,6 +841,7 @@ mz_optimizer_notices
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
 mz_peek_durations_histogram_raw
+mz_postgres_source_tables
 mz_postgres_sources
 mz_prepared_statement_history
 mz_recent_activity_log

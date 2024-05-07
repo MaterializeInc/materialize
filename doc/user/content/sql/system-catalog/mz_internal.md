@@ -66,7 +66,7 @@ granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-role
 | `mz_version`               | [`text`]                     | The version of Materialize that was running when the statement was executed.                                                                                                                                                                                                  |
 | `began_at`                 | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
 | `finished_at`              | [`timestamp with time zone`] | The wall-clock time at which the statement finished executing.                                                                                                                                                                                                                |
-| `finished_status`          | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `errored`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
+| `finished_status`          | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
 | `error_message`            | [`text`]                     | The error message, if the statement failed.                                                                                                                                                                                                                                   |
 | `rows_returned`            | [`bigint`]                   | The number of rows returned, for statements that return rows.                                                                                                                                                                                                                 |
 | `execution_strategy`       | [`text`]                     | For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow. |
@@ -129,6 +129,17 @@ the most recent status for each AWS PrivateLink connection in the system.
 | `name` | [`text`] | The name of the connection.  |
 | `last_status_change_at` | [`timestamp with time zone`] | Wall-clock timestamp of the connection status change.|
 | `status` | [`text`] | | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`. |
+
+### `mz_cluster_schedules`
+
+The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each cluster.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_schedules -->
+| Field                               | Type         | Meaning                                                       |
+|-------------------------------------|--------------|---------------------------------------------------------------|
+| `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters).|
+| `type`                              | [`text`]     | `on-refresh`, or `manual` (the default)                       |
+| `refresh_rehydration_time_estimate` | [`interval`] | The interval given in the `REHYDRATION TIME ESTIMATE` option. |
 
 ### `mz_cluster_replica_frontiers`
 
@@ -330,6 +341,17 @@ At this time, we do not make any guarantees about the freshness of these numbers
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
 
+### `mz_history_retention_strategies`
+
+The `mz_history_retention_strategies` table describes the history retention strategies of objects that have compaction windows (tables, sources, indexes, materialized views).
+
+<!-- RELATION_SPEC mz_internal.mz_history_retention_strategies -->
+| Field | Type | Meaning |
+| - | - | - |
+| `id` | [`text`] | The ID of the object. |
+| `strategy` | [`text`] | The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field. |
+| `value` | [`jsonb]` | The value of the strategy. For `FOR`, is a number of milliseconds. |
+
 ### `mz_hydration_statuses`
 
 The `mz_hydration_statuses` view describes the per-replica hydration status of
@@ -375,6 +397,19 @@ At this time, we do not make any guarantees about the freshness of these numbers
 | `slowest_local_input_id`  | [`text`]         | The ID of the slowest direct input.                                                      |
 | `slowest_global_input_id` | [`text`]         | The ID of the slowest root input.                                                        |
 
+### `mz_materialized_view_refresh_strategies`
+
+The `mz_materialized_view_refresh_strategies` table shows each `REFRESH` option specified for each materialized view. If a materialized view has multiple `REFRESH` options, then this table will contain a row for each refresh option.
+
+<!-- RELATION_SPEC mz_internal.mz_materialized_view_refresh_strategies -->
+| Field                  | Type       | Meaning                                                                                       |
+|------------------------|------------|-----------------------------------------------------------------------------------------------|
+| `materialized_view_id` | [`text`]   | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views)  |
+| `type`                 | [`text`]   | `at`, `every`, or `on-commit` (the default)                                                   |
+| `interval`             | [`interval`] | The refresh interval of a `REFRESH EVERY` option, or null if the `type` is not `every`.            |
+| `aligned_to`           | [`timestamp with time zone`] | The `ALIGNED TO` option of a `REFRESH EVERY` option, or null if the `type` is not `every`.|
+| `at`                   | [`timestamp with time zone`] | The time of a `REFRESH AT`, or null if the `type` is not `at`.              |
+
 ### `mz_object_dependencies`
 
 The `mz_object_dependencies` table describes the dependency structure between
@@ -407,6 +442,7 @@ The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/syste
 | Field          | Type                         | Meaning                                          |
 | ---------------|------------------------------|------------------------------------------------- |
 | `id`           | [`text`]                     | Materialize's unique ID for the object.          |
+| `previous_id`  | [`text`]                     | The object's previous ID, if one exists.          |
 | `object_type`  | [`text`]                     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                                              |
 | `event_type`   | [`text`]                     | The lifetime event, either `create` or `drop`.   |
 | `occurred_at`  | [`timestamp with time zone`] | Wall-clock timestamp of when the event occurred. |
@@ -478,6 +514,28 @@ system.
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
 | `replication_slot`  | [`text`]         | The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from. |
 | `timeline_id`       | [`uint8`]        | The PostgreSQL [timeline ID](https://www.postgresql.org/docs/current/continuous-archiving.html#BACKUP-TIMELINES) determined on source creation.
+
+### `mz_postgres_source_tables`
+
+The `mz_postgres_source_tables` table contains a row for each PostgreSQL table ingested by a subsource.
+
+<!-- RELATION_SPEC mz_internal.mz_postgres_source_tables -->
+| Field               | Type             | Meaning                                                                                                        |
+| ------------------- | ---------------- | --------                                                                                                       |
+| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `schema_name`  | [`text`]         | The ingested upstream table's schema name. |
+| `table_name`  | [`text`]         | The ingested upstream table's name. |
+
+### `mz_mysql_source_tables`
+
+The `mz_mysql_source_tables` table contains a row for each MySQL table ingested by a subsource.
+
+<!-- RELATION_SPEC mz_internal.mz_mysql_source_tables -->
+| Field               | Type             | Meaning                                                                                                        |
+| ------------------- | ---------------- | --------                                                                                                       |
+| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `schema_name`  | [`text`]         | The ingested upstream table's schema name. This is also sometimes referred to as the upstream table's database name.|
+| `table_name`  | [`text`]         | The ingested upstream table's name. |
 
 <!--
 ### `mz_prepared_statement_history`
@@ -1047,21 +1105,6 @@ Specifically, reductions can use more memory than we show here.
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_capacity_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_size_raw -->
 
-### `mz_compute_delays_histogram`
-
-The `mz_compute_delays_histogram` view describes a histogram of the wall-clock delay in nanoseconds between observations of import frontier advancements of a [dataflow] and the advancements of the corresponding export frontiers.
-
-<!-- RELATION_SPEC mz_internal.mz_compute_delays_histogram -->
-| Field        | Type        | Meaning                                                                                                                                                                                                                                              |
-| ------------ |-------------| --------                                                                                                                                                                                                                                             |
-| `export_id`  | [`text`]    | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).                                                                                                                                                 |
-| `import_id`  | [`text`]    | The ID of the dataflow import. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views). |
-| `delay_ns`   | [`uint8`]   | The upper bound of the bucket in nanoseconds.                                                                                                                                                                                                        |
-| `count`      | [`numeric`] | The (noncumulative) count of delay measurements in this bucket.                                                                                                                                                                                      |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_raw -->
-
 ### `mz_compute_error_counts`
 
 The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows][dataflow] in the system.
@@ -1372,6 +1415,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`bigint list`]: /sql/types/list
 [`boolean`]: /sql/types/boolean
 [`double precision`]: /sql/types/double-precision
+[`interval`]: /sql/types/interval/
 [`jsonb`]: /sql/types/jsonb
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric

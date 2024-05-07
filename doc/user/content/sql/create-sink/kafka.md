@@ -53,6 +53,7 @@ _sink&lowbar;name_ | A name for the sink. This name is only used within Material
 _item&lowbar;name_ | The name of the source, table or materialized view you want to send to the sink.
 **CONNECTION** _connection_name_ | The name of the connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
 **KEY (** _key&lowbar;column_ **)** | An optional list of columns to use as the Kafka message key. If unspecified, the Kafka key is left unset.
+**HEADERS** | An optional column containing headers to add to each Kafka message emitted by the sink. See [Headers](#headers) for details.
 **NOT ENFORCED** | Whether to disable validation of key uniqueness when using the upsert envelope. See [Upsert key selection](#upsert-key-selection) for details.
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source.
 **ENVELOPE UPSERT** | The sink emits data with [upsert semantics](#upsert-envelope).
@@ -79,8 +80,6 @@ Field                | Value  | Description
 
 #### `DOC ON` option syntax
 
-{{< private-preview />}}
-
 {{< diagram "create-sink-doc-on-option.svg" >}}
 
 The `DOC ON` option has special syntax, shown above, with the following
@@ -103,6 +102,29 @@ how documentation comments are added to the generated Avro schemas.
 Field                | Value  | Description
 ---------------------|--------|------------
 `SNAPSHOT`           | `bool` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`.
+
+## Headers
+
+{{< private-preview />}}
+
+Materialize always adds a header with key `materialize-timestamp` to each
+message emitted by the sink. The value of this header indicates the logical time
+at which the event described by the message occurred.
+
+The `HEADERS` option allows specifying the name of a column containing
+additional headers to add to each message emitted by the sink. When the option
+is unspecified, no additional headers are added. When specified, the named
+column must be of type `map[text => text]` or `map[text => bytea]`.
+
+Header keys starting with `materialize-` are reserved for Materialize's internal
+use. Materialize will ignore any headers in the map whose key starts with
+`materialize-`.
+
+**Known limitation:** Materialize does not permit adding multiple headers with
+the same key.
+
+**Known limitation:** Materialize cannot omit the headers column from the
+message value.
 
 ## Formats
 
@@ -195,15 +217,12 @@ may be created using [non-null assertions](../../create-materialized-view#non-nu
 
 #### Avro schema documentation
 
-{{< private-preview />}}
-
 Materialize allows control over the `doc` attribute for record fields and types
 in the generated Avro schemas for the sink.
 
 For the container record type (named `row` for the key schema and `envelope` for
-the value schema, unless overridden by the [`AVRO ... FULLNAME`
-options](#csr-connection-options)), Materialize searches for documentation in
-the following locations, in order:
+the value schema, unless overridden by the [`AVRO ... FULLNAME` options](#csr-connection-options)),
+Materialize searches for documentation in the following locations, in order:
 
 1. For the key schema, a [`KEY DOC ON TYPE` option](#doc-on-option-syntax)
    naming the sink's underlying relation. For the value schema, a

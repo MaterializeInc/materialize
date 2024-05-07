@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 
+use mz_arrow_util::builder::ArrowBuilder;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
@@ -32,7 +33,10 @@ use mz_sql_parser::ast::{
     IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
-use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection};
+use mz_storage_types::sinks::{
+    KafkaSinkConnection, KafkaSinkFormat, S3SinkFormat, StorageSinkConnection,
+    MAX_S3_SINK_FILE_SIZE, MIN_S3_SINK_FILE_SIZE,
+};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -281,6 +285,10 @@ pub fn describe_explain_plan(
                 .with_column("Path", ScalarType::String.nullable(false))
                 .with_column("Plan", ScalarType::String.nullable(false));
         }
+        ExplainStage::PlanInsights => {
+            let name = "Plan Insights";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
+        }
     };
 
     Ok(
@@ -354,8 +362,8 @@ generate_extracted_config!(
     (ReoptimizeImportedViews, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
-    (EnableEquivalencePropagation, Option<bool>, Default(None)),
-    (EnableVariadicLeftJoinLowering, Option<bool>, Default(None))
+    (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
+    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
 );
 
 impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
@@ -397,9 +405,9 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             types: v.types,
             features: OptimizerFeatureOverrides {
                 enable_eager_delta_joins: v.enable_eager_delta_joins,
-                enable_equivalence_propagation: v.enable_equivalence_propagation,
                 enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,
+                enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
                 reoptimize_imported_views: v.reoptimize_imported_views,
                 ..Default::default()
             },
@@ -455,9 +463,6 @@ fn plan_explainee(
         }
         Explainee::Select(select, broken) => {
             let (plan, desc) = plan_select_inner(scx, *select, params, None)?;
-            if broken {
-                scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
-            }
             crate::plan::Explainee::Statement(ExplaineeStatement::Select { broken, plan, desc })
         }
         Explainee::CreateView(mut stmt, broken) => {
@@ -549,7 +554,6 @@ pub fn plan_explain_plan(
         let mut with_options = ExplainPlanOptionExtracted::try_from(with_options)?;
 
         if with_options.filter_pushdown {
-            scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
             // If filtering is disabled, explain plans should not include pushdown info.
             with_options.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
         }
@@ -734,22 +738,38 @@ pub fn describe_subscribe(
                 .collect_vec();
             let mut before_values_desc = RelationDesc::empty();
             let mut after_values_desc = RelationDesc::empty();
-            for (mut name, mut ty) in relation_desc.into_iter() {
-                if key_columns.contains(&name) {
-                    if progress {
-                        ty.nullable = true;
-                    }
-                    desc = desc.with_column(name, ty);
-                } else {
-                    ty.nullable = true;
-                    before_values_desc =
-                        before_values_desc.with_column(format!("before_{}", name), ty.clone());
-                    if debezium {
-                        name = format!("after_{}", name).into();
-                    }
-                    after_values_desc = after_values_desc.with_column(name, ty);
+
+            // Add the key columns in the order that they're specified.
+            for column_name in &key_columns {
+                let mut column_ty = relation_desc
+                    .get_by_name(column_name)
+                    .map(|(_pos, ty)| ty.clone())
+                    .ok_or_else(|| PlanError::UnknownColumn {
+                        table: None,
+                        column: column_name.clone(),
+                        similar: Box::new([]),
+                    })?;
+                if progress {
+                    column_ty.nullable = true;
                 }
+                desc = desc.with_column(column_name, column_ty);
             }
+
+            // Then add the remaining columns in the order from the original
+            // table, filtering out the key columns since we added those above.
+            for (mut name, mut ty) in relation_desc
+                .into_iter()
+                .filter(|(name, _ty)| !key_columns.contains(name))
+            {
+                ty.nullable = true;
+                before_values_desc =
+                    before_values_desc.with_column(format!("before_{}", name), ty.clone());
+                if debezium {
+                    name = format!("after_{}", name).into();
+                }
+                after_values_desc = after_values_desc.with_column(name, ty);
+            }
+
             if debezium {
                 desc = desc.concat(before_values_desc);
             }
@@ -924,7 +944,7 @@ pub fn plan_subscribe(
     }))
 }
 
-pub fn describe_table(
+pub fn describe_copy_from_table(
     scx: &StatementContext,
     table_name: <Aug as AstInfo>::ItemName,
     columns: Vec<Ident>,
@@ -933,19 +953,37 @@ pub fn describe_table(
     Ok(StatementDesc::new(Some(desc)))
 }
 
+pub fn describe_copy_item(
+    scx: &StatementContext,
+    object_name: <Aug as AstInfo>::ItemName,
+    columns: Vec<Ident>,
+) -> Result<StatementDesc, PlanError> {
+    let (_, desc, _) = query::plan_copy_item(scx, object_name, columns)?;
+    Ok(StatementDesc::new(Some(desc)))
+}
+
 pub fn describe_copy(
     scx: &StatementContext,
-    CopyStatement { relation, .. }: CopyStatement<Aug>,
+    CopyStatement {
+        relation,
+        direction,
+        ..
+    }: CopyStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    Ok(match relation {
-        CopyRelation::Table { name, columns } => describe_table(scx, name, columns)?,
-        CopyRelation::Select(stmt) => describe_select(scx, stmt)?,
-        CopyRelation::Subscribe(stmt) => describe_subscribe(scx, stmt)?,
+    Ok(match (relation, direction) {
+        (CopyRelation::Named { name, columns }, CopyDirection::To) => {
+            describe_copy_item(scx, name, columns)?
+        }
+        (CopyRelation::Named { name, columns }, CopyDirection::From) => {
+            describe_copy_from_table(scx, name, columns)?
+        }
+        (CopyRelation::Select(stmt), _) => describe_select(scx, stmt)?,
+        (CopyRelation::Subscribe(stmt), _) => describe_subscribe(scx, stmt)?,
     }
     .with_is_copy())
 }
 
-fn plan_copy_to(
+fn plan_copy_to_expr(
     scx: &StatementContext,
     select_plan: SelectPlan,
     desc: RelationDesc,
@@ -964,15 +1002,20 @@ fn plan_copy_to(
         _ => sql_bail!("only AWS CONNECTION is supported for COPY ... TO <expr>"),
     }
 
-    if format != CopyFormat::Csv {
-        sql_bail!("only CSV format is supported for COPY ... TO <expr>");
-    }
-
-    // TODO(mouli): Get these from sql options
-    let format_params = CopyFormatParams::Csv(
-        CopyCsvFormatParams::try_new(None, None, None, None, None)
-            .map_err(|e| sql_err!("{}", e))?,
-    );
+    let format = match format {
+        CopyFormat::Csv => S3SinkFormat::PgCopy(CopyFormatParams::Csv(
+            // TODO(mouli): Get these from sql options
+            CopyCsvFormatParams::try_new(None, None, None, None, None)
+                .map_err(|e| sql_err!("{}", e))?,
+        )),
+        CopyFormat::Parquet => {
+            // Validate that the output desc can be formatted as parquet
+            ArrowBuilder::validate_desc(&desc).map_err(|e| sql_err!("{}", e))?;
+            S3SinkFormat::Parquet
+        }
+        CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
+        CopyFormat::Text => bail_unsupported!("FORMAT TEXT"),
+    };
 
     // Converting the to expr to a HirScalarExpr
     let mut to_expr = to.clone();
@@ -991,8 +1034,17 @@ fn plan_copy_to(
 
     let to = plan_expr(ecx, &to_expr)?.type_as(ecx, &ScalarType::String)?;
 
-    if options.max_file_size.as_bytes() < ByteSize::mb(16).as_bytes() {
-        sql_bail!("MAX FILE SIZE cannot be less than 16MB");
+    if options.max_file_size.as_bytes() < MIN_S3_SINK_FILE_SIZE.as_bytes() {
+        sql_bail!(
+            "MAX FILE SIZE cannot be less than {}",
+            MIN_S3_SINK_FILE_SIZE
+        );
+    }
+    if options.max_file_size.as_bytes() > MAX_S3_SINK_FILE_SIZE.as_bytes() {
+        sql_bail!(
+            "MAX FILE SIZE cannot be greater than {}",
+            MAX_S3_SINK_FILE_SIZE
+        );
     }
 
     Ok(Plan::CopyTo(CopyToPlan {
@@ -1001,7 +1053,7 @@ fn plan_copy_to(
         to,
         connection: connection.to_owned(),
         connection_id: conn_id,
-        format_params,
+        format,
         max_file_size: options.max_file_size.as_bytes(),
     }))
 }
@@ -1060,6 +1112,7 @@ fn plan_copy_from(
             )
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
+        CopyFormat::Parquet => bail_unsupported!("FORMAT PARQUET"),
     };
 
     let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;
@@ -1096,6 +1149,7 @@ pub fn plan_copy(
         "text" => CopyFormat::Text,
         "csv" => CopyFormat::Csv,
         "binary" => CopyFormat::Binary,
+        "parquet" => CopyFormat::Parquet,
         _ => sql_bail!("unknown FORMAT: {}", options.format),
     };
     if let CopyDirection::To = direction {
@@ -1108,7 +1162,7 @@ pub fn plan_copy(
     }
     match (&direction, &target) {
         (CopyDirection::To, CopyTarget::Stdout) => match relation {
-            CopyRelation::Table { .. } => sql_bail!("table with COPY TO unsupported"),
+            CopyRelation::Named { .. } => sql_bail!("named with COPY TO STDOUT unsupported"),
             CopyRelation::Select(stmt) => {
                 Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
             }
@@ -1117,7 +1171,7 @@ pub fn plan_copy(
             }
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
-            CopyRelation::Table { name, columns } => {
+            CopyRelation::Named { name, columns } => {
                 plan_copy_from(scx, name, columns, format, options)
             }
             _ => sql_bail!("COPY FROM {} not supported", target),
@@ -1126,7 +1180,7 @@ pub fn plan_copy(
             scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
 
             let stmt = match relation {
-                CopyRelation::Table { name, columns } => {
+                CopyRelation::Named { name, columns } => {
                     if !columns.is_empty() {
                         // TODO(mouli): Add support for this
                         sql_bail!("specifying columns for COPY <table_name> TO commands not yet supported; use COPY (SELECT...) TO ... instead");
@@ -1151,7 +1205,7 @@ pub fn plan_copy(
             };
 
             let (plan, desc) = plan_select_inner(scx, stmt, &Params::empty(), None)?;
-            plan_copy_to(scx, plan, desc, to_expr, format, options)
+            plan_copy_to_expr(scx, plan, desc, to_expr, format, options)
         }
         _ => sql_bail!("COPY {} {} not supported", direction, target),
     }

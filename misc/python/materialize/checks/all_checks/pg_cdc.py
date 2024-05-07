@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import re
 from random import Random
 from textwrap import dedent
 from typing import Any
@@ -18,6 +19,7 @@ from materialize.mz_version import MzVersion
 
 class PgCdcBase:
     base_version: MzVersion
+    current_version: MzVersion
     wait: bool
     suffix: str
     repeats: int
@@ -86,17 +88,7 @@ class PgCdcBase:
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'C', i, REPEAT('C', {self.repeats} - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
-                """
-                + (
-                    f"""
-                # Wait until Pg snapshot is complete in order to avoid #18940
-                > SELECT COUNT(*) > 0 FROM postgres_source_tableA{self.suffix}
-                true
-                """
-                    if self.wait
-                    else ""
-                ),
-                f"""
+
                 $[version>=5200] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
                 GRANT USAGE ON CONNECTION pg2{self.suffix} TO materialize
 
@@ -108,6 +100,28 @@ class PgCdcBase:
                   FROM POSTGRES CONNECTION pg2{self.suffix}
                   (PUBLICATION 'postgres_source{self.suffix}')
                   FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableB{self.suffix});
+
+                # Create a view with a complex dependency structure
+                > CREATE VIEW IF NOT EXISTS table_a_b_count_sum AS SELECT SUM(total_count) AS total_rows FROM (
+                        SELECT COUNT(*) AS total_count FROM postgres_source_tableA{self.suffix}
+                        UNION ALL
+                        SELECT COUNT(*) AS total_count FROM postgres_source_tableB{self.suffix}
+                    );
+                """
+                + (
+                    f"""
+                # Wait until Pg snapshot is complete in order to avoid #18940
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableA{self.suffix}
+                true
+
+                # Wait until Pg snapshot is complete in order to avoid #18940
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableB{self.suffix}
+                true
+                """
+                    if self.wait
+                    else ""
+                ),
+                f"""
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'E', i, REPEAT('E', {self.repeats} - i) FROM generate_series(1,100) AS i;
@@ -154,65 +168,74 @@ class PgCdcBase:
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
+        sql = dedent(
+            f"""
+            $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
+            GRANT SELECT ON postgres_source_tableA{self.suffix} TO materialize
+            GRANT SELECT ON postgres_source_tableB{self.suffix} TO materialize
+            GRANT SELECT ON postgres_source_tableC{self.suffix} TO materialize
+
+            # Can take longer after a restart
+            $ set-sql-timeout duration=600s
+
+            > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableA{self.suffix} GROUP BY f1;
+            A 800 {self.expects}
+            B 800 {self.expects}
+            C 700 {self.expects}
+            D 600 {self.expects}
+            E 500 {self.expects}
+            F 400 {self.expects}
+            G 300 {self.expects}
+            H 200 {self.expects}
+
+            > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableB{self.suffix} GROUP BY f1;
+            A 800 {self.expects}
+            B 800 {self.expects}
+            C 700 {self.expects}
+            D 600 {self.expects}
+            E 500 {self.expects}
+            F 400 {self.expects}
+            G 300 {self.expects}
+            H 200 {self.expects}
+
+            > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableC{self.suffix} GROUP BY f1;
+            A 800 {self.expects}
+            B 800 {self.expects}
+            C 700 {self.expects}
+            D 600 {self.expects}
+            E 500 {self.expects}
+            F 400 {self.expects}
+            G 300 {self.expects}
+            H 200 {self.expects}
+
+            > SELECT total_rows FROM table_a_b_count_sum;
+            1600
+            """
+        )
+
+        if self.base_version >= MzVersion.parse_mz("v0.50.0-dev"):
+            sql += dedent(
                 f"""
-                $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
-                GRANT SELECT ON postgres_source_tableA{self.suffix} TO materialize
-                GRANT SELECT ON postgres_source_tableB{self.suffix} TO materialize
-                GRANT SELECT ON postgres_source_tableC{self.suffix} TO materialize
+                # Confirm that the primary key information has been propagated from Pg
+                > SELECT key FROM (SHOW INDEXES ON postgres_source_tableA{self.suffix});
+                {{f1,f2}}
 
-                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableA{self.suffix} GROUP BY f1;
-                A 800 {self.expects}
-                B 800 {self.expects}
-                C 700 {self.expects}
-                D 600 {self.expects}
-                E 500 {self.expects}
-                F 400 {self.expects}
-                G 300 {self.expects}
-                H 200 {self.expects}
+                ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA{self.suffix};
+                Explained Query (fast path):
+                  Project (#0, #1)
+                    ReadIndex on=materialize.public.postgres_source_tablea{self.suffix} postgres_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
 
-                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableB{self.suffix} GROUP BY f1;
-                A 800 {self.expects}
-                B 800 {self.expects}
-                C 700 {self.expects}
-                D 600 {self.expects}
-                E 500 {self.expects}
-                F 400 {self.expects}
-                G 300 {self.expects}
-                H 200 {self.expects}
+                Used Indexes:
+                  - materialize.public.postgres_source_tablea{self.suffix}_primary_idx (*** full scan ***)
 
-                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableC{self.suffix} GROUP BY f1;
-                A 800 {self.expects}
-                B 800 {self.expects}
-                C 700 {self.expects}
-                D 600 {self.expects}
-                E 500 {self.expects}
-                F 400 {self.expects}
-                G 300 {self.expects}
-                H 200 {self.expects}
+                Target cluster: quickstart
                 """
             )
-            + (
-                dedent(
-                    f"""
-                    # Confirm that the primary key information has been propagated from Pg
-                    > SELECT key FROM (SHOW INDEXES ON postgres_source_tableA{self.suffix});
-                    {{f1,f2}}
 
-                    ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA{self.suffix};
-                    Explained Query (fast path):
-                      Project (#0, #1)
-                        ReadIndex on=materialize.public.postgres_source_tablea{self.suffix} postgres_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
+        if self.current_version < MzVersion.parse_mz("v0.96.0-dev"):
+            sql = remove_target_cluster_from_explain(sql)
 
-                    Used Indexes:
-                      - materialize.public.postgres_source_tablea{self.suffix}_primary_idx (*** full scan ***)
-                    """
-                )
-                if self.base_version >= MzVersion.parse_mz("v0.50.0-dev")
-                else ""
-            )
-        )
+        return Testdrive(sql)
 
 
 @externally_idempotent(False)
@@ -332,3 +355,7 @@ class PgCdcMzNow(Check):
                 """
             )
         )
+
+
+def remove_target_cluster_from_explain(sql: str) -> str:
+    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)

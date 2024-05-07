@@ -97,8 +97,9 @@ optimizer_feature_flags!({
     enable_consolidate_after_union_negate: bool,
     // Bound from `SystemVars::enable_eager_delta_joins`.
     enable_eager_delta_joins: bool,
-    // Enable the `EquivalencePropagation` transform in the optimizer.
-    enable_equivalence_propagation: bool,
+    // Enable Lattice-based fixpoint iteration on LetRec nodes in the
+    // Analysis framework.
+    enable_letrec_fixpoint_analysis: bool,
     // Bound from `SystemVars::enable_new_outer_join_lowering`.
     enable_new_outer_join_lowering: bool,
     // Bound from `SystemVars::enable_reduce_mfp_fusion`.
@@ -119,6 +120,19 @@ pub trait OverrideFrom<T> {
     /// Override the configuration represented by [`Self`] with values
     /// from the given `layer`.
     fn override_from(self, layer: &T) -> Self;
+}
+
+/// Overrides for `U` coming from an optional `T`.
+impl<T, U> OverrideFrom<Option<&T>> for U
+where
+    Self: OverrideFrom<T>,
+{
+    fn override_from(self, layer: &Option<&T>) -> Self {
+        match layer {
+            Some(layer) => self.override_from(layer),
+            None => self,
+        }
+    }
 }
 
 /// A trait that handles conversion of feature flags.

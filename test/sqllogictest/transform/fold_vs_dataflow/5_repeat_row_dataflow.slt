@@ -60,4 +60,6 @@ Explained Query:
       Reduce aggregates=[sum(#0)]
         ReadStorage materialize.public.mv_using_dataflow_rendering
 
+Target cluster: quickstart
+
 EOF

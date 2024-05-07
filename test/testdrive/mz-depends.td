@@ -24,9 +24,9 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
   top_level_s.name as source,
   s.name AS subsource
   FROM mz_internal.mz_object_dependencies AS d
-  JOIN mz_sources AS s ON s.id = d.referenced_object_id
-  JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id
-  WHERE top_level_s.name = 'with_subsources';
+  JOIN mz_sources AS s ON s.id = d.referenced_object_id OR s.id = d.object_id
+  JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id OR top_level_s.id = d.referenced_object_id
+  WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
 source          subsource
 -------------------------
 with_subsources accounts
@@ -42,9 +42,9 @@ with_subsources with_subsources_progress
   top_level_s.name as source,
   s.name AS subsource
   FROM mz_internal.mz_object_dependencies AS d
-  JOIN mz_sources AS s ON s.id = d.referenced_object_id
-  JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id
-  WHERE top_level_s.name = 'with_subsources';
+  JOIN mz_sources AS s ON s.id = d.referenced_object_id OR s.id = d.object_id
+  JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id OR top_level_s.id = d.referenced_object_id
+  WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
 source          subsource
 -------------------------
 

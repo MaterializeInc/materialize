@@ -961,6 +961,8 @@ Explained Query:
     Map (((#0 >> smallint_to_integer(#1)) << smallint_to_integer(#2)), ((#3 << #4) >> #5)) // { arity: 11 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
+Target cluster: quickstart
+
 EOF
 
 # precedence between bitwise operators and '&'
@@ -991,6 +993,8 @@ Explained Query:
   Project (#9, #10) // { arity: 2 }
     Map (((#0 >> smallint_to_integer(#1)) & #2), ((#3 << #4) & #5)) // { arity: 11 }
       ReadStorage materialize.public.nums // { arity: 9 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -1025,6 +1029,8 @@ Explained Query:
     Map (((#0 & #1) | #2), ((#3 & #4) | #5), ((#6 & #7) | #8), (integer_to_bigint((smallint_to_integer(#0) & #4)) | #8)) // { arity: 13 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
+Target cluster: quickstart
+
 EOF
 
 # precedence between '&' and '#'
@@ -1058,6 +1064,8 @@ Explained Query:
     Map (((#0 # #1) & #2), ((#3 # #4) & #5), ((#6 # #7) & #8), (integer_to_bigint((smallint_to_integer(#0) # #4)) & #8)) // { arity: 13 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
+Target cluster: quickstart
+
 EOF
 
 # precedence between '|' and '#'
@@ -1090,6 +1098,8 @@ Explained Query:
   Project (#9..=#12) // { arity: 4 }
     Map (((#0 # #1) | #2), ((#3 # #4) | #5), ((#6 # #7) | #8), (integer_to_bigint((smallint_to_integer(#0) # #4)) | #8)) // { arity: 13 }
       ReadStorage materialize.public.nums // { arity: 9 }
+
+Target cluster: quickstart
 
 EOF
 

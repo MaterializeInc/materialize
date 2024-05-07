@@ -38,6 +38,8 @@ EXPLAIN SELECT * FROM t_using_dataflow_rendering;
 Explained Query:
   ReadStorage materialize.public.t_using_dataflow_rendering
 
+Target cluster: quickstart
+
 EOF
 
 # -------------------------------
@@ -66,5 +68,7 @@ EXPLAIN SELECT * FROM t_using_dataflow_rendering;
 ----
 Explained Query:
   ReadStorage materialize.public.t_using_dataflow_rendering
+
+Target cluster: quickstart
 
 EOF

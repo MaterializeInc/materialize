@@ -24,6 +24,7 @@
 
 pub mod notice;
 
+use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::string::ToString;
 use std::sync::Mutex;
@@ -54,6 +55,8 @@ use mz_storage_client::healthcheck::{
 use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATISTICS_RAW_DESC};
 use once_cell::sync::Lazy;
 use serde::Serialize;
+
+use crate::durable::objects::SystemObjectDescription;
 
 pub const BUILTIN_PREFIXES: &[&str] = &["mz_", "pg_", "external_"];
 const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
@@ -1807,14 +1810,6 @@ pub static MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_COMPUTE_DELAYS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
-    name: "mz_compute_delays_histogram_raw",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::LOG_MZ_COMPUTE_DELAYS_HISTOGRAM_RAW_OID,
-    variant: LogVariant::Compute(ComputeLog::FrontierDelay),
-    access: vec![PUBLIC_SELECT],
-});
-
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_error_counts_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1958,6 +1953,28 @@ pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("replication_slot", ScalarType::String.nullable(false))
         .with_column("timeline_id", ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+pub static MZ_POSTGRES_SOURCE_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_postgres_source_tables",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_POSTGRES_SOURCE_TABLES_OID,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("schema_name", ScalarType::String.nullable(false))
+        .with_column("table_name", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: true,
+    access: vec![PUBLIC_SELECT],
+});
+pub static MZ_MYSQL_SOURCE_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_mysql_source_tables",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_MYSQL_SOURCE_TABLES_OID,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("schema_name", ScalarType::String.nullable(false))
+        .with_column("table_name", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
 pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2225,6 +2242,26 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: Lazy<BuiltinTable> =
+    Lazy::new(|| BuiltinTable {
+        name: "mz_materialized_view_refresh_strategies",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::TABLE_MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES_OID,
+        desc: RelationDesc::empty()
+            .with_column("materialized_view_id", ScalarType::String.nullable(false))
+            .with_column("type", ScalarType::String.nullable(false))
+            .with_column("interval", ScalarType::Interval.nullable(true))
+            .with_column(
+                "aligned_to",
+                ScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .with_column(
+                "at",
+                ScalarType::TimestampTz { precision: None }.nullable(true),
+            ),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_types",
     schema: MZ_CATALOG_SCHEMA,
@@ -2344,6 +2381,17 @@ pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_ROLE_PARAMETERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_role_parameters",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_ROLE_PARAMETERS_OID,
+    desc: RelationDesc::empty()
+        .with_column("role_id", ScalarType::String.nullable(false))
+        .with_column("parameter_name", ScalarType::String.nullable(false))
+        .with_column("parameter_value", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
@@ -2425,6 +2473,20 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
                 custom_id: None,
             }
             .nullable(true),
+        ),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+pub static MZ_CLUSTER_SCHEDULES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_schedules",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_CLUSTER_SCHEDULES_OID,
+    desc: RelationDesc::empty()
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column(
+            "refresh_rehydration_time_estimate",
+            ScalarType::Interval.nullable(true),
         ),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2593,7 +2655,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: Lazy<BuiltinView> = Lazy::new
         occurred_at as last_status_change_at,
         status
     FROM latest_events
-    JOIN mz_connections AS conns
+    JOIN mz_catalog.mz_connections AS conns
     ON conns.id = latest_events.connection_id",
     access: vec![PUBLIC_SELECT],
 });
@@ -2800,11 +2862,11 @@ pub static MZ_SOURCE_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     (
         SELECT subsources.id AS self, sources.id AS parent
         FROM
-            mz_sources AS subsources
+            mz_catalog.mz_sources AS subsources
                 JOIN
                     mz_internal.mz_object_dependencies AS deps
-                    ON subsources.id = deps.referenced_object_id
-                JOIN mz_sources AS sources ON sources.id = deps.object_id
+                    ON subsources.id = deps.object_id
+                JOIN mz_catalog.mz_sources AS sources ON sources.id = deps.referenced_object_id
     ),
      -- Determine which collection's ID to use for the status
     id_of_status_to_use AS
@@ -2850,7 +2912,7 @@ SELECT
     error,
     details
 FROM
-    mz_sources
+    mz_catalog.mz_sources
         LEFT JOIN latest_events_to_use AS e ON mz_sources.id = e.source_id
 WHERE mz_sources.id NOT LIKE 's%';",
     access: vec![PUBLIC_SELECT],
@@ -2885,7 +2947,7 @@ SELECT
     coalesce(status, 'created') as status,
     error,
     details
-FROM mz_sinks
+FROM mz_catalog.mz_sinks
 LEFT JOIN latest_events ON mz_sinks.id = latest_events.sink_id
 WHERE
     -- This is a convenient way to filter out system sinks, like the status_history table itself.
@@ -3100,6 +3162,18 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_HISTORY_RETENTION_STRATEGIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_history_retention_strategies",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_HISTORY_RETENTION_STRATEGIES_OID,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("strategy", ScalarType::String.nullable(false))
+        .with_column("value", ScalarType::Jsonb.nullable(false)),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -3232,13 +3306,14 @@ pub static MZ_OBJECT_LIFETIMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_object_lifetimes",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_LIFETIMES_OID,
-    column_defs: Some("id, object_type, event_type, occurred_at"),
+    column_defs: Some("id, previous_id, object_type, event_type, occurred_at"),
     sql: "
     SELECT
         CASE
             WHEN a.object_type = 'cluster-replica' THEN a.details ->> 'replica_id'
             ELSE a.details ->> 'id'
         END id,
+        a.details ->> 'previous_id',
         a.object_type,
         a.event_type,
         a.occurred_at
@@ -4061,10 +4136,10 @@ pub static PG_AUTH_MEMBERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     grantor.oid AS grantor,
     -- Materialize hasn't implemented admin_option.
     false as admin_option
-FROM mz_role_members membership
-JOIN mz_roles role ON membership.role_id = role.id
-JOIN mz_roles member ON membership.member = member.id
-JOIN mz_roles grantor ON membership.grantor = grantor.id",
+FROM mz_catalog.mz_role_members membership
+JOIN mz_catalog.mz_roles role ON membership.role_id = role.id
+JOIN mz_catalog.mz_roles member ON membership.member = member.id
+JOIN mz_catalog.mz_roles grantor ON membership.grantor = grantor.id",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -4311,36 +4386,6 @@ SELECT
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_scheduling_parks_histogram_per_worker
 GROUP BY slept_for_ns, requested_ns",
-    access: vec![PUBLIC_SELECT],
-});
-
-pub static MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
-    name: "mz_compute_delays_histogram_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER_OID,
-    column_defs: None,
-    sql: "SELECT
-    export_id, import_id, worker_id, delay_ns, pg_catalog.count(*) AS count
-FROM
-    mz_internal.mz_compute_delays_histogram_raw
-GROUP BY
-    export_id, import_id, worker_id, delay_ns",
-    access: vec![PUBLIC_SELECT],
-});
-
-pub static MZ_COMPUTE_DELAYS_HISTOGRAM: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
-    name: "mz_compute_delays_histogram",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_COMPUTE_DELAYS_HISTOGRAM_OID,
-    column_defs: None,
-    sql: "
-SELECT
-    export_id,
-    import_id,
-    delay_ns,
-    pg_catalog.sum(count) AS count
-FROM mz_internal.mz_compute_delays_histogram_per_worker
-GROUP BY export_id, import_id, delay_ns",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -4717,7 +4762,7 @@ SELECT
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
     m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent
 FROM
-    mz_cluster_replicas AS r
+    mz_catalog.mz_cluster_replicas AS r
         JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
     access: vec![PUBLIC_SELECT],
@@ -5078,9 +5123,9 @@ SELECT
     role.name AS role_name,
     -- ADMIN OPTION isn't implemented.
     'NO' AS is_grantable
-FROM mz_role_members membership
-JOIN mz_roles role ON membership.role_id = role.id
-JOIN mz_roles member ON membership.member = member.id
+FROM mz_catalog.mz_role_members membership
+JOIN mz_catalog.mz_roles role ON membership.role_id = role.id
+JOIN mz_catalog.mz_roles member ON membership.member = member.id
 WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USAGE')",
     access: vec![PUBLIC_SELECT],
 });
@@ -5117,7 +5162,7 @@ pub static INFORMATION_SCHEMA_ENABLED_ROLES: Lazy<BuiltinView> = Lazy::new(|| Bu
     column_defs: None,
     sql: "
 SELECT name AS role_name
-FROM mz_roles
+FROM mz_catalog.mz_roles
 WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
     access: vec![PUBLIC_SELECT],
 });
@@ -5293,12 +5338,12 @@ FROM
             END AS table_catalog,
             schemas.name AS table_schema,
             relations.name AS table_name
-        FROM mz_relations AS relations
-        JOIN mz_schemas AS schemas ON relations.schema_id = schemas.id
-        LEFT JOIN mz_databases AS databases ON schemas.database_id = databases.id
+        FROM mz_catalog.mz_relations AS relations
+        JOIN mz_catalog.mz_schemas AS schemas ON relations.schema_id = schemas.id
+        LEFT JOIN mz_catalog.mz_databases AS databases ON schemas.database_id = databases.id
         WHERE schemas.database_id IS NULL OR databases.name = current_database())
-    JOIN mz_roles AS grantor ON mz_internal.mz_aclitem_grantor(privileges) = grantor.id
-    LEFT JOIN mz_roles AS grantee ON mz_internal.mz_aclitem_grantee(privileges) = grantee.id)
+    JOIN mz_catalog.mz_roles AS grantor ON mz_internal.mz_aclitem_grantor(privileges) = grantor.id
+    LEFT JOIN mz_catalog.mz_roles AS grantee ON mz_internal.mz_aclitem_grantee(privileges) = grantee.id)
 WHERE
     -- WHERE clause is not guaranteed to short-circuit and 'PUBLIC' will cause an error when passed
     -- to pg_has_role. Therefore we need to use a CASE statement.
@@ -5648,8 +5693,8 @@ pub static MZ_SHOW_MATERIALIZED_VIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
     oid: oid::VIEW_MZ_SHOW_MATERIALIZED_VIEWS_OID,
     column_defs: None,
     sql: "SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
-FROM mz_materialized_views AS mviews
-JOIN mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
+FROM mz_catalog.mz_materialized_views AS mviews
+JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -5667,7 +5712,7 @@ pub static MZ_SHOW_INDEXES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     objs.schema_id AS schema_id,
     clusters.id AS cluster_id
 FROM
-    mz_indexes AS idxs
+    mz_catalog.mz_indexes AS idxs
     JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
     JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = idxs.cluster_id
     LEFT JOIN
@@ -5681,9 +5726,9 @@ FROM
                 ORDER BY idx_cols.index_position ASC
             ) AS key
         FROM
-            mz_indexes AS idxs
-            JOIN mz_index_columns idx_cols ON idxs.id = idx_cols.index_id
-            LEFT JOIN mz_columns obj_cols ON
+            mz_catalog.mz_indexes AS idxs
+            JOIN mz_catalog.mz_index_columns idx_cols ON idxs.id = idx_cols.index_id
+            LEFT JOIN mz_catalog.mz_columns obj_cols ON
                 idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         GROUP BY idxs.id) AS keys
     ON idxs.id = keys.id",
@@ -5727,9 +5772,9 @@ pub static MZ_SHOW_ROLE_MEMBERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     r2.name AS member,
     r3.name AS grantor
 FROM mz_catalog.mz_role_members rm
-JOIN mz_roles r1 ON r1.id = rm.role_id
-JOIN mz_roles r2 ON r2.id = rm.member
-JOIN mz_roles r3 ON r3.id = rm.grantor
+JOIN mz_catalog.mz_roles r1 ON r1.id = rm.role_id
+JOIN mz_catalog.mz_roles r2 ON r2.id = rm.member
+JOIN mz_catalog.mz_roles r3 ON r3.id = rm.grantor
 ORDER BY role"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5759,9 +5804,9 @@ pub static MZ_SHOW_SYSTEM_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinVi
     privileges.privilege_type AS privilege_type
 FROM
     (SELECT mz_internal.mz_aclexplode(ARRAY[privileges]).*
-    FROM mz_system_privileges) AS privileges
-LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
-LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+    FROM mz_catalog.mz_system_privileges) AS privileges
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5796,10 +5841,10 @@ pub static MZ_SHOW_CLUSTER_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
     privileges.privilege_type AS privilege_type
 FROM
     (SELECT mz_internal.mz_aclexplode(privileges).*, name
-    FROM mz_clusters
+    FROM mz_catalog.mz_clusters
     WHERE id NOT LIKE 's%') AS privileges
-LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
-LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5834,10 +5879,10 @@ pub static MZ_SHOW_DATABASE_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| Builtin
     privileges.privilege_type AS privilege_type
 FROM
     (SELECT mz_internal.mz_aclexplode(privileges).*, name
-    FROM mz_databases
+    FROM mz_catalog.mz_databases
     WHERE id NOT LIKE 's%') AS privileges
-LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
-LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5873,11 +5918,11 @@ pub static MZ_SHOW_SCHEMA_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinVi
     privileges.privilege_type AS privilege_type
 FROM
     (SELECT mz_internal.mz_aclexplode(privileges).*, database_id, name
-    FROM mz_schemas
+    FROM mz_catalog.mz_schemas
     WHERE id NOT LIKE 's%') AS privileges
-LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
-LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
-LEFT JOIN mz_databases databases ON privileges.database_id = databases.id
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_databases databases ON privileges.database_id = databases.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5915,12 +5960,12 @@ pub static MZ_SHOW_OBJECT_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinVi
     privileges.privilege_type AS privilege_type
 FROM
     (SELECT mz_internal.mz_aclexplode(privileges).*, schema_id, name, type
-    FROM mz_objects
+    FROM mz_catalog.mz_objects
     WHERE id NOT LIKE 's%') AS privileges
-LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
-LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
-LEFT JOIN mz_schemas schemas ON privileges.schema_id = schemas.id
-LEFT JOIN mz_databases databases ON schemas.database_id = databases.id
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_schemas schemas ON privileges.schema_id = schemas.id
+LEFT JOIN mz_catalog.mz_databases databases ON schemas.database_id = databases.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -5995,11 +6040,11 @@ pub static MZ_SHOW_DEFAULT_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
         ELSE grantee.name
     END AS grantee,
 	unnest(mz_internal.mz_format_privileges(defaults.privileges)) AS privilege_type
-FROM mz_default_privileges defaults
-LEFT JOIN mz_roles AS object_owner ON defaults.role_id = object_owner.id
-LEFT JOIN mz_roles AS grantee ON defaults.grantee = grantee.id
-LEFT JOIN mz_databases AS databases ON defaults.database_id = databases.id
-LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
+FROM mz_catalog.mz_default_privileges defaults
+LEFT JOIN mz_catalog.mz_roles AS object_owner ON defaults.role_id = object_owner.id
+LEFT JOIN mz_catalog.mz_roles AS grantee ON defaults.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_databases AS databases ON defaults.database_id = databases.id
+LEFT JOIN mz_catalog.mz_schemas AS schemas ON defaults.schema_id = schemas.id
 WHERE defaults.grantee NOT LIKE 's%'
     AND defaults.database_id IS NULL OR defaults.database_id NOT LIKE 's%'
     AND defaults.schema_id IS NULL OR defaults.schema_id NOT LIKE 's%'"#,
@@ -6088,7 +6133,7 @@ indexes AS (
         i.id AS object_id,
         h.replica_id,
         COALESCE(h.hydrated, false) AS hydrated
-    FROM mz_indexes i
+    FROM mz_catalog.mz_indexes i
     LEFT JOIN mz_internal.mz_compute_hydration_statuses h
         ON (h.object_id = i.id)
 ),
@@ -6097,7 +6142,7 @@ materialized_views AS (
         i.id AS object_id,
         h.replica_id,
         COALESCE(h.hydrated, false) AS hydrated
-    FROM mz_materialized_views i
+    FROM mz_catalog.mz_materialized_views i
     LEFT JOIN mz_internal.mz_compute_hydration_statuses h
         ON (h.object_id = i.id)
 ),
@@ -6105,26 +6150,10 @@ materialized_views AS (
 -- dataflows, so we need to find the ones that are. Generally, sources that
 -- have a cluster ID are maintained by a dataflow running on that cluster.
 -- Webhook sources are an exception to this rule.
-sources_maintained_by_dataflows AS (
-    SELECT id, cluster_id
-    FROM mz_sources
-    WHERE cluster_id IS NOT NULL AND type != 'webhook'
-),
--- Cluster IDs are missing for subsources in `mz_sources` (#24235), so we need
--- to add them manually here by looking up the parent sources.
-subsources_with_clusters AS (
-    SELECT ss.id, ps.cluster_id
-    FROM mz_sources ss
-    JOIN mz_internal.mz_object_dependencies d
-        ON (d.referenced_object_id = ss.id)
-    JOIN sources_maintained_by_dataflows ps
-        ON (ps.id = d.object_id)
-    WHERE ss.type = 'subsource'
-),
 sources_with_clusters AS (
-    SELECT id, cluster_id FROM sources_maintained_by_dataflows
-    UNION ALL
-    SELECT id, cluster_id FROM subsources_with_clusters
+    SELECT id, cluster_id
+    FROM mz_catalog.mz_sources
+    WHERE cluster_id IS NOT NULL AND type != 'webhook'
 ),
 sources AS (
     SELECT
@@ -6133,7 +6162,7 @@ sources AS (
         ss.rehydration_latency IS NOT NULL AS hydrated
     FROM sources_with_clusters s
     LEFT JOIN mz_internal.mz_source_statistics ss USING (id)
-    JOIN mz_cluster_replicas r
+    JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 ),
 sinks AS (
@@ -6141,9 +6170,9 @@ sinks AS (
         s.id AS object_id,
         r.id AS replica_id,
         ss.status = 'running' AS hydrated
-    FROM mz_sinks s
+    FROM mz_catalog.mz_sinks s
     LEFT JOIN mz_internal.mz_sink_statuses ss USING (id)
-    JOIN mz_cluster_replicas r
+    JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 )
 SELECT * FROM indexes
@@ -6165,11 +6194,11 @@ pub static MZ_MATERIALIZATION_LAG: Lazy<BuiltinView> = Lazy::new(|| BuiltinView 
 WITH MUTUALLY RECURSIVE
     -- IDs of objects for which we want to know the lag.
     materializations (id text) AS (
-        SELECT id FROM mz_indexes
+        SELECT id FROM mz_catalog.mz_indexes
         UNION ALL
-        SELECT id FROM mz_materialized_views
+        SELECT id FROM mz_catalog.mz_materialized_views
         UNION ALL
-        SELECT id FROM mz_sinks
+        SELECT id FROM mz_catalog.mz_sinks
     ),
     -- Compute dependencies enriched with sink dependencies.
     dataflow_dependencies (id text, dep_id text) AS (
@@ -6178,7 +6207,7 @@ WITH MUTUALLY RECURSIVE
         UNION ALL
         SELECT object_id, referenced_object_id
         FROM mz_internal.mz_object_dependencies
-        JOIN mz_sinks ON (id = object_id)
+        JOIN mz_catalog.mz_sinks ON (id = object_id)
     ),
     -- Direct dependencies of materializations.
     direct_dependencies (id text, dep_id text) AS (
@@ -6655,6 +6684,24 @@ ON mz_internal.mz_recent_activity_log_thinned (sql_hash)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_KAFKA_SOURCES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_kafka_sources_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_KAFKA_SOURCES_IND_OID,
+    sql: "IN CLUSTER mz_introspection
+ON mz_internal.mz_kafka_sources (id)",
+    is_retained_metrics_object: true,
+};
+
+pub const MZ_WEBHOOK_SOURCES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_webhook_sources_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_WEBHOOK_SOURCES_IND_OID,
+    sql: "IN CLUSTER mz_introspection
+ON mz_internal.mz_webhook_sources (id)",
+    is_retained_metrics_object: true,
+};
+
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -6903,7 +6950,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
-        Builtin::Log(&MZ_COMPUTE_DELAYS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
@@ -6917,9 +6963,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_TABLES),
         Builtin::Table(&MZ_SOURCES),
         Builtin::Table(&MZ_POSTGRES_SOURCES),
+        Builtin::Table(&MZ_POSTGRES_SOURCE_TABLES),
+        Builtin::Table(&MZ_MYSQL_SOURCE_TABLES),
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEWS),
+        Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_TYPE_PG_METADATA),
         Builtin::Table(&MZ_ARRAY_TYPES),
@@ -6928,11 +6977,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_MAP_TYPES),
         Builtin::Table(&MZ_ROLES),
         Builtin::Table(&MZ_ROLE_MEMBERS),
+        Builtin::Table(&MZ_ROLE_PARAMETERS),
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_OPERATORS),
         Builtin::Table(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTERS),
+        Builtin::Table(&MZ_CLUSTER_SCHEDULES),
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
@@ -6952,6 +7003,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
         Builtin::Table(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
+        Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),
@@ -6998,8 +7050,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
-        Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER),
-        Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM),
         Builtin::View(&MZ_SHOW_SOURCES),
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
@@ -7151,6 +7201,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_FRONTIERS_IND),
+        Builtin::Index(&MZ_KAFKA_SOURCES_IND),
+        Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
     ]);
 
     builtins.extend(notice::builtins());
@@ -7211,6 +7263,28 @@ pub mod BUILTINS {
         BUILTINS_STATIC.iter()
     }
 }
+
+pub static BUILTIN_LOG_LOOKUP: Lazy<BTreeMap<&'static str, &'static BuiltinLog>> =
+    Lazy::new(|| BUILTINS::logs().map(|log| (log.name, log)).collect());
+/// Keys are builtin object description, values are the builtin index when sorted by dependency and
+/// the builtin itself.
+pub static BUILTIN_LOOKUP: Lazy<
+    BTreeMap<SystemObjectDescription, (usize, &'static Builtin<NameReference>)>,
+> = Lazy::new(|| {
+    BUILTINS::iter()
+        .enumerate()
+        .map(|(idx, builtin)| {
+            (
+                SystemObjectDescription {
+                    schema_name: builtin.schema().to_string(),
+                    object_type: builtin.catalog_item_type(),
+                    object_name: builtin.name().to_string(),
+                },
+                (idx, builtin),
+            )
+        })
+        .collect()
+});
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`

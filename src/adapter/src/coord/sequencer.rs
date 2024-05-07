@@ -23,7 +23,7 @@ use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
+    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
     FetchPlan, MutationKind, Params, Plan, PlanKind, QueryWhen, RaisePlan,
 };
 use mz_sql::rbac;
@@ -76,6 +76,19 @@ impl Coordinator {
         async move {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
+
+            // Warn about users explicitly selecting the mz_introspection cluster. We are thinking
+            // about renaming this cluster, and this helps us gauge how much of a breaking change
+            // doing so would be.
+            // TODO(#26731): remove this warning again
+            let session = ctx.session();
+            if !session.user().is_internal() && session.vars().cluster() == "mz_introspection" {
+                tracing::warn!(
+                    github_26731 = true,
+                    user = session.user().name,
+                    "user manually selected `mz_introspection` cluster"
+                );
+            }
 
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
             let target_cluster = match ctx.session().transaction().cluster() {
@@ -135,7 +148,7 @@ impl Coordinator {
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),
-                            vec![CreateSourcePlans {
+                            vec![CreateSourcePlanBundle {
                                 source_id,
                                 plan,
                                 resolved_ids,
@@ -411,17 +424,9 @@ impl Coordinator {
                     let result = self.sequence_alter_secret(ctx.session(), plan).await;
                     ctx.retire(result);
                 }
-                Plan::PurifiedAlterSource {
-                    alter_source,
-                    subsources,
-                } => {
-                    let result = self
-                        .sequence_alter_source(ctx.session_mut(), alter_source, subsources)
-                        .await;
+                Plan::AlterSource(plan) => {
+                    let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
                     ctx.retire(result);
-                }
-                Plan::AlterSource(_) => {
-                    unreachable!("ALTER SOURCE must be purified")
                 }
                 Plan::AlterSystemSet(plan) => {
                     let result = self.sequence_alter_system_set(ctx.session(), plan).await;

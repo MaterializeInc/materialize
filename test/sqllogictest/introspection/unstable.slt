@@ -19,8 +19,16 @@ ALTER SYSTEM SET enable_rbac_checks TO false
 ----
 COMPLETE 0
 
-statement error cannot create index with unstable dependencies
+# Following #26434, this still goes through RBAC now
+statement error must be owner of VIEW mz_internal.mz_active_peeks
 CREATE DEFAULT INDEX ON mz_internal.mz_active_peeks
+
+simple conn=mz_system,user=mz_system
+CREATE DEFAULT INDEX ON mz_internal.mz_active_peeks
+----
+db error: ERROR: cannot create index with unstable dependencies
+DETAIL: The object depends on the following unstable objects:
+    mz_active_peeks
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET enable_rbac_checks

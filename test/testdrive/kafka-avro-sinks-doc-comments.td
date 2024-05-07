@@ -14,7 +14,6 @@ $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_comment = true;
-ALTER SYSTEM SET enable_sink_doc_on_option = true;
 
 > CREATE TYPE point AS (x integer, y integer);
 > CREATE TYPE custom_map AS MAP (KEY TYPE = text, VALUE TYPE = bool)
@@ -246,43 +245,3 @@ contains: need to specify an object and a column
   )
   ENVELOPE UPSERT;
 contains: cannot use value as string
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_sink_doc_on_option = false;
-
-! CREATE SINK not_enabled
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM t
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
-  KEY (c2) NOT ENFORCED
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  (
-    DOC ON COLUMN t.c1 = 'comments'
-  )
-  ENVELOPE UPSERT
-contains: DOC ON option for sinks is not supported
-
-# If feature flag is off, automatic doc on options from comments will not be added
-> EXPLAIN VALUE SCHEMA FOR CREATE SINK doc_on_disabled
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM t
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-doc_on_disabled-${testdrive.seed}')
-  KEY (c2) NOT ENFORCED
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE UPSERT;
-"{\n  \"type\": \"record\",\n  \"name\": \"envelope\",\n  \"fields\": [\n    {\n      \"name\": \"c1\",\n      \"type\": [\n        \"null\",\n        {\n          \"type\": \"record\",\n          \"name\": \"record0\",\n          \"namespace\": \"com.materialize.sink\",\n          \"fields\": [\n            {\n              \"name\": \"x\",\n              \"type\": [\n                \"null\",\n                \"int\"\n              ]\n            },\n            {\n              \"name\": \"y\",\n              \"type\": [\n                \"null\",\n                \"int\"\n              ]\n            }\n          ]\n        }\n      ]\n    },\n    {\n      \"name\": \"c2\",\n      \"type\": \"string\"\n    },\n    {\n      \"name\": \"c3_map_text__text_\",\n      \"type\": [\n        \"null\",\n        {\n          \"type\": \"map\",\n          \"values\": [\n            \"null\",\n            \"boolean\"\n          ]\n        }\n      ]\n    },\n    {\n      \"name\": \"c4\",\n      \"type\": [\n        \"null\",\n        {\n          \"type\": \"array\",\n          \"items\": [\n            \"null\",\n            {\n              \"type\": \"record\",\n              \"name\": \"record1\",\n              \"namespace\": \"com.materialize.sink\",\n              \"fields\": [\n                {\n                  \"name\": \"x\",\n                  \"type\": [\n                    \"null\",\n                    \"int\"\n                  ]\n                },\n                {\n                  \"name\": \"y\",\n                  \"type\": [\n                    \"null\",\n                    \"int\"\n                  ]\n                }\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  ]\n}"
-
-> CREATE CLUSTER doc_on_disabled_cluster SIZE '${arg.default-storage-size}';
-> CREATE SINK doc_on_disabled
-  IN CLUSTER doc_on_disabled_cluster
-  FROM t
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-doc_on_disabled-${testdrive.seed}')
-  KEY (c2) NOT ENFORCED
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE UPSERT;
-
-> SHOW CREATE SINK doc_on_disabled;
-name                            create_sql
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- "materialize.public.doc_on_disabled"  "CREATE SINK \"materialize\".\"public\".\"doc_on_disabled\" IN CLUSTER \"doc_on_disabled_cluster\" FROM \"materialize\".\"public\".\"t\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-doc_on_disabled-${testdrive.seed}') KEY (\"c2\") NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE UPSERT"
-$ unset-regex

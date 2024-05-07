@@ -31,17 +31,27 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if "OptbenchTPCH" in scenario_class_name:
+        # PR#26652 (explain: fix tracing fast path regression) significantly increased wallclock for OptbenchTPCH
+        min_ancestor_mz_version_per_commit[
+            "96c22562745f59010860bd825de5b4007a172c70"
+        ] = MzVersion.parse_mz("v0.97.0")
+        # PR#24155 (equivalence propagation) significantly increased wallclock for OptbenchTPCH
+        min_ancestor_mz_version_per_commit[
+            "3cfaa8207faa7df087942cd44311a3e7b4534c25"
+        ] = MzVersion.parse_mz("v0.92.0")
+
+    if scenario_class_name == "FastPathFilterNoIndex":
+        # PR#26084 (Optimize OffsetList) increased wallclock
+        min_ancestor_mz_version_per_commit[
+            "2abcd90ac3201b0235ea41c5db81bdd931a0fda0"
+        ] = MzVersion.parse_mz("v0.96.0")
+
     if scenario_class_name == "ParallelDataflows":
         # PR#26020 (Stage flatmap execution to consolidate as it goes) significantly increased wallclock
         min_ancestor_mz_version_per_commit[
             "da35946d636607a11fa27d5a8ea6e9939bf9525e"
         ] = MzVersion.parse_mz("v0.93.0")
-
-    if "OptbenchTPCH" in scenario_class_name:
-        # PR#24155 (equivalence propagation) significantly increased wallclock for OptbenchTPCH
-        min_ancestor_mz_version_per_commit[
-            "3cfaa8207faa7df087942cd44311a3e7b4534c25"
-        ] = MzVersion.parse_mz("v0.92.0")
 
     # add legacy entries
     min_ancestor_mz_version_per_commit.update(

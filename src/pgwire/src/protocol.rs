@@ -23,8 +23,8 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::StatementEndedExecutionReason;
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
-    RowsFuture,
+    verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
+    PeekResponseUnary, RowsFuture,
 };
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
@@ -36,7 +36,7 @@ use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSION
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
+use mz_sql::ast::{CopyDirection, CopyStatement, FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
@@ -899,34 +899,46 @@ where
             }
         };
 
-        if let Some(desc) = stmt.desc().relation_desc.clone() {
-            for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
-                match (format, &ty.scalar_type) {
-                    (Format::Binary, mz_repr::ScalarType::List { .. }) => {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::PROTOCOL_VIOLATION,
-                                "binary encoding of list types is not implemented",
-                            ))
-                            .await;
+        // Binary encodings are disabled for list, map, and aclitem types, but this doesn't
+        // apply to COPY TO statements.
+        if !stmt.stmt().map_or(false, |stmt| {
+            matches!(
+                stmt,
+                Statement::Copy(CopyStatement {
+                    direction: CopyDirection::To,
+                    ..
+                })
+            )
+        }) {
+            if let Some(desc) = stmt.desc().relation_desc.clone() {
+                for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
+                    match (format, &ty.scalar_type) {
+                        (Format::Binary, mz_repr::ScalarType::List { .. }) => {
+                            return self
+                                .error(ErrorResponse::error(
+                                    SqlState::PROTOCOL_VIOLATION,
+                                    "binary encoding of list types is not implemented",
+                                ))
+                                .await;
+                        }
+                        (Format::Binary, mz_repr::ScalarType::Map { .. }) => {
+                            return self
+                                .error(ErrorResponse::error(
+                                    SqlState::PROTOCOL_VIOLATION,
+                                    "binary encoding of map types is not implemented",
+                                ))
+                                .await;
+                        }
+                        (Format::Binary, mz_repr::ScalarType::AclItem) => {
+                            return self
+                                .error(ErrorResponse::error(
+                                    SqlState::PROTOCOL_VIOLATION,
+                                    "binary encoding of aclitem types does not exist",
+                                ))
+                                .await;
+                        }
+                        _ => (),
                     }
-                    (Format::Binary, mz_repr::ScalarType::Map { .. }) => {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::PROTOCOL_VIOLATION,
-                                "binary encoding of map types is not implemented",
-                            ))
-                            .await;
-                    }
-                    (Format::Binary, mz_repr::ScalarType::AclItem) => {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::PROTOCOL_VIOLATION,
-                                "binary encoding of aclitem types does not exist",
-                            ))
-                            .await;
-                    }
-                    _ => (),
                 }
             }
         }
@@ -1788,40 +1800,12 @@ where
             match batch {
                 FetchResult::Rows(None) => break,
                 FetchResult::Rows(Some(mut batch_rows)) => {
-                    // Verify the first row is of the expected type. This is often good enough to
-                    // find problems. Notably it failed to find #6304 when "FETCH 2" was used in a
-                    // test, instead we had to use "FETCH 1" twice.
-                    if let [row, ..] = batch_rows.as_slice() {
-                        let datums = row.unpack();
-                        let col_types = &row_desc.typ().column_types;
-                        if datums.len() != col_types.len() {
-                            let msg = format!(
-                                        "internal error: row descriptor has {} columns but row has {} columns",
-                                        col_types.len(),
-                                        datums.len(),
-                                    );
-                            return self
-                                .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, msg.clone()))
-                                .await
-                                .map(|state| (state, SendRowsEndedReason::Errored { error: msg }));
-                        }
-                        for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
-                            if !d.is_instance_of(t) {
-                                let msg = format!(
-                                    "internal error: column {} is not of expected type {:?}: {:?}",
-                                    i, t, d
-                                );
-                                return self
-                                    .error(ErrorResponse::error(
-                                        SqlState::INTERNAL_ERROR,
-                                        msg.clone(),
-                                    ))
-                                    .await
-                                    .map(|state| {
-                                        (state, SendRowsEndedReason::Errored { error: msg })
-                                    });
-                            }
-                        }
+                    if let Err(err) = verify_datum_desc(&row_desc, &batch_rows) {
+                        let msg = err.to_string();
+                        return self
+                            .error(err.into_response(Severity::Error))
+                            .await
+                            .map(|state| (state, SendRowsEndedReason::Errored { error: msg }));
                     }
 
                     // If wait_once is true: the first time this fn is called it blocks (same as
@@ -1915,6 +1899,13 @@ where
                 CopyFormatParams::Csv(CopyCsvFormatParams::default()),
                 Format::Text,
             ),
+            CopyFormat::Parquet => {
+                let text = "Parquet format is not supported".to_string();
+                return self
+                    .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
+                    .await
+                    .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
+            }
         };
 
         let encode_fn = |row: &Row, typ: &RelationType, out: &mut Vec<u8>| {

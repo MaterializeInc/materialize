@@ -711,8 +711,8 @@ ReduceMinsMaxes
 "Arrange ReduceMinsMaxes"                     1
 "ArrangeAccumulable [val: empty]"             3
 "ArrangeBy[[Column(0), Column(2)]]"           1
-"ArrangeBy[[Column(0)]]-errors"              21
-"ArrangeBy[[Column(0)]]"                     46
+"ArrangeBy[[Column(0)]]-errors"              23
+"ArrangeBy[[Column(0)]]"                     48
 "ArrangeBy[[Column(1), Column(3)]]"           2
 "ArrangeBy[[Column(1)]]-errors"               4
 "ArrangeBy[[Column(1)]]"                     11
@@ -762,7 +762,6 @@ CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEB
 "Arrange Compute(DataflowCurrent)"
 "Arrange Compute(ErrorCount)"
 "Arrange Compute(FrontierCurrent)"
-"Arrange Compute(FrontierDelay)"
 "Arrange Compute(ImportFrontierCurrent)"
 "Arrange Compute(PeekCurrent)"
 "Arrange Compute(PeekDuration)"

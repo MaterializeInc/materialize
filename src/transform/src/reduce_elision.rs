@@ -33,10 +33,10 @@ impl crate::Transform for ReduceElision {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         // Assemble type information once for the whole expression.
-        let mut builder = DerivedBuilder::default();
+        let mut builder = DerivedBuilder::new(ctx.features);
         builder.require::<RelationType>();
         builder.require::<UniqueKeys>();
         let derived = builder.visit(relation);

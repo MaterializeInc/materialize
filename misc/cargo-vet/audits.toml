@@ -15,10 +15,85 @@ who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.5.2"
 
+[[audits.arrow]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-arith]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-array]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-buffer]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-cast]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-data]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-ipc]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-ord]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-row]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-schema]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-select]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.arrow-string]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.atoi]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "2.0.0"
+
 [[audits.aws-sdk-s3]]
 who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.26.0"
+
+[[audits.aws-sdk-secretsmanager]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.22.0"
+
+[[audits.base64]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.22.0"
 
 [[audits.bitmaps]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -69,7 +144,7 @@ notes = "Reads and writes files under a prefix controlled by the caller."
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:448e158aa9ff9f944eabb3a0a87d9801513251a6"
+version = "0.12.0@git:a3f0f31d280b41254fd98fe51ef614622addd949"
 
 [[audits.domain]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -92,6 +167,16 @@ who = "Sean Loiselle <sean@materialize.io>"
 criteria = "safe-to-deploy"
 version = "0.3.26"
 
+[[audits.flatbuffers]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "23.5.26"
+
+[[audits.flatcontainer]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+
 [[audits.funty]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -106,6 +191,11 @@ version = "3.0.2"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.6.0"
+
+[[audits.half]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "2.4.1"
 
 [[audits.hibitset]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -122,6 +212,11 @@ who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "15.1.0"
 
+[[audits.integer-encoding]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "3.0.4"
+
 [[audits.jsonwebtoken]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
@@ -131,6 +226,46 @@ delta = "8.3.0 -> 9.2.0"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "1.0.0 -> 1.0.0@git:df1440c8b93a192d50470d1b258615febe52f1f8"
+
+[[audits.lexical-core]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.8.5"
+
+[[audits.lexical-parse-float]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.8.5"
+
+[[audits.lexical-parse-integer]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.8.6"
+
+[[audits.lexical-util]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.8.5"
+
+[[audits.lexical-write-float]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.8.5"
+
+[[audits.lexical-write-integer]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.8.5"
+
+[[audits.libm]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.2.8"
+
+[[audits.memchr]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "2.7.2"
 
 [[audits.mysql_async]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -146,6 +281,31 @@ version = "0.32.1"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.3.0"
+
+[[audits.num]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.4.1"
+
+[[audits.num-complex]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.4.5"
+
+[[audits.num-integer]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.46"
+
+[[audits.num-iter]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.44"
+
+[[audits.num-rational]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.4.1"
 
 [[audits.octseq]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -183,9 +343,39 @@ criteria = "maintained-and-necessary"
 version = "0.21.2"
 
 [[audits.ordered-float]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "2.10.1"
+
+[[audits.ordered-float]]
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "4.2.0"
+
+[[audits.parquet]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "51.0.0"
+
+[[audits.postgres]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.19.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
+[[audits.postgres-openssl]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.5.0@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
+[[audits.postgres-protocol]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.6.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
+[[audits.postgres-types]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.2.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 
 [[audits.quanta]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -232,6 +422,11 @@ who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "1.0.17"
 
+[[audits.regex-syntax]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.8.3"
+
 [[audits.ring]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
@@ -241,6 +436,11 @@ delta = "0.16.20 -> 0.17.7"
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "1.0.4"
+
+[[audits.ryu]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.17"
 
 [[audits.sized-chunks]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -272,25 +472,35 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "3.8.0 -> 3.8.1"
 
+[[audits.thrift]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.17.0"
+
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
+version = "0.12.0@git:89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 
 [[audits.timely_bytes]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
+version = "0.12.0@git:89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 
 [[audits.timely_communication]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
+version = "0.12.0@git:89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 
 [[audits.timely_logging]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
+version = "0.12.0@git:89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+
+[[audits.tokio-postgres]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.7.8@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 
 [[audits.tracing-capture]]
 who = "Matt Jibson <matt.jibson@gmail.com>"

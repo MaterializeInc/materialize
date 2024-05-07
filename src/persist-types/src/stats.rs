@@ -53,7 +53,7 @@ impl PartStatsMetrics {
 /// If Custom is used, the DynStats returned must be a`<T as Data>::Stats`.
 pub enum StatsFn {
     Default,
-    Custom(fn(&DynColumnRef, ValidityRef<'_>) -> Result<Box<dyn DynStats>, String>),
+    Custom(fn(&DynColumnRef, ValidityRef) -> Result<Box<dyn DynStats>, String>),
 }
 
 #[cfg(debug_assertions)]
@@ -62,14 +62,10 @@ impl PartialEq for StatsFn {
         match (self, other) {
             (StatsFn::Default, StatsFn::Default) => true,
             (StatsFn::Custom(s), StatsFn::Custom(o)) => {
-                let s: fn(
-                    &'static DynColumnRef,
-                    ValidityRef<'static>,
-                ) -> Result<Box<dyn DynStats>, String> = *s;
-                let o: fn(
-                    &'static DynColumnRef,
-                    ValidityRef<'static>,
-                ) -> Result<Box<dyn DynStats>, String> = *o;
+                let s: fn(&'static DynColumnRef, ValidityRef) -> Result<Box<dyn DynStats>, String> =
+                    *s;
+                let o: fn(&'static DynColumnRef, ValidityRef) -> Result<Box<dyn DynStats>, String> =
+                    *o;
                 // I think this is not always correct, but it's only used in
                 // debug_assertions so as long as CI is happy with it, probably
                 // good enough.
@@ -119,7 +115,7 @@ pub trait StatsFrom<T> {
     /// a nullable struct. For optional columns (i.e. ones with their own
     /// validity) it _must be a subset_ of the column's validity, otherwise this
     /// panics.
-    fn stats_from(col: &T, validity: ValidityRef<'_>) -> Self;
+    fn stats_from(col: &T, validity: ValidityRef) -> Self;
 }
 
 /// Type-erased aggregate statistics about a column of data.
@@ -1055,11 +1051,11 @@ mod impls {
     }
 
     impl StatsFrom<Bitmap> for PrimitiveStats<bool> {
-        fn stats_from(col: &Bitmap, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &Bitmap, validity: ValidityRef) -> Self {
             let array = BooleanArray::new(
                 arrow2::datatypes::DataType::Boolean,
                 col.clone(),
-                validity.0.cloned(),
+                validity.0.as_ref().cloned(),
             );
             let lower = arrow2::compute::aggregate::min_boolean(&array).unwrap_or_default();
             let upper = arrow2::compute::aggregate::max_boolean(&array).unwrap_or_default();
@@ -1068,7 +1064,7 @@ mod impls {
     }
 
     impl StatsFrom<BooleanArray> for OptionStats<PrimitiveStats<bool>> {
-        fn stats_from(col: &BooleanArray, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &BooleanArray, validity: ValidityRef) -> Self {
             debug_assert!(validity.is_superset(col.validity()));
             let lower = arrow2::compute::aggregate::min_boolean(col).unwrap_or_default();
             let upper = arrow2::compute::aggregate::max_boolean(col).unwrap_or_default();
@@ -1085,8 +1081,12 @@ mod impls {
         T: NativeType + Simd,
         T::Simd: SimdOrd<T>,
     {
-        fn stats_from(col: &Buffer<T>, validity: ValidityRef<'_>) -> Self {
-            let array = PrimitiveArray::new(T::PRIMITIVE.into(), col.clone(), validity.0.cloned());
+        fn stats_from(col: &Buffer<T>, validity: ValidityRef) -> Self {
+            let array = PrimitiveArray::new(
+                T::PRIMITIVE.into(),
+                col.clone(),
+                validity.0.as_ref().cloned(),
+            );
             let lower = arrow2::compute::aggregate::min_primitive::<T>(&array).unwrap_or_default();
             let upper = arrow2::compute::aggregate::max_primitive::<T>(&array).unwrap_or_default();
             PrimitiveStats { lower, upper }
@@ -1098,7 +1098,7 @@ mod impls {
         T: Data + NativeType + Simd,
         T::Simd: SimdOrd<T>,
     {
-        fn stats_from(col: &PrimitiveArray<T>, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &PrimitiveArray<T>, validity: ValidityRef) -> Self {
             debug_assert!(validity.is_superset(col.validity()));
             let lower = arrow2::compute::aggregate::min_primitive::<T>(col).unwrap_or_default();
             let upper = arrow2::compute::aggregate::max_primitive::<T>(col).unwrap_or_default();
@@ -1111,10 +1111,10 @@ mod impls {
     }
 
     impl StatsFrom<BinaryArray<i32>> for PrimitiveStats<Vec<u8>> {
-        fn stats_from(col: &BinaryArray<i32>, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &BinaryArray<i32>, validity: ValidityRef) -> Self {
             assert!(col.validity().is_none());
             let mut array = col.clone();
-            array.set_validity(validity.0.cloned());
+            array.set_validity(validity.0.as_ref().cloned());
             let lower = arrow2::compute::aggregate::min_binary(&array).unwrap_or_default();
             let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
                 .expect("lower bound should always truncate");
@@ -1129,7 +1129,7 @@ mod impls {
     }
 
     impl StatsFrom<BinaryArray<i32>> for OptionStats<PrimitiveStats<Vec<u8>>> {
-        fn stats_from(col: &BinaryArray<i32>, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &BinaryArray<i32>, validity: ValidityRef) -> Self {
             debug_assert!(validity.is_superset(col.validity()));
             let lower = arrow2::compute::aggregate::min_binary(col).unwrap_or_default();
             let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
@@ -1149,13 +1149,13 @@ mod impls {
     }
 
     impl StatsFrom<BinaryArray<i32>> for BytesStats {
-        fn stats_from(col: &BinaryArray<i32>, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &BinaryArray<i32>, validity: ValidityRef) -> Self {
             BytesStats::Primitive(<PrimitiveStats<Vec<u8>>>::stats_from(col, validity))
         }
     }
 
     impl StatsFrom<BinaryArray<i32>> for OptionStats<BytesStats> {
-        fn stats_from(col: &BinaryArray<i32>, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &BinaryArray<i32>, validity: ValidityRef) -> Self {
             let stats = OptionStats::<PrimitiveStats<Vec<u8>>>::stats_from(col, validity);
             OptionStats {
                 none: stats.none,
@@ -1165,10 +1165,10 @@ mod impls {
     }
 
     impl StatsFrom<Utf8Array<i32>> for PrimitiveStats<String> {
-        fn stats_from(col: &Utf8Array<i32>, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &Utf8Array<i32>, validity: ValidityRef) -> Self {
             assert!(col.validity().is_none());
             let mut array = col.clone();
-            array.set_validity(validity.0.cloned());
+            array.set_validity(validity.0.as_ref().cloned());
             let lower = arrow2::compute::aggregate::min_string(&array).unwrap_or_default();
             let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
                 .expect("lower bound should always truncate");
@@ -1183,7 +1183,7 @@ mod impls {
     }
 
     impl StatsFrom<Utf8Array<i32>> for OptionStats<PrimitiveStats<String>> {
-        fn stats_from(col: &Utf8Array<i32>, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &Utf8Array<i32>, validity: ValidityRef) -> Self {
             debug_assert!(validity.is_superset(col.validity()));
             let lower = arrow2::compute::aggregate::min_string(col).unwrap_or_default();
             let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
@@ -1203,28 +1203,28 @@ mod impls {
     }
 
     impl StatsFrom<DynStructCol> for StructStats {
-        fn stats_from(col: &DynStructCol, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &DynStructCol, validity: ValidityRef) -> Self {
             assert!(col.validity.is_none());
             col.stats(validity).expect("valid stats").some
         }
     }
 
     impl StatsFrom<DynStructCol> for OptionStats<StructStats> {
-        fn stats_from(col: &DynStructCol, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &DynStructCol, validity: ValidityRef) -> Self {
             debug_assert!(validity.is_superset(col.validity.as_ref()));
             col.stats(validity).expect("valid stats")
         }
     }
 
     impl<T: arrow2::array::Array> StatsFrom<T> for NoneStats {
-        fn stats_from(col: &T, _validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &T, _validity: ValidityRef) -> Self {
             assert!(col.validity().is_none());
             NoneStats
         }
     }
 
     impl<T: arrow2::array::Array> StatsFrom<T> for OptionStats<NoneStats> {
-        fn stats_from(col: &T, validity: ValidityRef<'_>) -> Self {
+        fn stats_from(col: &T, validity: ValidityRef) -> Self {
             debug_assert!(validity.is_superset(col.validity()));
             let none = col.validity().map_or(0, |x| x.unset_bits());
             OptionStats {

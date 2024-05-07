@@ -30,6 +30,8 @@ class TestResult:
 
 @dataclass
 class TestFailureDetails:
+    __test__ = False
+
     message: str
     details: str | None
     test_class_name_override: str | None = None
@@ -56,8 +58,9 @@ class FailedTestExecutionError(UIError):
     def __init__(
         self,
         errors: list[TestFailureDetails],
+        error_summary: str = "At least one test failed",
     ):
-        super().__init__("At least one test failed")
+        super().__init__(error_summary)
         self.errors = errors
 
 

@@ -102,13 +102,12 @@ TEXT_OPERATION_TYPES.append(
 )
 
 # case-sensitive SQL LIKE matching (equal to: $ ~~ $)
-TEXT_OPERATION_TYPES.append(
-    DbOperation(
-        "$ LIKE $",
-        [TextOperationParam(), LIKE_PARAM],
-        BooleanReturnTypeSpec(),
-    )
+TEXT_LIKE_OPERATION = DbOperation(
+    "$ LIKE $",
+    [TextOperationParam(), LIKE_PARAM],
+    BooleanReturnTypeSpec(),
 )
+TEXT_OPERATION_TYPES.append(TEXT_LIKE_OPERATION)
 
 # case-insensitive SQL LIKE matching (equal to: $ ~~* $)
 TEXT_OPERATION_TYPES.append(
@@ -120,13 +119,12 @@ TEXT_OPERATION_TYPES.append(
 )
 
 # negative case-sensitive SQL LIKE matching (equal to: $ !~~ $)
-TEXT_OPERATION_TYPES.append(
-    DbOperation(
-        "$ NOT LIKE $",
-        [TextOperationParam(), LIKE_PARAM],
-        BooleanReturnTypeSpec(),
-    )
+TEXT_NOT_LIKE_OPERATION = DbOperation(
+    "$ NOT LIKE $",
+    [TextOperationParam(), LIKE_PARAM],
+    BooleanReturnTypeSpec(),
 )
+TEXT_OPERATION_TYPES.append(TEXT_NOT_LIKE_OPERATION)
 
 # negative case-insensitive SQL LIKE matching (equal to: $ !~~* $)
 TEXT_OPERATION_TYPES.append(
@@ -195,6 +193,15 @@ TEXT_OPERATION_TYPES.append(chr_function)
 
 TEXT_OPERATION_TYPES.append(
     DbFunction(
+        "initcap",
+        [TextOperationParam()],
+        TextReturnTypeSpec(),
+        since_mz_version=MzVersion.parse_mz("v0.97.0"),
+    )
+)
+
+TEXT_OPERATION_TYPES.append(
+    DbFunction(
         "left",
         [TextOperationParam(), MaxSignedInt4OperationParam()],
         TextReturnTypeSpec(),
@@ -209,13 +216,12 @@ TEXT_OPERATION_TYPES.append(
     )
 )
 
-TEXT_OPERATION_TYPES.append(
-    DbFunction(
-        "lower",
-        [TextOperationParam()],
-        TextReturnTypeSpec(),
-    )
+LOWER_OPERATION = DbFunction(
+    "lower",
+    [TextOperationParam()],
+    TextReturnTypeSpec(),
 )
+TEXT_OPERATION_TYPES.append(LOWER_OPERATION)
 
 
 class LpadFunction(DbFunction):
@@ -289,14 +295,13 @@ TEXT_OPERATION_TYPES.append(
     )
 )
 
-TEXT_OPERATION_TYPES.append(
-    DbFunction(
-        "regexp_replace",
-        [TextOperationParam(), REGEX_PARAM, TextOperationParam()],
-        TextReturnTypeSpec(),
-        tags={TAG_REGEX},
-    )
+REGEXP_REPLACE = DbFunction(
+    "regexp_replace",
+    [TextOperationParam(), REGEX_PARAM, TextOperationParam(), REGEX_FLAG_PARAM],
+    TextReturnTypeSpec(),
+    tags={TAG_REGEX},
 )
+TEXT_OPERATION_TYPES.append(REGEXP_REPLACE)
 
 TEXT_OPERATION_TYPES.append(
     DbFunction(

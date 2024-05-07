@@ -1271,7 +1271,7 @@ fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErr
             .expect("reducing precision below max always succeeds");
         let mut integral_check = b.clone();
 
-        // `reduce` rounds to the the context's final digit when the number of
+        // `reduce` rounds to the context's final digit when the number of
         // digits in its argument exceeds its precision. We've contrived that to
         // happen by shrinking the context's precision by 1.
         cx.reduce(&mut integral_check);
@@ -3221,6 +3221,49 @@ impl BinaryFunc {
             | BinaryFunc::Gte
             | BinaryFunc::Gt
             | BinaryFunc::Lte => false,
+            BinaryFunc::BitAndInt16
+            | BinaryFunc::BitAndInt32
+            | BinaryFunc::BitAndInt64
+            | BinaryFunc::BitAndUInt16
+            | BinaryFunc::BitAndUInt32
+            | BinaryFunc::BitAndUInt64
+            | BinaryFunc::BitOrInt16
+            | BinaryFunc::BitOrInt32
+            | BinaryFunc::BitOrInt64
+            | BinaryFunc::BitOrUInt16
+            | BinaryFunc::BitOrUInt32
+            | BinaryFunc::BitOrUInt64
+            | BinaryFunc::BitXorInt16
+            | BinaryFunc::BitXorInt32
+            | BinaryFunc::BitXorInt64
+            | BinaryFunc::BitXorUInt16
+            | BinaryFunc::BitXorUInt32
+            | BinaryFunc::BitXorUInt64
+            | BinaryFunc::BitShiftLeftInt16
+            | BinaryFunc::BitShiftLeftInt32
+            | BinaryFunc::BitShiftLeftInt64
+            | BinaryFunc::BitShiftLeftUInt16
+            | BinaryFunc::BitShiftLeftUInt32
+            | BinaryFunc::BitShiftLeftUInt64
+            | BinaryFunc::BitShiftRightInt16
+            | BinaryFunc::BitShiftRightInt32
+            | BinaryFunc::BitShiftRightInt64
+            | BinaryFunc::BitShiftRightUInt16
+            | BinaryFunc::BitShiftRightUInt32
+            | BinaryFunc::BitShiftRightUInt64 => false,
+            BinaryFunc::JsonbGetInt64 { .. }
+            | BinaryFunc::JsonbGetString { .. }
+            | BinaryFunc::JsonbGetPath { .. }
+            | BinaryFunc::JsonbContainsString
+            | BinaryFunc::JsonbConcat
+            | BinaryFunc::JsonbContainsJsonb
+            | BinaryFunc::JsonbDeleteInt64
+            | BinaryFunc::JsonbDeleteString => false,
+            BinaryFunc::MapContainsKey
+            | BinaryFunc::MapGetValue
+            | BinaryFunc::MapContainsAllKeys
+            | BinaryFunc::MapContainsAnyKeys
+            | BinaryFunc::MapContainsMap => false,
             _ => true,
         }
     }
@@ -4667,6 +4710,7 @@ derive_unary!(
     TrimWhitespace,
     TrimLeadingWhitespace,
     TrimTrailingWhitespace,
+    Initcap,
     RecordGet,
     ListLength,
     MapLength,
@@ -5458,6 +5502,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::TrimWhitespace(_) => TrimWhitespace(()),
             UnaryFunc::TrimLeadingWhitespace(_) => TrimLeadingWhitespace(()),
             UnaryFunc::TrimTrailingWhitespace(_) => TrimTrailingWhitespace(()),
+            UnaryFunc::Initcap(_) => Initcap(()),
             UnaryFunc::RecordGet(func) => RecordGet(func.0.into_proto()),
             UnaryFunc::ListLength(_) => ListLength(()),
             UnaryFunc::MapBuildFromRecordList(inner) => {
@@ -5926,6 +5971,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 TrimWhitespace(()) => Ok(impls::TrimWhitespace.into()),
                 TrimLeadingWhitespace(()) => Ok(impls::TrimLeadingWhitespace.into()),
                 TrimTrailingWhitespace(()) => Ok(impls::TrimTrailingWhitespace.into()),
+                Initcap(()) => Ok(impls::Initcap.into()),
                 RecordGet(field) => Ok(impls::RecordGet(field.into_rust()?).into()),
                 ListLength(()) => Ok(impls::ListLength.into()),
                 MapBuildFromRecordList(value_type) => Ok(impls::MapBuildFromRecordList {
@@ -6420,14 +6466,17 @@ fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
 
 fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     let string = datums[0].unwrap_str();
-    let from = datums[1].unwrap_str();
-    let to = datums[2].unwrap_str();
+    let from = datums[1].unwrap_str().chars().collect::<Vec<_>>();
+    let to = datums[2].unwrap_str().chars().collect::<Vec<_>>();
 
     Datum::String(
         temp_storage.push_string(
             string
                 .chars()
-                .filter_map(|c| from.find(c).map_or(Some(c), |m| to.chars().nth(m)))
+                .filter_map(|c| match from.iter().position(|f| f == &c) {
+                    Some(idx) => to.get(idx).copied(),
+                    None => Some(c),
+                })
                 .collect(),
         ),
     )
@@ -7901,6 +7950,13 @@ impl VariadicFunc {
     pub fn could_error(&self) -> bool {
         match self {
             VariadicFunc::And | VariadicFunc::Or => false,
+            VariadicFunc::Coalesce => false,
+            VariadicFunc::Greatest | VariadicFunc::Least => false,
+            VariadicFunc::Concat | VariadicFunc::ConcatWs => false,
+            VariadicFunc::Replace => false,
+            VariadicFunc::Translate => false,
+            VariadicFunc::ArrayIndex { .. } => false,
+            VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => false,
             // All other cases are unknown
             _ => true,
         }

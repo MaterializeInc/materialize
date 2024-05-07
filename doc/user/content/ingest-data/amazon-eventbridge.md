@@ -92,6 +92,12 @@ you define a `CHECK` statement with your webhook sources.
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
 This enables a simple and rudimentary way to grant authorization to your webhook source.
 
+### Throughput
+
+If your throughput exceeds the [maximum request rate](/sql/create-source/webhook/#request-limits),
+we recommend [batching multiple events](/sql/create-source/webhook/#handling-batch-events)
+into a single request, for example using [EventBridge Pipes](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-pipes-batching-concurrency.html).
+
 ## Step 4. Create an API destination in Amazon EventBridge
 
 [//]: # "TODO(morsapaes) This needs to be broken down into instructions, same as

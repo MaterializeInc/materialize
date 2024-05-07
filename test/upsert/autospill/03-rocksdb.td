@@ -36,6 +36,13 @@ fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
   ORDER BY s.name
 true true 3
 
+$ set-from-sql var=previous-bytes-2
+SELECT
+  (SUM(u.bytes_indexed))::text
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name = 'autospill'
+
 # Removing all the inserted keys
 $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
 fish:
@@ -45,13 +52,15 @@ animal:
 > SELECT count(*) from autospill;
 0
 
-# Both bytes_indexed and records_indexed should be zero
+# records_indexed should be zero.
+# bytes_indexed will still have tombstones, but should be smaller than when
+# there are full values.
 > SELECT
-    SUM(u.bytes_indexed),
+    SUM(u.bytes_indexed) < ${previous-bytes-2},
     SUM(u.records_indexed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name = 'autospill'
   GROUP BY s.name
   ORDER BY s.name
-0 0
+true 0

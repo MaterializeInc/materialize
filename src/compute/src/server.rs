@@ -42,7 +42,6 @@ use tokio::sync::mpsc::error::SendError;
 use tracing::{info, trace, warn};
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
-use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
 
 /// Caller-provided configuration for compute.
@@ -345,6 +344,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             let cmd_queue = Rc::clone(&cmd_queue);
 
             move |scope| {
+                let mut container = Default::default();
                 source(scope, "CmdSource", |capability, info| {
                     // Send activator for this operator back
                     let activator = scope.sync_activator_for(&info.address[..]);
@@ -399,21 +399,18 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         }
                     }
                 })
-                .unary_frontier::<Vec<()>, _, _, _>(
+                .sink(
                     Exchange::new(|(idx, _)| u64::cast_from(*idx)),
                     "CmdReceiver",
-                    |_, _| {
-                        let mut container = Default::default();
-                        move |input, _| {
-                            let mut queue = cmd_queue.borrow_mut();
-                            if input.frontier().is_empty() {
-                                queue.push_back(Err(TryRecvError::Disconnected))
-                            }
-                            while let Some((_, data)) = input.next() {
-                                data.swap(&mut container);
-                                for (_, cmd) in container.drain(..) {
-                                    queue.push_back(Ok(cmd));
-                                }
+                    move |input| {
+                        let mut queue = cmd_queue.borrow_mut();
+                        if input.frontier().is_empty() {
+                            queue.push_back(Err(TryRecvError::Disconnected))
+                        }
+                        while let Some((_, data)) = input.next() {
+                            data.swap(&mut container);
+                            for (_, cmd) in container.drain(..) {
+                                queue.push_back(Ok(cmd));
                             }
                         }
                     },
@@ -485,10 +482,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
-            }
-
-            if let Some(compute_state) = &mut self.compute_state {
-                compute_state.process_sequential_hydration();
             }
 
             self.metrics
@@ -735,7 +728,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 //  * For dataflows we continue to use, reset to ensure we report something not
                 //    before the new `as_of` next.
                 //  * For dataflows we drop, set to the empty frontier, to ensure we don't report
-                //    anything for them. This is only needed until we implement #16275.
+                //    anything for them.
                 let retained = retain_ids.contains(&id);
                 let compaction = old_compaction.remove(&id);
                 let new_reported_frontier = match (retained, compaction) {
@@ -754,17 +747,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     }
                 };
 
-                // Compensate what already was sent to logging sources.
-                if let Some(logger) = &compute_state.compute_logger {
-                    if let Some(time) = collection.reported_frontier.logging_time() {
-                        logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
-                    }
-                    if let Some(time) = new_reported_frontier.logging_time() {
-                        logger.log(ComputeEvent::Frontier { id, time, diff: 1 });
-                    }
-                }
-
-                collection.reported_frontier = new_reported_frontier;
+                collection.reset_reported_frontiers(new_reported_frontier);
 
                 // Sink tokens should be retained for retained dataflows, and dropped for dropped
                 // dataflows.

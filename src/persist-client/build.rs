@@ -10,7 +10,7 @@
 use std::env;
 
 fn main() {
-    env::set_var("PROTOC", protobuf_src::protoc());
+    env::set_var("PROTOC", mz_build_tools::protoc());
 
     let mut config = prost_build::Config::new();
     config
@@ -66,6 +66,7 @@ fn main() {
         // is to re-run if any file in the crate changes; that's still a bit too
         // broad, but it's better.
         .emit_rerun_if_changed(false)
+        .extern_path(".mz_persist", "::mz_persist")
         .extern_path(".mz_persist_types", "::mz_persist_types")
         .extern_path(".mz_proto", "::mz_proto")
         .compile_with_config(

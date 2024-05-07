@@ -22,12 +22,14 @@ use mz_repr::{Datum, GlobalId, ScalarType, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
 
-use mz_adapter::InternalReadHolds;
 use mz_adapter::ReadHolds;
+use mz_adapter::ReadHoldsInner;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(transparent)]
@@ -109,51 +111,39 @@ impl TimestampProvider for Frontiers {
         self.compute.get(&(instance, id)).unwrap().write.borrow()
     }
 
-    fn storage_read_capabilities<'a>(
-        &'a self,
-        id: GlobalId,
-    ) -> timely::progress::frontier::AntichainRef<'a, Timestamp> {
-        self.storage.get(&id).unwrap().read.borrow()
-    }
-
-    fn storage_implied_capability<'a>(
-        &'a self,
-        id: GlobalId,
-    ) -> &'a timely::progress::Antichain<Timestamp> {
-        &self.storage.get(&id).unwrap().read
-    }
-
-    fn storage_write_frontier<'a>(
-        &'a self,
-        id: GlobalId,
-    ) -> &'a timely::progress::Antichain<Timestamp> {
-        &self.storage.get(&id).unwrap().write
+    fn storage_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Vec<(
+        GlobalId,
+        timely::progress::Antichain<Timestamp>,
+        timely::progress::Antichain<Timestamp>,
+    )> {
+        self.storage
+            .iter()
+            .filter(|(id, _frontiers)| ids.contains(id))
+            .map(|(id, frontiers)| (*id, frontiers.read.clone(), frontiers.write.clone()))
+            .collect()
     }
 
     fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
-        let mut read_holds = InternalReadHolds::new();
+        let mut read_holds = ReadHoldsInner::new();
 
         for (instance_id, ids) in id_bundle.compute_ids.iter() {
             for id in ids.iter() {
                 let frontiers = self.compute.get(&(*instance_id, *id)).unwrap();
-                read_holds
-                    .holds
-                    .entry(frontiers.read.to_owned())
-                    .or_default()
-                    .compute_ids
-                    .entry(*instance_id)
-                    .or_default()
-                    .insert(*id);
+                read_holds.compute_holds.insert(
+                    (*instance_id, *id),
+                    MutableAntichain::from(frontiers.read.to_owned()),
+                );
             }
         }
         for id in id_bundle.storage_ids.iter() {
             let frontiers = self.storage.get(id).unwrap();
-            read_holds
-                .holds
-                .entry(frontiers.read.to_owned())
-                .or_default()
-                .storage_ids
-                .insert(*id);
+
+            let (dummy_tx, _dummy_rx) = tokio::sync::mpsc::unbounded_channel();
+            let mock_storage_hold = ReadHold::new(*id, frontiers.read.to_owned(), dummy_tx);
+            read_holds.storage_holds.insert(*id, mock_storage_hold);
         }
 
         let (dummy_tx, _dummy_rx) = tokio::sync::mpsc::unbounded_channel();

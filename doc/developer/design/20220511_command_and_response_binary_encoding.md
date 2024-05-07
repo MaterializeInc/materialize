@@ -55,7 +55,7 @@ The selected strategy offers flexibility due to the separation of the serializab
    3. define `$T ⇔ Proto$T` for each `$T`.
 2. Requires the most amount of maintenance work, as the same boilerplate needs to be added for each new type `$T` used by the API.
 3. Accumulates technical debt, as the `$T ⇔ Proto$T` for complex type is coing to be recursive and therefore susceptible to stack overflow issues (see #9000).
-4. We have to pay the runtime and memory penalty if mediating between `$T` and `Proto$T`, possibly in the the hot paths of some processes.
+4. We have to pay the runtime and memory penalty if mediating between `$T` and `Proto$T`, possibly in the hot paths of some processes.
 
 ## Alternatives
 

@@ -269,6 +269,8 @@ Explained Query:
     Map ((#0 != #1), (#0 = #1), (#0 >= #1), (#0 <= #1), (#0 < #1), (#0 > #1), NOT((#2 @> {}))) // { arity: 11 }
       ReadStorage materialize.public.x // { arity: 4 }
 
+Target cluster: quickstart
+
 EOF
 
 statement ok
@@ -284,6 +286,8 @@ Explained Query:
   Project (#0) // { arity: 1 }
     ReadStorage materialize.public.y // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 # Bypass if statements with identical branches
@@ -296,6 +300,8 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map ((null OR NOT(#1) OR (#1) IS NULL)) // { arity: 3 }
       ReadStorage materialize.public.y // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -311,6 +317,8 @@ Explained Query:
     Map ((#1 AND null AND (#1) IS NOT NULL)) // { arity: 3 }
       ReadStorage materialize.public.y // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -323,6 +331,8 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map ((null OR (#1 AND (#1) IS NOT NULL))) // { arity: 3 }
       ReadStorage materialize.public.y // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -337,6 +347,8 @@ Explained Query:
     Map ((null AND (NOT(#1) OR (#1) IS NULL))) // { arity: 3 }
       ReadStorage materialize.public.y // { arity: 2 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -348,6 +360,8 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map ((NOT(#1) OR (#1) IS NULL)) // { arity: 3 }
       ReadStorage materialize.public.y // { arity: 2 }
+
+Target cluster: quickstart
 
 EOF
 
@@ -368,6 +382,8 @@ Explained Query:
 
 Source materialize.public.z
   filter=(((#0) IS NULL OR (#1) IS NULL OR (#0 <= #1)))
+
+Target cluster: quickstart
 
 EOF
 

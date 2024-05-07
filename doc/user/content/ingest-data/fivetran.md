@@ -40,7 +40,7 @@ target database in Materialize.
 ## Setup guide
 ### Step 1: Create the Materialize destination
 Follow this
-[Materialize-authored guide in the Fivetran docs](https://fivetran.com/docs/destinations/materialize/setup-guide#materializesetupguide) to set up Materialize as a destiniation in Fivetran.
+[Materialize-authored guide in the Fivetran docs](https://fivetran.com/docs/destinations/materialize/setup-guide#materializesetupguide) to set up Materialize as a destination in Fivetran.
 
 ### Step 2: Create the connector(s)
 Follow the

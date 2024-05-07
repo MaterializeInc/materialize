@@ -167,6 +167,8 @@ Source materialize.public.orders
 Source materialize.public.lineitem
   project=(#0, #11, #12)
 
+Target cluster: quickstart
+
 EOF
 
 query I

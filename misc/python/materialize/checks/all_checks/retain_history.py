@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+import re
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
@@ -250,7 +251,12 @@ class RetainHistoryOnMv(Check):
                 ? EXPLAIN OPTIMIZED PLAN AS TEXT FOR SELECT * FROM retain_history_mv1
                 Explained Query:
                   ReadStorage materialize.public.retain_history_mv1
+
+                Target cluster: quickstart
                 """
+
+        if self.base_version < MzVersion.parse_mz("v0.96.0-dev"):
+            other_validations = remove_target_cluster_from_explain(other_validations)
 
         return Testdrive(
             dedent(
@@ -445,3 +451,7 @@ class RetainHistoryOnKafkaSource(Check):
                 """
             )
         )
+
+
+def remove_target_cluster_from_explain(sql: str) -> str:
+    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)

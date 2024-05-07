@@ -52,4 +52,6 @@ Explained Query:
 Source materialize.public.t3
   filter=((#1 = text_to_char(text_to_varchar(boolean_to_text(like["0.31161855206970124"](padchar(#1)))))))
 
+Target cluster: quickstart
+
 EOF

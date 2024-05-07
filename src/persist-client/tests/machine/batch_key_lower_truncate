@@ -1,0 +1,29 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# We only keep real key_lower for hollow parts, so disable inline writes.
+dyncfg
+persist_inline_writes_single_max_bytes 0
+persist_inline_writes_total_max_bytes 0
+----
+ok
+
+# raw key stats are bounded size
+write-batch output=b0 lower=0 upper=2 target_size=50
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBBBBBBBBB 0 1
+----
+parts=1 len=1
+
+fetch-batch input=b0 stats=lower
+----
+<part 0>
+<key lower=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA>
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBBBBBBBBB 0 1
+<run 0>
+part 0

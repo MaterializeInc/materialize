@@ -983,6 +983,8 @@ Explained Query:
     Map (coalesce(#0, 0)) // { types: "(integer?, integer?, integer, integer)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -994,6 +996,8 @@ Explained Query:
   Project (#3) // { types: "(integer)" }
     Map (coalesce(#0, #2)) // { types: "(integer?, integer?, integer, integer)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF
 
@@ -1010,6 +1014,8 @@ Explained Query:
         Project (#0, #1) // { types: "(integer?, integer?)" }
           ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 # coalesce's output type should be nullable when all of its input types are nullable
@@ -1023,6 +1029,8 @@ Explained Query:
     Map (coalesce(#0, #1)) // { types: "(integer?, integer?, integer, integer?)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -1034,5 +1042,7 @@ Explained Query:
   Project (#3) // { types: "(integer?)" }
     Map (coalesce(#0, (#1 + 5))) // { types: "(integer?, integer?, integer, integer?)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+Target cluster: quickstart
 
 EOF

@@ -280,7 +280,7 @@ name    on  cluster         key
 ----------------------------------------------------------------------------------------------
 j1      s3  <CLUSTER_NAME>  "{pg_catalog.ascii(y)}"
 
-> DROP SOURCE s3;
+> DROP SOURCE s3 CASCADE;
 
 ! DROP SOURCE s3;
 contains:unknown catalog item 's3'
@@ -336,7 +336,7 @@ contains:unknown catalog item 'j2'
 
 > DROP INDEX s5_primary_idx CASCADE;
 
-> DROP SOURCE s5;
+> DROP SOURCE s5 CASCADE;
 
 # https://github.com/MaterializeInc/materialize/issues/5577
 > CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4)
@@ -417,7 +417,7 @@ contains:cannot drop type "int4_list": still depended upon by type "int4_list_li
 
 > DROP SINK s2;
 
-> DROP SOURCE s;
+> DROP SOURCE s CASCADE;
 
 # Test CREATE OR REPLACE view.
 

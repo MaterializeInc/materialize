@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 use mz_dyncfg::{Config, ConfigSet};
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -32,6 +33,7 @@ use timely::PartialOrder;
 use tracing::{debug, info, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
+use crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES;
 use crate::cache::StateCache;
 use crate::cfg::RetryParameters;
 use crate::critical::CriticalReaderId;
@@ -43,9 +45,9 @@ use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
-    IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
-    Upper,
+    BatchPart, CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch,
+    HollowRollup, IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr,
+    StateCollections, Upper,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -169,6 +171,7 @@ where
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
+        use_critical_since: bool,
     ) -> (LeasedReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, (reader_state, seqno_since), maintenance) = self
@@ -180,6 +183,7 @@ where
                     seqno,
                     lease_duration,
                     heartbeat_timestamp_ms,
+                    use_critical_since,
                 )
             })
             .await;
@@ -239,6 +243,9 @@ where
                 }
                 CompareAndAppendRes::InvalidUsage(x) => {
                     return CompareAndAppendRes::InvalidUsage(x)
+                }
+                CompareAndAppendRes::InlineBackpressure => {
+                    return CompareAndAppendRes::InlineBackpressure
                 }
                 CompareAndAppendRes::UpperMismatch(seqno, _current_upper) => {
                     // If the state machine thinks that the shard upper is not
@@ -376,7 +383,7 @@ where
         loop {
             let cmd_res = self
                 .applier
-                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, _, state| {
+                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, cfg, state| {
                     writer_was_present = state.writers.contains_key(writer_id);
                     state.compare_and_append(
                         batch,
@@ -385,6 +392,7 @@ where
                         lease_duration_ms,
                         idempotency_token,
                         debug_info,
+                        INLINE_WRITES_TOTAL_MAX_BYTES.get(cfg),
                     )
                 })
                 .await;
@@ -430,6 +438,16 @@ where
                     if !writer_was_present {
                         metrics.state.writer_added.inc();
                     }
+                    for part in &batch.parts {
+                        match part {
+                            BatchPart::Inline { updates, .. } => {
+                                let bytes = u64::cast_from(updates.encoded_size_bytes());
+                                metrics.inline.part_commit_count.inc();
+                                metrics.inline.part_commit_bytes.inc_by(bytes);
+                            }
+                            BatchPart::Hollow(_) => {}
+                        }
+                    }
                     return CompareAndAppendRes::Success(seqno, writer_maintenance);
                 }
                 Err(CompareAndAppendBreak::AlreadyCommitted) => {
@@ -450,6 +468,11 @@ where
                     // to commit it. No network, no Indeterminate.
                     assert!(indeterminate.is_none());
                     return CompareAndAppendRes::InvalidUsage(err);
+                }
+                Err(CompareAndAppendBreak::InlineBackpressure) => {
+                    // We tried to write an inline part, but there was already
+                    // too much in state. Flush it out to s3 and try again.
+                    return CompareAndAppendRes::InlineBackpressure;
                 }
                 Err(CompareAndAppendBreak::Upper {
                     shard_upper,
@@ -627,6 +650,7 @@ where
         (seqno, maintenance)
     }
 
+    #[allow(dead_code)] // TODO(bkirwi): remove this when since behaviour on expiry has settled
     pub async fn expire_critical_reader(
         &mut self,
         reader_id: &CriticalReaderId,
@@ -1008,10 +1032,12 @@ pub(crate) enum CompareAndAppendRes<T> {
     Success(SeqNo, WriterMaintenance<T>),
     InvalidUsage(InvalidUsage<T>),
     UpperMismatch(SeqNo, Antichain<T>),
+    InlineBackpressure,
 }
 
 #[cfg(test)]
 impl<T: Debug> CompareAndAppendRes<T> {
+    #[track_caller]
     fn unwrap(self) -> (SeqNo, WriterMaintenance<T>) {
         match self {
             CompareAndAppendRes::Success(seqno, maintenance) => (seqno, maintenance),
@@ -1260,6 +1286,7 @@ pub mod datadriven {
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
     use mz_dyncfg::{ConfigUpdates, ConfigVal};
+    use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{
@@ -1335,6 +1362,17 @@ pub mod datadriven {
                 routine: Vec::new(),
             }
         }
+
+        fn to_batch(&self, hollow: HollowBatch<u64>) -> Batch<String, (), u64, i64> {
+            Batch::new(
+                true,
+                Arc::clone(&self.client.metrics),
+                Arc::clone(&self.client.blob),
+                self.client.metrics.shards.shard(&self.shard_id, "test"),
+                self.client.cfg.build_version.clone(),
+                hollow,
+            )
+        }
     }
 
     /// Scans consensus and returns all states with their SeqNos
@@ -1357,24 +1395,25 @@ pub mod datadriven {
             if x.seqno < from {
                 continue;
             }
-            let mut batches = vec![];
             let rollups: Vec<_> = x
                 .collections
                 .rollups
                 .keys()
                 .map(|seqno| seqno.to_string())
                 .collect();
-            x.collections.trace.map_batches(|b| {
-                if b.parts.is_empty() {
-                    return;
-                }
-                for (batch_name, original_batch) in &datadriven.batches {
-                    if original_batch.parts == b.parts {
-                        batches.push(batch_name.to_owned());
-                        break;
-                    }
-                }
-            });
+            let batches: Vec<_> = x
+                .collections
+                .trace
+                .batches()
+                .filter(|b| !b.parts.is_empty())
+                .filter_map(|b| {
+                    datadriven
+                        .batches
+                        .iter()
+                        .find(|(_, original_batch)| original_batch.parts == b.parts)
+                        .map(|(batch_name, _)| batch_name.to_owned())
+                })
+                .collect();
             write!(
                 s,
                 "seqno={} batches={} rollups={}\n",
@@ -1456,6 +1495,7 @@ pub mod datadriven {
         ))
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn dyncfg(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -1583,7 +1623,7 @@ pub mod datadriven {
             val: Arc::new(UnitSchema),
         };
         let builder = BatchBuilderInternal::new(
-            cfg,
+            cfg.clone(),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             schemas.clone(),
@@ -1599,18 +1639,32 @@ pub mod datadriven {
         );
         let mut builder = BatchBuilder {
             builder,
-            stats_schemas: schemas,
+            stats_schemas: schemas.clone(),
         };
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
         }
-        let batch = builder.finish(upper).await?.into_hollow_batch();
+        let mut batch = builder.finish(upper).await?;
+        // We can only reasonably use parts_size_override with hollow batches,
+        // so if it's set, flush any inline batches out.
+        if parts_size_override.is_some() {
+            batch
+                .flush_to_blob(
+                    &cfg,
+                    &datadriven.client.metrics.user,
+                    &datadriven.client.isolated_runtime,
+                    &schemas,
+                )
+                .await;
+        }
+        let batch = batch.into_hollow_batch();
 
         if let Some(size) = parts_size_override {
             let mut batch = batch.clone();
             for part in batch.parts.iter_mut() {
                 match part {
-                    BatchPart::Hollow(x) => x.encoded_size_bytes = size,
+                    BatchPart::Hollow(part) => part.encoded_size_bytes = size,
+                    BatchPart::Inline { .. } => unreachable!("flushed out above"),
                 }
             }
             datadriven.batches.insert(output.to_owned(), batch);
@@ -1631,8 +1685,16 @@ pub mod datadriven {
         let mut s = String::new();
         for (idx, part) in batch.parts.iter().enumerate() {
             write!(s, "<part {idx}>\n");
-            if stats == Some("lower") && !part.key_lower().is_empty() {
-                writeln!(s, "<key lower={}>", std::str::from_utf8(part.key_lower())?)
+            let key_lower = match part {
+                BatchPart::Hollow(x) => x.key_lower.clone(),
+                BatchPart::Inline { updates, .. } => {
+                    let updates: BlobTraceBatchPart<u64> =
+                        updates.decode(&datadriven.client.metrics.columnar).unwrap();
+                    updates.key_lower().to_vec()
+                }
+            };
+            if stats == Some("lower") && !key_lower.is_empty() {
+                writeln!(s, "<key lower={}>", std::str::from_utf8(&key_lower)?)
             }
             match part {
                 BatchPart::Hollow(part) => {
@@ -1651,6 +1713,7 @@ pub mod datadriven {
                         }
                     };
                 }
+                BatchPart::Inline { .. } => {}
             };
             let part = EncodedPart::fetch(
                 &datadriven.shard_id,
@@ -1717,7 +1780,10 @@ pub mod datadriven {
         let batch = datadriven.batches.get_mut(input).expect("unknown batch");
         for part in batch.parts.iter_mut() {
             match part {
-                BatchPart::Hollow(part) => part.encoded_size_bytes = size,
+                BatchPart::Hollow(x) => x.encoded_size_bytes = size,
+                BatchPart::Inline { .. } => {
+                    panic!("set_batch_parts_size only supports hollow parts")
+                }
             }
         }
         Ok("ok\n".to_string())
@@ -1820,6 +1886,7 @@ pub mod datadriven {
         Ok(out)
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn rewrite_ts(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -1937,6 +2004,7 @@ pub mod datadriven {
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
+                false,
             )
             .await
             .expect("invalid shard types");
@@ -2005,6 +2073,7 @@ pub mod datadriven {
                 "tests",
                 READER_LEASE_DURATION.get(&datadriven.client.cfg),
                 (datadriven.client.cfg.now)(),
+                false,
             )
             .await;
         datadriven.routine.push(maintenance);
@@ -2065,18 +2134,7 @@ pub mod datadriven {
                     .get(batch)
                     .expect("unknown batch")
                     .clone();
-                Batch::new(
-                    true,
-                    Arc::clone(&datadriven.client.metrics),
-                    Arc::clone(&datadriven.client.blob),
-                    datadriven
-                        .client
-                        .metrics
-                        .shards
-                        .shard(&datadriven.shard_id, "test"),
-                    datadriven.client.cfg.build_version.clone(),
-                    hollow,
-                )
+                datadriven.to_batch(hollow)
             })
             .collect();
 
@@ -2136,33 +2194,52 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
         let writer_id = args.expect("writer_id");
-        let batch = datadriven
+        let mut batch = datadriven
             .batches
             .get(input)
             .expect("unknown batch")
             .clone();
         let token = args.optional("token").unwrap_or_else(IdempotencyToken::new);
-        let indeterminate = args
-            .optional::<String>("prev_indeterminate")
-            .map(|x| Indeterminate::new(anyhow::Error::msg(x)));
         let now = (datadriven.client.cfg.now)();
-        let res = datadriven
-            .machine
-            .compare_and_append_idempotent(
-                &batch,
-                &writer_id,
-                now,
-                &token,
-                &HandleDebugState::default(),
-                indeterminate,
-            )
-            .await;
-        let maintenance = match res {
-            CompareAndAppendRes::Success(_, x) => x,
-            CompareAndAppendRes::UpperMismatch(_seqno, upper) => {
-                return Err(anyhow!("{:?}", Upper(upper)))
-            }
-            _ => panic!("{:?}", res),
+        let maintenance = loop {
+            let indeterminate = args
+                .optional::<String>("prev_indeterminate")
+                .map(|x| Indeterminate::new(anyhow::Error::msg(x)));
+            let res = datadriven
+                .machine
+                .compare_and_append_idempotent(
+                    &batch,
+                    &writer_id,
+                    now,
+                    &token,
+                    &HandleDebugState::default(),
+                    indeterminate,
+                )
+                .await;
+            match res {
+                CompareAndAppendRes::Success(_, x) => break x,
+                CompareAndAppendRes::UpperMismatch(_seqno, upper) => {
+                    return Err(anyhow!("{:?}", Upper(upper)))
+                }
+                CompareAndAppendRes::InlineBackpressure => {
+                    let mut b = datadriven.to_batch(batch.clone());
+                    let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &writer_id);
+                    let schemas = Schemas::<String, ()> {
+                        key: Arc::new(StringSchema),
+                        val: Arc::new(UnitSchema),
+                    };
+                    b.flush_to_blob(
+                        &cfg,
+                        &datadriven.client.metrics.user,
+                        &datadriven.client.isolated_runtime,
+                        &schemas,
+                    )
+                    .await;
+                    batch = b.into_hollow_batch();
+                    continue;
+                }
+                _ => panic!("{:?}", res),
+            };
         };
         // TODO: Don't throw away writer maintenance. It's slightly tricky
         // because we need a WriterId for Compactor.
@@ -2227,6 +2304,7 @@ pub mod tests {
     use mz_persist::location::SeqNo;
     use timely::progress::Antichain;
 
+    use crate::batch::BatchBuilderConfig;
     use crate::cache::StateCache;
     use crate::internal::gc::{GarbageCollector, GcReq};
     use crate::internal::state::{HandleDebugState, ROLLUP_THRESHOLD};
@@ -2249,8 +2327,19 @@ pub mod tests {
         // live entries in consensus.
         const NUM_BATCHES: u64 = 100;
         for idx in 0..NUM_BATCHES {
-            let batch = write
+            let mut batch = write
                 .expect_batch(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+                .await;
+            // Flush this batch out so the CaA doesn't get inline writes
+            // backpressure.
+            let cfg = BatchBuilderConfig::new(&client.cfg, &write.writer_id);
+            batch
+                .flush_to_blob(
+                    &cfg,
+                    &client.metrics.user,
+                    &client.isolated_runtime,
+                    &write.schemas,
+                )
                 .await;
             let (_, writer_maintenance) = write
                 .machine
@@ -2354,7 +2443,7 @@ pub mod tests {
         let (mut write1, _) = client.expect_open::<String, (), u64, i64>(shard_id).await;
         let (mut write2, _) = client2.expect_open::<String, (), u64, i64>(shard_id).await;
 
-        let data = vec![
+        let data = [
             (("1".to_owned(), ()), 1, 1),
             (("2".to_owned(), ()), 2, 1),
             (("3".to_owned(), ()), 3, 1),

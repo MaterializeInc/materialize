@@ -19,7 +19,7 @@ mz-ore = { path = "../ore", features = ["async", "tracing_", "test"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread", "time"] }
 num-traits = "0.2"
-ahash = { version = "0.8.0", default_features = false }
+ahash = { version = "0.8.11", default_features = false }
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
 
 [package.metadata.cargo-udeps.ignore]

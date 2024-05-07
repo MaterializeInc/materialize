@@ -116,6 +116,8 @@ pub struct Config {
     /// The internal pgwire connection parameters for the Materialize instance that
     /// testdrive will connect to.
     pub materialize_internal_pgconfig: tokio_postgres::Config,
+    /// Whether to use HTTPS instead of plain HTTP for the HTTP(S) connections.
+    pub materialize_use_https: bool,
     /// The port for the public endpoints of the materialize instance that
     /// testdrive will connect to via HTTP.
     pub materialize_http_port: u16,
@@ -193,6 +195,7 @@ pub struct State {
     materialize_catalog_config: Option<CatalogConfig>,
 
     materialize_sql_addr: String,
+    materialize_use_https: bool,
     materialize_http_addr: String,
     materialize_internal_sql_addr: String,
     materialize_internal_http_addr: String,
@@ -730,6 +733,7 @@ impl Run for PosCommand {
                     }
                     "psql-execute" => psql::run_execute(builtin, state).await,
                     "s3-verify-data" => s3::run_verify_data(builtin, state).await,
+                    "s3-verify-keys" => s3::run_verify_keys(builtin, state).await,
                     "schema-registry-publish" => schema_registry::run_publish(builtin, state).await,
                     "schema-registry-verify" => schema_registry::run_verify(builtin, state).await,
                     "schema-registry-wait" => schema_registry::run_wait(builtin, state).await,
@@ -861,6 +865,7 @@ pub async fn create_state(
 
     let (
         materialize_sql_addr,
+        materialize_use_https,
         materialize_http_addr,
         materialize_internal_sql_addr,
         materialize_internal_http_addr,
@@ -921,6 +926,7 @@ pub async fn create_state(
         );
         (
             materialize_sql_addr,
+            config.materialize_use_https,
             materialize_http_addr,
             materialize_internal_sql_addr,
             materialize_internal_http_addr,
@@ -1021,6 +1027,7 @@ pub async fn create_state(
         // === Materialize state. ===
         materialize_catalog_config,
         materialize_sql_addr,
+        materialize_use_https,
         materialize_http_addr,
         materialize_internal_sql_addr,
         materialize_internal_http_addr,

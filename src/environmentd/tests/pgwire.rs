@@ -213,7 +213,7 @@ async fn test_conn_startup() {
 
         match notice_rx.recv().await {
             Some(n) => {
-                assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
+                assert_eq!(*n.code(), SqlState::from_code("MZ004"));
                 assert_eq!(n.message(), "session database \"newdb\" does not exist");
             }
             _ => panic!("missing database notice not generated"),

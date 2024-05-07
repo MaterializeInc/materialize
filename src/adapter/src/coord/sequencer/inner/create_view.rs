@@ -12,7 +12,7 @@ use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::optimize::OverrideFrom;
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, RelationDesc, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
@@ -102,7 +102,7 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
         let resolved_ids = ResolvedIds(Default::default());
@@ -142,7 +142,7 @@ impl Coordinator {
         };
 
         let state = self.catalog().state();
-        let plan_result = state.deserialize_plan(id, &item.create_sql, true);
+        let plan_result = state.deserialize_plan(&item.create_sql, true);
         let (plan, resolved_ids) = return_if_err!(plan_result, ctx);
 
         let plan::Plan::CreateView(plan) = plan else {
@@ -155,7 +155,7 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,
@@ -191,18 +191,27 @@ impl Coordinator {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
+        let target_cluster = None; // Views don't have a target cluster.
+
+        let features =
+            OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
+
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
                 view.raw_expr.clone(),
                 format,
                 &config,
+                &features,
                 &self.catalog().for_session(ctx.session()),
+                target_cluster,
             )?,
             ExplainStage::LocalPlan => explain_plan(
                 view.optimized_expr.as_inner().clone(),
                 format,
                 &config,
+                &features,
                 &self.catalog().for_session(ctx.session()),
+                target_cluster,
             )?,
             _ => {
                 coord_bail!("cannot EXPLAIN {} FOR VIEW", stage);
@@ -420,7 +429,6 @@ impl Coordinator {
                 },
             explain_ctx:
                 ExplainPlanContext {
-                    broken,
                     config,
                     format,
                     stage,
@@ -435,27 +443,27 @@ impl Coordinator {
             let full_name = self.catalog().resolve_full_name(&name, None);
             let transient_items = btreemap! {
                 id => TransientItem::new(
-                    Some(full_name.to_string()),
-                    Some(full_name.item.to_string()),
+                    Some(full_name.into_parts()),
                     Some(column_names.iter().map(|c| c.to_string()).collect()),
                 )
             };
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
+        let features =
+            OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
+
         let rows = optimizer_trace.into_rows(
             format,
             &config,
+            &features,
             &expr_humanizer,
             None,
+            None, // Views don't have a target cluster.
             Default::default(),
             stage,
             plan::ExplaineeStatementKind::CreateView,
         )?;
-
-        if broken {
-            tracing_core::callsite::rebuild_interest_cache();
-        }
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }

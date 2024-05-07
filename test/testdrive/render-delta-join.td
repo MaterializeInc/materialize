@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Remove both newlines, references to internal table identifiers, and "materialize.public" strings, all with a single regexp
-$ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
+# Remove references to internal table identifiers and "materialize.public" strings
+$ set-regex match=(\s\(u\d+\)|materialize\.public\.) replacement=
 
 > CREATE TABLE t1(f1 INT, f2 INT);
 > CREATE INDEX i1 ON t1(f1);
@@ -31,8 +31,23 @@ count
 ----
 1
 
-> EXPLAIN WITH(join implementations) SELECT * FROM delta_join;
-"Explained Query:  Project (#0, #1, #0, #3)    Filter (#0) IS NOT NULL      Join on=(#0 = #2) type=differential        implementation          %0:t1[#0]KA » %1:t2[#0]KA        ArrangeBy keys=[[#0]]          ReadIndex on=t1 i1=[differential join]        ArrangeBy keys=[[#0]]          ReadIndex on=t2 i2=[differential join]Used Indexes:  - i1 (differential join)  - i2 (differential join)"
+? EXPLAIN WITH(join implementations) SELECT * FROM delta_join;
+Explained Query:
+  Project (#0, #1, #0, #3)
+    Filter (#0) IS NOT NULL
+      Join on=(#0 = #2) type=differential
+        implementation
+          %0:t1[#0]KA » %1:t2[#0]KA
+        ArrangeBy keys=[[#0]]
+          ReadIndex on=t1 i1=[differential join]
+        ArrangeBy keys=[[#0]]
+          ReadIndex on=t2 i2=[differential join]
+
+Used Indexes:
+  - i1 (differential join)
+  - i2 (differential join)
+
+Target cluster: quickstart
 
 > SELECT count(*) AS count FROM delta_join;
 count

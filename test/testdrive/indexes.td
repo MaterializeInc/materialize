@@ -286,7 +286,6 @@ mz_cluster_replica_sizes_ind                                mz_cluster_replica_s
 mz_cluster_replica_statuses_ind                             mz_cluster_replica_statuses                  mz_introspection    {replica_id}
 mz_cluster_replicas_ind                                     mz_cluster_replicas                          mz_introspection    {id}
 mz_clusters_ind                                             mz_clusters                                  mz_introspection    {id}
-mz_compute_delays_histogram_raw_s2_primary_idx              mz_compute_delays_histogram_raw              mz_introspection    {export_id,import_id,worker_id,delay_ns}
 mz_compute_dependencies_ind                                 mz_compute_dependencies                      mz_introspection    {dependency_id}
 mz_compute_error_counts_raw_s2_primary_idx                  mz_compute_error_counts_raw                  mz_introspection    {export_id,worker_id}
 mz_compute_exports_per_worker_s2_primary_idx                mz_compute_exports_per_worker                mz_introspection    {export_id,worker_id}
@@ -300,6 +299,7 @@ mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operator
 mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_introspection    {worker_id,duration_ns}
 mz_frontiers_ind                                            mz_frontiers                                 mz_introspection    {object_id}
 mz_indexes_ind                                              mz_indexes                                   mz_introspection    {id}
+mz_kafka_sources_ind                                        mz_kafka_sources                             mz_introspection    {id}
 mz_materialized_views_ind                                   mz_materialized_views                        mz_introspection    {id}
 mz_message_batch_counts_received_raw_s2_primary_idx         mz_message_batch_counts_received_raw         mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_batch_counts_sent_raw_s2_primary_idx             mz_message_batch_counts_sent_raw             mz_introspection    {channel_id,from_worker_id,to_worker_id}
@@ -338,3 +338,4 @@ mz_source_status_history_ind                                mz_source_status_his
 mz_source_statuses_ind                                      mz_source_statuses                           mz_introspection    {id}
 mz_sources_ind                                              mz_sources                                   mz_introspection    {id}
 mz_recent_sql_text_ind                                      mz_recent_sql_text                           mz_introspection    {sql_hash}
+mz_webhook_sources_ind                                      mz_webhook_sources                           mz_introspection    {id}

@@ -10,20 +10,16 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection, Hashable};
-use itertools::Itertools;
+use differential_dataflow::{Collection, Hashable};
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -33,6 +29,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use serde::{Deserialize, Serialize};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
@@ -45,30 +42,27 @@ use tracing::trace;
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
+use crate::sink::correction::Correction;
 use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn render_continuous_sink(
+    fn render_sink(
         &self,
         compute_state: &mut ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
-        sinked_collection: Collection<G, Row, Diff>,
-        err_collection: Collection<G, DataflowError, Diff>,
-    ) -> Option<Rc<dyn Any>>
-    where
-        G: Scope<Timestamp = Timestamp>,
-    {
-        let mut desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
-
+        mut ok_collection: Collection<G, Row, Diff>,
+        mut err_collection: Collection<G, DataflowError, Diff>,
+    ) -> Option<Rc<dyn Any>> {
         // If a `RefreshSchedule` was specified, round up timestamps.
         if let Some(refresh_schedule) = &sink.refresh_schedule {
-            desired_collection = apply_refresh(desired_collection, refresh_schedule.clone());
+            ok_collection = apply_refresh(ok_collection, refresh_schedule.clone());
+            err_collection = apply_refresh(err_collection, refresh_schedule.clone());
         }
 
         if sink.up_to != Antichain::default() {
@@ -80,7 +74,8 @@ where
         persist_sink(
             sink_id,
             &self.storage_metadata,
-            desired_collection,
+            ok_collection,
+            err_collection,
             as_of,
             compute_state,
             start_signal,
@@ -91,7 +86,8 @@ where
 pub(crate) fn persist_sink<G>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
-    desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
+    ok_collection: Collection<G, Row, Diff>,
+    err_collection: Collection<G, DataflowError, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
     start_signal: StartSignal,
@@ -99,13 +95,16 @@ pub(crate) fn persist_sink<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let desired_oks = ok_collection.inner;
+    let desired_errs = err_collection.inner;
+
     // There is no guarantee that `as_of` is beyond the persist shard's since. If it isn't,
     // instantiating a `persist_source` with it would panic. So instead we leave it to
     // `persist_source` to select an appropriate `as_of`. We only care about times beyond the
     // current shard upper anyway.
     let source_as_of = None;
-    let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source(
-        &mut desired_collection.scope(),
+    let (persist_oks, persist_errs, token) = mz_storage_operators::persist_source::persist_source(
+        &mut desired_oks.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
         target.clone(),
@@ -116,17 +115,15 @@ where
         compute_state.dataflow_max_inflight_bytes(),
         start_signal,
     );
-    let persist_collection = ok_stream
-        .as_collection()
-        .map(Ok)
-        .concat(&err_stream.as_collection().map(Err));
 
     Some(Rc::new((
         install_desired_into_persist(
             sink_id,
             target,
-            desired_collection,
-            persist_collection,
+            desired_oks,
+            desired_errs,
+            persist_oks,
+            persist_errs,
             as_of,
             compute_state,
         ),
@@ -164,8 +161,10 @@ where
 fn install_desired_into_persist<G>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
-    desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
-    persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
+    desired_oks: Stream<G, (Row, Timestamp, Diff)>,
+    desired_errs: Stream<G, (DataflowError, Timestamp, Diff)>,
+    persist_oks: Stream<G, (Row, Timestamp, Diff)>,
+    persist_errs: Stream<G, (DataflowError, Timestamp, Diff)>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut crate::compute_state::ComputeState,
 ) -> Option<Rc<dyn Any>>
@@ -185,7 +184,7 @@ where
         );
     }
 
-    let mut scope = desired_collection.inner.scope();
+    let mut scope = desired_oks.scope();
 
     // The append operator keeps capabilities that it downgrades to match the
     // current upper frontier of the persist shard. This frontier can be
@@ -197,11 +196,12 @@ where
     // the timestamp on feeding back using the summary.
     let (persist_feedback_handle, persist_feedback_stream) = scope.feedback(Timestamp::default());
 
-    let (batch_descriptions, passthrough_desired_stream, mint_token) = mint_batch_descriptions(
+    let (batch_descriptions, desired_oks, desired_errs, mint_token) = mint_batch_descriptions(
         sink_id,
         operator_name.clone(),
         target,
-        &desired_collection.inner,
+        &desired_oks,
+        &desired_errs,
         &persist_feedback_stream,
         as_of,
         Arc::clone(&persist_clients),
@@ -213,8 +213,10 @@ where
         operator_name.clone(),
         target,
         &batch_descriptions,
-        &passthrough_desired_stream,
-        &persist_collection.inner,
+        &desired_oks,
+        &desired_errs,
+        &persist_oks,
+        &persist_errs,
         Arc::clone(&persist_clients),
     );
 
@@ -249,20 +251,22 @@ fn mint_batch_descriptions<G>(
     sink_id: GlobalId,
     operator_name: String,
     target: &CollectionMetadata,
-    desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    desired_oks: &Stream<G, (Row, Timestamp, Diff)>,
+    desired_errs: &Stream<G, (DataflowError, Timestamp, Diff)>,
     persist_feedback_stream: &Stream<G, ()>,
     as_of: Antichain<Timestamp>,
     persist_clients: Arc<PersistClientCache>,
     compute_state: &mut crate::compute_state::ComputeState,
 ) -> (
     Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    Stream<G, (Row, Timestamp, Diff)>,
+    Stream<G, (DataflowError, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let scope = desired_stream.scope();
+    let scope = desired_oks.scope();
 
     // Only attempt to write from this frontier onward, as our data are not necessarily
     // correct for times not greater or equal to this frontier.
@@ -294,13 +298,18 @@ where
     let mut mint_op =
         AsyncOperatorBuilder::new(format!("{} mint_batch_descriptions", operator_name), scope);
 
-    let (mut output, output_stream) = mint_op.new_output();
-    let (mut data_output, data_output_stream) = mint_op.new_output();
+    let (mut output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
+    let (mut desired_oks_output, desired_oks_output_stream) =
+        mint_op.new_output::<CapacityContainerBuilder<_>>();
+    let (mut desired_errs_output, desired_errs_output_stream) =
+        mint_op.new_output::<CapacityContainerBuilder<_>>();
 
-    // The description and the data-passthrough outputs are both driven by this input, so
-    // they use a standard input connection.
-    let mut desired_input =
-        mint_op.new_input_for_many(desired_stream, Pipeline, [&output, &data_output]);
+    // The `desired` inputs drive both the description output and their respective passthrough
+    // output.
+    let mut desired_oks_input =
+        mint_op.new_input_for_many(desired_oks, Pipeline, [&output, &desired_oks_output]);
+    let mut desired_errs_input =
+        mint_op.new_input_for_many(desired_errs, Pipeline, [&output, &desired_errs_output]);
 
     // Neither output's capabilities should depend on the feedback input.
     let mut persist_feedback_input =
@@ -310,25 +319,35 @@ where
         // Non-active workers should just pass the data through.
         if !active_worker {
             // The description output is entirely driven by the active worker, so we drop
-            // its capability here. The data-passthrough output just uses the data
+            // its capability here. The data-passthrough outputs just uses the data
             // capabilities.
             drop(capabilities);
-            while let Some(event) = desired_input.next().await {
-                match event {
-                    Event::Data([_output_cap, data_output_cap], mut data) => {
-                        data_output
-                            .give_container(&data_output_cap, &mut data)
-                            .await;
+
+            loop {
+                tokio::select! {
+                    Some(event) = desired_oks_input.next() => {
+                        if let Event::Data([_, cap], mut data) = event {
+                            desired_oks_output
+                                .give_container(&cap, &mut data)
+                                .await;
+                        }
                     }
-                    Event::Progress(_) => {}
+                    Some(event) = desired_errs_input.next() => {
+                        if let Event::Data([_, cap], mut data) = event {
+                            desired_errs_output
+                                .give_container(&cap, &mut data)
+                                .await;
+                        }
+                    }
+                    // All inputs are exhausted, so we can shut down.
+                    else => return,
                 }
             }
-            return;
         }
 
-        // The data-passthrough output will use the data capabilities, so we drop
-        // its capability here.
-        let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
+        // The data-passthrough outputs will use the data capabilities, so we drop
+        // their capabilities here.
+        let [desc_cap, _, _]: [_; 3] = capabilities.try_into().expect("one capability per output");
         let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
         // TODO(aljoscha): We need to figure out what to do with error
@@ -392,7 +411,8 @@ where
         }
 
         // The current input frontiers.
-        let mut desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut desired_oks_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut desired_errs_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
         let mut persist_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
 
         // The persist_frontier as it was when we last ran through our minting logic.
@@ -405,15 +425,27 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = desired_input.next() => {
+                Some(event) = desired_oks_input.next() => {
                     match event {
-                        Event::Data([_output_cap, data_output_cap], mut data) => {
+                        Event::Data([_, cap], mut data) => {
                             // Just passthrough the data.
-                            data_output.give_container(&data_output_cap, &mut data).await;
+                            desired_oks_output.give_container(&cap, &mut data).await;
                             continue;
                         }
                         Event::Progress(frontier) => {
-                            desired_frontier = frontier;
+                            desired_oks_frontier = frontier;
+                        }
+                    }
+                }
+                Some(event) = desired_errs_input.next() => {
+                    match event {
+                        Event::Data([_, cap], mut data) => {
+                            // Just passthrough the data.
+                            desired_errs_output.give_container(&cap, &mut data).await;
+                            continue;
+                        }
+                        Event::Progress(frontier) => {
+                            desired_errs_frontier = frontier;
                         }
                     }
                 }
@@ -472,6 +504,7 @@ where
             // persist frontier got moved by someone else, in which case
             // we also won't mint a new batch description for the same
             // frontier.
+            let desired_frontier = desired_oks_frontier.meet(&desired_errs_frontier);
             if PartialOrder::less_than(&persist_frontier, &desired_frontier)
                 && (emitted_persist_frontier.is_none()
                     || PartialOrder::less_than(
@@ -531,7 +564,12 @@ where
     }
 
     let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, data_output_stream, token)
+    (
+        output_stream,
+        desired_oks_output_stream,
+        desired_errs_output_stream,
+        token,
+    )
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -544,140 +582,6 @@ enum BatchOrData {
     },
 }
 
-/// A type to wrap a `correction` buffer taking the difference between
-/// existing and desired contents for the sink while collecting metrics
-/// on its length and capacity dynamics.
-struct CorrectionBuffer<T, R>(Vec<(Result<Row, DataflowError>, T, R)>);
-
-impl<T, R> CorrectionBuffer<T, R> {
-    fn with_correction_buffer<F: FnMut(&mut Vec<(Result<Row, DataflowError>, T, R)>) -> O, O>(
-        &mut self,
-        sink_metrics: &SinkMetrics,
-        sink_worker_metrics: &SinkWorkerMetrics,
-        mut f: F,
-    ) -> O {
-        let (old_len, old_capacity) = (self.0.len(), self.0.capacity());
-        let output = f(&mut self.0);
-        let (new_len, new_capacity) = (self.0.len(), self.0.capacity());
-        let (len_delta, capacity_delta) = (
-            UpdateDelta::new(new_len, old_len),
-            UpdateDelta::new(new_capacity, old_capacity),
-        );
-        sink_worker_metrics.report_correction_update_totals(new_len, new_capacity);
-        sink_metrics.report_correction_update_deltas(len_delta, capacity_delta);
-        output
-    }
-}
-
-/// A stash for storing future updates by time.
-#[derive(Default)]
-struct UpdateStash<D>(BTreeMap<Timestamp, ConsolidatingVec<D>>);
-
-impl<D: Ord> UpdateStash<D> {
-    fn new() -> Self {
-        Self(Default::default())
-    }
-
-    /// Insert a batch of updates into the stash.
-    fn insert(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
-        consolidate_updates(&mut updates);
-        updates.sort_unstable_by_key(|(_, time, _)| *time);
-
-        let mut updates = updates.into_iter().peekable();
-        while let Some(&(_, time, _)) = updates.peek() {
-            let data = updates
-                .peeking_take_while(|(_, t, _)| *t == time)
-                .map(|(d, _, r)| (d, r));
-
-            use std::collections::btree_map::Entry;
-            match self.0.entry(time) {
-                Entry::Vacant(entry) => {
-                    entry.insert(data.collect());
-                }
-                Entry::Occupied(mut entry) => {
-                    entry.get_mut().extend(data);
-                }
-            }
-        }
-    }
-
-    /// Remove all updates before the given frontier and return an iterator over them.
-    fn seal(
-        &mut self,
-        frontier: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> {
-        let retain = match frontier.as_option() {
-            Some(time) => self.0.split_off(time),
-            None => BTreeMap::new(),
-        };
-        let drain = std::mem::replace(&mut self.0, retain);
-        drain
-            .into_iter()
-            .flat_map(|(t, data)| data.into_iter().map(move |(d, r)| (d, t, r)))
-    }
-}
-
-/// A vector that consolidates its contents.
-///
-/// The vector is filled with updates until it reaches capacity. At this point, the updates are
-/// consolidated to free up space. This process repeats until the consolidation recovered less than
-/// half of the vector's capacity, at which point the capacity is doubled.
-struct ConsolidatingVec<D>(Vec<(D, Diff)>);
-
-impl<D: Ord> ConsolidatingVec<D> {
-    // Pushes `item` into the vector.
-    //
-    // If the vector does not have sufficient capacity, we try to consolidate and/or double its
-    // capacity.
-    //
-    // The worst-case cost of this function is O(n log n) in the number of items the vector stores,
-    // but amortizes to O(1).
-    fn push(&mut self, item: (D, Diff)) {
-        let capacity = self.0.capacity();
-        if self.0.len() == capacity {
-            // The vector is full. First, consolidate to try to recover some space.
-            consolidate(&mut self.0);
-
-            // If consolidation didn't free at least half the available capacity, double the
-            // capacity. This ensures we won't consolidate over and over again with small gains.
-            if self.0.len() > capacity / 2 {
-                self.0.reserve(capacity);
-            }
-        }
-
-        self.0.push(item);
-    }
-}
-
-impl<D> IntoIterator for ConsolidatingVec<D> {
-    type Item = (D, Diff);
-    type IntoIter = std::vec::IntoIter<(D, Diff)>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl<D> FromIterator<(D, Diff)> for ConsolidatingVec<D> {
-    fn from_iter<I>(iter: I) -> Self
-    where
-        I: IntoIterator<Item = (D, Diff)>,
-    {
-        Self(Vec::from_iter(iter))
-    }
-}
-
-impl<D: Ord> Extend<(D, Diff)> for ConsolidatingVec<D> {
-    fn extend<I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = (D, Diff)>,
-    {
-        for item in iter {
-            self.push(item);
-        }
-    }
-}
-
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` for any batch of updates that was written.
@@ -686,8 +590,10 @@ fn write_batches<G>(
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
-    persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    desired_oks: &Stream<G, (Row, Timestamp, Diff)>,
+    desired_errs: &Stream<G, (DataflowError, Timestamp, Diff)>,
+    persist_oks: &Stream<G, (Row, Timestamp, Diff)>,
+    persist_errs: &Stream<G, (DataflowError, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (Stream<G, BatchOrData>, Rc<dyn Any>)
 where
@@ -697,7 +603,7 @@ where
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
 
-    let scope = desired_stream.scope();
+    let scope = desired_oks.scope();
     let worker_index = scope.index();
 
     let mut write_op = AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope);
@@ -706,25 +612,30 @@ where
 
     let mut descriptions_input =
         write_op.new_input_for(&batch_descriptions.broadcast(), Pipeline, &output);
-    let mut desired_input = write_op.new_input_for(
-        desired_stream,
-        Exchange::new(
-            move |(row, _ts, _diff): &(Result<Row, DataflowError>, Timestamp, Diff)| row.hashed(),
-        ),
+    let mut desired_oks_input = write_op.new_input_for(
+        desired_oks,
+        Exchange::new(move |(row, _, _): &(Row, _, _)| row.hashed()),
         &output,
     );
-    // This input is disconnected so that the persist frontier is not taken into account when
+    let mut desired_errs_input = write_op.new_input_for(
+        desired_errs,
+        Exchange::new(move |(error, _, _): &(DataflowError, _, _)| error.hashed()),
+        &output,
+    );
+    // These inputs are disconnected so that the persist frontier is not taken into account when
     // determining downstream implications. We're only interested in the frontier to know when we
     // are ready to write out new data (when the corrections have "settled"). But the persist
     // frontier must not hold back the downstream frontier, otherwise the `append_batches` operator
     // would never append batches because it waits for its input frontier to advance before it does
     // so. The input frontier would never advance if we don't write new updates to persist, leading
     // to a Catch-22-type situation.
-    let mut persist_input = write_op.new_disconnected_input(
-        persist_stream,
-        Exchange::new(
-            move |(row, _ts, _diff): &(Result<Row, DataflowError>, Timestamp, Diff)| row.hashed(),
-        ),
+    let mut persist_oks_input = write_op.new_disconnected_input(
+        persist_oks,
+        Exchange::new(move |(row, _, _): &(Row, _, _)| row.hashed()),
+    );
+    let mut persist_errs_input = write_op.new_disconnected_input(
+        persist_errs,
+        Exchange::new(move |(error, _, _): &(DataflowError, _, _)| error.hashed()),
     );
 
     // This operator accepts the current and desired update streams for a `persist` shard.
@@ -732,15 +643,19 @@ where
     // will cause the changes of desired to be committed to persist.
 
     let shutdown_button = write_op.build(move |_capabilities| async move {
-        // Contains `desired - persist`, reflecting the updates we would like to commit
-        // to `persist` in order to "correct" it to track `desired`. This collection is
-        // only modified by updates received from either the `desired` or `persist` inputs.
-        let mut correction = CorrectionBuffer(Vec::new());
+        // TODO(aljoscha): We need to figure out what to do with error results from these calls.
+        let persist_client = persist_clients
+            .open(persist_location)
+            .await
+            .expect("could not open persist client");
+        let sink_metrics = persist_client.metrics().sink.clone();
+        let sink_worker_metrics = sink_metrics.for_worker(worker_index);
 
-        // Contains updates from `desired` at times beyond `desired`'s frontier, by time. The idea
-        // is to only move updates into `correction` that have a chance of being emitted shortly,
-        // to keep the amount of updates we need to consolidate small.
-        let mut desired_stash = UpdateStash::new();
+        // Contains `desired - persist`, reflecting the updates we would like to commit
+        // to `persist` in order to "correct" it to track `desired`. These collections are
+        // only modified by updates received from either the `desired` or `persist` inputs.
+        let mut correction_oks = Correction::new(sink_metrics.clone(), sink_worker_metrics.clone());
+        let mut correction_errs = Correction::new(sink_metrics, sink_worker_metrics);
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -753,14 +668,6 @@ where
             (Antichain<Timestamp>, Antichain<Timestamp>),
             Capability<Timestamp>,
         >::new();
-
-        // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-        let persist_client = persist_clients
-            .open(persist_location)
-            .await
-            .expect("could not open persist client");
-        let sink_metrics = &persist_client.metrics().sink;
-        let sink_worker_metrics = &sink_metrics.for_worker(worker_index);
 
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
@@ -777,8 +684,10 @@ where
 
         // The current input frontiers.
         let mut batch_descriptions_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
-        let mut desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
-        let mut persist_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut desired_oks_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut desired_errs_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut persist_oks_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut persist_errs_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
 
         loop {
             tokio::select! {
@@ -796,9 +705,9 @@ where
                                             batch_descriptions_frontier: {:?}, \
                                             persist_frontier: {:?}",
                                         description,
-                                        desired_frontier,
+                                        desired_oks_frontier.meet(&desired_errs_frontier),
                                         batch_descriptions_frontier,
-                                        persist_frontier
+                                        persist_oks_frontier.meet(&persist_errs_frontier),
                                     );
                                 }
                                 let existing = in_flight_batches.insert(
@@ -822,11 +731,10 @@ where
                         }
                     }
                 }
-                Some(event) = desired_input.next() => {
+                Some(event) = desired_oks_input.next() => {
                     match event {
                         Event::Data(_cap, data) => {
-                            // Extract desired rows into the stash. They are moved into
-                            // `correction` in response to frontier advancements.
+                            // Extract desired rows as positive contributions to `correction_oks`.
                             if sink_id.is_user() && !data.is_empty() {
                                 trace!(
                                     "persist_sink {sink_id}/{shard_id}: \
@@ -837,42 +745,75 @@ where
                                         persist_frontier: {:?}",
                                     data,
                                     in_flight_batches,
-                                    desired_frontier,
+                                    desired_oks_frontier.meet(&desired_errs_frontier),
                                     batch_descriptions_frontier,
-                                    persist_frontier
+                                    persist_oks_frontier.meet(&persist_errs_frontier),
                                 );
                             }
 
-                            desired_stash.insert(data);
+                            correction_oks.insert(data);
 
                             continue;
                         }
                         Event::Progress(frontier) => {
-                            // Extract desired rows as positive contributions to `correction`.
-                            correction.with_correction_buffer(
-                                sink_metrics,
-                                sink_worker_metrics,
-                                |buffer| buffer.extend(desired_stash.seal(&frontier)),
-                            );
-
-                            desired_frontier = frontier;
+                            desired_oks_frontier = frontier;
                         }
                     }
                 }
-                Some(event) = persist_input.next() => {
+                Some(event) = desired_errs_input.next() => {
                     match event {
-                        Event::Data(_cap, mut data) => {
-                            // Extract persist rows as negative contributions to `correction`.
-                            correction.with_correction_buffer(
-                                sink_metrics,
-                                sink_worker_metrics,
-                                |buffer| buffer.extend(data.drain(..).map(|(d, t, r)| (d, t, -r))),
-                            );
+                        Event::Data(_cap, data) => {
+                            // Extract desired rows as positive contributions to `correction_errs`.
+                            if sink_id.is_user() && !data.is_empty() {
+                                trace!(
+                                    "persist_sink {sink_id}/{shard_id}: \
+                                        updates: {:?}, \
+                                        in-flight-batches: {:?}, \
+                                        desired_frontier: {:?}, \
+                                        batch_descriptions_frontier: {:?}, \
+                                        persist_frontier: {:?}",
+                                    data,
+                                    in_flight_batches,
+                                    desired_oks_frontier.meet(&desired_errs_frontier),
+                                    batch_descriptions_frontier,
+                                    persist_oks_frontier.meet(&persist_errs_frontier),
+                                );
+                            }
+
+                            correction_errs.insert(data);
 
                             continue;
                         }
                         Event::Progress(frontier) => {
-                            persist_frontier = frontier;
+                            desired_errs_frontier = frontier;
+                        }
+                    }
+                }
+                Some(event) = persist_oks_input.next() => {
+                    match event {
+                        Event::Data(_cap, mut data) => {
+                            // Extract persist rows as negative contributions to `correction_oks`.
+                            let updates = data.drain(..).map(|(d, t, r)| (d, t, -r)).collect();
+                            correction_oks.insert(updates);
+
+                            continue;
+                        }
+                        Event::Progress(frontier) => {
+                            persist_oks_frontier = frontier;
+                        }
+                    }
+                }
+                Some(event) = persist_errs_input.next() => {
+                    match event {
+                        Event::Data(_cap, mut data) => {
+                            // Extract persist rows as negative contributions to `correction_errs`.
+                            let updates = data.drain(..).map(|(d, t, r)| (d, t, -r)).collect();
+                            correction_errs.insert(updates);
+
+                            continue;
+                        }
+                        Event::Progress(frontier) => {
+                            persist_errs_frontier = frontier;
                         }
                     }
                 }
@@ -881,6 +822,9 @@ where
                     return;
                 }
             }
+
+            let desired_frontier = desired_oks_frontier.meet(&desired_errs_frontier);
+            let persist_frontier = persist_oks_frontier.meet(&persist_errs_frontier);
 
             trace!(
                 "persist_sink {sink_id}/{shard_id}: \
@@ -891,24 +835,12 @@ where
                 in_flight_batches,
                 batch_descriptions_frontier,
                 desired_frontier,
-                persist_frontier
+                persist_frontier,
             );
 
             // Advance all updates to `persist`'s frontier.
-            for (row, time, diff) in correction.0.iter_mut() {
-                let time_before = *time;
-                time.advance_by(persist_frontier.borrow());
-                if sink_id.is_user() && &time_before != time {
-                    trace!(
-                        "persist_sink {sink_id}/{shard_id}: \
-                            advanced {:?}, {}, {} to {}",
-                        row,
-                        time_before,
-                        diff,
-                        time
-                    );
-                }
-            }
+            correction_oks.advance_by(&persist_frontier);
+            correction_errs.advance_by(&persist_frontier);
 
             // We can write updates for a given batch description when
             // a) the batch is not beyond `batch_descriptions_frontier`,
@@ -930,36 +862,6 @@ where
                 ready_batches,
             );
 
-            if !ready_batches.is_empty() {
-                // Consolidate updates only when they are required by an
-                // attempt to write out new updates. Otherwise, we might
-                // spend a lot of time "consolidating" the same updates
-                // over and over again, with no changes.
-                correction.with_correction_buffer(
-                    sink_metrics,
-                    sink_worker_metrics,
-                    consolidate_updates,
-                );
-
-                // `correction` starts large as it diffs the initial snapshots,
-                // but in steady state contains substantially fewer updates.
-                // We should regularly shrink it to an appropriate size.
-                // We use a 4x threshold here to ensure that we cannot enter
-                // a resizing cycle without a linear-in-`correction.len()`
-                // number of updates. E.g. a 2x threshold could result in
-                // an allocation that must soon after be re-doubled back to
-                // the current size, then halved, then doubled. We want that
-                // pattern to require a linear number of updates rather than
-                // a constant number.
-                if correction.0.len() < correction.0.capacity() / 4 {
-                    correction.with_correction_buffer(
-                        sink_metrics,
-                        sink_worker_metrics,
-                        Vec::shrink_to_fit,
-                    );
-                }
-            }
-
             for batch_description in ready_batches.into_iter() {
                 let cap = in_flight_batches.remove(&batch_description).unwrap();
 
@@ -973,29 +875,17 @@ where
                 }
 
                 let (batch_lower, batch_upper) = batch_description;
+                let to_append_oks = correction_oks.updates_within(&batch_lower, &batch_upper);
+                let to_append_errs = correction_errs.updates_within(&batch_lower, &batch_upper);
+                let update_count = to_append_oks.len() + to_append_errs.len();
 
-                let mut to_append = correction
-                    .0
-                    .iter()
-                    .filter(|(_, time, _)| {
-                        batch_lower.less_equal(time) && !batch_upper.less_equal(time)
-                    })
-                    .peekable();
-
-                if to_append.peek().is_some() {
-                    // We want to pass along the data directly if `to_append` is small, but to avoid
-                    // having to iterate through everything twice we'll check if `correction`
-                    // is small as a reasonable proxy.
+                if update_count > 0 {
                     let minimum_batch_updates = persist_clients.cfg().sink_minimum_batch_updates();
-                    let batch_or_data = if correction.0.len() >= minimum_batch_updates {
+                    let batch_or_data = if update_count >= minimum_batch_updates {
+                        let oks = to_append_oks.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r));
+                        let errs = to_append_errs.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r));
                         let batch = write
-                            .batch(
-                                to_append.map(|(data, time, diff)| {
-                                    ((SourceData(data.clone()), ()), time, diff)
-                                }),
-                                batch_lower.clone(),
-                                batch_upper.clone(),
-                            )
+                            .batch(oks.chain(errs), batch_lower, batch_upper)
                             .await
                             .expect("invalid usage");
 
@@ -1010,10 +900,12 @@ where
                         }
                         BatchOrData::Batch(batch.into_transmittable_batch())
                     } else {
+                        let oks = to_append_oks.map(|(d, t, r)| (Ok(d), t, r));
+                        let errs = to_append_errs.map(|(d, t, r)| (Err(d), t, r));
                         BatchOrData::Data {
-                            lower: batch_lower.clone(),
-                            upper: batch_upper.clone(),
-                            contents: to_append.cloned().collect(),
+                            lower: batch_lower,
+                            upper: batch_upper,
+                            contents: oks.chain(errs).collect(),
                         }
                     };
 
@@ -1063,7 +955,7 @@ where
     // We never output anything, but we update our capabilities based on the
     // persist frontier we know about. So someone can listen on our output
     // frontier and learn about the persist frontier advancing.
-    let (mut _output, output_stream) = append_op.new_output();
+    let (mut _output, output_stream) = append_op.new_output::<CapacityContainerBuilder<_>>();
 
     let hashed_id = sink_id.hashed();
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();

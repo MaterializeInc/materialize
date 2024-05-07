@@ -59,6 +59,8 @@ Explained Query:
     Map (is_regexp_match["foo?", case_insensitive=false](#0)) // { arity: 2 }
       ReadStorage materialize.public.data // { arity: 1 }
 
+Target cluster: quickstart
+
 EOF
 
 # ...but not variable regexes.
@@ -70,6 +72,8 @@ Explained Query:
     Map ((#0 ~ #0)) // { arity: 2 }
       ReadStorage materialize.public.data // { arity: 1 }
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -79,6 +83,8 @@ SELECT regexp_match('ABC', 'a.*');
 Explained Query (fast path):
   Constant
     - (null)
+
+Target cluster: quickstart
 
 EOF
 
@@ -94,6 +100,8 @@ SELECT regexp_match('ABC', 'a.*', 'i');
 Explained Query (fast path):
   Constant
     - ({"ABC"})
+
+Target cluster: quickstart
 
 EOF
 
@@ -150,6 +158,8 @@ Explained Query:
 Source materialize.public.t
   filter=(is_regexp_match["a.*", case_insensitive=false](#0))
 
+Target cluster: quickstart
+
 EOF
 
 query T
@@ -171,6 +181,8 @@ Explained Query:
 Source materialize.public.t
   filter=(is_regexp_match["a.*", case_insensitive=true](#0))
 
+Target cluster: quickstart
+
 EOF
 
 query T
@@ -188,6 +200,8 @@ Explained Query:
     Map (replace(#0, "
 ", "<newline>"), regexp_match["a.*", case_insensitive=false](#0))
       ReadStorage materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -212,6 +226,8 @@ Explained Query:
     Map (replace(#0, "
 ", "<newline>"), regexp_match["a.*", case_insensitive=true](#0))
       ReadStorage materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -270,6 +286,8 @@ Explained Query:
 Source materialize.public.t
   filter=((#0 ~ #2))
 
+Target cluster: quickstart
+
 EOF
 
 query T
@@ -292,6 +310,8 @@ Explained Query:
 Source materialize.public.t
   filter=((#0 ~* #2))
 
+Target cluster: quickstart
+
 EOF
 
 query T
@@ -310,6 +330,8 @@ Explained Query:
     Map (replace(#0, "
 ", "<newline>"), regexp_match(#0, #2))
       ReadStorage materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -339,6 +361,8 @@ Explained Query:
     Map (replace(#0, "
 ", "<newline>"), regexp_match(#0, #2, "i"))
       ReadStorage materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 
@@ -409,6 +433,8 @@ Explained Query:
     ^
 error: incomplete escape sequence, reached end of pattern prematurely"))
     ReadStorage materialize.public.t
+
+Target cluster: quickstart
 
 EOF
 

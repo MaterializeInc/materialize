@@ -31,7 +31,7 @@ _view&lowbar;name_ | A name for the materialized view.
 **(** _col_ident_... **)** | Rename the `SELECT` statement's columns to the list of identifiers, both of which must be the same length. Note that this is required for statements that return multiple columns with the same identifier.
 _cluster&lowbar;name_ | The cluster to maintain this materialized view. If not specified, defaults to the active cluster.
 _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you want to maintain incrementally updated.
-**(** **ASSERT NOT NULL** _col_ident_... **)** | ***Private preview.** This option has known performance or stability issues and is under active development.* A list of columns for which to create [non-null assertions](#non-null-assertions).
+**(** **ASSERT NOT NULL** _col_ident_... **)** | This option has known performance or stability issues and is under active development.* A list of columns for which to create [non-null assertions](#non-null-assertions).
 _retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ## Details
@@ -75,8 +75,6 @@ this exists+add detail about using indexes to optimize materialized view
 stacking."
 
 ### Non-null assertions
-
-{{< private-preview />}}
 
 Because materialized views may be created on arbitrary queries, it may
 not in all cases be possible for Materialize to automatically infer non-nullability

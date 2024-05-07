@@ -17,5 +17,5 @@
   WHERE s.name IN ('count')
 true
 
-> DROP SOURCE IF EXISTS count
+> DROP SOURCE IF EXISTS count CASCADE
 > DROP CLUSTER IF EXISTS test_cluster CASCADE

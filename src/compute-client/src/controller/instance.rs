@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
+use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
@@ -25,22 +26,25 @@ use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_compute_types::sources::SourceInstanceDesc;
+use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_types::read_holds::ReadHoldError;
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use timely::PartialOrder;
+use timely::progress::{Antichain, ChangeBatch};
+use timely::{Container, PartialOrder};
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
-    CollectionState, ComputeControllerResponse, IntrospectionUpdates, ReplicaId,
+    CollectionState, ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates,
+    ReplicaId,
 };
 use crate::logging::LogVariant;
 use crate::metrics::{InstanceMetrics, ReplicaMetrics};
@@ -50,8 +54,8 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, OperatorHydrationStatus, PeekResponse, StatusResponse,
-    SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
+    StatusResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -83,6 +87,15 @@ impl From<CollectionMissing> for DataflowCreationError {
     }
 }
 
+impl From<ReadHoldError> for DataflowCreationError {
+    fn from(error: ReadHoldError) -> Self {
+        match error {
+            ReadHoldError::CollectionMissing(id) => DataflowCreationError::CollectionMissing(id),
+            ReadHoldError::SinceViolation(id) => DataflowCreationError::SinceViolation(id),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub(super) enum PeekError {
     #[error("collection does not exist: {0}")]
@@ -96,6 +109,15 @@ pub(super) enum PeekError {
 impl From<CollectionMissing> for PeekError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<ReadHoldError> for PeekError {
+    fn from(error: ReadHoldError) -> Self {
+        match error {
+            ReadHoldError::CollectionMissing(id) => PeekError::CollectionMissing(id),
+            ReadHoldError::SinceViolation(id) => PeekError::SinceViolation(id),
+        }
     }
 }
 
@@ -185,9 +207,11 @@ pub(super) struct Instance<T> {
     replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
+    /// Dynamic system configuration.
+    dyncfg: Arc<ConfigSet>,
 }
 
-impl<T: Timestamp> Instance<T> {
+impl<T: ComputeControllerTimestamp> Instance<T> {
     /// Acquire a handle to the collection state associated with `id`.
     pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
@@ -380,12 +404,18 @@ impl<T: Timestamp> Instance<T> {
     /// This method is invoked by `ActiveComputeController::process`, which we expect to
     /// be periodically called during normal operation.
     fn refresh_state_metrics(&self) {
+        let unscheduled_collections_count =
+            self.collections.values().filter(|c| !c.scheduled).count();
+
         self.metrics
             .replica_count
             .set(u64::cast_from(self.replicas.len()));
         self.metrics
             .collection_count
             .set(u64::cast_from(self.collections.len()));
+        self.metrics
+            .collection_unscheduled_count
+            .set(u64::cast_from(unscheduled_collections_count));
         self.metrics
             .peek_count
             .set(u64::cast_from(self.peeks.len()));
@@ -553,6 +583,7 @@ impl<T: Timestamp> Instance<T> {
             envd_epoch,
             replica_epochs,
             metrics: _,
+            dyncfg: _,
         } = self;
 
         fn field(
@@ -601,7 +632,7 @@ impl<T: Timestamp> Instance<T> {
 
 impl<T> Instance<T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn new(
@@ -609,6 +640,7 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
+        dyncfg: Arc<ConfigSet>,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
@@ -636,6 +668,7 @@ where
             envd_epoch,
             replica_epochs: Default::default(),
             metrics,
+            dyncfg,
         };
 
         instance.send(ComputeCommand::CreateTimely {
@@ -816,7 +849,7 @@ pub(super) struct ActiveInstance<'a, T> {
 
 impl<'a, T> ActiveInstance<'a, T>
 where
-    T: Timestamp + Lattice,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Add a new instance replica, by ID.
@@ -844,6 +877,7 @@ where
             updates.insert(*compute_id, read_frontier.to_owned());
         }
         self.update_replica_write_frontiers(id, &updates);
+        self.update_replica_input_frontiers(id, &updates);
 
         let replica_epoch = self.compute.replica_epochs.entry(id).or_default();
         *replica_epoch += 1;
@@ -854,6 +888,7 @@ where
             config.clone(),
             ClusterStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
             metrics.clone(),
+            Arc::clone(&self.compute.dyncfg),
         );
 
         // Take this opportunity to clean up the history we should present.
@@ -882,7 +917,7 @@ where
             .ok_or(ReplicaMissing(id))?;
 
         // Remove frontier tracking for this replica.
-        self.remove_replica_write_frontiers(id);
+        self.remove_replica_frontiers(id);
 
         // Subscribes targeting this replica either won't be served anymore (if the replica is
         // dropped) or might produce inconsistent output (if the target collection is an
@@ -971,32 +1006,37 @@ where
         // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
 
-        // When we initialize per-replica write frontiers (and thereby the per-replica read
+        // When we initialize per-replica input frontiers (and thereby the per-replica read
         // capabilities), we cannot use the `as_of` because of reconciliation: Existing
         // slow replicas might be reading from the inputs at times before the `as_of` and we
         // would rather not crash them by allowing their inputs to compact too far. So instead
         // we initialize the per-replica write frontiers with the smallest possible value that
         // is a valid read capability for all inputs, which is the join of all input `since`s.
-        let mut replica_write_frontier = Antichain::from_elem(T::minimum());
+        let mut replica_input_frontier = Antichain::from_elem(T::minimum());
 
         // Record all transitive dependencies of the outputs.
         let mut storage_dependencies = Vec::new();
         let mut compute_dependencies = Vec::new();
 
+        // Any potentially acquired STORAGE read holds. We acquire them and
+        // check whether our as_of is valid. They are dropped once we installed
+        // read capabilities manually.
+        //
+        // TODO: Instead of acquiring these and then dropping later, we should
+        // instead store them and don't "manually" acquire read holds using
+        // `update_read_capabilities`.
+        let mut storage_read_holds = Vec::new();
+
         // Validate sources have `since.less_equal(as_of)`.
         for source_id in dataflow.source_imports.keys() {
-            let since = &self
+            let storage_read_hold = self
                 .storage_controller
-                .collection(*source_id)
-                .map_err(|_| DataflowCreationError::CollectionMissing(*source_id))?
-                .read_capabilities
-                .frontier();
-            if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
-                Err(DataflowCreationError::SinceViolation(*source_id))?;
-            }
+                .acquire_read_hold_at_time(*source_id, as_of.clone())?;
 
             storage_dependencies.push(*source_id);
-            replica_write_frontier.join_assign(&since.to_owned());
+            replica_input_frontier.join_assign(storage_read_hold.since());
+
+            storage_read_holds.push(storage_read_hold);
         }
 
         // Validate indexes have `since.less_equal(as_of)`.
@@ -1009,13 +1049,13 @@ where
             }
 
             compute_dependencies.push(*index_id);
-            replica_write_frontier.join_assign(&since.to_owned());
+            replica_input_frontier.join_assign(&since.to_owned());
         }
 
-        // If the `as_of` is empty, we are not going to create a dataflow, so don't install any read
-        // holds.
+        // If the `as_of` is empty, we are not going to create a dataflow, so replicas won't read
+        // from the inputs.
         if as_of.is_empty() {
-            replica_write_frontier = Antichain::new();
+            replica_input_frontier = Antichain::new();
         }
 
         // Canonicalize dependencies.
@@ -1040,6 +1080,10 @@ where
             .collect();
         self.storage_controller
             .update_read_capabilities(&mut storage_read_updates);
+        // Drop the acquired read holds after we installed our old-style, manual
+        // read capabilities.
+        drop(storage_read_holds);
+
         // Update compute read capabilities for inputs.
         let compute_read_updates = compute_dependencies
             .iter()
@@ -1048,7 +1092,6 @@ where
         self.update_read_capabilities(compute_read_updates);
 
         // Install collection state for each of the exports.
-        let mut updates = BTreeMap::new();
         for export_id in dataflow.export_ids() {
             let write_only = dataflow.sink_exports.contains_key(&export_id);
             self.compute.add_collection(
@@ -1058,12 +1101,21 @@ where
                 compute_dependencies.clone(),
                 write_only,
             );
-            updates.insert(export_id, replica_write_frontier.clone());
         }
+
         // Initialize tracking of replica frontiers.
+        let replica_write_frontier_updates = dataflow
+            .export_ids()
+            .map(|id| (id, as_of.clone()))
+            .collect();
+        let replica_input_frontier_updates = dataflow
+            .export_ids()
+            .map(|id| (id, replica_input_frontier.clone()))
+            .collect();
         let replica_ids: Vec<_> = self.compute.replica_ids().collect();
         for replica_id in replica_ids {
-            self.update_replica_write_frontiers(replica_id, &updates);
+            self.update_replica_write_frontiers(replica_id, &replica_write_frontier_updates);
+            self.update_replica_input_frontiers(replica_id, &replica_input_frontier_updates);
         }
 
         // Initialize tracking of subscribes.
@@ -1082,14 +1134,15 @@ where
         // storage metadata needed by the compute instance.
         let mut source_imports = BTreeMap::new();
         for (id, (si, monotonic)) in dataflow.source_imports {
-            let collection = self
+            let collection_metadata = self
                 .storage_controller
-                .collection(id)
+                .collection_metadata(id)
                 .map_err(|_| DataflowCreationError::CollectionMissing(id))?;
+
             let desc = SourceInstanceDesc {
-                storage_metadata: collection.collection_metadata.clone(),
+                storage_metadata: collection_metadata.clone(),
                 arguments: si.arguments,
-                typ: collection.description.desc.typ().clone(),
+                typ: si.typ.clone(),
             };
             source_imports.insert(id, (desc, monotonic));
         }
@@ -1100,9 +1153,8 @@ where
                 ComputeSinkConnection::Persist(conn) => {
                     let metadata = self
                         .storage_controller
-                        .collection(id)
+                        .collection_metadata(id)
                         .map_err(|_| DataflowCreationError::CollectionMissing(id))?
-                        .collection_metadata
                         .clone();
                     let conn = PersistSinkConnection {
                         value_desc: conn.value_desc,
@@ -1210,20 +1262,35 @@ where
             return;
         }
 
-        // Check dependency frontiers to determine if all inputs are available.
-        // An input is available when its frontier is greater than the `as_of`, i.e., all input
-        // data up to and including the `as_of` has been sealed.
-        let compute_frontiers = collection.compute_dependencies.iter().map(|id| {
-            let dep = &self.compute.expect_collection(*id);
-            &dep.write_frontier
-        });
-        let storage_frontiers = collection.storage_dependencies.iter().map(|id| {
-            let dep = &self.storage_controller.collection(*id).expect("must exist");
-            &dep.write_frontier
-        });
-        let ready = compute_frontiers
-            .chain(storage_frontiers)
-            .all(|frontier| PartialOrder::less_than(&as_of, &frontier.borrow()));
+        let ready = if id.is_transient() {
+            // Always schedule transient collections immediately. The assumption is that those are
+            // created by interactive user commands and we want to schedule them as quickly as
+            // possible. Inputs might not yet be available, but when they become available, we
+            // don't need to wait for the controller to become aware and for the scheduling check
+            // to run again.
+            true
+        } else {
+            // Check dependency frontiers to determine if all inputs are
+            // available. An input is available when its frontier is greater
+            // than the `as_of`, i.e., all input data up to and including the
+            // `as_of` has been sealed.
+            let compute_frontiers = collection.compute_dependencies.iter().map(|id| {
+                let dep = &self.compute.expect_collection(*id);
+                &dep.write_frontier
+            });
+
+            let storage_frontiers = self
+                .storage_controller
+                .collections_frontiers(collection.storage_dependencies.clone())
+                .expect("must exist");
+            let storage_frontiers = storage_frontiers.iter().map(|(_id, _since, upper)| upper);
+
+            let ready = compute_frontiers
+                .chain(storage_frontiers)
+                .all(|frontier| PartialOrder::less_than(&as_of, &frontier.borrow()));
+
+            ready
+        };
 
         if ready {
             self.compute.send(ComputeCommand::Schedule(id));
@@ -1288,17 +1355,24 @@ where
         target_replica: Option<ReplicaId>,
         peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
-        let since = match &peek_target {
-            PeekTarget::Index { .. } => self.compute.collection(id)?.read_capabilities.frontier(),
-            PeekTarget::Persist { .. } => self
-                .storage_controller
-                .collection(id)
-                .map_err(|_| PeekError::CollectionMissing(id))?
-                .implied_capability
-                .borrow(),
-        };
-        if !since.less_equal(&timestamp) {
-            return Err(PeekError::SinceViolation(id));
+        // When querying persist directly, we acquire read holds and verify that
+        // we can actually acquire them at the right time.
+        let mut maybe_storage_read_hold = None;
+        match &peek_target {
+            PeekTarget::Index { .. } => {
+                let since = self.compute.collection(id)?.read_capabilities.frontier();
+                if !since.less_equal(&timestamp) {
+                    return Err(PeekError::SinceViolation(id));
+                }
+            }
+
+            PeekTarget::Persist { .. } => {
+                let storage_read_hold = self
+                    .storage_controller
+                    .acquire_read_hold_at_time(id, Antichain::from_elem(timestamp.clone()))?;
+
+                maybe_storage_read_hold = Some(storage_read_hold);
+            }
         }
 
         if let Some(target) = target_replica {
@@ -1316,6 +1390,10 @@ where
                 .storage_controller
                 .update_read_capabilities(&mut updates),
         };
+
+        // Drop the acquired read hold after we installed our old-style, manual
+        // read capabilities.
+        drop(maybe_storage_read_hold);
 
         let otel_ctx = OpenTelemetryContext::obtain();
         self.compute.peeks.insert(
@@ -1449,9 +1527,6 @@ where
         replica_id: ReplicaId,
         updates: &BTreeMap<GlobalId, Antichain<T>>,
     ) {
-        // Compute and apply read hold downgrades on storage dependencies that result from
-        // replica frontier advancements.
-        let mut storage_read_capability_changes = BTreeMap::default();
         for (id, new_upper) in updates {
             let collection = self.compute.expect_collection_mut(*id);
 
@@ -1467,16 +1542,49 @@ where
                      collection={id}, replica={replica_id}",
                 );
             }
+        }
+    }
+
+    /// Apply replica input frontier updates.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the `updates` references an absent collection.
+    /// Panics if any of the `updates` regresses an existing replica input frontier.
+    #[mz_ore::instrument(level = "debug")]
+    fn update_replica_input_frontiers(
+        &mut self,
+        replica_id: ReplicaId,
+        updates: &BTreeMap<GlobalId, Antichain<T>>,
+    ) {
+        // Compute and apply read hold downgrades on storage dependencies that result from
+        // input frontier advancements.
+        let mut storage_read_capability_changes = BTreeMap::default();
+        for (id, new_cap) in updates {
+            let collection = self.compute.expect_collection_mut(*id);
+
+            let old_cap = collection
+                .replica_input_frontiers
+                .insert(replica_id, new_cap.clone());
+
+            // Safety check against frontier regressions.
+            if let Some(old) = &old_cap {
+                assert!(
+                    PartialOrder::less_equal(old, new_cap),
+                    "replica input frontier regression: {old:?} -> {new_cap:?}, \
+                     collection={id}, replica={replica_id}",
+                );
+            }
 
             // Update per-replica read holds on storage dependencies.
             for storage_id in &collection.storage_dependencies {
                 let update = storage_read_capability_changes
                     .entry(*storage_id)
                     .or_insert_with(|| ChangeBatch::new());
-                if let Some(old) = &old_upper {
+                if let Some(old) = &old_cap {
                     update.extend(old.iter().map(|time| (time.clone(), -1)));
                 }
-                update.extend(new_upper.iter().map(|time| (time.clone(), 1)));
+                update.extend(new_cap.iter().map(|time| (time.clone(), 1)));
             }
         }
 
@@ -1492,22 +1600,27 @@ where
 
     /// Remove frontier tracking state for the given replica.
     #[mz_ore::instrument(level = "debug")]
-    fn remove_replica_write_frontiers(&mut self, replica_id: ReplicaId) {
+    fn remove_replica_frontiers(&mut self, replica_id: ReplicaId) {
         let mut storage_read_capability_changes = BTreeMap::default();
         for collection in self.compute.collections.values_mut() {
-            let last_upper = collection.replica_write_frontiers.remove(&replica_id);
-            let Some(frontier) = last_upper else { continue };
+            // Remove the tracked write frontier.
+            collection.replica_write_frontiers.remove(&replica_id);
 
-            if !frontier.is_empty() {
-                // Update read holds on storage dependencies.
-                for storage_id in &collection.storage_dependencies {
-                    let update = storage_read_capability_changes
-                        .entry(*storage_id)
-                        .or_insert_with(ChangeBatch::new);
-                    update.extend(frontier.iter().map(|time| (time.clone(), -1)));
+            // Remove the tracked input frontier and release any corresponding read holds on
+            // storage dependencies.
+            let last_cap = collection.replica_input_frontiers.remove(&replica_id);
+            if let Some(frontier) = last_cap {
+                if !frontier.is_empty() {
+                    for storage_id in &collection.storage_dependencies {
+                        let update = storage_read_capability_changes
+                            .entry(*storage_id)
+                            .or_insert_with(ChangeBatch::new);
+                        update.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                    }
                 }
             }
         }
+
         if !storage_read_capability_changes.is_empty() {
             self.storage_controller
                 .update_read_capabilities(&mut storage_read_capability_changes);
@@ -1567,7 +1680,7 @@ where
         let storage_updates: Vec<_> = updates
             .iter()
             .filter_map(|(&id, upper)| {
-                let found = self.storage_controller.collection(id).is_ok();
+                let found = self.storage_controller.check_exists(id).is_ok();
                 found.then_some((id, upper.clone()))
             })
             .collect();
@@ -1689,8 +1802,8 @@ where
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
         match response {
-            ComputeResponse::FrontierUpper { id, upper } => {
-                self.handle_frontier_upper(id, upper, replica_id)
+            ComputeResponse::Frontiers(id, frontiers) => {
+                self.handle_frontiers_response(id, frontiers, replica_id)
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
@@ -1710,54 +1823,59 @@ where
 
     /// Handle new frontiers, returning any compute response that needs to
     /// be sent to the client.
-    fn handle_frontier_upper(
+    fn handle_frontiers_response(
         &mut self,
         id: GlobalId,
-        new_frontier: Antichain<T>,
+        frontiers: FrontiersResponse<T>,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
-        // According to the compute protocol, replicas are not allowed to send `FrontierUpper`s
-        // that regress frontiers they have reported previously. We still perform a check here,
-        // rather than risking the controller becoming confused trying to handle regressions.
+        let mut response = None;
+
+        // According to the compute protocol, replicas are not allowed to send `Frontiers`
+        // responses that regress frontiers they have reported previously. We still perform a check
+        // here, rather than risking the controller becoming confused trying to handle regressions.
         let Ok(coll) = self.compute.collection(id) else {
-            tracing::warn!(
-                ?replica_id,
-                "Frontier update for unknown collection {id}: {:?}",
-                new_frontier.elements(),
+            tracing::error!(
+               %id, %replica_id, ?frontiers,
+               "frontiers update for unknown collection",
             );
-            tracing::error!("Replica reported an untracked collection frontier");
             return None;
         };
 
-        if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
-            if !PartialOrder::less_equal(old_frontier, &new_frontier) {
-                tracing::warn!(
-                    ?replica_id,
-                    "Frontier of collection {id} regressed: {:?} -> {:?}",
-                    old_frontier.elements(),
-                    new_frontier.elements(),
-                );
-                tracing::error!("Replica reported a regressed collection frontier");
-                return None;
+        // Apply a write frontier advancement.
+        if let Some(new_frontier) = frontiers.write_frontier {
+            if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
+                if !PartialOrder::less_equal(old_frontier, &new_frontier) {
+                    tracing::error!(
+                       %id, %replica_id, ?old_frontier, ?new_frontier,
+                       "collection write frontier regression",
+                    );
+                    return None;
+                }
+            }
+
+            let old_global_frontier = coll.write_frontier.clone();
+
+            self.compute
+                .update_hydration_status(id, replica_id, &new_frontier);
+            self.update_write_frontiers(replica_id, &[(id, new_frontier.clone())].into());
+
+            if let Ok(coll) = self.compute.collection(id) {
+                if coll.write_frontier != old_global_frontier {
+                    response = Some(ComputeControllerResponse::FrontierUpper {
+                        id,
+                        upper: coll.write_frontier.clone(),
+                    });
+                }
             }
         }
 
-        let old_global_frontier = coll.write_frontier.clone();
-
-        self.compute
-            .update_hydration_status(id, replica_id, &new_frontier);
-        self.update_write_frontiers(replica_id, &[(id, new_frontier.clone())].into());
-
-        if let Ok(coll) = self.compute.collection(id) {
-            (coll.write_frontier != old_global_frontier).then_some(
-                ComputeControllerResponse::FrontierUpper {
-                    id,
-                    upper: coll.write_frontier.clone(),
-                },
-            )
-        } else {
-            None
+        // Apply an input frontier advancement.
+        if let Some(new_frontier) = frontiers.input_frontier {
+            self.update_replica_input_frontiers(replica_id, &[(id, new_frontier.clone())].into());
         }
+
+        response
     }
 
     fn handle_peek_response(
@@ -1848,6 +1966,12 @@ where
         let write_frontier_updates = [(subscribe_id, write_frontier)].into();
         self.update_replica_write_frontiers(replica_id, &write_frontier_updates);
 
+        // For subscribes we downgrade replica input frontiers based on write frontiers. This
+        // should be fine because subscribes can't jump their write frontiers ahead of the times
+        // they have read from their inputs currently.
+        // TODO(#16274): report subscribe input frontiers through `Frontiers` responses
+        self.update_replica_input_frontiers(replica_id, &write_frontier_updates);
+
         // If the subscribe is not tracked, or targets a different replica, there is nothing to do.
         let mut subscribe = self.compute.subscribes.get(&subscribe_id)?.clone();
         let replica_targeted = subscribe.target_replica.unwrap_or(replica_id) == replica_id;
@@ -1919,13 +2043,7 @@ where
                 .update_operator_hydration_status(replica_id, status),
         }
     }
-}
 
-impl<'a, T> ActiveInstance<'a, T>
-where
-    T: TimestampManipulation,
-    ComputeGrpcClient: ComputeClient<T>,
-{
     /// Downgrade the warmup capabilities of collections as much as possible.
     ///
     /// The only requirement we have for a collection's warmup capability is that it is for a time
@@ -1954,12 +2072,21 @@ where
 
             let compute_frontiers = collection.compute_dependencies.iter().flat_map(|dep_id| {
                 let collection = self.compute.collections.get(dep_id);
-                collection.map(|c| &c.write_frontier)
+                collection.map(|c| c.write_frontier.clone())
             });
-            let storage_frontiers = collection.storage_dependencies.iter().flat_map(|dep_id| {
-                let collection = &self.storage_controller.collection(*dep_id).ok();
-                collection.map(|c| &c.write_frontier)
-            });
+
+            let existing_storage_dependencies = collection
+                .storage_dependencies
+                .iter()
+                .filter(|id| self.storage_controller.check_exists(**id).is_ok())
+                .copied()
+                .collect::<Vec<_>>();
+            let storage_frontiers = self
+                .storage_controller
+                .collections_frontiers(existing_storage_dependencies)
+                .expect("missing storage collections")
+                .into_iter()
+                .map(|(_id, _since, upper)| upper);
 
             let mut new_capability = Antichain::new();
             for frontier in compute_frontiers.chain(storage_frontiers) {
@@ -2032,10 +2159,10 @@ struct ActiveSubscribe<T> {
     target_replica: Option<ReplicaId>,
 }
 
-impl<T: Timestamp> ActiveSubscribe<T> {
+impl<T: ComputeControllerTimestamp> ActiveSubscribe<T> {
     fn new() -> Self {
         Self {
-            frontier: Antichain::from_elem(Timestamp::minimum()),
+            frontier: Antichain::from_elem(timely::progress::Timestamp::minimum()),
             target_replica: None,
         }
     }

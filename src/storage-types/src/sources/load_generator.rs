@@ -15,6 +15,7 @@ use mz_ore::now::NowFn;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
+use mz_sql_parser::ast::UnresolvedItemName;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -119,6 +120,24 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
     }
+
+    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
+        let name = match &name.0[..] {
+            [database, namespace, name]
+                if database.as_str() == LOAD_GENERATOR_DATABASE_NAME
+                    && namespace.as_str() == self.load_generator.schema_name() =>
+            {
+                name.as_str()
+            }
+            _ => return None,
+        };
+
+        self.load_generator
+            .views()
+            .iter()
+            .position(|(view_name, _)| *view_name == name)
+            .map(|idx| idx + 1)
+    }
 }
 
 impl crate::AlterCompatible for LoadGeneratorSourceConnection {}
@@ -144,7 +163,20 @@ pub enum LoadGenerator {
     KeyValue(KeyValueLoadGenerator),
 }
 
+pub const LOAD_GENERATOR_DATABASE_NAME: &str = "mz_load_generators";
+
 impl LoadGenerator {
+    pub fn schema_name(&self) -> &'static str {
+        match self {
+            LoadGenerator::Counter { .. } => "counter",
+            LoadGenerator::Marketing => "marketing",
+            LoadGenerator::Auction => "auction",
+            LoadGenerator::Datums => "datums",
+            LoadGenerator::Tpch { .. } => "tpch",
+            LoadGenerator::KeyValue { .. } => "key_value",
+        }
+    }
+
     /// Returns the list of table names and their column types that this generator generates
     pub fn views(&self) -> Vec<(&str, RelationDesc)> {
         match self {

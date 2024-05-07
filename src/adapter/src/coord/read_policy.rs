@@ -13,19 +13,6 @@
 //! This module contains the API for read holds on collections. A "read hold" prevents
 //! the controller from compacting the associated collections, and ensures that they
 //! remain "readable" at a specific time, as long as the hold is held.
-//!
-//! The split into [InternalReadHolds] and [ReadHolds] makes a historically
-//! grown distinction explicit. The former is for use internal to the
-//! Coordinator: for each timeline we keep a [TimelineState], and when creating
-//! a collection a hold for it is added to that timeline-global
-//! [InternalReadHolds]. Likewise, when a collection is dropped its entry is
-//! removed from that [InternalReadHolds]. The timeline-global
-//! [InternalReadHolds] is never released, but it is continually downgraded
-//! using [Coordinator::update_read_holds].
-//!
-//! [ReadHolds] are used for short-lived read holds. For example, when
-//! processing peeks or rendering dataflows. These are never downgraded but they
-//! _are_ released automatically when being dropped.
 
 //! Allow usage of `std::collections::HashMap`.
 //! The code in this module deals with `Antichain`-keyed maps. `Antichain` does not implement
@@ -33,7 +20,7 @@
 //! `mz_ore` wrapper either.
 #![allow(clippy::disallowed_types)]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{btree_map, hash_map, BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::Deref;
@@ -45,33 +32,47 @@ use mz_compute_types::ComputeInstanceId;
 use mz_ore::instrument;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::session::metadata::SessionMetadata;
+use mz_storage_types::read_holds::ReadHold as StorageReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
+use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::util::ResultExt;
 
-/// Relevant information for acquiring or releasing a bundle of read holds.
+/// For each timeline, we hold one [TimelineReadHolds] as the root read holds
+/// for that timeline. Even if there are no other read holds ([ReadHolds] and/or
+/// [ReadHoldsInner]), it acts as a backstop that makes sure that collections
+/// remain readable at the read timestamp (according to the
+/// timestamp oracle) of that timeline.
 ///
-/// See module-level documentation about the split between [InternalReadHolds]
-/// and [ReadHolds].
+/// When creating a collection in a timeline, it is added to the one
+/// [TimelineReadHolds] of that timeline and when a collection is dropped it is
+/// removed.
+///
+/// A [TimelineReadHolds] is never released, it is only dropped when the
+/// corresponding timeline is dropped, which only happens when all collections
+/// in it have been dropped. We only add collections, remove collections, and
+/// downgrade (update, yes!) the read holds.
 #[derive(Debug, Serialize)]
-pub struct InternalReadHolds<T> {
+pub struct TimelineReadHolds<T> {
     pub holds: HashMap<Antichain<T>, CollectionIdBundle>,
 }
 
-impl<T: Eq + Hash + Ord> InternalReadHolds<T> {
+impl<T: Eq + Hash + Ord> TimelineReadHolds<T> {
     /// Return empty `ReadHolds`.
     pub fn new() -> Self {
-        InternalReadHolds {
+        TimelineReadHolds {
             holds: HashMap::new(),
         }
     }
 
-    /// Returns whether the [InternalReadHolds] is empty.
+    /// Returns whether the [TimelineReadHolds] is empty.
     pub fn is_empty(&self) -> bool {
         self.holds.is_empty()
     }
@@ -82,7 +83,7 @@ impl<T: Eq + Hash + Ord> InternalReadHolds<T> {
     }
 
     /// Return a `CollectionIdBundle` containing all the IDs in the
-    /// [InternalReadHolds].
+    /// [TimelineReadHolds].
     pub fn id_bundle(&self) -> CollectionIdBundle {
         self.holds
             .values()
@@ -93,6 +94,7 @@ impl<T: Eq + Hash + Ord> InternalReadHolds<T> {
     }
 
     /// Returns an iterator over all storage ids and the time at which their read hold exists.
+    #[allow(unused)]
     pub fn storage_ids(&self) -> impl Iterator<Item = (&Antichain<T>, &GlobalId)> {
         self.holds
             .iter()
@@ -130,10 +132,11 @@ impl<T: Eq + Hash + Ord> InternalReadHolds<T> {
         })
     }
 
-    /// Extends a [InternalReadHolds] with the contents of another
-    /// [InternalReadHolds].
+    /// Extends a [TimelineReadHolds] with the contents of another
+    /// [TimelineReadHolds].
+    ///
     /// Asserts that the newly added read holds don't coincide with any of the existing read holds in self.
-    pub fn extend_with_new(&mut self, mut other: InternalReadHolds<T>) {
+    pub fn extend_with_new(&mut self, mut other: TimelineReadHolds<T>) {
         for (time, other_id_bundle) in other.holds.drain() {
             let self_id_bundle = self.holds.entry(time).or_default();
             assert!(
@@ -168,28 +171,19 @@ impl<T: Eq + Hash + Ord> InternalReadHolds<T> {
     }
 }
 
-impl<T> Default for InternalReadHolds<T> {
-    fn default() -> Self {
-        InternalReadHolds {
-            holds: Default::default(),
-        }
-    }
+/// [ReadHolds] are used for short-lived read holds. For example, when
+/// processing peeks or rendering dataflows. These are never downgraded but they
+/// _are_ released automatically when being dropped.
+pub struct ReadHolds<T: TimelyTimestamp> {
+    pub inner: ReadHoldsInner<T>,
+    dropped_read_holds_tx: tokio::sync::mpsc::UnboundedSender<ReadHoldsInner<T>>,
 }
 
-/// A wrapper around [InternalReadHolds] that will release it's holds when dropped.
-///
-/// See module-level documentation about the split between [InternalReadHolds]
-/// and [ReadHolds].
-pub struct ReadHolds<T> {
-    pub inner: InternalReadHolds<T>,
-    dropped_read_holds_tx: tokio::sync::mpsc::UnboundedSender<InternalReadHolds<T>>,
-}
-
-impl<T: Eq + Hash + Ord> ReadHolds<T> {
+impl<T: TimelyTimestamp> ReadHolds<T> {
     /// Return empty `ReadHolds`.
     pub fn new(
-        read_holds: InternalReadHolds<T>,
-        dropped_read_holds_tx: tokio::sync::mpsc::UnboundedSender<InternalReadHolds<T>>,
+        read_holds: ReadHoldsInner<T>,
+        dropped_read_holds_tx: tokio::sync::mpsc::UnboundedSender<ReadHoldsInner<T>>,
     ) -> Self {
         ReadHolds {
             inner: read_holds,
@@ -197,16 +191,24 @@ impl<T: Eq + Hash + Ord> ReadHolds<T> {
         }
     }
 }
+impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
+    pub fn merge(&mut self, mut other: Self) {
+        // Now, when other is dropped we don't release the holds anymore.
+        // Instead we take ownership and move them to ourselves.
+        let other_inner = std::mem::take(&mut other.inner);
+        self.inner.merge(other_inner)
+    }
+}
 
-impl<T> Deref for ReadHolds<T> {
-    type Target = InternalReadHolds<T>;
+impl<T: TimelyTimestamp> Deref for ReadHolds<T> {
+    type Target = ReadHoldsInner<T>;
 
-    fn deref(&self) -> &InternalReadHolds<T> {
+    fn deref(&self) -> &ReadHoldsInner<T> {
         &self.inner
     }
 }
 
-impl<T: Debug> Debug for ReadHolds<T> {
+impl<T: TimelyTimestamp> Debug for ReadHolds<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReadHolds")
             .field("read_holds", &self.inner)
@@ -214,16 +216,114 @@ impl<T: Debug> Debug for ReadHolds<T> {
     }
 }
 
-impl<T> Drop for ReadHolds<T> {
+impl<T: TimelyTimestamp> Drop for ReadHolds<T> {
     fn drop(&mut self) {
         let inner_holds = std::mem::take(&mut self.inner);
 
-        tracing::debug!("dropping ReadHolds on {:?}", inner_holds.holds.values());
+        tracing::debug!(
+            "dropping ReadHolds on storage {:?} and compute {:?} ",
+            inner_holds.storage_holds.keys(),
+            inner_holds.compute_holds.keys()
+        );
 
         let res = self.dropped_read_holds_tx.send(inner_holds);
         if let Err(e) = res {
             tracing::warn!("error when trying to drop ReadHold: {:?}", e)
         }
+    }
+}
+
+/// Inner state of [ReadHolds]. We have this separate so that we can send the
+/// inner state along a channel, for releasing when dropped.
+#[derive(Debug)]
+pub struct ReadHoldsInner<T: TimelyTimestamp> {
+    pub storage_holds: HashMap<GlobalId, StorageReadHold<T>>,
+    pub compute_holds: HashMap<(ComputeInstanceId, GlobalId), MutableAntichain<T>>,
+}
+
+impl<T: TimelyTimestamp> ReadHoldsInner<T> {
+    /// Return empty `ReadHolds`.
+    pub fn new() -> Self {
+        ReadHoldsInner {
+            storage_holds: HashMap::new(),
+            compute_holds: HashMap::new(),
+        }
+    }
+
+    /// Return a `CollectionIdBundle` containing all the IDs in the
+    /// [ReadHoldsInner].
+    pub fn id_bundle(&self) -> CollectionIdBundle {
+        let mut res = CollectionIdBundle::default();
+        for id in self.storage_holds.keys() {
+            res.storage_ids.insert(*id);
+        }
+        for (instance_id, id) in self.compute_holds.keys() {
+            res.compute_ids.entry(*instance_id).or_default().insert(*id);
+        }
+
+        res
+    }
+}
+
+impl<T: TimelyTimestamp + Lattice> ReadHoldsInner<T> {
+    pub fn least_valid_read(&self) -> Antichain<T> {
+        let mut since = Antichain::from_elem(T::minimum());
+        for (_id, hold) in self.storage_holds.iter() {
+            since.join_assign(&hold.since().to_owned());
+        }
+
+        for (_id, hold) in self.compute_holds.iter() {
+            since.join_assign(&hold.frontier().to_owned());
+        }
+
+        since
+    }
+
+    /// Returns the frontier at which this [ReadHoldsInner] is holding back the
+    /// since of the collection identified by `id`. This does not mean that the
+    /// overall since of the collection is what we report here. Only that it is
+    /// _at least_ held back to the reported frontier by this read hold.
+    ///
+    /// This method is not meant to be fast, use wisely!
+    pub fn since(&self, desired_id: &GlobalId) -> Antichain<T> {
+        let mut since = Antichain::new();
+
+        if let Some(hold) = self.storage_holds.get(desired_id) {
+            since.extend(hold.since().to_owned());
+        }
+
+        for ((_instance, id), hold) in self.compute_holds.iter() {
+            if id != desired_id {
+                continue;
+            }
+            since.extend(hold.frontier().to_owned());
+        }
+
+        since
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        for (id, other_hold) in other.storage_holds {
+            let existing_hold = self.storage_holds.entry(id);
+            match existing_hold {
+                hash_map::Entry::Occupied(mut o) => {
+                    o.get_mut().merge_assign(other_hold);
+                }
+                hash_map::Entry::Vacant(v) => {
+                    v.insert(other_hold);
+                }
+            }
+        }
+        for (id, mut other_hold) in other.compute_holds {
+            let hold = self.compute_holds.entry(id).or_default();
+            hold.update_iter(other_hold.updates().cloned());
+        }
+    }
+}
+
+impl<T: TimelyTimestamp> Default for ReadHoldsInner<T> {
+    fn default() -> Self {
+        ReadHoldsInner::new()
     }
 }
 
@@ -235,12 +335,12 @@ impl crate::coord::Coordinator {
     /// with a read policy that allows no compaction.
     pub(crate) async fn initialize_storage_read_policies(
         &mut self,
-        ids: Vec<GlobalId>,
+        ids: BTreeSet<GlobalId>,
         compaction_window: CompactionWindow,
     ) {
         self.initialize_read_policies(
             &CollectionIdBundle {
-                storage_ids: ids.into_iter().collect(),
+                storage_ids: ids,
                 compute_ids: BTreeMap::new(),
             },
             compaction_window,
@@ -282,6 +382,68 @@ impl crate::coord::Coordinator {
         id_bundle: &CollectionIdBundle,
         compaction_window: CompactionWindow,
     ) {
+        // When initializing read policies we acquire a hold from STORAGE. We
+        // have to keep those until we install our read policy all the way at
+        // the end.
+        let mut stashed_storage_holds = Vec::new();
+
+        // Creates a `ReadHolds` struct that contains a read hold for each id in
+        // `id_bundle`. The time of each read holds is at `time`, if possible
+        // otherwise it is at the lowest possible time, meaning the implied
+        // capability of the collection.
+        //
+        // This does not apply the read holds in STORAGE or COMPUTE. The code
+        // below applies those, after ensuring that read capabilities exist.
+        let mut initialize_read_holds = |coord: &mut Coordinator,
+                                         time: mz_repr::Timestamp,
+                                         id_bundle: &CollectionIdBundle|
+         -> TimelineReadHolds<mz_repr::Timestamp> {
+            let mut read_holds = TimelineReadHolds::new();
+            let time = Antichain::from_elem(time);
+
+            for id in id_bundle.storage_ids.iter() {
+                // Figure out at what since we can hold for this collection. We
+                // will use that for the initial policy that we're installing
+                // below.
+                let storage_hold = coord
+                    .controller
+                    .storage
+                    .acquire_read_hold(*id)
+                    .expect("collection does not exist");
+
+                let time = time.join(storage_hold.since());
+                read_holds
+                    .holds
+                    .entry(time)
+                    .or_default()
+                    .storage_ids
+                    .insert(*id);
+
+                // Stash the hold until we update/initialize the policy below.
+                stashed_storage_holds.push(storage_hold);
+            }
+            for (compute_instance, compute_ids) in id_bundle.compute_ids.iter() {
+                let compute = coord.controller.active_compute();
+                for id in compute_ids.iter() {
+                    let collection = compute
+                        .collection(*compute_instance, *id)
+                        .expect("collection does not exist");
+                    let read_frontier = collection.read_capability().clone();
+                    let time = time.join(&read_frontier);
+                    read_holds
+                        .holds
+                        .entry(time)
+                        .or_default()
+                        .compute_ids
+                        .entry(*compute_instance)
+                        .or_default()
+                        .insert(*id);
+                }
+            }
+
+            read_holds
+        };
+
         let mut compute_policy_updates: BTreeMap<ComputeInstanceId, Vec<_>> = BTreeMap::new();
         let mut storage_policy_updates = Vec::new();
         let mut id_bundles: HashMap<_, CollectionIdBundle> = HashMap::new();
@@ -292,7 +454,7 @@ impl crate::coord::Coordinator {
                 TimelineContext::TimelineDependent(timeline) => {
                     let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
                     let read_ts = oracle.read_ts().await;
-                    let new_read_holds = self.initialize_read_holds(read_ts, &id_bundle);
+                    let new_read_holds = initialize_read_holds(self, read_ts, &id_bundle);
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(&timeline).await;
                     for (time, id_bundle) in &new_read_holds.holds {
@@ -352,6 +514,107 @@ impl crate::coord::Coordinator {
         self.controller
             .storage
             .set_read_policy(storage_policy_updates);
+
+        // Now that we installed our read policy updates we can relinquish holds
+        // that we used to determine and hold collection sinces.
+        drop(stashed_storage_holds);
+    }
+
+    /// Attempt to update the timestamp of the read holds on the indicated collections from the
+    /// indicated times within `read_holds` to `new_time`.
+    pub(super) fn update_timeline_read_holds(
+        &mut self,
+        read_holds: &mut TimelineReadHolds<mz_repr::Timestamp>,
+        new_time: mz_repr::Timestamp,
+    ) {
+        // After this, read_holds.holds is initialized to an empty HashMap.
+        let old_holds = std::mem::take(&mut read_holds.holds);
+
+        let mut storage_policy_changes = Vec::new();
+        let mut compute_policy_changes: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        let new_time = Antichain::from_elem(new_time);
+
+        for (old_time, id_bundle) in old_holds {
+            let new_time = old_time.join(&new_time);
+            if old_time != new_time {
+                read_holds
+                    .holds
+                    .entry(new_time.clone())
+                    .or_default()
+                    .extend(&id_bundle);
+                for id in id_bundle.storage_ids {
+                    // NOTE: We don't verify that the new frontier is beyond the
+                    // old frontier. The timeline read hold for storage
+                    // collections is largely advisory, and "real" read holds
+                    // that we acquire via `acquire_read_hold` go directly to
+                    // STORAGE to acquire read holds at the earliest legal time.
+
+                    let read_needs = self
+                        .storage_read_capabilities
+                        .get_mut(&id)
+                        .expect("id does not exist");
+
+                    read_needs
+                        .holds
+                        .update_iter(new_time.iter().map(|t| (*t, 1)));
+                    read_needs
+                        .holds
+                        .update_iter(old_time.iter().map(|t| (*t, -1)));
+
+                    storage_policy_changes.push((id, read_needs.policy()));
+                }
+
+                for (compute_instance, compute_ids) in id_bundle.compute_ids {
+                    let compute = self.controller.active_compute();
+                    for id in compute_ids {
+                        let collection = compute
+                            .collection(compute_instance, id)
+                            .expect("id does not exist");
+                        assert!(collection.read_capability().le(&new_time.borrow()),
+                                "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
+                                id,
+                                compute_instance,
+                                collection.read_capability(),
+                                new_time,
+                                old_time,
+                        );
+                        let read_needs = self
+                            .compute_read_capabilities
+                            .get_mut(&id)
+                            .expect("id does not exist");
+                        read_needs
+                            .holds
+                            .update_iter(new_time.iter().map(|t| (*t, 1)));
+                        read_needs
+                            .holds
+                            .update_iter(old_time.iter().map(|t| (*t, -1)));
+                        compute_policy_changes
+                            .entry(compute_instance)
+                            .or_default()
+                            .push((id, read_needs.policy()));
+                    }
+                }
+            } else {
+                read_holds
+                    .holds
+                    .entry(old_time)
+                    .or_default()
+                    .extend(&id_bundle);
+            }
+        }
+
+        // Update STORAGE read policies.
+        self.controller
+            .storage
+            .set_read_policy(storage_policy_changes);
+
+        // Update COMPUTE read policies
+        let mut compute = self.controller.active_compute();
+        for (compute_instance, compute_policy_changes) in compute_policy_changes {
+            compute
+                .set_read_policy(compute_instance, compute_policy_changes)
+                .unwrap_or_terminate("cannot fail to set read policy");
+        }
     }
 
     /// If there is not capability for the given object, initialize one at the
@@ -420,15 +683,11 @@ impl crate::coord::Coordinator {
                 let policy: ReadPolicy<Timestamp> = match compaction_window {
                     Some(compaction_window) => compaction_window.into(),
                     None => {
-                        // We didn't get an initial policy, so set the current
-                        // since as a static policy.
-                        let collection = self
-                            .controller
-                            .storage
-                            .collection(*id)
-                            .expect("collection does not exist");
-                        let read_frontier = collection.implied_capability.clone();
-                        ReadPolicy::ValidFrom(read_frontier)
+                        // We didn't get an initial policy, so put in place the
+                        // most conservative policy in order to not accidentally
+                        // give a very lax policy to STORAGE. This will get
+                        // updated once the "real" policies are put in place.
+                        ReadPolicy::ValidFrom(Antichain::from_elem(mz_repr::Timestamp::MIN))
                     }
                 };
 
@@ -503,35 +762,44 @@ impl crate::coord::Coordinator {
         self.compute_read_capabilities.remove(id).is_some()
     }
 
-    /// Creates a `ReadHolds` struct that creates a read hold for each id in
-    /// `id_bundle`. The time of each read holds is at `time`, if possible
-    /// otherwise it is at the lowest possible time.
+    /// Attempt to acquire read holds on the indicated collections at the
+    /// earliest available time.
     ///
-    /// This does not apply the read holds in STORAGE or COMPUTE. It is up
-    /// to the caller to apply the read holds.
-    fn initialize_read_holds(
+    /// # Panics
+    ///
+    /// Will panic if any of the referenced collections in `id_bundle` don't
+    /// exist.
+    pub(crate) fn acquire_read_holds(
         &mut self,
-        time: mz_repr::Timestamp,
         id_bundle: &CollectionIdBundle,
-    ) -> InternalReadHolds<mz_repr::Timestamp> {
-        let mut read_holds = InternalReadHolds::new();
-        let time = Antichain::from_elem(time);
+    ) -> ReadHolds<Timestamp> {
+        // Create a `ReadHoldsInner` that contains a read hold for each id in
+        // `id_bundle`. The time of each read holds is at `time`, if possible
+        // otherwise it is at the lowest possible time.
+        //
+        // This does not apply the read holds in COMPUTE. The code below applies
+        // those in the correct read capability.
+        let mut read_holds = ReadHoldsInner::new();
+        let time_antichain = Antichain::from_elem(Timestamp::MIN);
 
-        for id in id_bundle.storage_ids.iter() {
-            let collection = self
-                .controller
-                .storage
-                .collection(*id)
-                .expect("collection does not exist");
-            let read_frontier = collection.implied_capability.clone();
-            let time = time.join(&read_frontier);
-            read_holds
-                .holds
-                .entry(time)
-                .or_default()
-                .storage_ids
-                .insert(*id);
+        let desired_storage_holds = id_bundle.storage_ids.iter().map(|id| *id).collect_vec();
+        let storage_read_holds = self
+            .controller
+            .storage
+            .acquire_read_holds(desired_storage_holds)
+            .expect("missing collections");
+
+        for storage_read_hold in storage_read_holds {
+            let prev = read_holds
+                .storage_holds
+                .insert(storage_read_hold.id(), storage_read_hold);
+
+            assert!(
+                prev.is_none(),
+                "can only store one storage ReadHold per collection"
+            );
         }
+
         for (compute_instance, compute_ids) in id_bundle.compute_ids.iter() {
             let compute = self.controller.active_compute();
             for id in compute_ids.iter() {
@@ -539,210 +807,54 @@ impl crate::coord::Coordinator {
                     .collection(*compute_instance, *id)
                     .expect("collection does not exist");
                 let read_frontier = collection.read_capability().clone();
-                let time = time.join(&read_frontier);
+                let time_antichain = time_antichain.join(&read_frontier);
+                let hold_chain = MutableAntichain::from(time_antichain);
                 read_holds
-                    .holds
-                    .entry(time)
-                    .or_default()
-                    .compute_ids
-                    .entry(*compute_instance)
-                    .or_default()
-                    .insert(*id);
+                    .compute_holds
+                    .insert((*compute_instance, *id), hold_chain);
             }
         }
 
-        read_holds
-    }
-
-    /// Attempt to acquire read holds on the indicated collections at the indicated `time`.
-    ///
-    /// If we are unable to acquire a read hold at the provided `time` for a specific id, then
-    /// depending on the `precise` argument, we either fall back to acquiring a read hold at
-    /// the lowest possible time for that id, or return an error. The returned error contains
-    /// those collection sinces that were later than the specified time.
-    pub(crate) fn acquire_read_holds(
-        &mut self,
-        time: Timestamp,
-        id_bundle: &CollectionIdBundle,
-        precise: bool,
-    ) -> Result<ReadHolds<Timestamp>, Vec<(Antichain<Timestamp>, CollectionIdBundle)>> {
-        let read_holds = self.initialize_read_holds(time, id_bundle);
-
-        if precise {
-            // If we are not able to acquire read holds precisely at the specified time (only later), then error out.
-            let too_late = read_holds
-                .holds
-                .iter()
-                .filter_map(|(antichain, ids)| {
-                    if antichain.iter().all(|hold_time| *hold_time == time) {
-                        None
-                    } else {
-                        Some((antichain.clone(), ids.clone()))
-                    }
-                })
-                .collect_vec();
-            if !too_late.is_empty() {
-                return Err(too_late);
-            }
-        }
-
-        // Update STORAGE read policies.
-        let mut policy_changes = Vec::new();
-        for (time, id) in read_holds.storage_ids() {
-            let read_needs = self.ensure_storage_capability(id, None);
-            read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
-            policy_changes.push((*id, read_needs.policy()));
-        }
-        self.controller.storage.set_read_policy(policy_changes);
         // Update COMPUTE read policies
-        for (compute_instance, compute_ids) in read_holds.compute_ids() {
-            let mut policy_changes = Vec::new();
-            for (time, id) in compute_ids {
-                let read_needs = self.ensure_compute_capability(compute_instance, id, None);
-                read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
-                policy_changes.push((*id, read_needs.policy()));
-            }
-            let mut compute = self.controller.active_compute();
+        let mut policy_changes: HashMap<_, Vec<_>> = HashMap::new();
+        for ((compute_instance, id), hold) in read_holds.compute_holds.iter_mut() {
+            let read_needs = self.ensure_compute_capability(compute_instance, id, None);
+            read_needs.holds.update_iter(hold.updates().cloned());
+            policy_changes
+                .entry(*compute_instance)
+                .or_default()
+                .push((*id, read_needs.policy()));
+        }
+
+        let mut compute = self.controller.active_compute();
+        for (compute_instance, policy_changes) in policy_changes {
             compute
-                .set_read_policy(*compute_instance, policy_changes)
+                .set_read_policy(compute_instance, policy_changes)
                 .unwrap_or_terminate("cannot fail to set read policy");
         }
 
         let read_holds = ReadHolds::new(read_holds, self.dropped_read_holds_tx.clone());
-        Ok(read_holds)
+        tracing::debug!(?read_holds, "acquire_read_holds");
+        read_holds
     }
 
-    /// Attempt to acquire read holds on the indicated collections at the indicated `time`.
-    /// This is similar to [Self::acquire_read_holds], but instead of returning the read holds,
-    /// it arranges for them to be automatically released at the end of the transaction.
-    ///
-    /// If we are unable to acquire a read hold at the provided `time` for a specific id, then
-    /// depending on the `precise` argument, we either fall back to acquiring a read hold at
-    /// the lowest possible time for that id, or return an error. The returned error contains
-    /// those collection sinces that were later than the specified time.
-    pub(crate) fn acquire_read_holds_auto_cleanup(
+    /// Stash transaction read holds. They will be released when the transaction
+    /// is cleaned up.
+    pub(crate) fn store_transaction_read_holds(
         &mut self,
         session: &Session,
-        time: Timestamp,
-        id_bundle: &CollectionIdBundle,
-        precise: bool,
-    ) -> Result<(), Vec<(Antichain<Timestamp>, CollectionIdBundle)>> {
-        let read_holds = self.acquire_read_holds(time, id_bundle, precise)?;
-        self.txn_read_holds
-            .entry(session.conn_id().clone())
-            .or_insert_with(Vec::new)
-            .push(read_holds);
-        Ok(())
-    }
+        read_holds: ReadHolds<Timestamp>,
+    ) {
+        let entry = self.txn_read_holds.entry(session.conn_id().clone());
 
-    /// Attempt to update the timestamp of the read holds on the indicated collections from the
-    /// indicated times within `read_holds` to `new_time`.
-    ///
-    /// If we are unable to update a read hold at the provided `time` for a specific id, then we
-    /// leave it unchanged.
-    ///
-    /// This method relies on a previous call to
-    /// `initialize_read_holds`, `acquire_read_holds`, or `update_read_hold` that returned
-    /// `read_holds`, and its behavior will be erratic if called on anything else.
-    pub(super) fn update_read_holds(
-        &mut self,
-        mut read_holds: InternalReadHolds<mz_repr::Timestamp>,
-        new_time: mz_repr::Timestamp,
-    ) -> InternalReadHolds<mz_repr::Timestamp> {
-        // After this, read_holds.holds is initialized to an empty HashMap.
-        let old_holds = std::mem::take(&mut read_holds.holds);
-
-        let mut storage_policy_changes = Vec::new();
-        let mut compute_policy_changes: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let new_time = Antichain::from_elem(new_time);
-
-        for (old_time, id_bundle) in old_holds {
-            let new_time = old_time.join(&new_time);
-            if old_time != new_time {
-                read_holds
-                    .holds
-                    .entry(new_time.clone())
-                    .or_default()
-                    .extend(&id_bundle);
-                for id in id_bundle.storage_ids {
-                    let collection = self
-                        .controller
-                        .storage
-                        .collection(id)
-                        .expect("id does not exist");
-                    assert!(collection.implied_capability.le(&new_time.borrow()),
-                            "Storage collection {:?} has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
-                            id,
-                            collection.implied_capability,
-                            new_time,
-                            old_time,
-                    );
-                    let read_needs = self
-                        .storage_read_capabilities
-                        .get_mut(&id)
-                        .expect("id does not exist");
-                    read_needs
-                        .holds
-                        .update_iter(new_time.iter().map(|t| (*t, 1)));
-                    read_needs
-                        .holds
-                        .update_iter(old_time.iter().map(|t| (*t, -1)));
-                    storage_policy_changes.push((id, read_needs.policy()));
-                }
-
-                for (compute_instance, compute_ids) in id_bundle.compute_ids {
-                    let compute = self.controller.active_compute();
-                    for id in compute_ids {
-                        let collection = compute
-                            .collection(compute_instance, id)
-                            .expect("id does not exist");
-                        assert!(collection.read_capability().le(&new_time.borrow()),
-                                "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
-                                id,
-                                compute_instance,
-                                collection.read_capability(),
-                                new_time,
-                                old_time,
-                        );
-                        let read_needs = self
-                            .compute_read_capabilities
-                            .get_mut(&id)
-                            .expect("id does not exist");
-                        read_needs
-                            .holds
-                            .update_iter(new_time.iter().map(|t| (*t, 1)));
-                        read_needs
-                            .holds
-                            .update_iter(old_time.iter().map(|t| (*t, -1)));
-                        compute_policy_changes
-                            .entry(compute_instance)
-                            .or_default()
-                            .push((id, read_needs.policy()));
-                    }
-                }
-            } else {
-                read_holds
-                    .holds
-                    .entry(old_time)
-                    .or_default()
-                    .extend(&id_bundle);
+        match entry {
+            btree_map::Entry::Vacant(v) => {
+                v.insert(read_holds);
+            }
+            btree_map::Entry::Occupied(mut o) => {
+                o.get_mut().merge(read_holds);
             }
         }
-
-        // Update STORAGE read policies.
-        self.controller
-            .storage
-            .set_read_policy(storage_policy_changes);
-
-        // Update COMPUTE read policies
-        let mut compute = self.controller.active_compute();
-        for (compute_instance, compute_policy_changes) in compute_policy_changes {
-            compute
-                .set_read_policy(compute_instance, compute_policy_changes)
-                .unwrap_or_terminate("cannot fail to set read policy");
-        }
-
-        read_holds
     }
 
     /// Release the given read holds.
@@ -751,38 +863,27 @@ impl crate::coord::Coordinator {
     /// `initialize_read_holds`, `acquire_read_holds`, or `update_read_hold` that returned
     /// `ReadHolds`, and its behavior will be erratic if called on anything else,
     /// or if called more than once on the same bundle of read holds.
-    pub(super) fn release_read_holds(&mut self, read_holdses: Vec<InternalReadHolds<Timestamp>>) {
-        // Update STORAGE read policies.
-        let mut storage_policy_changes = Vec::new();
-        for read_holds in read_holdses.iter() {
-            for (time, id) in read_holds.storage_ids() {
-                // It's possible that a concurrent DDL statement has already dropped this GlobalId
-                if let Some(read_needs) = self.storage_read_capabilities.get_mut(id) {
-                    read_needs.holds.update_iter(time.iter().map(|t| (*t, -1)));
-                    storage_policy_changes.push((*id, read_needs.policy()));
-                }
-            }
-        }
-        self.controller
-            .storage
-            .set_read_policy(storage_policy_changes);
+    pub(super) fn release_read_holds(&mut self, mut read_holdses: Vec<ReadHoldsInner<Timestamp>>) {
+        tracing::debug!(?read_holdses, "release_read_holds");
+        // STORAGE read holds are released implicitly by dropping the STORAGE
+        // ReadHolds.
+
         // Update COMPUTE read policies
-        let mut compute = self.controller.active_compute();
         let mut policy_changes_per_instance = BTreeMap::new();
-        for read_holds in read_holdses.iter() {
-            for (compute_instance, compute_ids) in read_holds.compute_ids() {
+        for read_holds in read_holdses.iter_mut() {
+            for ((compute_instance, id), hold) in read_holds.compute_holds.iter_mut() {
                 let policy_changes = policy_changes_per_instance
                     .entry(compute_instance)
                     .or_insert_with(Vec::new);
-                for (time, id) in compute_ids {
-                    // It's possible that a concurrent DDL statement has already dropped this GlobalId
-                    if let Some(read_needs) = self.compute_read_capabilities.get_mut(id) {
-                        read_needs.holds.update_iter(time.iter().map(|t| (*t, -1)));
-                        policy_changes.push((*id, read_needs.policy()));
-                    }
+                // It's possible that a concurrent DDL statement has already dropped this GlobalId
+                if let Some(read_needs) = self.compute_read_capabilities.get_mut(id) {
+                    let inverted_hold = hold.updates().map(|(t, diff)| (*t, -diff));
+                    read_needs.holds.update_iter(inverted_hold);
+                    policy_changes.push((*id, read_needs.policy()));
                 }
             }
         }
+        let mut compute = self.controller.active_compute();
         for (compute_instance, policy_changes) in policy_changes_per_instance {
             if compute.instance_exists(*compute_instance) {
                 compute

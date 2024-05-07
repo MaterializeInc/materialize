@@ -9,6 +9,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
+use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::refresh_schedule::RefreshSchedule;
@@ -17,6 +18,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::soft_panic_or_log;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::Datum;
 use mz_repr::Row;
@@ -29,7 +31,6 @@ use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use timely::progress::Antichain;
-use timely::progress::Timestamp;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -132,7 +133,7 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
         let resolved_ids = ResolvedIds(Default::default());
@@ -172,7 +173,7 @@ impl Coordinator {
         };
 
         let state = self.catalog().state();
-        let plan_result = state.deserialize_plan(id, &item.create_sql, true);
+        let plan_result = state.deserialize_plan(&item.create_sql, true);
         let (plan, resolved_ids) = return_if_err!(plan_result, ctx);
 
         let plan::Plan::CreateMaterializedView(plan) = plan else {
@@ -185,7 +186,7 @@ impl Coordinator {
 
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+        let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,
@@ -232,18 +233,28 @@ impl Coordinator {
             );
         };
 
+        let target_cluster = self.catalog().get_cluster(view.cluster_id);
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features())
+            .override_from(&config.features);
+
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
                 view.raw_expr.clone(),
                 format,
                 &config,
+                &features,
                 &self.catalog().for_session(ctx.session()),
+                Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::LocalPlan => explain_plan(
                 view.optimized_expr.as_inner().clone(),
                 format,
                 &config,
+                &features,
                 &self.catalog().for_session(ctx.session()),
+                Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
@@ -254,7 +265,9 @@ impl Coordinator {
                     plan,
                     format,
                     &config,
+                    &features,
                     &self.catalog().for_session(ctx.session()),
+                    Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
@@ -267,7 +280,9 @@ impl Coordinator {
                     plan,
                     format,
                     &config,
+                    &features,
                     &self.catalog().for_session(ctx.session()),
+                    Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
@@ -332,27 +347,35 @@ impl Coordinator {
             role_metadata: session.role_metadata().clone(),
         };
 
-        // Acquire read holds at all the REFRESH AT times.
-        // Note that we already acquired a possibly non-precise read hold at mz_now() in the purification,
-        // if any of the REFRESH options involve mz_now(). But now we can acquire precise read holds, because by now
-        // the REFRESH AT expressions have been evaluated, so we can handle something like
-        // `mz_now()::text::int8 + 10000`;
+        // Check whether we can read all inputs at all the REFRESH AT times.
         if let Some(refresh_schedule) = refresh_schedule {
             if !refresh_schedule.ats.is_empty() && matches!(explain_ctx, ExplainContext::None) {
+                // Purification has acquired the earliest possible read holds if there are any
+                // REFRESH options.
+                let read_holds = self
+                    .txn_read_holds
+                    .get(session.conn_id())
+                    .expect("purification acquired read holds if there are REFRESH ATs");
+                let least_valid_read = read_holds.least_valid_read();
+                for refresh_at_ts in &refresh_schedule.ats {
+                    if !least_valid_read.less_equal(refresh_at_ts) {
+                        return Err(AdapterError::InputNotReadableAtRefreshAtTime(
+                            *refresh_at_ts,
+                            least_valid_read,
+                        ));
+                    }
+                }
+                // Also check that no new id has appeared in `sufficient_collections` (e.g. a new
+                // index), otherwise we might be missing some read holds.
                 let ids = self
                     .index_oracle(*cluster_id)
                     .sufficient_collections(resolved_ids.0.iter());
-                for refresh_at_ts in &refresh_schedule.ats {
-                    match self.acquire_read_holds_auto_cleanup(session, *refresh_at_ts, &ids, true)
-                    {
-                        Ok(()) => {}
-                        Err(earliest_possible) => {
-                            return Err(AdapterError::InputNotReadableAtRefreshAtTime(
-                                *refresh_at_ts,
-                                earliest_possible,
-                            ));
-                        }
-                    };
+                if !ids.difference(&read_holds.inner.id_bundle()).is_empty() {
+                    return Err(AdapterError::ChangedPlan(
+                        "the set of possible inputs changed during the creation of the \
+                         materialized view"
+                            .to_string(),
+                    ));
                 }
             }
         }
@@ -534,8 +557,23 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
-        let (read_holds, dataflow_as_of, storage_as_of, until) =
-            self.select_timestamps(id_bundle, refresh_schedule.as_ref())?;
+
+        let read_holds_owned;
+        let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
+            // In some cases, for example when REFRESH is used, the preparatory
+            // stages will already have acquired ReadHolds, we can re-use those.
+
+            txn_reads
+        } else {
+            // No one has acquired holds, make sure we can determine an as_of
+            // and render our dataflow below.
+            read_holds_owned = self.acquire_read_holds(&id_bundle);
+            &read_holds_owned
+        };
+
+        let (dataflow_as_of, storage_as_of, until) =
+            self.select_timestamps(id_bundle, refresh_schedule.as_ref(), read_holds)?;
+
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
             storage_as_of = ?storage_as_of,
@@ -639,7 +677,7 @@ impl Coordinator {
 
                 coord
                     .initialize_storage_read_policies(
-                        vec![sink_id],
+                        btreeset![sink_id],
                         compaction_window.unwrap_or(CompactionWindow::Default),
                     )
                     .await;
@@ -670,10 +708,6 @@ impl Coordinator {
             })
             .await;
 
-        // Only drop the read holds once the dataflow has been installed,
-        // which acquires its own read holds.
-        drop(read_holds);
-
         match transact_result {
             Ok(_) => Ok(ExecuteResponse::CreatedMaterializedView),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
@@ -695,28 +729,26 @@ impl Coordinator {
     /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
     /// materialized view.
     fn select_timestamps(
-        &mut self,
+        &self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
+        read_holds: &ReadHolds<mz_repr::Timestamp>,
     ) -> Result<
         (
-            ReadHolds<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
         ),
         AdapterError,
     > {
-        // Acquire read holds _before_ determining the least valid read.
-        // Otherwise the frontier might advance away from under us,
-        // concurrently.
-        let read_holds = self
-            .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
-            .expect("can always acquire non-precise read holds");
+        assert!(
+            id_bundle.difference(&read_holds.id_bundle()).is_empty(),
+            "we must have read holds for all involved collections"
+        );
 
         // For non-REFRESH MVs both the `dataflow_as_of` and the `storage_as_of` should be simply
         // `least_valid_read`.
-        let least_valid_read = self.least_valid_read(&id_bundle);
+        let least_valid_read = self.least_valid_read(read_holds);
         let mut dataflow_as_of = least_valid_read.clone();
         let mut storage_as_of = least_valid_read.clone();
 
@@ -764,7 +796,7 @@ impl Coordinator {
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
 
-        Ok((read_holds, dataflow_as_of, storage_as_of, until))
+        Ok((dataflow_as_of, storage_as_of, until))
     }
 
     #[instrument]
@@ -776,13 +808,17 @@ impl Coordinator {
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
-                    materialized_view: plan::MaterializedView { column_names, .. },
+                    materialized_view:
+                        plan::MaterializedView {
+                            column_names,
+                            cluster_id,
+                            ..
+                        },
                     ..
                 },
             df_meta,
             explain_ctx:
                 ExplainPlanContext {
-                    broken,
                     config,
                     format,
                     stage,
@@ -797,27 +833,30 @@ impl Coordinator {
             let full_name = self.catalog().resolve_full_name(&name, None);
             let transient_items = btreemap! {
                 sink_id => TransientItem::new(
-                    Some(full_name.to_string()),
-                    Some(full_name.item.to_string()),
+                    Some(full_name.into_parts()),
                     Some(column_names.iter().map(|c| c.to_string()).collect()),
                 )
             };
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
+        let target_cluster = self.catalog().get_cluster(cluster_id);
+
+        let features = OptimizerFeatures::from(self.catalog().system_config())
+            .override_from(&target_cluster.config.features())
+            .override_from(&config.features);
+
         let rows = optimizer_trace.into_rows(
             format,
             &config,
+            &features,
             &expr_humanizer,
             None,
+            Some(target_cluster.name.as_str()),
             df_meta,
             stage,
             plan::ExplaineeStatementKind::CreateMaterializedView,
         )?;
-
-        if broken {
-            tracing_core::callsite::rebuild_interest_cache();
-        }
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }

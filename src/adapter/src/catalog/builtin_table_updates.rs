@@ -12,24 +12,27 @@ mod notice;
 use std::net::Ipv4Addr;
 
 use bytesize::ByteSize;
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS,
-    MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
+    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES,
+    MZ_CLUSTER_SCHEDULES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES,
+    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES,
     MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS,
     MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
-    MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
-    MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
+    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
+    MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES, MZ_ROLES,
+    MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
     MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterVariant, Connection, DataSourceDesc, Database, Func, Index,
-    MaterializedView, Sink, Table, Type, View,
+    CatalogItem, ClusterVariant, Connection, DataSourceDesc, Func, Index, MaterializedView, Sink,
+    Table, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -37,29 +40,36 @@ use mz_controller::clusters::{
     ReplicaAllocation, ReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::refresh_schedule::RefreshEvery;
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
+use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
-use mz_sql::ast::{CreateIndexStatement, Statement};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
     TypeCategory,
 };
 use mz_sql::func::FuncImplCatalogDetails;
-use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
+use mz_sql::names::{
+    CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
+};
+use mz_sql::plan::ClusterSchedule;
+use mz_sql::session::user::SYSTEM_USER;
+use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{KafkaConnection, StringOrSecret};
 use mz_storage_types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 use mz_storage_types::sources::{
-    GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection,
+    GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection, SourceConnection,
 };
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -97,9 +107,10 @@ impl CatalogState {
 
     pub(super) fn pack_database_update(
         &self,
-        database: &Database,
+        database_id: &DatabaseId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
+        let database = self.get_database(database_id);
         let row = self.pack_privilege_array_row(database.privileges());
         let privileges = row.unpack_first();
         BuiltinTableUpdate {
@@ -144,13 +155,13 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_role_update(&self, id: RoleId, diff: Diff) -> Option<BuiltinTableUpdate> {
+    pub(super) fn pack_role_update(&self, id: RoleId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         match id {
             // PUBLIC role should not show up in mz_roles.
-            RoleId::Public => None,
+            RoleId::Public => vec![],
             id => {
                 let role = self.get_role(&id);
-                Some(BuiltinTableUpdate {
+                let role_update = BuiltinTableUpdate {
                     id: self.resolve_builtin_table(&MZ_ROLES),
                     row: Row::pack_slice(&[
                         Datum::String(&role.id.to_string()),
@@ -159,7 +170,40 @@ impl CatalogState {
                         Datum::from(role.attributes.inherit),
                     ]),
                     diff,
-                })
+                };
+                let mut updates = vec![role_update];
+
+                // HACK/TODO(parkmycar): Creating an empty SessionVars like this is pretty hacky,
+                // we should instead have a static list of all session vars.
+                let session_vars_reference = SessionVars::new_unchecked(
+                    &mz_build_info::DUMMY_BUILD_INFO,
+                    SYSTEM_USER.clone(),
+                );
+
+                for (name, val) in role.vars() {
+                    let result = session_vars_reference
+                        .inspect(name)
+                        .and_then(|var| var.check(val.borrow()));
+                    let Ok(formatted_val) = result else {
+                        // Note: all variables should have been validated by this point, so we
+                        // shouldn't ever hit this.
+                        tracing::error!(?name, ?val, ?result, "found invalid role default var");
+                        continue;
+                    };
+
+                    let role_var_update = BuiltinTableUpdate {
+                        id: self.resolve_builtin_table(&MZ_ROLE_PARAMETERS),
+                        row: Row::pack_slice(&[
+                            Datum::String(&role.id.to_string()),
+                            Datum::String(name),
+                            Datum::String(&formatted_val),
+                        ]),
+                        diff,
+                    };
+                    updates.push(role_var_update);
+                }
+
+                updates
             }
         }
     }
@@ -187,7 +231,7 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
+    pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> Vec<BuiltinTableUpdate> {
         let id = self.clusters_by_name[name];
         let cluster = &self.clusters_by_id[&id];
         let row = self.pack_privilege_array_row(cluster.privileges());
@@ -223,11 +267,41 @@ impl CatalogState {
         } else {
             packer.push(Datum::Null);
         }
-        BuiltinTableUpdate {
+
+        let mut updates = Vec::new();
+
+        updates.push(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
             row,
             diff,
+        });
+
+        if let ClusterVariant::Managed(managed_config) = &cluster.config.variant {
+            let row = match managed_config.schedule {
+                ClusterSchedule::Manual => Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String("manual"),
+                    Datum::Null,
+                ]),
+                ClusterSchedule::Refresh {
+                    rehydration_time_estimate,
+                } => Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String("on-refresh"),
+                    Datum::Interval(
+                        Interval::from_duration(rehydration_time_estimate)
+                            .expect("undoes planning"),
+                    ),
+                ]),
+            };
+            updates.push(BuiltinTableUpdate {
+                id: self.resolve_builtin_table(&MZ_CLUSTER_SCHEDULES),
+                row,
+                diff,
+            });
         }
+
+        updates
     }
 
     pub(super) fn pack_cluster_replica_update(
@@ -303,7 +377,7 @@ impl CatalogState {
         let not_ready_reason = match event.status {
             ClusterStatus::Ready => None,
             ClusterStatus::NotReady(None) => None,
-            ClusterStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("oom-killed"),
+            ClusterStatus::NotReady(Some(reason)) => Some(reason.to_string()),
         };
 
         BuiltinTableUpdate {
@@ -312,7 +386,7 @@ impl CatalogState {
                 Datum::String(&replica_id.to_string()),
                 Datum::UInt64(process_id),
                 Datum::String(status),
-                not_ready_reason.into(),
+                Datum::from(not_ready_reason.as_deref()),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),
             diff,
@@ -350,7 +424,16 @@ impl CatalogState {
                     let source_type = source.source_type();
                     let connection_id = source.connection_id();
                     let envelope = source.envelope();
-                    let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
+                    let cluster_entry = match source.data_source {
+                        // Ingestion exports don't have their own cluster, but
+                        // run on their ingestion's cluster.
+                        DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                            self.get_entry(&ingestion_id)
+                        }
+                        _ => entry,
+                    };
+
+                    let cluster_id = cluster_entry.item().cluster_id().map(|id| id.to_string());
 
                     let (key_format, value_format) = source.formats();
 
@@ -372,15 +455,63 @@ impl CatalogState {
                     );
 
                     updates.extend(match &source.data_source {
-                        DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.connection {
-                            GenericSourceConnection::Postgres(postgres) => {
-                                self.pack_postgres_source_update(id, postgres, diff)
+                        DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                            match &ingestion_desc.desc.connection {
+                                GenericSourceConnection::Postgres(postgres) => {
+                                    self.pack_postgres_source_update(id, postgres, diff)
+                                }
+                                GenericSourceConnection::Kafka(kafka) => {
+                                    self.pack_kafka_source_update(id, kafka, diff)
+                                }
+                                _ => vec![],
                             }
-                            GenericSourceConnection::Kafka(kafka) => {
-                                self.pack_kafka_source_update(id, kafka, diff)
+                        }
+                        DataSourceDesc::IngestionExport {
+                            ingestion_id,
+                            external_reference: UnresolvedItemName(external_reference),
+                        } => {
+                            let ingestion_entry = self
+                                .get_entry(ingestion_id)
+                                .source_desc()
+                                .expect("primary source exists")
+                                .expect("primary source is a source");
+
+                            match ingestion_entry.connection.name() {
+                                "postgres" => {
+                                    mz_ore::soft_assert_eq_no_log!(external_reference.len(), 3);
+                                    // The left-most qualification of Postgres
+                                    // tables is the database, but this
+                                    // information is redundant because each
+                                    // Postgres connection connects to only one
+                                    // database.
+                                    let schema_name = external_reference[1].to_ast_string();
+                                    let table_name = external_reference[2].to_ast_string();
+
+                                    self.pack_postgres_source_tables_update(
+                                        id,
+                                        &schema_name,
+                                        &table_name,
+                                        diff,
+                                    )
+                                }
+                                "mysql" => {
+                                    mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
+                                    let schema_name = external_reference[0].to_ast_string();
+                                    let table_name = external_reference[1].to_ast_string();
+
+                                    self.pack_mysql_source_tables_update(
+                                        id,
+                                        &schema_name,
+                                        &table_name,
+                                        diff,
+                                    )
+                                }
+                                // Load generator sources don't have any special
+                                // updates.
+                                "load-generator" => vec![],
+                                s => unreachable!("{s} sources do not have subsources"),
                             }
-                            _ => vec![],
-                        },
+                        }
                         DataSourceDesc::Webhook { .. } => {
                             vec![self.pack_webhook_source_update(id, diff)]
                         }
@@ -448,7 +579,41 @@ impl CatalogState {
             }
         }
 
+        // Use initial lcw so that we can tell apart default from non-existent windows.
+        if let Some(cw) = entry.item().initial_logical_compaction_window() {
+            updates.push(self.pack_history_retention_strategy_update(id, cw, diff));
+            // Propagate subsource changes.
+            for (cw, mut ids) in self.source_compaction_windows([id]) {
+                // Id already accounted for above.
+                ids.remove(&id);
+                for sub_id in ids {
+                    updates.push(self.pack_history_retention_strategy_update(sub_id, cw, diff));
+                }
+            }
+        }
+
         updates
+    }
+
+    fn pack_history_retention_strategy_update(
+        &self,
+        id: GlobalId,
+        cw: CompactionWindow,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let cw: u64 = cw.comparable_timestamp().into();
+        let cw = Jsonb::from_serde_json(serde_json::Value::Number(serde_json::Number::from(cw)))
+            .expect("must serialize");
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_HISTORY_RETENTION_STRATEGIES),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                // FOR is the only strategy at the moment. We may introduce FROM or others later.
+                Datum::String("FOR"),
+                cw.into_row().into_element(),
+            ]),
+            diff,
+        }
     }
 
     fn pack_table_update(
@@ -580,6 +745,42 @@ impl CatalogState {
                 Datum::String(&id.to_string()),
                 Datum::String(&kafka.group_id(&self.config.connection_context, id)),
                 Datum::String(&kafka.topic),
+            ]),
+            diff,
+        }]
+    }
+
+    fn pack_postgres_source_tables_update(
+        &self,
+        id: GlobalId,
+        schema_name: &str,
+        table_name: &str,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_POSTGRES_SOURCE_TABLES),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(schema_name),
+                Datum::String(table_name),
+            ]),
+            diff,
+        }]
+    }
+
+    fn pack_mysql_source_tables_update(
+        &self,
+        id: GlobalId,
+        schema_name: &str,
+        table_name: &str,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_MYSQL_SOURCE_TABLES),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(schema_name),
+                Datum::String(table_name),
             ]),
             diff,
         }]
@@ -881,7 +1082,9 @@ impl CatalogState {
         // do the same for compatibility's sake.
         query_string.push(';');
 
-        vec![BuiltinTableUpdate {
+        let mut updates = Vec::new();
+
+        updates.push(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_MATERIALIZED_VIEWS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
@@ -896,7 +1099,65 @@ impl CatalogState {
                 Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
-        }]
+        });
+
+        if let Some(refresh_schedule) = &mview.refresh_schedule {
+            // This can't be `ON COMMIT`, because that is represented by a `None` instead of an
+            // empty `RefreshSchedule`.
+            assert!(!refresh_schedule.is_empty());
+            for RefreshEvery {
+                interval,
+                aligned_to,
+            } in refresh_schedule.everies.iter()
+            {
+                let aligned_to_dt = mz_ore::now::to_datetime(
+                    <&Timestamp as TryInto<u64>>::try_into(aligned_to).expect("undoes planning"),
+                );
+                updates.push(BuiltinTableUpdate {
+                    id: self.resolve_builtin_table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
+                    row: Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String("every"),
+                        Datum::Interval(
+                            Interval::from_duration(*interval).expect("undoes planning"),
+                        ),
+                        Datum::TimestampTz(aligned_to_dt.try_into().expect("undoes planning")),
+                        Datum::Null,
+                    ]),
+                    diff,
+                });
+            }
+            for at in refresh_schedule.ats.iter() {
+                let at_dt = mz_ore::now::to_datetime(
+                    <&Timestamp as TryInto<u64>>::try_into(at).expect("undoes planning"),
+                );
+                updates.push(BuiltinTableUpdate {
+                    id: self.resolve_builtin_table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
+                    row: Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String("at"),
+                        Datum::Null,
+                        Datum::Null,
+                        Datum::TimestampTz(at_dt.try_into().expect("undoes planning")),
+                    ]),
+                    diff,
+                });
+            }
+        } else {
+            updates.push(BuiltinTableUpdate {
+                id: self.resolve_builtin_table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
+                row: Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String("on-commit"),
+                    Datum::Null,
+                    Datum::Null,
+                    Datum::Null,
+                ]),
+                diff,
+            });
+        }
+
+        updates
     }
 
     fn pack_sink_update(
@@ -1295,6 +1556,7 @@ impl CatalogState {
     pub fn pack_audit_log_update(
         &self,
         event: &VersionedEvent,
+        diff: Diff,
     ) -> Result<BuiltinTableUpdate, Error> {
         let (event_type, object_type, details, user, occurred_at): (
             &EventType,
@@ -1338,14 +1600,15 @@ impl CatalogState {
                 },
                 Datum::TimestampTz(dt.try_into().expect("must fit")),
             ]),
-            diff: 1,
+            diff,
         })
     }
 
     pub fn pack_storage_usage_update(
         &self,
         VersionedStorageUsage::V1(event): &VersionedStorageUsage,
-    ) -> Result<BuiltinTableUpdate, Error> {
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
         let id = self.resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
         let row = Row::pack_slice(&[
             Datum::UInt64(event.id),
@@ -1357,7 +1620,7 @@ impl CatalogState {
                     .expect("must fit"),
             ),
         ]);
-        Ok(BuiltinTableUpdate { id, row, diff: 1 })
+        BuiltinTableUpdate { id, row, diff }
     }
 
     pub fn pack_egress_ip_update(&self, ip: &Ipv4Addr) -> Result<BuiltinTableUpdate, Error> {

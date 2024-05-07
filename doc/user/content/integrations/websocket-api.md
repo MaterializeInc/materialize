@@ -161,6 +161,7 @@ The payload has the following structure:
 ```
 {
     "message": <informational message>,
+    "code": <notice code>,
     "severity": <"warning"|"notice"|"debug"|"info"|"log">,
     "detail": <optional error detail>,
     "hint": <optional error hint>,

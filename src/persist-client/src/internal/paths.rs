@@ -149,14 +149,6 @@ impl std::fmt::Display for PartialBatchKey {
     }
 }
 
-impl Deref for PartialBatchKey {
-    type Target = String;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 /// An opaque identifier for an individual blob of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct RollupId(pub(crate) [u8; 16]);

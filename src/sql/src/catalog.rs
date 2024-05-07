@@ -49,7 +49,7 @@ use crate::names::{
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
-use crate::plan::{query, PlanError, PlanNotice};
+use crate::plan::{query, ClusterSchedule, PlanError, PlanNotice};
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -533,6 +533,9 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the size of the cluster, if the cluster is a managed cluster.
     fn managed_size(&self) -> Option<&str>;
+
+    /// Returns the schedule of the cluster, if the cluster is a managed cluster.
+    fn schedule(&self) -> Option<&ClusterSchedule>;
 }
 
 /// A cluster replica in a [`SessionCatalog`]
@@ -611,14 +614,12 @@ pub trait CatalogItem {
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
 
-    /// Reports whether this catalog item is a subsource.
-    fn is_subsource(&self) -> bool;
+    /// Reports whether this catalog entry is a subsource and, if it is, the
+    /// ingestion it is a subsource of, as well as the item it exports.
+    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName)>;
 
     /// Reports whether this catalog item is a progress source.
     fn is_progress_source(&self) -> bool;
-
-    /// If this catalog item is a source, it return the IDs of its subsources.
-    fn subsources(&self) -> BTreeSet<GlobalId>;
 
     /// If this catalog item is a source, it return the IDs of its progress collection.
     fn progress_id(&self) -> Option<GlobalId>;
@@ -735,6 +736,23 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
+        }
+    }
+}
+
+impl From<CatalogItemType> for mz_audit_log::ObjectType {
+    fn from(value: CatalogItemType) -> Self {
+        match value {
+            CatalogItemType::Table => mz_audit_log::ObjectType::Table,
+            CatalogItemType::Source => mz_audit_log::ObjectType::Source,
+            CatalogItemType::View => mz_audit_log::ObjectType::View,
+            CatalogItemType::MaterializedView => mz_audit_log::ObjectType::MaterializedView,
+            CatalogItemType::Index => mz_audit_log::ObjectType::Index,
+            CatalogItemType::Type => mz_audit_log::ObjectType::Type,
+            CatalogItemType::Sink => mz_audit_log::ObjectType::Sink,
+            CatalogItemType::Func => mz_audit_log::ObjectType::Func,
+            CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
+            CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
         }
     }
 }

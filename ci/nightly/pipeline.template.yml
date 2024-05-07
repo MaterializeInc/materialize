@@ -218,7 +218,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
@@ -242,7 +242,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
@@ -253,6 +253,8 @@ steps:
         label: Full Testdrive in Cloudtest (K8s)
         depends_on: build-aarch64
         timeout_in_minutes: 300
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
           queue: linux-aarch64-large
         plugins:
@@ -798,6 +800,17 @@ steps:
               args: [--scenario=MigrateX86Aarch64]
         sanitizer: skip
 
+      - id: checks-toggle-persist-roundtrip-spine
+        label: "Checks toggling persist roundtrip spine"
+        depends_on: build-aarch64
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=TogglePersistRoundtripSpine, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-migrate-aarch64-x86-64
         label: "Checks migrate from aarch64 to x86-64"
         depends_on: [build-x86_64, build-aarch64]
@@ -815,12 +828,28 @@ steps:
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-aarch64
         timeout_in_minutes: 60
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
           queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_upgrade.py]
+        sanitizer: skip
+
+      - id: cloudtest-slow
+        label: "Slow Cloudtest"
+        depends_on: build-aarch64
+        timeout_in_minutes: 35
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+        agents:
+          queue: linux-aarch64
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/cloudtest:
+              args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
         sanitizer: skip
 
   - group: "K8s node recovery cloudtest"
@@ -834,7 +863,7 @@ steps:
         retry:
           automatic:
             - exit_status: 1
-              limit: 1
+              limit: 2
         agents:
           queue: linux-aarch64
         inputs:
@@ -1091,7 +1120,8 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              args: [--max-joins=2, --runtime=1500]
+              # TODO(def-) Increase number of joins when #23451 is fixed
+              args: [--max-joins=1, --runtime=1500]
 
       - id: sqlsmith-explain
         label: "SQLsmith explain"
@@ -1102,7 +1132,8 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              args: [--max-joins=15, --explain-only, --runtime=1500]
+              # TODO(def-) Increase number of joins when #23451 is fixed
+              args: [--max-joins=5, --explain-only, --runtime=1500]
 
   - group: SQLancer
     key: sqlancer
@@ -1228,7 +1259,7 @@ steps:
       - id: rqg-banking
         label: "RQG banking workload"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 60
         agents:
           queue: linux-aarch64-small
         plugins:
@@ -1236,10 +1267,21 @@ steps:
               composition: rqg
               args: ["banking", "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: rqg-left-join-stacks
+        label: "RQG left join stacks workload"
+        depends_on: build-aarch64
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: rqg
+              args: ["left-join-stacks", "--seed=$BUILDKITE_JOB_ID"]
+
   - id: crdb-restarts
     label: "CRDB rolling restarts"
     depends_on: build-aarch64
-    timeout_in_minutes: 15
+    timeout_in_minutes: 30
     agents:
       queue: linux-aarch64-small
     plugins:
@@ -1286,11 +1328,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --complexity=dml, --threads=8]
+              args: [--runtime=1500, --complexity=dml, --threads=16]
 
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
@@ -1298,11 +1340,23 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
+          queue: linux-aarch64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --threads=16]
+
+      - id: parallel-workload-ddl-only
+        label: "Parallel Workload (DDL Only)"
+        depends_on: build-aarch64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 60
+        agents:
           queue: linux-aarch64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500]
+              args: [--runtime=1500, --complexity=ddl-only, --threads=2]
 
       - id: parallel-workload-100-threads
         label: "Parallel Workload (100 threads)"
@@ -1310,8 +1364,8 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          # OOMs with linux-aarch64-small
-          queue: linux-aarch64
+          # TODO: Decrease when #26675 is fixed
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1323,11 +1377,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=rename, --naughty-identifiers]
+              args: [--runtime=1500, --scenario=rename, --naughty-identifiers, --threads=16]
 
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
@@ -1335,11 +1389,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=rename]
+              args: [--runtime=1500, --scenario=rename, --threads=16]
 
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
@@ -1348,11 +1402,11 @@ steps:
         timeout_in_minutes: 60
         skip: "TODO(def-): Reenable when #2392 is fixed"
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=cancel]
+              args: [--runtime=1500, --scenario=cancel, --threads=16]
 
       - id: parallel-workload-kill
         label: "Parallel Workload (kill)"
@@ -1360,12 +1414,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          # OOMs with linux-aarch64-small
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=kill]
+              args: [--runtime=1500, --scenario=kill, --threads=16]
 
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
@@ -1374,11 +1427,11 @@ steps:
         timeout_in_minutes: 60
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers]
+              args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
 
       - id: parallel-workload-persist-txn
         label: "Parallel Workload (toggle persist-txn)"
@@ -1386,11 +1439,11 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=toggle-persist-txn]
+              args: [--runtime=1500, --scenario=toggle-persist-txn, --threads=16]
 
   - id: incident-70
     label: "Test for incident 70"
@@ -1445,6 +1498,32 @@ steps:
 
     agents:
       queue: linux-aarch64
+
+  - group: "Copy To S3"
+    key: copy-to-s3
+    steps:
+    - id: copy-to-s3-1-replica
+      label: "Copy To S3 (1 replica)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 60
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: copy-to-s3
+            run: nightly
+      agents:
+        queue: linux-aarch64-large
+
+    - id: copy-to-s3-2-replicas
+      label: "Copy To S3 (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 60
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: copy-to-s3
+            run: nightly
+            args: [--default-size=2]
+      agents:
+        queue: linux-aarch64-large
 
   - group: "Language tests"
     key: language-tests

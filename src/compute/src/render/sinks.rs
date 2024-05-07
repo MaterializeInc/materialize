@@ -129,7 +129,7 @@ where
             .region_named(&region_name, |inner| {
                 let sink_render = get_sink_render_for::<_>(&sink.connection);
 
-                let sink_token = sink_render.render_continuous_sink(
+                let sink_token = sink_render.render_sink(
                     compute_state,
                     sink,
                     sink_id,
@@ -154,7 +154,7 @@ pub(crate) trait SinkRender<G>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
-    fn render_continuous_sink(
+    fn render_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
@@ -163,9 +163,7 @@ where
         start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-    ) -> Option<Rc<dyn Any>>
-    where
-        G: Scope<Timestamp = mz_repr::Timestamp>;
+    ) -> Option<Rc<dyn Any>>;
 }
 
 fn get_sink_render_for<G>(

@@ -21,9 +21,9 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
 use mz_dyncfg::Config;
-use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
+use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
@@ -43,7 +43,7 @@ use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
-use crate::iter::Consolidator;
+use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
 pub use crate::internal::encoding::LazyPartStats;
@@ -103,7 +103,6 @@ impl LeasedReaderId {
 pub struct Subscribe<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
-    // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
@@ -147,7 +146,15 @@ where
             }
         }
     }
+}
 
+impl<K, V, T, D> Subscribe<K, V, T, D>
+where
+    K: Debug + Codec + Default,
+    V: Debug + Codec + Default,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
     /// fetches and returns the data from within it.
     #[instrument(level = "debug", fields(shard = %self.listen.handle.machine.shard_id()))]
@@ -184,7 +191,15 @@ where
     pub async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
         self.listen.fetch_batch_part(part).await
     }
+}
 
+impl<K, V, T, D> Subscribe<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
         self.listen
@@ -200,12 +215,12 @@ where
 
     /// Politely expires this subscribe, releasing its lease.
     ///
-    /// There is a best-effort impl in Drop to expire a listen that wasn't
-    /// explicitly expired with this method. When possible, explicit expiry is
-    /// still preferred because the Drop one is best effort and is dependant on
-    /// a tokio [Handle] being available in the TLC at the time of drop (which
-    /// is a bit subtle). Also, explicit expiry allows for control over when it
-    /// happens.
+    /// There is a best-effort impl in Drop for [`ReadHandle`] to expire the
+    /// [`ReadHandle`] held by the subscribe that wasn't explicitly expired
+    /// with this method. When possible, explicit expiry is still preferred
+    /// because the Drop one is best effort and is dependant on a tokio
+    /// [Handle] being available in the TLC at the time of drop (which is a bit
+    /// subtle). Also, explicit expiry allows for control over when it happens.
     pub async fn expire(mut self) {
         if let Some(parts) = self.snapshot.take() {
             for part in parts {
@@ -232,7 +247,6 @@ pub enum ListenEvent<T, D> {
 pub struct Listen<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
-    // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
@@ -267,19 +281,6 @@ where
             frontier: as_of.clone(),
             as_of,
         }
-    }
-
-    /// Convert listener into futures::Stream
-    pub fn into_stream(
-        mut self,
-    ) -> impl Stream<Item = ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
-        async_stream::stream!({
-            loop {
-                for msg in self.fetch_next().await {
-                    yield msg;
-                }
-            }
-        })
     }
 
     /// An exclusive upper bound on the progress of this Listen.
@@ -383,7 +384,15 @@ where
 
         (parts, self.frontier.clone())
     }
+}
 
+impl<K, V, T, D> Listen<K, V, T, D>
+where
+    K: Debug + Codec + Default,
+    V: Debug + Codec + Default,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     /// Attempt to pull out the next values of this subscription.
     ///
     /// The updates received in [ListenEvent::Updates] should be assumed to be in arbitrary order
@@ -411,35 +420,17 @@ where
         ret
     }
 
-    /// Fetches the contents of `part` and returns its lease.
-    ///
-    /// This is broken out into its own function to provide a trivial means for
-    /// [`Subscribe`], which contains a [`Listen`], to fetch batches.
-    async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
-        let fetched_part = fetch_leased_part(
-            &part,
-            self.handle.blob.as_ref(),
-            Arc::clone(&self.handle.metrics),
-            &self.handle.metrics.read.listen,
-            &self.handle.machine.applier.shard_metrics,
-            &self.handle.reader_id,
-            self.handle.schemas.clone(),
-        )
-        .await;
-        self.handle.process_returned_leased_part(part);
-        fetched_part
-    }
-
-    /// Politely expires this listen, releasing its lease.
-    ///
-    /// There is a best-effort impl in Drop to expire a listen that wasn't
-    /// explicitly expired with this method. When possible, explicit expiry is
-    /// still preferred because the Drop one is best effort and is dependant on
-    /// a tokio [Handle] being available in the TLC at the time of drop (which
-    /// is a bit subtle). Also, explicit expiry allows for control over when it
-    /// happens.
-    pub async fn expire(self) {
-        self.handle.expire().await
+    /// Convert listener into futures::Stream
+    pub fn into_stream(
+        mut self,
+    ) -> impl Stream<Item = ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
+        async_stream::stream!({
+            loop {
+                for msg in self.fetch_next().await {
+                    yield msg;
+                }
+            }
+        })
     }
 
     /// Test helper to read from the listener until the given frontier is
@@ -467,6 +458,45 @@ where
         // Unlike most tests, intentionally don't consolidate updates here
         // because Listen replays them at the original fidelity.
         (updates, frontier)
+    }
+}
+
+impl<K, V, T, D> Listen<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// Fetches the contents of `part` and returns its lease.
+    ///
+    /// This is broken out into its own function to provide a trivial means for
+    /// [`Subscribe`], which contains a [`Listen`], to fetch batches.
+    async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
+        let fetched_part = fetch_leased_part(
+            &part,
+            self.handle.blob.as_ref(),
+            Arc::clone(&self.handle.metrics),
+            &self.handle.metrics.read.listen,
+            &self.handle.machine.applier.shard_metrics,
+            &self.handle.reader_id,
+            self.handle.schemas.clone(),
+        )
+        .await;
+        self.handle.process_returned_leased_part(part);
+        fetched_part
+    }
+
+    /// Politely expires this listen, releasing its lease.
+    ///
+    /// There is a best-effort impl in Drop for [`ReadHandle`] to expire the
+    /// [`ReadHandle`] held by the listen that wasn't explicitly expired with
+    /// this method. When possible, explicit expiry is still preferred because
+    /// the Drop one is best effort and is dependant on a tokio [Handle] being
+    /// available in the TLC at the time of drop (which is a bit subtle). Also,
+    /// explicit expiry allows for control over when it happens.
+    pub async fn expire(self) {
+        self.handle.expire().await
     }
 }
 
@@ -720,6 +750,14 @@ where
     ) -> Result<Vec<LeasedBatchPart<T>>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
+        soft_assert_or_log!(
+            PartialOrder::less_equal(self.since(), &as_of),
+            "ReadHandle::snapshot called with as_of {:?} not past the handle's since {:?}, \
+            though the read has succeeded. This implies the since is not being held back correctly.",
+            &as_of,
+            self.since()
+        );
+
         let filter = FetchBatchFilter::Snapshot { as_of };
         let mut leased_parts = Vec::new();
         for batch in batches {
@@ -824,11 +862,13 @@ where
                 purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
                 heartbeat_ts,
+                false,
             )
             .await;
         maintenance.start_performing(&machine, &gc);
         // The point of clone is that you're guaranteed to have the same (or
         // greater) since capability, verify that.
+        // TODO: better if it's the same since capability exactly.
         assert!(PartialOrder::less_equal(&reader_state.since, &self.since));
         let new_reader = ReadHandle::new(
             self.cfg.clone(),
@@ -1038,11 +1078,13 @@ where
         let batches = self.machine.snapshot(&as_of).await?;
 
         let mut consolidator = Consolidator::new(
+            format!("{}[as_of={:?}]", self.shard_id(), as_of.elements()),
             Arc::clone(&self.metrics),
             FetchBatchFilter::Snapshot {
                 as_of: as_of.clone(),
             },
             self.cfg.dynamic.compaction_memory_bound_bytes(),
+            SPLIT_OLD_RUNS.get(&self.cfg.configs),
         );
 
         let filter = FetchBatchFilter::Snapshot { as_of };
@@ -1100,7 +1142,15 @@ where
             parts,
         })
     }
+}
 
+impl<K, V, T, D> ReadHandle<K, V, T, D>
+where
+    K: Debug + Codec + Ord + Default,
+    V: Debug + Codec + Ord + Default,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     /// Generates a [Self::snapshot], and streams out all of the updates
     /// it contains in bounded memory.
     ///
@@ -1241,7 +1291,7 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn drop_unused_subscribe(dyncfgs: ConfigUpdates) {
-        let data = vec![
+        let data = [
             (("0".to_owned(), "zero".to_owned()), 0, 1),
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),

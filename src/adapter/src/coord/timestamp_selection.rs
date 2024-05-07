@@ -14,6 +14,7 @@ use std::fmt;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
@@ -175,42 +176,18 @@ impl TimestampProvider for Coordinator {
             .write_frontier()
     }
 
-    /// Accumulation of read capabilities for the collection.
-    fn storage_read_capabilities<'a>(&'a self, id: GlobalId) -> AntichainRef<'a, Timestamp> {
+    fn storage_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Vec<(GlobalId, Antichain<Timestamp>, Antichain<Timestamp>)> {
         self.controller
             .storage
-            .collection(id)
-            .expect("id does not exist")
-            .read_capabilities
-            .frontier()
-    }
-
-    /// The implicit capability associated with collection creation.
-    fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp> {
-        &self
-            .controller
-            .storage
-            .collection(id)
-            .expect("id does not exist")
-            .implied_capability
-    }
-
-    /// Reported write frontier.
-    fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp> {
-        &self
-            .controller
-            .storage
-            .collection(id)
-            .expect("id does not exist")
-            .write_frontier
+            .collections_frontiers(ids)
+            .expect("missing collections")
     }
 
     fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
-        let read_holds = self
-            .acquire_read_holds(mz_repr::Timestamp::minimum(), id_bundle, false)
-            .expect("can acquire read holds");
-
-        read_holds
+        self.acquire_read_holds(id_bundle)
     }
 
     fn catalog_state(&self) -> &CatalogState {
@@ -236,9 +213,12 @@ pub trait TimestampProvider {
         id: GlobalId,
     ) -> AntichainRef<'a, Timestamp>;
 
-    fn storage_read_capabilities<'a>(&'a self, id: GlobalId) -> AntichainRef<'a, Timestamp>;
-    fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
-    fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
+    /// Returns the implied capability (since) and write frontier (upper) for
+    /// the specified storage collections.
+    fn storage_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Vec<(GlobalId, Antichain<Timestamp>, Antichain<Timestamp>)>;
 
     fn catalog_state(&self) -> &CatalogState;
 
@@ -313,7 +293,7 @@ pub trait TimestampProvider {
         // stay queryable at the chosen timestamp.
         let read_holds = self.acquire_read_holds(id_bundle);
 
-        let since = self.least_valid_read(id_bundle);
+        let since = self.least_valid_read(&read_holds);
         let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
@@ -430,9 +410,10 @@ pub trait TimestampProvider {
             );
             candidate
         } else {
-            coord_bail!(self.generate_timestamp_not_valid_error_msg(
+            coord_bail!(generate_timestamp_not_valid_error_msg(
                 id_bundle,
                 compute_instance,
+                &read_holds,
                 candidate
             ));
         };
@@ -456,22 +437,13 @@ pub trait TimestampProvider {
         Ok((determination, read_holds))
     }
 
-    /// The smallest common valid read frontier among the specified collections.
-    fn least_valid_read(&self, id_bundle: &CollectionIdBundle) -> Antichain<mz_repr::Timestamp> {
-        let mut since = Antichain::from_elem(Timestamp::minimum());
-        {
-            for id in id_bundle.storage_ids.iter() {
-                since.join_assign(self.storage_implied_capability(*id))
-            }
-        }
-        {
-            for (instance, compute_ids) in &id_bundle.compute_ids {
-                for id in compute_ids.iter() {
-                    since.join_assign(self.compute_read_capability(*instance, *id))
-                }
-            }
-        }
-        since
+    /// The smallest common valid read frontier among times in the given
+    /// [ReadHolds].
+    fn least_valid_read(
+        &self,
+        read_holds: &ReadHolds<mz_repr::Timestamp>,
+    ) -> Antichain<mz_repr::Timestamp> {
+        read_holds.least_valid_read()
     }
 
     /// Acquires [ReadHolds], for the given `id_bundle` at the earliest possible
@@ -486,20 +458,22 @@ pub trait TimestampProvider {
     /// Times that are not greater or equal to this frontier are complete for all collections
     /// identified as arguments.
     fn least_valid_write(&self, id_bundle: &CollectionIdBundle) -> Antichain<mz_repr::Timestamp> {
-        let mut since = Antichain::new();
+        let mut upper = Antichain::new();
         {
-            for id in id_bundle.storage_ids.iter() {
-                since.extend(self.storage_write_frontier(*id).iter().cloned());
+            for (_id, _since, collection_upper) in
+                self.storage_frontiers(id_bundle.storage_ids.iter().cloned().collect_vec())
+            {
+                upper.extend(collection_upper);
             }
         }
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
                 for id in compute_ids.iter() {
-                    since.extend(self.compute_write_frontier(*instance, *id).iter().cloned());
+                    upper.extend(self.compute_write_frontier(*instance, *id).iter().cloned());
                 }
             }
         }
-        since
+        upper
     }
 
     /// Returns `least_valid_write` - 1, i.e., each time in `least_valid_write` stepped back in a
@@ -511,46 +485,36 @@ pub trait TimestampProvider {
         }
         frontier
     }
+}
 
-    fn generate_timestamp_not_valid_error_msg(
-        &self,
-        id_bundle: &CollectionIdBundle,
-        compute_instance: ComputeInstanceId,
-        candidate: mz_repr::Timestamp,
-    ) -> String {
-        let invalid_indexes =
-            if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-                compute_ids
-                    .iter()
-                    .filter_map(|id| {
-                        let since = self.compute_read_frontier(compute_instance, *id).to_owned();
-                        if since.less_equal(&candidate) {
-                            None
-                        } else {
-                            Some(since)
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-        let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
-            let since = self.storage_read_capabilities(*id).to_owned();
-            if since.less_equal(&candidate) {
-                None
-            } else {
-                Some(since)
+fn generate_timestamp_not_valid_error_msg(
+    id_bundle: &CollectionIdBundle,
+    compute_instance: ComputeInstanceId,
+    read_holds: &ReadHolds<mz_repr::Timestamp>,
+    candidate: mz_repr::Timestamp,
+) -> String {
+    let mut invalid = Vec::new();
+
+    if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
+        for id in compute_ids {
+            let since = read_holds.since(id);
+            if !since.less_equal(&candidate) {
+                invalid.push((*id, since));
             }
-        });
-        let invalid = invalid_indexes
-            .into_iter()
-            .chain(invalid_sources)
-            .collect::<Vec<_>>();
-        format!(
-            "Timestamp ({}) is not valid for all inputs: {:?}",
-            candidate, invalid,
-        )
+        }
     }
+
+    for id in id_bundle.storage_ids.iter() {
+        let since = read_holds.since(id);
+        if !since.less_equal(&candidate) {
+            invalid.push((*id, since));
+        }
+    }
+
+    format!(
+        "Timestamp ({}) is not valid for all inputs: {:?}",
+        candidate, invalid,
+    )
 }
 
 impl Coordinator {

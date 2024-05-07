@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 
 use anyhow::anyhow;
 use derivative::Derivative;
@@ -17,12 +17,13 @@ use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
 use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
@@ -48,14 +49,17 @@ use crate::durable::objects::{
     SystemPrivilegesKey, SystemPrivilegesValue, UnfinalizedShardKey,
 };
 use crate::durable::{
-    CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
+    CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
     AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateUpdate, StateUpdateKind};
 
+type Timestamp = u64;
+
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
+/// An operation also logically groups multiple catalog updates together.
 #[derive(Derivative)]
 #[derivative(Debug, PartialEq)]
 pub struct Transaction<'a> {
@@ -86,6 +90,8 @@ pub struct Transaction<'a> {
     // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
     storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
+    /// The ID of the current operation of this transaction.
+    op_id: Timestamp,
 }
 
 impl<'a> Transaction<'a> {
@@ -153,16 +159,17 @@ impl<'a> Transaction<'a> {
             persist_txn_shard: TableTransaction::new(persist_txn_shard, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
+            op_id: 0,
         })
     }
 
-    pub fn loaded_items(&self) -> Vec<Item> {
-        let mut items = Vec::new();
-        self.items.for_values(|k, v| {
-            items.push(Item::from_key_value(k.clone(), v.clone()));
-        });
-        items.sort_by_key(|Item { id, .. }| *id);
-        items
+    pub fn get_items(&self) -> impl Iterator<Item = Item> {
+        self.items
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .sorted_by_key(|Item { id, .. }| *id)
     }
 
     pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
@@ -219,6 +226,7 @@ impl<'a> Transaction<'a> {
                 privileges,
                 oid,
             },
+            self.op_id,
         ) {
             Ok(_) => Ok(oid),
             Err(_) => Err(SqlCatalogError::DatabaseAlreadyExists(database_name.to_owned()).into()),
@@ -264,6 +272,7 @@ impl<'a> Transaction<'a> {
                 privileges,
                 oid,
             },
+            self.op_id,
         ) {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::SchemaAlreadyExists(schema_name).into()),
@@ -316,6 +325,7 @@ impl<'a> Transaction<'a> {
                 vars,
                 oid,
             },
+            self.op_id,
         ) {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::RoleAlreadyExists(name).into()),
@@ -379,6 +389,7 @@ impl<'a> Transaction<'a> {
                 privileges,
                 config,
             },
+            self.op_id,
         ) {
             return Err(SqlCatalogError::ClusterAlreadyExists(cluster_name.to_owned()).into());
         };
@@ -398,7 +409,7 @@ impl<'a> Transaction<'a> {
             };
             let (key, value) = introspection_source_index.into_key_value();
             self.introspection_sources
-                .insert(key, value)
+                .insert(key, value, self.op_id)
                 .expect("no uniqueness violation");
         }
 
@@ -413,39 +424,24 @@ impl<'a> Transaction<'a> {
     ) -> Result<(), CatalogError> {
         let key = ClusterKey { id: cluster_id };
 
-        match self.clusters.update(|k, v| {
-            if *k == key {
-                let mut value = v.clone();
-                value.name = cluster_to_name.to_string();
-                Some(value)
-            } else {
-                None
-            }
-        })? {
+        match self.clusters.update(
+            |k, v| {
+                if *k == key {
+                    let mut value = v.clone();
+                    value.name = cluster_to_name.to_string();
+                    Some(value)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )? {
             0 => Err(SqlCatalogError::UnknownCluster(cluster_name.to_string()).into()),
             1 => Ok(()),
             n => panic!(
                 "Expected to update single cluster {cluster_name} ({cluster_id}), updated {n}"
             ),
         }
-    }
-
-    pub fn check_migration_has_run(&mut self, name: String) -> Result<bool, CatalogError> {
-        let key = SettingKey { name };
-        // If the key does not exist, then the migration has not been run.
-        let has_run = self.settings.get(&key).as_ref().is_some();
-
-        Ok(has_run)
-    }
-
-    pub fn mark_migration_has_run(&mut self, name: String) -> Result<(), CatalogError> {
-        let key = SettingKey { name };
-        let val = SettingValue {
-            value: true.to_string(),
-        };
-        self.settings.insert(key, val)?;
-
-        Ok(())
     }
 
     pub fn rename_cluster_replica(
@@ -464,7 +460,7 @@ impl<'a> Transaction<'a> {
             } else {
                 None
             }
-        })? {
+        }, self.op_id)? {
             0 => Err(SqlCatalogError::UnknownClusterReplica(replica_name.to_string()).into()),
             1 => Ok(()),
             n => panic!(
@@ -489,6 +485,7 @@ impl<'a> Transaction<'a> {
                 config,
                 owner_id,
             },
+            self.op_id,
         ) {
             let cluster = self
                 .clusters
@@ -521,7 +518,9 @@ impl<'a> Transaction<'a> {
                 };
                 let (key, value) = introspection_source_index.into_key_value();
 
-                let prev = self.introspection_sources.set(key, Some(value))?;
+                let prev = self
+                    .introspection_sources
+                    .set(key, Some(value), self.op_id)?;
                 if prev.is_none() {
                     return Err(SqlCatalogError::FailedBuiltinSchemaMigration(format!(
                         "{index_id}"
@@ -569,6 +568,7 @@ impl<'a> Transaction<'a> {
                 privileges,
                 oid,
             },
+            self.op_id,
         ) {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
@@ -593,9 +593,11 @@ impl<'a> Transaction<'a> {
         let next_id = current_id
             .checked_add(amount)
             .ok_or(SqlCatalogError::IdExhaustion)?;
-        let prev = self
-            .id_allocator
-            .set(IdAllocKey { name: key }, Some(IdAllocValue { next_id }))?;
+        let prev = self.id_allocator.set(
+            IdAllocKey { name: key },
+            Some(IdAllocValue { next_id }),
+            self.op_id,
+        )?;
         assert_eq!(
             prev,
             Some(IdAllocValue {
@@ -720,6 +722,7 @@ impl<'a> Transaction<'a> {
             Some(IdAllocValue {
                 next_id: next_id.into(),
             }),
+            self.op_id,
         )?;
         assert_eq!(
             prev,
@@ -742,17 +745,20 @@ impl<'a> Transaction<'a> {
         name: String,
         next_id: u64,
     ) -> Result<(), CatalogError> {
-        match self
-            .id_allocator
-            .insert(IdAllocKey { name: name.clone() }, IdAllocValue { next_id })
-        {
+        match self.id_allocator.insert(
+            IdAllocKey { name: name.clone() },
+            IdAllocValue { next_id },
+            self.op_id,
+        ) {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::IdAllocatorAlreadyExists(name).into()),
         }
     }
 
     pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), CatalogError> {
-        let prev = self.databases.set(DatabaseKey { id: *id }, None)?;
+        let prev = self
+            .databases
+            .set(DatabaseKey { id: *id }, None, self.op_id)?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -765,7 +771,9 @@ impl<'a> Transaction<'a> {
         database_id: &Option<DatabaseId>,
         schema_id: &SchemaId,
     ) -> Result<(), CatalogError> {
-        let prev = self.schemas.set(SchemaKey { id: *schema_id }, None)?;
+        let prev = self
+            .schemas
+            .set(SchemaKey { id: *schema_id }, None, self.op_id)?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -778,7 +786,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn remove_role(&mut self, name: &str) -> Result<(), CatalogError> {
-        let roles = self.roles.delete(|_k, v| v.name == name);
+        let roles = self.roles.delete(|_k, v| v.name == name, self.op_id);
         assert!(
             roles.iter().all(|(k, _)| k.id.is_user()),
             "cannot delete non-user roles"
@@ -793,7 +801,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn remove_cluster(&mut self, id: ClusterId) -> Result<(), CatalogError> {
-        let deleted = self.clusters.delete(|k, _v| k.id == id);
+        let deleted = self.clusters.delete(|k, _v| k.id == id, self.op_id);
         if deleted.is_empty() {
             Err(SqlCatalogError::UnknownCluster(id.to_string()).into())
         } else {
@@ -803,15 +811,16 @@ impl<'a> Transaction<'a> {
             // TODO(benesch): this doesn't seem right. Cascade deletions should
             // be entirely the domain of the higher catalog layer, not the
             // storage layer.
-            self.cluster_replicas.delete(|_k, v| v.cluster_id == id);
+            self.cluster_replicas
+                .delete(|_k, v| v.cluster_id == id, self.op_id);
             self.introspection_sources
-                .delete(|k, _v| k.cluster_id == id);
+                .delete(|k, _v| k.cluster_id == id, self.op_id);
             Ok(())
         }
     }
 
     pub fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), CatalogError> {
-        let deleted = self.cluster_replicas.delete(|k, _v| k.id == id);
+        let deleted = self.cluster_replicas.delete(|k, _v| k.id == id, self.op_id);
         if deleted.len() == 1 {
             Ok(())
         } else {
@@ -835,7 +844,7 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
     pub fn remove_item(&mut self, id: GlobalId) -> Result<(), CatalogError> {
-        let prev = self.items.set(ItemKey { gid: id }, None)?;
+        let prev = self.items.set(ItemKey { gid: id }, None, self.op_id)?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -848,9 +857,12 @@ impl<'a> Transaction<'a> {
     /// Returns an error if any id in `ids` is not found.
     ///
     /// NOTE: On error, there still may be some items removed from the transaction. It is
-    /// up to the called to either abort the transaction or commit.
+    /// up to the caller to either abort the transaction or commit.
     pub fn remove_items(&mut self, ids: BTreeSet<GlobalId>) -> Result<(), CatalogError> {
-        let n = self.items.delete(|k, _v| ids.contains(&k.gid)).len();
+        let n = self
+            .items
+            .delete(|k, _v| ids.contains(&k.gid), self.op_id)
+            .len();
         if n == ids.len() {
             Ok(())
         } else {
@@ -865,20 +877,23 @@ impl<'a> Transaction<'a> {
     /// Returns an error if any description in `descriptions` is not found.
     ///
     /// NOTE: On error, there still may be some items removed from the transaction. It is
-    /// up to the called to either abort the transaction or commit.
+    /// up to the caller to either abort the transaction or commit.
     pub fn remove_system_object_mappings(
         &mut self,
         descriptions: BTreeSet<SystemObjectDescription>,
     ) -> Result<(), CatalogError> {
         let n = self
             .system_gid_mapping
-            .delete(|k, _v| {
-                descriptions.contains(&SystemObjectDescription {
-                    schema_name: k.schema_name.clone(),
-                    object_type: k.object_type.clone(),
-                    object_name: k.object_name.clone(),
-                })
-            })
+            .delete(
+                |k, _v| {
+                    descriptions.contains(&SystemObjectDescription {
+                        schema_name: k.schema_name.clone(),
+                        object_type: k.object_type.clone(),
+                        object_name: k.object_name.clone(),
+                    })
+                },
+                self.op_id,
+            )
             .len();
         if n == descriptions.len() {
             Ok(())
@@ -903,6 +918,39 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Removes all introspection source indexes in `indexes` from the transaction.
+    ///
+    /// Returns an error if any index in `indexes` is not found.
+    ///
+    /// NOTE: On error, there still may be some indexes removed from the transaction. It is
+    /// up to the caller to either abort the transaction or commit.
+    pub fn remove_introspection_source_indexes(
+        &mut self,
+        introspection_source_indexes: BTreeSet<(ClusterId, String)>,
+    ) -> Result<(), CatalogError> {
+        let n = self
+            .introspection_sources
+            .delete(
+                |k, _v| introspection_source_indexes.contains(&(k.cluster_id, k.name.clone())),
+                self.op_id,
+            )
+            .len();
+        if n == introspection_source_indexes.len() {
+            Ok(())
+        } else {
+            let txn_indexes = self
+                .introspection_sources
+                .items()
+                .keys()
+                .map(|k| (k.cluster_id, k.name.clone()))
+                .collect();
+            let mut unknown = introspection_source_indexes
+                .difference(&txn_indexes)
+                .map(|(cluster_id, name)| format!("{cluster_id} {name}"));
+            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+        }
+    }
+
     /// Updates item `id` in the transaction to `item_name` and `item`.
     ///
     /// Returns an error if `id` is not found.
@@ -910,17 +958,20 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
     pub fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), CatalogError> {
-        let n = self.items.update(|k, v| {
-            if k.gid == id {
-                let item = item.clone();
-                // Schema IDs cannot change.
-                assert_eq!(item.schema_id, v.schema_id);
-                let (_, new_value) = item.into_key_value();
-                Some(new_value)
-            } else {
-                None
-            }
-        })?;
+        let n = self.items.update(
+            |k, v| {
+                if k.gid == id {
+                    let item = item.clone();
+                    // Schema IDs cannot change.
+                    assert_eq!(item.schema_id, v.schema_id);
+                    let (_, new_value) = item.into_key_value();
+                    Some(new_value)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -935,18 +986,21 @@ impl<'a> Transaction<'a> {
     /// Returns an error if any id in `items` is not found.
     ///
     /// NOTE: On error, there still may be some items updated in the transaction. It is
-    /// up to the called to either abort the transaction or commit.
+    /// up to the caller to either abort the transaction or commit.
     pub fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), CatalogError> {
-        let n = self.items.update(|k, v| {
-            if let Some(item) = items.get(&k.gid) {
-                // Schema IDs cannot change.
-                assert_eq!(item.schema_id, v.schema_id);
-                let (_, new_value) = item.clone().into_key_value();
-                Some(new_value)
-            } else {
-                None
-            }
-        })?;
+        let n = self.items.update(
+            |k, v| {
+                if let Some(item) = items.get(&k.gid) {
+                    // Schema IDs cannot change.
+                    assert_eq!(item.schema_id, v.schema_id);
+                    let (_, new_value) = item.clone().into_key_value();
+                    Some(new_value)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )?;
         let n = usize::try_from(n).expect("Must be positive and fit in usize");
         if n == items.len() {
             Ok(())
@@ -966,20 +1020,54 @@ impl<'a> Transaction<'a> {
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
     pub fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), CatalogError> {
-        let n = self.roles.update(move |k, _v| {
-            if k.id == id {
-                let role = role.clone();
-                let (_, new_value) = role.into_key_value();
-                Some(new_value)
-            } else {
-                None
-            }
-        })?;
+        let n = self.roles.update(
+            move |k, _v| {
+                if k.id == id {
+                    let role = role.clone();
+                    let (_, new_value) = role.into_key_value();
+                    Some(new_value)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
+        }
+    }
+
+    /// Updates all [`Role`]s with ids matching the keys of `roles` in the transaction, to the
+    /// corresponding value in `roles`.
+    ///
+    /// Returns an error if any id in `roles` is not found.
+    ///
+    /// NOTE: On error, there still may be some roles updated in the transaction. It is
+    /// up to the caller to either abort the transaction or commit.
+    pub fn update_roles(&mut self, roles: BTreeMap<RoleId, Role>) -> Result<(), CatalogError> {
+        let n = self.roles.update(
+            |k, _v| {
+                if let Some(role) = roles.get(&k.id) {
+                    let (_, new_role) = role.clone().into_key_value();
+                    Some(new_role)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )?;
+        let n = usize::try_from(n).expect("Must be positive and fit in usize");
+
+        if n == roles.len() {
+            Ok(())
+        } else {
+            let update_role_ids: BTreeSet<_> = roles.into_keys().collect();
+            let role_ids: BTreeSet<_> = self.roles.items().keys().map(|k| k.id).collect();
+            let mut unknown = update_role_ids.difference(&role_ids);
+            Err(SqlCatalogError::UnknownRole(unknown.join(", ")).into())
         }
     }
 
@@ -991,14 +1079,17 @@ impl<'a> Transaction<'a> {
         &mut self,
         mappings: BTreeMap<GlobalId, SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
-        let n = self.system_gid_mapping.update(|_k, v| {
-            if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
-                let (_, new_value) = mapping.clone().into_key_value();
-                Some(new_value)
-            } else {
-                None
-            }
-        })?;
+        let n = self.system_gid_mapping.update(
+            |_k, v| {
+                if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
+                    let (_, new_value) = mapping.clone().into_key_value();
+                    Some(new_value)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )?;
 
         if usize::try_from(n).expect("update diff should fit into usize") != mappings.len() {
             let id_str = mappings.keys().map(|id| id.to_string()).join(",");
@@ -1015,14 +1106,17 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of clusters in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), CatalogError> {
-        let n = self.clusters.update(|k, _v| {
-            if k.id == id {
-                let (_, new_value) = cluster.clone().into_key_value();
-                Some(new_value)
-            } else {
-                None
-            }
-        })?;
+        let n = self.clusters.update(
+            |k, _v| {
+                if k.id == id {
+                    let (_, new_value) = cluster.clone().into_key_value();
+                    Some(new_value)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -1042,14 +1136,17 @@ impl<'a> Transaction<'a> {
         replica_id: ReplicaId,
         replica: ClusterReplica,
     ) -> Result<(), CatalogError> {
-        let n = self.cluster_replicas.update(|k, _v| {
-            if k.id == replica_id {
-                let (_, new_value) = replica.clone().into_key_value();
-                Some(new_value)
-            } else {
-                None
-            }
-        })?;
+        let n = self.cluster_replicas.update(
+            |k, _v| {
+                if k.id == replica_id {
+                    let (_, new_value) = replica.clone().into_key_value();
+                    Some(new_value)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -1069,14 +1166,17 @@ impl<'a> Transaction<'a> {
         id: DatabaseId,
         database: Database,
     ) -> Result<(), CatalogError> {
-        let n = self.databases.update(|k, _v| {
-            if id == k.id {
-                let (_, new_value) = database.clone().into_key_value();
-                Some(new_value)
-            } else {
-                None
-            }
-        })?;
+        let n = self.databases.update(
+            |k, _v| {
+                if id == k.id {
+                    let (_, new_value) = database.clone().into_key_value();
+                    Some(new_value)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -1096,15 +1196,18 @@ impl<'a> Transaction<'a> {
         schema_id: SchemaId,
         schema: Schema,
     ) -> Result<(), CatalogError> {
-        let n = self.schemas.update(|k, _v| {
-            if schema_id == k.id {
-                let schema = schema.clone();
-                let (_, new_value) = schema.clone().into_key_value();
-                Some(new_value)
-            } else {
-                None
-            }
-        })?;
+        let n = self.schemas.update(
+            |k, _v| {
+                if schema_id == k.id {
+                    let schema = schema.clone();
+                    let (_, new_value) = schema.clone().into_key_value();
+                    Some(new_value)
+                } else {
+                    None
+                }
+            },
+            self.op_id,
+        )?;
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -1134,6 +1237,7 @@ impl<'a> Transaction<'a> {
                 grantee,
             },
             privileges.map(|privileges| DefaultPrivilegesValue { privileges }),
+            self.op_id,
         )?;
         Ok(())
     }
@@ -1148,7 +1252,8 @@ impl<'a> Transaction<'a> {
             .map(DurableType::into_key_value)
             .map(|(k, v)| (k, Some(v)))
             .collect();
-        self.default_privileges.set_many(default_privileges)?;
+        self.default_privileges
+            .set_many(default_privileges, self.op_id)?;
         Ok(())
     }
 
@@ -1164,6 +1269,7 @@ impl<'a> Transaction<'a> {
         self.system_privileges.set(
             SystemPrivilegesKey { grantee, grantor },
             acl_mode.map(|acl_mode| SystemPrivilegesValue { acl_mode }),
+            self.op_id,
         )?;
         Ok(())
     }
@@ -1178,7 +1284,8 @@ impl<'a> Transaction<'a> {
             .map(DurableType::into_key_value)
             .map(|(k, v)| (k, Some(v)))
             .collect();
-        self.system_privileges.set_many(system_privileges)?;
+        self.system_privileges
+            .set_many(system_privileges, self.op_id)?;
         Ok(())
     }
 
@@ -1191,6 +1298,7 @@ impl<'a> Transaction<'a> {
         self.settings.set(
             SettingKey { name },
             value.map(|value| SettingValue { value }),
+            self.op_id,
         )?;
         Ok(())
     }
@@ -1220,7 +1328,7 @@ impl<'a> Transaction<'a> {
 
         for introspection_source_index in &introspection_source_indexes {
             let (key, value) = introspection_source_index.clone().into_key_value();
-            self.introspection_sources.insert(key, value)?;
+            self.introspection_sources.insert(key, value, self.op_id)?;
         }
 
         Ok(introspection_source_indexes)
@@ -1236,7 +1344,7 @@ impl<'a> Transaction<'a> {
             .map(DurableType::into_key_value)
             .map(|(k, v)| (k, Some(v)))
             .collect();
-        self.system_gid_mapping.set_many(mappings)?;
+        self.system_gid_mapping.set_many(mappings, self.op_id)?;
         Ok(())
     }
 
@@ -1247,7 +1355,7 @@ impl<'a> Transaction<'a> {
             .map(DurableType::into_key_value)
             .map(|(k, v)| (k, Some(v)))
             .collect();
-        self.cluster_replicas.set_many(replicas)?;
+        self.cluster_replicas.set_many(replicas, self.op_id)?;
         Ok(())
     }
 
@@ -1257,10 +1365,10 @@ impl<'a> Transaction<'a> {
             Some(value) => {
                 let config = Config { key, value };
                 let (key, value) = config.into_key_value();
-                self.configs.set(key, Some(value))?;
+                self.configs.set(key, Some(value), self.op_id)?;
             }
             None => {
-                self.configs.set(ConfigKey { key }, None)?;
+                self.configs.set(ConfigKey { key }, None, self.op_id)?;
             }
         }
         Ok(())
@@ -1304,7 +1412,7 @@ impl<'a> Transaction<'a> {
             sub_component,
         };
         let value = comment.map(|c| CommentValue { comment: c });
-        self.comments.set(key, value)?;
+        self.comments.set(key, value, self.op_id)?;
 
         Ok(())
     }
@@ -1313,7 +1421,9 @@ impl<'a> Transaction<'a> {
         &mut self,
         object_id: CommentObjectId,
     ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, CatalogError> {
-        let deleted = self.comments.delete(|k, _v| k.object_id == object_id);
+        let deleted = self
+            .comments
+            .delete(|k, _v| k.object_id == object_id, self.op_id);
         let deleted = deleted
             .into_iter()
             .map(|(k, v)| (k.object_id, k.sub_component, v.comment))
@@ -1327,7 +1437,8 @@ impl<'a> Transaction<'a> {
             name: name.to_string(),
         };
         let value = ServerConfigurationValue { value };
-        self.system_configurations.set(key, Some(value))?;
+        self.system_configurations
+            .set(key, Some(value), self.op_id)?;
         Ok(())
     }
 
@@ -1337,20 +1448,21 @@ impl<'a> Transaction<'a> {
             name: name.to_string(),
         };
         self.system_configurations
-            .set(key, None)
+            .set(key, None, self.op_id)
             .expect("cannot have uniqueness violation");
     }
 
     /// Removes all persisted system configurations.
     pub fn clear_system_configs(&mut self) {
-        self.system_configurations.delete(|_k, _v| true);
+        self.system_configurations.delete(|_k, _v| true, self.op_id);
     }
 
     pub(crate) fn insert_config(&mut self, key: String, value: u64) -> Result<(), CatalogError> {
-        match self
-            .configs
-            .insert(ConfigKey { key: key.clone() }, ConfigValue { value })
-        {
+        match self.configs.insert(
+            ConfigKey { key: key.clone() },
+            ConfigValue { value },
+            self.op_id,
+        ) {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::ConfigAlreadyExists(key).into()),
         }
@@ -1374,14 +1486,6 @@ impl<'a> Transaction<'a> {
 
     pub fn get_roles(&self) -> impl Iterator<Item = Role> {
         self.roles
-            .items()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
-    }
-
-    pub fn get_comments(&self) -> impl Iterator<Item = Comment> {
-        self.comments
             .items()
             .clone()
             .into_iter()
@@ -1413,7 +1517,7 @@ impl<'a> Transaction<'a> {
             .get(&SettingKey {
                 name: CATALOG_CONTENT_VERSION_KEY.to_string(),
             })
-            .map(|value| value.value.clone())
+            .map(|value| value.value)
     }
 
     pub fn get_updates(&self) -> impl Iterator<Item = StateUpdate> {
@@ -1422,8 +1526,8 @@ impl<'a> Transaction<'a> {
             kind_fn: impl FnMut(T) -> StateUpdateKind,
         ) -> impl Iterator<Item = StateUpdateKind>
         where
-            K: Ord + Eq + Clone,
-            V: Ord + Clone,
+            K: Ord + Eq + Clone + Debug,
+            V: Ord + Clone + Debug,
             T: DurableType<K, V>,
         {
             table_txn
@@ -1456,8 +1560,33 @@ impl<'a> Transaction<'a> {
                 StateUpdateKind::SystemConfiguration,
             ))
             .chain(get_collection_updates(
+                &self.clusters,
+                StateUpdateKind::Cluster,
+            ))
+            .chain(get_collection_updates(
+                &self.introspection_sources,
+                StateUpdateKind::IntrospectionSourceIndex,
+            ))
+            .chain(get_collection_updates(
+                &self.cluster_replicas,
+                StateUpdateKind::ClusterReplica,
+            ))
+            .chain(get_collection_updates(
+                &self.system_gid_mapping,
+                StateUpdateKind::SystemObjectMapping,
+            ))
+            .chain(get_collection_updates(&self.items, StateUpdateKind::Item))
+            .chain(get_collection_updates(
                 &self.comments,
                 StateUpdateKind::Comment,
+            ))
+            .chain(get_collection_updates(
+                &self.storage_collection_metadata,
+                StateUpdateKind::StorageCollectionMetadata,
+            ))
+            .chain(get_collection_updates(
+                &self.unfinalized_shards,
+                StateUpdateKind::UnfinalizedShard,
             ))
             .map(|kind| StateUpdate { kind, diff: 1 })
     }
@@ -1486,6 +1615,14 @@ impl<'a> Transaction<'a> {
             storage_usage_updates: self.storage_usage_updates,
         };
         (txn_batch, self.durable_catalog)
+    }
+
+    /// Commit the current operation within the transaction. This does not cause anything to be
+    /// written durably, but signals to the current transaction that we are moving on to the next
+    /// operation.
+    #[mz_ore::instrument(level = "debug")]
+    pub fn commit_op(&mut self) {
+        self.op_id += 1;
     }
 
     /// Commits the storage transaction to durable storage. Any error returned indicates the catalog may be
@@ -1517,7 +1654,7 @@ impl<'a> Transaction<'a> {
             audit_log_updates,
             storage_usage_updates,
         } = &mut txn_batch;
-        // Consolidate in memory becuase it will likely be faster than consolidating after the
+        // Consolidate in memory because it will likely be faster than consolidating after the
         // transaction has been made durable.
         differential_dataflow::consolidation::consolidate_updates(databases);
         differential_dataflow::consolidation::consolidate_updates(schemas);
@@ -1546,7 +1683,7 @@ impl<'a> Transaction<'a> {
 use crate::durable::async_trait;
 
 #[async_trait]
-impl StorageTxn<Timestamp> for Transaction<'_> {
+impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, String> {
         self.storage_collection_metadata
             .items()
@@ -1563,7 +1700,7 @@ impl StorageTxn<Timestamp> for Transaction<'_> {
     fn insert_collection_metadata(
         &mut self,
         metadata: BTreeMap<GlobalId, String>,
-    ) -> Result<(), StorageError<Timestamp>> {
+    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         for (id, shard) in metadata {
             self.storage_collection_metadata
                 .insert(
@@ -1571,6 +1708,7 @@ impl StorageTxn<Timestamp> for Transaction<'_> {
                     StorageCollectionMetadataValue {
                         shard: shard.clone(),
                     },
+                    self.op_id,
                 )
                 .map_err(|err| match err {
                     DurableCatalogError::DuplicateKey => {
@@ -1587,7 +1725,10 @@ impl StorageTxn<Timestamp> for Transaction<'_> {
 
     fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)> {
         self.storage_collection_metadata
-            .delete(|StorageCollectionMetadataKey { id }, _| ids.contains(id))
+            .delete(
+                |StorageCollectionMetadataKey { id }, _| ids.contains(id),
+                self.op_id,
+            )
             .into_iter()
             .map(
                 |(
@@ -1609,11 +1750,11 @@ impl StorageTxn<Timestamp> for Transaction<'_> {
     fn insert_unfinalized_shards(
         &mut self,
         s: BTreeSet<String>,
-    ) -> Result<(), StorageError<Timestamp>> {
+    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         for shard in s {
             match self
                 .unfinalized_shards
-                .insert(UnfinalizedShardKey { shard }, ())
+                .insert(UnfinalizedShardKey { shard }, (), self.op_id)
             {
                 // Inserting duplicate keys has no effect.
                 Ok(()) | Err(DurableCatalogError::DuplicateKey) => {}
@@ -1624,9 +1765,10 @@ impl StorageTxn<Timestamp> for Transaction<'_> {
     }
 
     fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>) {
-        let _ = self
-            .unfinalized_shards
-            .delete(|UnfinalizedShardKey { shard }, _| shards.contains(shard.as_str()));
+        let _ = self.unfinalized_shards.delete(
+            |UnfinalizedShardKey { shard }, _| shards.contains(shard.as_str()),
+            self.op_id,
+        );
     }
 
     fn get_persist_txn_shard(&self) -> Option<String> {
@@ -1637,9 +1779,12 @@ impl StorageTxn<Timestamp> for Transaction<'_> {
             .map(|PersistTxnShardValue { shard }| shard)
     }
 
-    fn write_persist_txn_shard(&mut self, shard: String) -> Result<(), StorageError<Timestamp>> {
+    fn write_persist_txn_shard(
+        &mut self,
+        shard: String,
+    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         self.persist_txn_shard
-            .insert((), PersistTxnShardValue { shard })
+            .insert((), PersistTxnShardValue { shard }, self.op_id)
             .map_err(|err| match err {
                 DurableCatalogError::DuplicateKey => StorageError::PersistTxnShardAlreadyExists,
                 err => StorageError::Generic(anyhow::anyhow!(err)),
@@ -1698,6 +1843,13 @@ impl TransactionBatch {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TransactionUpdate<V> {
+    value: V,
+    ts: Timestamp,
+    diff: Diff,
+}
+
 /// TableTransaction emulates some features of a typical SQL transaction over
 /// table for a Collection.
 ///
@@ -1710,16 +1862,16 @@ impl TransactionBatch {
 #[derive(Debug, PartialEq, Eq)]
 struct TableTransaction<K, V> {
     initial: BTreeMap<K, V>,
-    // The desired state of keys after commit. `None` means the value will be
-    // deleted.
-    pending: BTreeMap<K, Option<V>>,
+    // The desired updates to keys after commit.
+    // Invariant: Value is sorted by `ts`.
+    pending: BTreeMap<K, Vec<TransactionUpdate<V>>>,
     uniqueness_violation: fn(a: &V, b: &V) -> bool,
 }
 
 impl<K, V> TableTransaction<K, V>
 where
-    K: Ord + Eq + Clone,
-    V: Ord + Clone,
+    K: Ord + Eq + Clone + Debug,
+    V: Ord + Clone + Debug,
 {
     /// Create a new TableTransaction with initial data. `uniqueness_violation` is a function
     /// whether there is a uniqueness violation among two values.
@@ -1760,23 +1912,14 @@ where
         // retracted if they already exist and were deleted or are being updated.
         self.pending
             .into_iter()
-            .map(|(k, v)| match self.initial.get(&k) {
-                Some(initial_v) => {
-                    let mut diffs = vec![(k.clone(), initial_v.clone(), -1)];
-                    if let Some(v) = v {
-                        diffs.push((k, v, 1));
-                    }
-                    diffs
-                }
-                None => {
-                    if let Some(v) = v {
-                        vec![(k, v, 1)]
-                    } else {
-                        vec![]
-                    }
-                }
+            .flat_map(|(k, v)| {
+                let mut v: Vec<_> = v
+                    .into_iter()
+                    .map(|TransactionUpdate { value, ts: _, diff }| (value, diff))
+                    .collect();
+                differential_dataflow::consolidation::consolidate(&mut v);
+                v.into_iter().map(move |(v, diff)| (k.clone(), v, diff))
             })
-            .flatten()
             .map(|(key, val, diff)| (key.into_proto(), val.into_proto(), diff))
             .collect()
     }
@@ -1791,6 +1934,13 @@ where
                 }
             }
         }
+        soft_assert_no_log!(
+            self.pending
+                .values()
+                .all(|pending| { pending.is_sorted_by(|a, b| a.ts <= b.ts) }),
+            "pending should be sorted by timestamp: {:?}",
+            self.pending
+        );
         Ok(())
     }
 
@@ -1798,12 +1948,13 @@ where
     /// order and applies `f` on all key, value pairs.
     fn for_values<F: FnMut(&K, &V)>(&self, mut f: F) {
         let mut seen = BTreeSet::new();
-        for (k, v) in self.pending.iter() {
+        for k in self.pending.keys() {
             seen.insert(k);
+            let v = self.get(k);
             // Deleted items don't exist so shouldn't be visited, but still suppress
             // visiting the key later.
             if let Some(v) = v {
-                f(k, v);
+                f(k, &v);
             }
         }
         for (k, v) in self.initial.iter() {
@@ -1815,14 +1966,21 @@ where
     }
 
     /// Returns the current value of `k`.
-    fn get(&self, k: &K) -> Option<&V> {
-        if let Some(v) = self.pending.get(k) {
-            v.as_ref()
-        } else if let Some(v) = self.initial.get(k) {
-            Some(v)
-        } else {
-            None
+    fn get(&self, k: &K) -> Option<V> {
+        let mut updates = Vec::new();
+        if let Some(initial) = self.initial.get(k) {
+            updates.push((initial.clone(), 1));
         }
+        if let Some(pending) = self.pending.get(k) {
+            updates.extend(
+                pending
+                    .into_iter()
+                    .map(|TransactionUpdate { value, ts: _, diff }| (value.clone(), diff.clone())),
+            );
+        }
+        differential_dataflow::consolidation::consolidate(&mut updates);
+        assert!(updates.len() <= 1);
+        updates.into_iter().next().map(|(v, _)| v)
     }
 
     /// Returns the items viewable in the current transaction.
@@ -1837,16 +1995,21 @@ where
     /// Iterates over the items viewable in the current transaction, and provides a
     /// map where additional pending items can be inserted, which will be appended
     /// to current pending items. Does not verify uniqueness.
-    fn for_values_mut<F: FnMut(&mut BTreeMap<K, Option<V>>, &K, &V)>(&mut self, mut f: F) {
+    fn for_values_mut<F: FnMut(&mut BTreeMap<K, Vec<TransactionUpdate<V>>>, &K, &V)>(
+        &mut self,
+        mut f: F,
+    ) {
         let mut pending = BTreeMap::new();
         self.for_values(|k, v| f(&mut pending, k, v));
-        self.pending.extend(pending);
+        for (k, updates) in pending {
+            self.pending.entry(k).or_default().extend(updates);
+        }
     }
 
     /// Inserts a new k,v pair.
     ///
     /// Returns an error if the uniqueness check failed or the key already exists.
-    fn insert(&mut self, k: K, v: V) -> Result<(), DurableCatalogError> {
+    fn insert(&mut self, k: K, v: V, ts: Timestamp) -> Result<(), DurableCatalogError> {
         let mut violation = None;
         self.for_values(|for_k, for_v| {
             if &k == for_k {
@@ -1859,7 +2022,11 @@ where
         if let Some(violation) = violation {
             return Err(violation.into());
         }
-        self.pending.insert(k, Some(v));
+        self.pending.entry(k).or_default().push(TransactionUpdate {
+            value: v,
+            ts,
+            diff: 1,
+        });
         soft_assert_no_log!(self.verify().is_ok());
         Ok(())
     }
@@ -1869,14 +2036,28 @@ where
     /// entries.
     ///
     /// Returns an error if the uniqueness check failed.
-    fn update<F: Fn(&K, &V) -> Option<V>>(&mut self, f: F) -> Result<Diff, DurableCatalogError> {
+    fn update<F: Fn(&K, &V) -> Option<V>>(
+        &mut self,
+        f: F,
+        ts: Timestamp,
+    ) -> Result<Diff, DurableCatalogError> {
         let mut changed = 0;
         // Keep a copy of pending in case of uniqueness violation.
         let pending = self.pending.clone();
         self.for_values_mut(|p, k, v| {
             if let Some(next) = f(k, v) {
                 changed += 1;
-                p.insert(k.clone(), Some(next));
+                let updates = p.entry(k.clone()).or_default();
+                updates.push(TransactionUpdate {
+                    value: v.clone(),
+                    ts,
+                    diff: -1,
+                });
+                updates.push(TransactionUpdate {
+                    value: next,
+                    ts,
+                    diff: 1,
+                });
             }
         });
         // Check for uniqueness violation.
@@ -1894,39 +2075,47 @@ where
     /// Returns an error if the uniqueness check failed.
     ///
     /// DO NOT call this function in a loop, use [`Self::set_many`] instead.
-    fn set(&mut self, k: K, v: Option<V>) -> Result<Option<V>, DurableCatalogError> {
-        // Save the pending value for the key so we can restore it in case of
-        // uniqueness violation.
-        let restore = self.pending.get(&k).cloned();
+    fn set(&mut self, k: K, v: Option<V>, ts: Timestamp) -> Result<Option<V>, DurableCatalogError> {
+        let prev = self.get(&k);
+        let entry = self.pending.entry(k.clone()).or_default();
+        let restore_len = entry.len();
 
-        let prev = match self.pending.entry(k.clone()) {
-            // key hasn't been set in this txn yet.
-            Entry::Vacant(e) => {
-                let initial = self.initial.get(&k);
-                if initial != v.as_ref() {
-                    // Provided value and initial value are different. Set key.
-                    e.insert(v);
-                }
-                // Return the initial txn's value of k.
-                initial.cloned()
+        match (v, prev.clone()) {
+            (Some(v), Some(prev)) => {
+                entry.push(TransactionUpdate {
+                    value: prev,
+                    ts,
+                    diff: -1,
+                });
+                entry.push(TransactionUpdate {
+                    value: v,
+                    ts,
+                    diff: 1,
+                });
             }
-            // key has been set in this txn. Set it and return the previous
-            // pending value.
-            Entry::Occupied(mut e) => e.insert(v),
-        };
+            (Some(v), None) => {
+                entry.push(TransactionUpdate {
+                    value: v,
+                    ts,
+                    diff: 1,
+                });
+            }
+            (None, Some(prev)) => {
+                entry.push(TransactionUpdate {
+                    value: prev,
+                    ts,
+                    diff: -1,
+                });
+            }
+            (None, None) => {}
+        }
 
         // Check for uniqueness violation.
         if let Err(err) = self.verify() {
             // Revert self.pending to the state it was in before calling this
             // function.
-            match restore {
-                Some(v) => {
-                    self.pending.insert(k, v);
-                }
-                None => {
-                    self.pending.remove(&k);
-                }
-            }
+            let pending = self.pending.get_mut(&k).expect("inserted above");
+            pending.truncate(restore_len);
             Err(err)
         } else {
             Ok(prev)
@@ -1940,47 +2129,56 @@ where
     fn set_many(
         &mut self,
         kvs: BTreeMap<K, Option<V>>,
+        ts: Timestamp,
     ) -> Result<BTreeMap<K, Option<V>>, DurableCatalogError> {
         let mut prevs = BTreeMap::new();
         let mut restores = BTreeMap::new();
 
         for (k, v) in kvs {
-            // Save the pending value for the key so we can restore it in case of
-            // uniqueness violation.
-            let restore = self.pending.get(&k).cloned();
-            restores.insert(k.clone(), restore);
+            let prev = self.get(&k);
+            let entry = self.pending.entry(k.clone()).or_default();
+            restores.insert(k.clone(), entry.len());
 
-            let prev = match self.pending.entry(k.clone()) {
-                // key hasn't been set in this txn yet.
-                Entry::Vacant(e) => {
-                    let initial = self.initial.get(&k);
-                    if initial != v.as_ref() {
-                        // Provided value and initial value are different. Set key.
-                        e.insert(v);
-                    }
-                    // Return the initial txn's value of k.
-                    initial.cloned()
+            match (v, prev.clone()) {
+                (Some(v), Some(prev)) => {
+                    entry.push(TransactionUpdate {
+                        value: prev,
+                        ts,
+                        diff: -1,
+                    });
+                    entry.push(TransactionUpdate {
+                        value: v,
+                        ts,
+                        diff: 1,
+                    });
                 }
-                // key has been set in this txn. Set it and return the previous
-                // pending value.
-                Entry::Occupied(mut e) => e.insert(v),
-            };
+                (Some(v), None) => {
+                    entry.push(TransactionUpdate {
+                        value: v,
+                        ts,
+                        diff: 1,
+                    });
+                }
+                (None, Some(prev)) => {
+                    entry.push(TransactionUpdate {
+                        value: prev,
+                        ts,
+                        diff: -1,
+                    });
+                }
+                (None, None) => {}
+            }
+
             prevs.insert(k, prev);
         }
 
         // Check for uniqueness violation.
         if let Err(err) = self.verify() {
-            for (k, restore) in restores {
+            for (k, restore_len) in restores {
                 // Revert self.pending to the state it was in before calling this
                 // function.
-                match restore {
-                    Some(v) => {
-                        self.pending.insert(k, v);
-                    }
-                    None => {
-                        self.pending.remove(&k);
-                    }
-                }
+                let pending = self.pending.get_mut(&k).expect("inserted above");
+                pending.truncate(restore_len);
             }
             Err(err)
         } else {
@@ -1990,12 +2188,16 @@ where
 
     /// Deletes items for which `f` returns true. Returns the keys and values of
     /// the deleted entries.
-    fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F) -> Vec<(K, V)> {
+    fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F, ts: Timestamp) -> Vec<(K, V)> {
         let mut deleted = Vec::new();
         self.for_values_mut(|p, k, v| {
             if f(k, v) {
                 deleted.push((k.clone(), v.clone()));
-                p.insert(k.clone(), None);
+                p.entry(k.clone()).or_default().push(TransactionUpdate {
+                    value: v.clone(),
+                    ts,
+                    diff: -1,
+                });
             }
         });
         soft_assert_no_log!(self.verify().is_ok());
@@ -2015,10 +2217,10 @@ fn test_table_transaction_simple() {
     .unwrap();
 
     table
-        .insert(2i64.to_le_bytes().to_vec(), "b".to_string())
+        .insert(2i64.to_le_bytes().to_vec(), "b".to_string(), 0)
         .unwrap();
     table
-        .insert(3i64.to_le_bytes().to_vec(), "c".to_string())
+        .insert(3i64.to_le_bytes().to_vec(), "c".to_string(), 0)
         .unwrap();
 }
 
@@ -2049,24 +2251,26 @@ fn test_table_transaction() {
     table.insert(2i64.to_le_bytes().to_vec(), "v2".to_string());
     let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
     assert_eq!(table_txn.items(), table);
-    assert_eq!(table_txn.delete(|_k, _v| false).len(), 0);
-    assert_eq!(table_txn.delete(|_k, v| v == "v2").len(), 1);
+    assert_eq!(table_txn.delete(|_k, _v| false, 0).len(), 0);
+    assert_eq!(table_txn.delete(|_k, v| v == "v2", 1).len(), 1);
     assert_eq!(
         table_txn.items(),
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string())])
     );
     assert_eq!(
-        table_txn.update(|_k, _v| Some("v3".to_string())).unwrap(),
+        table_txn
+            .update(|_k, _v| Some("v3".to_string()), 2)
+            .unwrap(),
         1
     );
 
     // Uniqueness violation.
     table_txn
-        .insert(3i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(3i64.to_le_bytes().to_vec(), "v3".to_string(), 3)
         .unwrap_err();
 
     table_txn
-        .insert(3i64.to_le_bytes().to_vec(), "v4".to_string())
+        .insert(3i64.to_le_bytes().to_vec(), "v4".to_string(), 4)
         .unwrap();
     assert_eq!(
         table_txn.items(),
@@ -2076,7 +2280,7 @@ fn test_table_transaction() {
         ])
     );
     let err = table_txn
-        .update(|_k, _v| Some("v1".to_string()))
+        .update(|_k, _v| Some("v1".to_string()), 5)
         .unwrap_err();
     assert!(
         matches!(err, DurableCatalogError::UniquenessViolation),
@@ -2103,25 +2307,31 @@ fn test_table_transaction() {
 
     let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
     // Deleting then creating an item that has a uniqueness violation should work.
-    assert_eq!(table_txn.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
+    assert_eq!(
+        table_txn.delete(|k, _v| k == &1i64.to_le_bytes(), 0).len(),
+        1
+    );
     table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
         .unwrap();
     // Uniqueness violation in value.
     table_txn
-        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
         .unwrap_err();
     // Key already exists, expect error.
     table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string(), 0)
         .unwrap_err();
-    assert_eq!(table_txn.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
+    assert_eq!(
+        table_txn.delete(|k, _v| k == &1i64.to_le_bytes(), 0).len(),
+        1
+    );
     // Both the inserts work now because the key and uniqueness violation are gone.
     table_txn
-        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
         .unwrap();
     table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string(), 0)
         .unwrap();
     let pending = table_txn.pending();
     assert_eq!(
@@ -2143,9 +2353,9 @@ fn test_table_transaction() {
     );
 
     let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    assert_eq!(table_txn.delete(|_k, _v| true).len(), 3);
+    assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 3);
     table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v1".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v1".to_string(), 0)
         .unwrap();
 
     commit(&mut table, table_txn.pending());
@@ -2155,9 +2365,9 @@ fn test_table_transaction() {
     );
 
     let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    assert_eq!(table_txn.delete(|_k, _v| true).len(), 1);
+    assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 1);
     table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v2".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v2".to_string(), 0)
         .unwrap();
     commit(&mut table, table_txn.pending());
     assert_eq!(
@@ -2167,16 +2377,16 @@ fn test_table_transaction() {
 
     // Verify we don't try to delete v3 or v4 during commit.
     let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    assert_eq!(table_txn.delete(|_k, _v| true).len(), 1);
+    assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 1);
     table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
         .unwrap();
     table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v4".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v4".to_string(), 1)
         .unwrap_err();
-    assert_eq!(table_txn.delete(|_k, _v| true).len(), 1);
+    assert_eq!(table_txn.delete(|_k, _v| true, 1).len(), 1);
     table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string(), 1)
         .unwrap();
     commit(&mut table, table_txn.pending());
     assert_eq!(
@@ -2188,13 +2398,13 @@ fn test_table_transaction() {
     let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
     // Uniqueness violation.
     table_txn
-        .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()))
+        .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()), 0)
         .unwrap_err();
     table_txn
-        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()))
+        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()), 1)
         .unwrap();
-    table_txn.set(2i64.to_le_bytes().to_vec(), None).unwrap();
-    table_txn.set(1i64.to_le_bytes().to_vec(), None).unwrap();
+    table_txn.set(2i64.to_le_bytes().to_vec(), None, 2).unwrap();
+    table_txn.set(1i64.to_le_bytes().to_vec(), None, 2).unwrap();
     let pending = table_txn.pending();
     assert_eq!(
         pending,
@@ -2212,7 +2422,7 @@ fn test_table_transaction() {
     // Duplicate `set`.
     let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
     table_txn
-        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()))
+        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()), 0)
         .unwrap();
     let pending = table_txn.pending::<Vec<u8>, String>();
     assert!(pending.is_empty());
@@ -2221,22 +2431,31 @@ fn test_table_transaction() {
     let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
     // Uniqueness violation.
     table_txn
-        .set_many(BTreeMap::from([
-            (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
-            (42i64.to_le_bytes().to_vec(), Some("v1".to_string())),
-        ]))
+        .set_many(
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+                (42i64.to_le_bytes().to_vec(), Some("v1".to_string())),
+            ]),
+            0,
+        )
         .unwrap_err();
     table_txn
-        .set_many(BTreeMap::from([
-            (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
-            (3i64.to_le_bytes().to_vec(), Some("v1".to_string())),
-        ]))
+        .set_many(
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+                (3i64.to_le_bytes().to_vec(), Some("v1".to_string())),
+            ]),
+            1,
+        )
         .unwrap();
     table_txn
-        .set_many(BTreeMap::from([
-            (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
-            (3i64.to_le_bytes().to_vec(), None),
-        ]))
+        .set_many(
+            BTreeMap::from([
+                (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
+                (3i64.to_le_bytes().to_vec(), None),
+            ]),
+            2,
+        )
         .unwrap();
     let pending = table_txn.pending();
     assert_eq!(
@@ -2259,10 +2478,13 @@ fn test_table_transaction() {
     // Duplicate `set_many`.
     let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
     table_txn
-        .set_many(BTreeMap::from([
-            (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
-            (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
-        ]))
+        .set_many(
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+                (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
+            ]),
+            0,
+        )
         .unwrap();
     let pending = table_txn.pending::<Vec<u8>, String>();
     assert!(pending.is_empty());

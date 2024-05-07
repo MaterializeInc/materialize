@@ -24,6 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use mz_dyncfg::Config;
 use mz_ore::task::JoinHandle;
 use mz_persist::location::Blob;
 use mz_persist_types::Codec64;
@@ -85,6 +86,9 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
             FetchData::Unleased { part, .. } => part.key.split().0 >= min_version,
             FetchData::Leased { part, .. } => match &part.part {
                 BatchPart::Hollow(x) => x.key.split().0 >= min_version,
+                // Inline parts are only written directly by the user and so may
+                // be unconsolidated.
+                BatchPart::Inline { .. } => true,
             },
             FetchData::AlreadyFetched => false,
         }
@@ -239,10 +243,12 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
 pub(crate) struct Consolidator<T, D> {
+    context: String,
     metrics: Arc<Metrics>,
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
+    split_old_runs: bool,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
@@ -255,20 +261,30 @@ pub(crate) struct Consolidator<T, D> {
     drop_stash: Option<Tuple<T, D>>,
 }
 
+pub(crate) const SPLIT_OLD_RUNS: Config<bool> = Config::new(
+    "persist_split_old_runs",
+    true,
+    "If set, split up runs that were written by older versions of Materialize and may not truly be consolidated."
+);
+
 impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D> {
     /// Create a new [Self] instance with the given prefetch budget. This budget is a "soft limit"
     /// on the size of the parts that the consolidator will fetch... we'll try and stay below the
     /// limit, but may burst above it if that's necessary to make progress.
     pub fn new(
+        context: String,
         metrics: Arc<Metrics>,
         filter: FetchBatchFilter<T>,
         prefetch_budget_bytes: usize,
+        split_old_runs: bool,
     ) -> Self {
         Self {
+            context,
             metrics,
             runs: vec![],
             filter,
             budget: prefetch_budget_bytes,
+            split_old_runs,
             initial_state: None,
             drop_stash: None,
         }
@@ -308,9 +324,24 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                     };
                     (c_part, part.encoded_size_bytes)
                 }
+                BatchPart::Inline {
+                    updates,
+                    ts_rewrite,
+                } => {
+                    let read_metrics = read_metrics(&metrics.read).clone();
+                    let part = EncodedPart::from_inline(
+                        metrics,
+                        read_metrics,
+                        desc.clone(),
+                        updates,
+                        ts_rewrite.as_ref(),
+                    );
+                    let c_part = ConsolidationPart::from_encoded(part, &self.filter, true);
+                    (c_part, updates.encoded_size_bytes())
+                }
             })
             .collect();
-        self.runs.push(run);
+        self.push_run(run);
     }
 
     /// Add a leased run of data to be consolidated.
@@ -338,7 +369,29 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                 (queued, size)
             })
             .collect();
-        self.runs.push(run);
+        self.push_run(run);
+    }
+
+    fn push_run(&mut self, run: VecDeque<(ConsolidationPart<T, D>, usize)>) {
+        // Normally unconsolidated parts are in their own run, but we can end up with unconsolidated
+        // runs if we change our sort order or have bugs, for example. Defend against this by
+        // splitting up a run if it contains possibly-unconsolidated parts.
+        let maybe_unconsolidated = run.iter().any(|(p, _)| match p {
+            ConsolidationPart::Queued { data } => data.maybe_unconsolidated(),
+            ConsolidationPart::Prefetched {
+                maybe_unconsolidated,
+                ..
+            } => *maybe_unconsolidated,
+            ConsolidationPart::Encoded { part, .. } => part.maybe_unconsolidated(),
+            ConsolidationPart::Sorted { .. } => false,
+        });
+        if run.len() > 1 && maybe_unconsolidated && self.split_old_runs {
+            for part in run {
+                self.runs.push(VecDeque::from([part]));
+            }
+        } else {
+            self.runs.push(run);
+        }
     }
 
     /// Tidy up: discard any empty parts, and discard any runs that have no parts left.
@@ -367,6 +420,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         }
 
         let mut iter = ConsolidatingIter::new(
+            &self.context,
             self.initial_state.as_ref().map(borrow_tuple),
             &mut self.drop_stash,
         );
@@ -712,6 +766,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
 
 #[derive(Debug)]
 pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
+    context: &'a str,
     parts: Vec<ConsolidationPartIter<'a, T, D>>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
     upper_bound: Option<(&'a [u8], &'a [u8], T)>,
@@ -725,10 +780,12 @@ where
     D: Codec64 + Semigroup,
 {
     pub fn new(
+        context: &'a str,
         init_state: Option<TupleRef<'a, T, D>>,
         drop_stash: &'a mut Option<Tuple<T, D>>,
     ) -> Self {
         Self {
+            context,
             parts: vec![],
             heap: BinaryHeap::new(),
             upper_bound: None,
@@ -776,7 +833,8 @@ where
                             // Don't want to log the entire KV, but it's interesting to know
                             // whether it's KVs going backwards or 'just' timestamps.
                             panic!(
-                                "data arrived at the consolidator out of order (kvs equal? {})",
+                                "data arrived at the consolidator out of order ({}, kvs equal? {})",
+                                self.context,
                                 (*k0, *v0) == (*k1, *v1)
                             );
                         }
@@ -878,6 +936,7 @@ mod tests {
             let streaming = {
                 // Toy compaction loop!
                 let mut consolidator = Consolidator {
+                    context: "test".to_string(),
                     metrics: Arc::clone(metrics),
                     // Generated runs of data that are sorted, but not necessarily consolidated.
                     // This is because timestamp-advancement may cause us to have duplicate KVTs,
@@ -902,6 +961,7 @@ mod tests {
                         since: Antichain::from_elem(0),
                     },
                     budget: 0,
+                    split_old_runs: true,
                     initial_state: None,
                     drop_stash: None,
                 };
@@ -959,11 +1019,13 @@ mod tests {
             let shard_metrics = metrics.shards.shard(&shard_id, "");
 
             let mut consolidator: Consolidator<u64, i64> = Consolidator::new(
+                "test".to_string(),
                 Arc::clone(&metrics),
                 FetchBatchFilter::Compaction {
                     since: desc.since().clone(),
                 },
                 budget,
+                false,
             );
 
             for run in runs {
@@ -978,6 +1040,7 @@ mod tests {
                             key_lower: vec![],
                             stats: None,
                             ts_rewrite: None,
+                            diffs_sum: None,
                         })
                     })
                     .collect();

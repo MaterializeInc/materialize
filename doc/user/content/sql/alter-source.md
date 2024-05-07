@@ -37,8 +37,8 @@ _retention_period_ | ***Private preview.** This option has known performance or 
 
 ### **ADD SUBSOURCE** `with_options`
 
-Field                                | Value     | Description
--------------------------------------|-----------|-------------------------------------
+Field                                | Value           | Description
+-------------------------------------|-----------------|-------------------------------------
 `TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
 
 ## Context

@@ -28,13 +28,13 @@ use std::num::NonZeroI64;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::{Peekable, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::{
     ActiveComputeController, ComputeController, ComputeControllerResponse,
+    ComputeControllerTimestamp,
 };
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -48,17 +48,16 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::{GlobalId, TimestampManipulation};
+use mz_repr::{Datum, GlobalId, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
-use mz_storage_client::controller::{StorageController, StorageTxn};
+use mz_storage_client::controller::{StorageController, StorageMetadata, StorageTxn};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use serde::Serialize;
-use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::time::{self, Duration, Interval, MissedTickBehavior};
@@ -117,7 +116,9 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-    /// Notification that a watch set has finished. See [`Controller::install_watch_set`] for details.
+    /// Notification that a watch set has finished. See
+    /// [`Controller::install_compute_watch_set`] and
+    /// [`Controller::install_storage_watch_set`] for details.
     WatchSetFinished(Vec<Box<dyn Any>>),
 }
 
@@ -190,7 +191,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     immediate_watch_sets: Vec<Box<dyn Any>>,
 }
 
-impl<T: Timestamp> Controller<T> {
+impl<T: ComputeControllerTimestamp> Controller<T> {
     pub fn active_compute(&mut self) -> ActiveComputeController<T> {
         self.compute.activate(&mut *self.storage)
     }
@@ -273,7 +274,7 @@ impl<T: Timestamp> Controller<T> {
 
 impl<T> Controller<T>
 where
-    T: TimestampManipulation,
+    T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn update_orchestrator_scheduling_config(
@@ -347,7 +348,7 @@ where
     ///
     /// When all the objects in `objects` have advanced to `t`, the object
     /// `token` is returned to the client on the next call to [`Self::process`].
-    pub fn install_watch_set(
+    pub fn install_compute_watch_set(
         &mut self,
         mut objects: BTreeSet<GlobalId>,
         t: T,
@@ -358,14 +359,47 @@ where
                 .compute
                 .find_collection(*id)
                 .map(|s| s.write_frontier())
-                .unwrap_or_else(|_| {
-                    self.storage
-                        .collection(*id)
-                        .expect("some controller must have the collection")
-                        .write_frontier
-                        .borrow()
-                });
+                .expect("missing compute dependency");
             frontier.less_equal(&t)
+        });
+        if objects.is_empty() {
+            self.immediate_watch_sets.push(token);
+        } else {
+            let state = Rc::new((t, token));
+            for id in objects {
+                self.objects_to_unfulfilled_watch_sets
+                    .entry(id)
+                    .or_default()
+                    .push(Rc::clone(&state));
+            }
+        }
+    }
+
+    /// Install a _watch set_ in the controller.
+    ///
+    /// A _watch set_ is a request to be informed by the controller when
+    /// all of the frontiers of a particular set of objects have advanced at
+    /// least to a particular timestamp.
+    ///
+    /// When all the objects in `objects` have advanced to `t`, the object
+    /// `token` is returned to the client on the next call to [`Self::process`].
+    pub fn install_storage_watch_set(
+        &mut self,
+        mut objects: BTreeSet<GlobalId>,
+        t: T,
+        token: Box<dyn Any>,
+    ) {
+        let uppers = self
+            .storage
+            .collections_frontiers(objects.iter().cloned().collect())
+            .expect("missing storage dependencies")
+            .into_iter()
+            .map(|(id, _since, upper)| (id, upper))
+            .collect::<BTreeMap<_, _>>();
+
+        objects.retain(|id| {
+            let upper = uppers.get(id).expect("missing collection");
+            upper.less_equal(&t)
         });
         if objects.is_empty() {
             self.immediate_watch_sets.push(token);
@@ -384,8 +418,9 @@ where
     /// return a higher-level response to our client.
     async fn process_storage_response(
         &mut self,
+        storage_metadata: &StorageMetadata,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let maybe_response = self.storage.process().await?;
+        let maybe_response = self.storage.process(storage_metadata).await?;
         Ok(maybe_response.and_then(
             |mz_storage_client::controller::Response::FrontierUpdates(r)| {
                 self.handle_frontier_updates(&r)
@@ -425,10 +460,13 @@ where
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     #[mz_ore::instrument(level = "debug")]
-    pub async fn process(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+    pub async fn process(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
-            Readiness::Storage => self.process_storage_response().await,
+            Readiness::Storage => self.process_storage_response(storage_metadata).await,
             Readiness::Compute => self.process_compute_response().await,
             Readiness::Metrics => Ok(self
                 .metrics_rx
@@ -496,21 +534,17 @@ where
 
 impl<T> Controller<T>
 where
+    // Bounds needed by `StorageController` and/or `Controller`:
     T: Timestamp
-        + Lattice
-        + TotalOrder
-        + TryInto<i64>
-        + TryFrom<i64>
         + Codec64
-        + Unpin
         + From<EpochMillis>
         + TimestampManipulation
-        + std::fmt::Display,
-    <T as TryInto<i64>>::Error: std::fmt::Debug,
-    <T as TryFrom<i64>>::Error: std::fmt::Debug,
+        + std::fmt::Display
+        + for<'a> Into<Datum<'a>>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    T: Into<mz_repr::Timestamp>,
+    // Bounds needed by `ComputeController`:
+    T: ComputeControllerTimestamp,
 {
     /// Creates a new controller.
     ///

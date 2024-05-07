@@ -22,7 +22,7 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
 );
 
 /// The yielding behavior with which linear joins should be rendered.
-pub const LINEAR_JOIN_YIELDING: Config<String> = Config::new(
+pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
     "linear_join_yielding",
     "work:1000000,time:100",
     "The yielding behavior compute rendering should apply for linear join operators. Either \
@@ -50,23 +50,6 @@ pub const ENABLE_CHUNKED_STACK: Config<bool> = Config::new(
     "enable_compute_chunked_stack",
     false,
     "Enable the chunked stack implementation in compute.",
-);
-
-/// Enable operator hydration status logging.
-pub const ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING: Config<bool> = Config::new(
-    "enable_compute_operator_hydration_status_logging",
-    true,
-    "Enable logging of the hydration status of compute operators.",
-);
-
-/// Enable controller-controlled dataflow scheduling.
-///
-/// Introduced to derisk the rollout of the `Schedule` compute command.
-/// TODO(teskje): remove after successful validation in prod
-pub const ENABLE_CONTROLLER_DATAFLOW_SCHEDULING: Config<bool> = Config::new(
-    "enable_compute_controller_dataflow_scheduling",
-    true,
-    "Enable compute controller-controlled dataflow scheduling.",
 );
 
 /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
@@ -105,8 +88,31 @@ pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
 /// The number of dataflows that may hydrate concurrently.
 pub const HYDRATION_CONCURRENCY: Config<usize> = Config::new(
     "compute_hydration_concurrency",
-    usize::MAX,
+    4,
     "Controls how many compute dataflows may hydrate concurrently.",
+);
+
+/// See `src/storage-operators/src/s3_oneshot_sink/parquet.rs` for more details.
+pub const COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO: Config<usize> = Config::new(
+    "copy_to_s3_parquet_row_group_file_ratio",
+    20,
+    "The ratio (defined as a percentage) of row-group size to max-file-size. \
+        Must be <= 100.",
+);
+
+/// See `src/storage-operators/src/s3_oneshot_sink/parquet.rs` for more details.
+pub const COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO: Config<usize> = Config::new(
+    "copy_to_s3_arrow_builder_buffer_ratio",
+    150,
+    "The ratio (defined as a percentage) of arrow-builder size to row-group size. \
+        Must be >= 100.",
+);
+
+/// The size of each part in the multi-part upload to use when uploading files to S3.
+pub const COPY_TO_S3_MULTIPART_PART_SIZE_BYTES: Config<usize> = Config::new(
+    "copy_to_s3_multipart_part_size_bytes",
+    1024 * 1024 * 8,
+    "The size of each part in a multipart upload to S3.",
 );
 
 /// Adds the full set of all compute `Config`s.
@@ -117,11 +123,12 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_CHUNKED_STACK)
-        .add(&ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING)
-        .add(&ENABLE_CONTROLLER_DATAFLOW_SCHEDULING)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)
         .add(&LGALLOC_SLOW_CLEAR_BYTES)
         .add(&HYDRATION_CONCURRENCY)
+        .add(&COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO)
+        .add(&COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO)
+        .add(&COPY_TO_S3_MULTIPART_PART_SIZE_BYTES)
 }

@@ -32,6 +32,8 @@ Explained Query (fast path):
   Finish limit=10 output=[#0]
     PeekPersist materialize.public.numbers
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -43,6 +45,8 @@ Explained Query (fast path):
       Map ((#0 + 1000))
         PeekPersist materialize.public.numbers
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -51,6 +55,8 @@ EXPLAIN SELECT * from numbers LIMIT 10 OFFSET 10;
 Explained Query (fast path):
   Finish limit=10 offset=10 output=[#0]
     PeekPersist materialize.public.numbers
+
+Target cluster: quickstart
 
 EOF
 
@@ -131,6 +137,8 @@ Explained Query:
   Finish limit=1000 output=[#0]
     ReadStorage materialize.public.numbers
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -139,6 +147,8 @@ EXPLAIN SELECT * from numbers ORDER BY value LIMIT 10;
 Explained Query:
   Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
     ReadStorage materialize.public.numbers
+
+Target cluster: quickstart
 
 EOF
 
@@ -152,6 +162,8 @@ Explained Query:
 
 Source materialize.public.numbers
   filter=((integer_to_mz_timestamp(#0) > mz_now()))
+
+Target cluster: quickstart
 
 EOF
 
@@ -189,6 +201,8 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.numbers_primary_idx (fast path limit)
+
+Target cluster: quickstart
 
 EOF
 

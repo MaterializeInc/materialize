@@ -71,6 +71,8 @@ Explained Query:
         Project (#0..=#2)
           ReadStorage materialize.public.t_using_dataflow_rendering
 
+Target cluster: quickstart
+
 EOF
 
 query error
@@ -102,5 +104,7 @@ Explained Query:
       Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
         Project (#0)
           ReadStorage materialize.public.t_using_dataflow_rendering
+
+Target cluster: quickstart
 
 EOF

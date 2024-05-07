@@ -63,9 +63,6 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_import_frontiers);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_delays_histogram);
-1
-
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_error_counts);
 1
 
@@ -93,8 +90,8 @@ contains:cannot drop schema mz_internal because it is required by the database s
 ! DROP VIEW mz_internal.mz_compute_frontiers
 contains:cannot drop view mz_internal.mz_compute_frontiers because it is required by the database system
 
-! DROP SOURCE mz_internal.mz_compute_delays_histogram_raw
-contains:cannot drop source mz_internal.mz_compute_delays_histogram_raw because it is required by the database system
+! DROP SOURCE mz_internal.mz_compute_frontiers_per_worker
+contains:cannot drop source mz_internal.mz_compute_frontiers_per_worker because it is required by the database system
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
@@ -189,18 +186,6 @@ id      name        position    type
 SID   operator_id 1           uint8
 SID   worker_id   2           uint8
 SID   count       3           bigint
-
-> SELECT mz_columns.id, mz_columns.name, position, type
-  FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_compute_delays_histogram_per_worker'
-  ORDER BY position
-id      name        position    type
---------------------------------------
-SID   export_id   1           text
-SID   import_id   2           text
-SID   worker_id   3           uint8
-SID   delay_ns    4           uint8
-SID   count       5           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
   FROM mz_sources JOIN mz_columns USING (id)

@@ -97,7 +97,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
@@ -107,15 +107,14 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
-use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
-use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
+use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::names::{Aug, ResolvedIds};
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
@@ -127,6 +126,7 @@ use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConn
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -137,6 +137,7 @@ use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
+use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
@@ -149,11 +150,11 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
-use crate::coord::read_policy::InternalReadHolds;
+use crate::coord::read_policy::ReadHoldsInner;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
-use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
@@ -182,6 +183,7 @@ pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
 mod appends;
+mod cluster_scheduling;
 mod command_handler;
 pub mod consistency;
 mod ddl;
@@ -215,7 +217,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         Option<GroupCommitPermit>,
     ),
     AdvanceTimelines,
-    DropReadHolds(Vec<InternalReadHolds<Timestamp>>),
+    DropReadHolds(Vec<ReadHoldsInner<Timestamp>>),
     ClusterEvent(ClusterEvent),
     CancelPendingPeeks {
         conn_id: ConnectionId,
@@ -270,6 +272,13 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
+    CheckSchedulingPolicies,
+
+    /// Scheduling policy decisions about turning clusters On/Off.
+    /// `Vec<(policy name, Vec of decisions by the policy)>`
+    /// A cluster will be On if and only if there is at least one On decision for it.
+    /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
+    SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, bool)>)>),
 }
 
 impl Message {
@@ -320,6 +329,8 @@ impl Message {
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
+            Message::CheckSchedulingPolicies => "check_scheduling_policies",
+            Message::SchedulingDecisions { .. } => "scheduling_decision",
         }
     }
 }
@@ -331,15 +342,12 @@ pub struct BackgroundWorkResult<T> {
     pub ctx: ExecuteContext,
     pub result: Result<T, AdapterError>,
     pub params: Params,
-    pub resolved_ids: ResolvedIds,
+    pub plan_validity: PlanValidity,
     pub original_stmt: Arc<Statement<Raw>>,
     pub otel_ctx: OpenTelemetryContext,
 }
 
-pub type PurifiedStatementReady = BackgroundWorkResult<(
-    Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-    Statement<Aug>,
-)>;
+pub type PurifiedStatementReady = BackgroundWorkResult<mz_sql::pure::PurifiedStatement>;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -433,7 +441,7 @@ pub struct CopyToContext {
     /// The ID of the CONNECTION object to be used for copying the data.
     pub connection_id: GlobalId,
     /// Format params to format the data.
-    pub format_params: CopyFormatParams<'static>,
+    pub format: S3SinkFormat,
     /// Approximate max file size of each uploaded file.
     pub max_file_size: u64,
     /// Number of batches the output of the COPY TO will be partitioned into
@@ -523,6 +531,9 @@ pub struct PeekStageFinish {
     source_ids: BTreeSet<GlobalId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
+    /// When present, an optimizer trace to be used for emitting a plan insights
+    /// notice.
+    plan_insights_optimizer_trace: Option<OptimizerTrace>,
     global_lir_plan: optimize::peek::GlobalLirPlan,
 }
 
@@ -536,8 +547,7 @@ pub struct PeekStageCopyTo {
 #[derive(Debug)]
 pub struct PeekStageExplainPlan {
     validity: PlanValidity,
-    select_id: GlobalId,
-    finishing: RowSetFinishing,
+    optimizer: optimize::peek::Optimizer,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
 }
@@ -625,6 +635,9 @@ pub enum ExplainContext {
     None,
     /// The `EXPLAIN <level> PLAN FOR <explainee>` version of the statement.
     Plan(ExplainPlanContext),
+    /// Generate a notice containing the `EXPLAIN PLAN INSIGHTS` output
+    /// alongside the query's normal output.
+    PlanInsightsNotice(OptimizerTrace),
     /// `EXPLAIN FILTER PUSHDOWN`
     Pushdown,
 }
@@ -633,14 +646,13 @@ impl ExplainContext {
     /// If available for this context, wrap the [`OptimizerTrace`] into a
     /// [`tracing::Dispatch`] and set it as default, returning the resulting
     /// guard in a `Some(guard)` option.
-    fn dispatch_guard(&self) -> Option<tracing::subscriber::DefaultGuard> {
-        match self {
-            ExplainContext::Plan(explain_ctx) => {
-                let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
-                Some(tracing::dispatcher::set_default(&dispatch))
-            }
+    fn dispatch_guard(&self) -> Option<DispatchGuard<'_>> {
+        let optimizer_trace = match self {
+            ExplainContext::Plan(explain_ctx) => Some(&explain_ctx.optimizer_trace),
+            ExplainContext::PlanInsightsNotice(optimizer_trace) => Some(optimizer_trace),
             _ => None,
-        }
+        };
+        optimizer_trace.map(|optimizer_trace| optimizer_trace.as_guard())
     }
 }
 
@@ -1271,13 +1283,13 @@ pub struct Coordinator {
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
 
-    /// Channel for returning/releasing [InternalReadHolds](InternalReadHolds).
+    /// Channel for returning/releasing [read holds](ReadHoldsInner).
     ///
     /// We're using a special purpose channel rather than using
     /// `internal_cmd_tx` so that we can control the priority of working off
     /// dropped read holds. If we sent them as [Message] on the internal cmd
     /// channel, these would always get top priority, which is not necessary.
-    dropped_read_holds_tx: mpsc::UnboundedSender<InternalReadHolds<Timestamp>>,
+    dropped_read_holds_tx: mpsc::UnboundedSender<ReadHoldsInner<Timestamp>>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -1312,9 +1324,7 @@ pub struct Coordinator {
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    ///
-    /// We use a Vec because `ReadHolds` doesn't have a way of tracking multiplicity.
-    txn_read_holds: BTreeMap<ConnectionId, Vec<read_policy::ReadHolds<Timestamp>>>,
+    txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds<Timestamp>>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
@@ -1388,13 +1398,21 @@ pub struct Coordinator {
     /// Data used by the statement logging feature.
     statement_logging: StatementLogging,
 
-    /// Limit for how many conncurrent webhook requests we allow.
+    /// Limit for how many concurrent webhook requests we allow.
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
 
     /// Optional config for the Postgres-backed timestamp oracle. This is
     /// _required_ when `postgres` is configured using the `timestamp_oracle`
     /// system variable.
     pg_timestamp_oracle_config: Option<PostgresTimestampOracleConfig>,
+
+    /// Periodically asks cluster scheduling policies to make their decisions.
+    check_cluster_scheduling_policies_interval: tokio::time::Interval,
+
+    /// This keeps the last On/Off decision for each cluster and each scheduling policy.
+    /// (Clusters that have been dropped or are otherwise out of scope for automatic scheduling are
+    /// periodically cleaned up from this Map.)
+    cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, bool>>,
 }
 
 impl Coordinator {
@@ -1452,113 +1470,7 @@ impl Coordinator {
         debug!("coordinator init: initializing storage collections");
         self.bootstrap_storage_collections().await;
 
-        // Load catalog entries based on topological dependency sorting. We do
-        // this to reinforce that `GlobalId`'s `Ord` implementation does not
-        // express the entries' dependency graph.
-        let mut entries_awaiting_dependencies: BTreeMap<
-            GlobalId,
-            Vec<(CatalogEntry, Vec<GlobalId>)>,
-        > = BTreeMap::new();
-
-        let mut loaded_items = BTreeSet::new();
-
-        // Subsources must be created immediately before their primary source
-        // without any intermediary collections between them. This version of MZ
-        // needs this because it sets tighter bounds on collections' sinces.
-        // Without this, dependent collections can place read holds on the
-        // subsource, which can result in panics if we adjust the subsource's
-        // since.
-        //
-        // This can likely be removed in the next version of Materialize
-        // (v0.46).
-        let mut entries_awaiting_dependent: BTreeMap<GlobalId, Vec<CatalogEntry>> = BTreeMap::new();
-        let mut awaited_dependent_seen = BTreeSet::new();
-
-        let mut unsorted_entries: VecDeque<_> = self
-            .catalog()
-            .entries()
-            .cloned()
-            .map(|entry| {
-                let remaining_deps = entry.uses().into_iter().collect::<Vec<_>>();
-                (entry, remaining_deps)
-            })
-            .collect();
-        let mut entries = Vec::with_capacity(unsorted_entries.len());
-
-        while let Some((entry, mut remaining_deps)) = unsorted_entries.pop_front() {
-            let awaiting_this_dep = entries_awaiting_dependent.get(&entry.id());
-            remaining_deps.retain(|dep| {
-                // Consider dependency filled if item is loaded or if this
-                // dependency is waiting on this entry.
-                !loaded_items.contains(dep)
-                    && awaiting_this_dep
-                        .map(|awaiting| awaiting.iter().all(|e| e.id() != *dep))
-                        .unwrap_or(true)
-            });
-
-            // While you cannot assume anything about the ordering of
-            // dependencies based on their GlobalId, it is not secret knowledge
-            // that the most likely final dependency is that with the greatest
-            // ID.
-            match remaining_deps.last() {
-                Some(dep) => {
-                    entries_awaiting_dependencies
-                        .entry(*dep)
-                        .or_default()
-                        .push((entry, remaining_deps));
-                }
-                None => {
-                    let id = entry.id();
-
-                    if let Some(waiting_on_this_dep) = entries_awaiting_dependencies.remove(&id) {
-                        unsorted_entries.extend(waiting_on_this_dep);
-                    }
-
-                    if let Some(waiting_on_this_dependent) = entries_awaiting_dependent.remove(&id)
-                    {
-                        mz_ore::soft_assert_no_log! {{
-                            let subsources =  entry.subsources();
-                            let w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
-                            w.iter().all(|w| subsources.contains(w))
-                        }, "expect that items are exactly source's subsources"}
-
-                        // Re-enqueue objects and continue.
-                        for entry in
-                            std::iter::once(entry).chain(waiting_on_this_dependent.into_iter())
-                        {
-                            awaited_dependent_seen.insert(entry.id());
-                            unsorted_entries.push_front((entry, vec![]));
-                        }
-                        continue;
-                    }
-
-                    // Subsources wait on their primary source before being
-                    // added.
-                    if entry.is_subsource() && !awaited_dependent_seen.contains(&id) {
-                        let min = entry
-                            .used_by()
-                            .into_iter()
-                            .min()
-                            .expect("subsource always used");
-
-                        entries_awaiting_dependent
-                            .entry(*min)
-                            .or_default()
-                            .push(entry);
-                        continue;
-                    }
-
-                    awaited_dependent_seen.remove(&id);
-                    loaded_items.insert(id);
-                    entries.push(entry);
-                }
-            }
-        }
-
-        assert!(
-            entries_awaiting_dependent.is_empty() && entries_awaiting_dependencies.is_empty(),
-            "items not cleared from queue {entries_awaiting_dependent:?}, {entries_awaiting_dependencies:?}"
-        );
+        let entries: Vec<_> = self.catalog().entries().cloned().collect();
 
         debug!("coordinator init: optimizing dataflow plans");
         self.bootstrap_dataflow_plans(&entries)?;
@@ -1574,20 +1486,49 @@ impl Coordinator {
         debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
 
+        let local_read_ts_for_index_bootstrapping = self.get_local_read_ts().await;
+
         for entry in &entries {
+            // TODO(#26794): we should move this invariant into `CatalogEntry`.
+            mz_ore::soft_assert_or_log!(
+                entry
+                    .used_by()
+                    .iter()
+                    .all(|dependent_id| *dependent_id > entry.id),
+                "item dependencies should respect `GlobalId`'s PartialOrd \
+                but {:?} depends on {:?}",
+                entry.id,
+                entry.used_by()
+            );
+
             debug!(
                 "coordinator init: installing {} {}",
                 entry.item().typ(),
                 entry.id()
             );
-            let policy = entry.item().initial_logical_compaction_window();
+            let mut policy = entry.item().initial_logical_compaction_window();
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
                 // indexes are always built individually and does not store information
                 // about how it was built. If we start building multiple sinks and/or indexes
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
+                CatalogItem::Source(source) => {
+                    // Propagate source compaction windows to subsources if needed.
+                    if source.custom_logical_compaction_window.is_none() {
+                        if let DataSourceDesc::IngestionExport { ingestion_id, .. } =
+                            source.data_source
+                        {
+                            policy = Some(
+                                self.catalog()
+                                    .get_entry(&ingestion_id)
+                                    .source()
+                                    .expect("must be source")
+                                    .custom_logical_compaction_window
+                                    .unwrap_or_default(),
+                            );
+                        }
+                    }
                     policies_to_set
                         .entry(policy.expect("sources have a compaction window"))
                         .or_insert_with(Default::default)
@@ -1645,6 +1586,7 @@ impl Coordinator {
                             idx.cluster_id,
                             storage_constraints,
                             compaction_window,
+                            local_read_ts_for_index_bootstrapping,
                         );
                         df_desc.set_as_of(as_of);
 
@@ -1704,6 +1646,7 @@ impl Coordinator {
                         mview.cluster_id,
                         storage_constraints,
                         mview.custom_logical_compaction_window.unwrap_or_default(),
+                        local_read_ts_for_index_bootstrapping,
                     );
                     df_desc.set_as_of(as_of);
 
@@ -1785,10 +1728,6 @@ impl Coordinator {
         // Having installed all entries, creating all constraints, we can now relax read policies.
         //
         // TODO -- Improve `initialize_read_policies` API so we can avoid calling this in a loop.
-        //
-        // As of this writing, there can only be at most two keys in `policies_to_set`,
-        // so the extra load isn't crazy, but that might not be true in general if we
-        // open up custom compaction windows to users.
         for (cw, policies) in policies_to_set {
             self.initialize_read_policies(&policies, cw).await;
         }
@@ -1927,19 +1866,36 @@ impl Coordinator {
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
 
         let source_desc = |source: &Source| {
-            let (data_source, status_collection_id) = match &source.data_source {
+            let (data_source, status_collection_id) = match source.data_source.clone() {
                 // Re-announce the source description.
-                DataSourceDesc::Ingestion(ingestion) => {
-                    let ingestion = ingestion.clone().into_inline_connection(catalog.state());
+                DataSourceDesc::Ingestion {
+                    ingestion_desc:
+                        mz_sql::plan::Ingestion {
+                            desc,
+                            progress_subsource,
+                        },
+                    cluster_id,
+                } => {
+                    let desc = desc.into_inline_connection(catalog.state());
+                    let ingestion = mz_storage_types::sources::IngestionDescription::new(
+                        desc,
+                        cluster_id,
+                        progress_subsource,
+                    );
 
                     (
                         DataSource::Ingestion(ingestion.clone()),
                         Some(source_status_collection_id),
                     )
                 }
-                // Subsources use source statuses.
-                DataSourceDesc::Source => (
-                    DataSource::Other(DataSourceOther::Source),
+                DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                } => (
+                    DataSource::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                    },
                     Some(source_status_collection_id),
                 ),
                 DataSourceDesc::Webhook { .. } => {
@@ -1947,7 +1903,7 @@ impl Coordinator {
                 }
                 DataSourceDesc::Progress => (DataSource::Progress, None),
                 DataSourceDesc::Introspection(introspection) => {
-                    (DataSource::Introspection(*introspection), None)
+                    (DataSource::Introspection(introspection), None)
                 }
             };
             CollectionDescription {
@@ -2140,7 +2096,8 @@ impl Coordinator {
     /// This method expects all dataflow plans to be available, so it must run after
     /// [`Coordinator::bootstrap_dataflow_plans`].
     fn collect_dataflow_storage_constraints(&self) -> BTreeMap<GlobalId, StorageConstraints> {
-        let is_storage_collection = |id: &GlobalId| self.controller.storage.collection(*id).is_ok();
+        let is_storage_collection =
+            |id: &GlobalId| self.controller.storage.check_exists(*id).is_ok();
 
         // Collect index imports and direct storage constraints for all dataflows.
         let mut index_imports: BTreeMap<_, Vec<_>> = Default::default();
@@ -2226,6 +2183,7 @@ impl Coordinator {
         cluster_id: ComputeInstanceId,
         storage_constraints: StorageConstraints,
         compaction_window: CompactionWindow,
+        local_read_ts: Timestamp,
     ) -> (Antichain<Timestamp>, ReadHolds<Timestamp>) {
         // Supporting multi-export dataflows is not impossible but complicates the logic, so we
         // punt on it until we actually want to create such dataflows.
@@ -2241,11 +2199,9 @@ impl Coordinator {
         // We're putting in place read holds, to prevent the since of
         // dependencies moving along concurrently, pulling the rug from under
         // us!
-        let read_holds = self
-            .acquire_read_holds(mz_repr::Timestamp::minimum(), &direct_dependencies, false)
-            .expect("can acquire un-precise read holds");
+        let read_holds = self.acquire_read_holds(&direct_dependencies);
 
-        let min_as_of = self.least_valid_read(&direct_dependencies);
+        let min_as_of = self.least_valid_read(&read_holds);
 
         // We must not select an `as_of` that is beyond any times that have not yet been written to
         // downstream storage collections (i.e., materialized views). If we would, we might skip
@@ -2257,10 +2213,10 @@ impl Coordinator {
         // we only need to provide output starting from their `since`s, so these serve as upper
         // bounds for our `as_of`.
         let mut max_as_of = Antichain::new();
-        for id in &storage_constraints.dependants {
-            let since = self.storage_implied_capability(*id);
-            let upper = self.storage_write_frontier(*id);
-            max_as_of.meet_assign(&since.join(upper));
+        let dependent_frontiers =
+            self.storage_frontiers(storage_constraints.dependants.iter().cloned().collect());
+        for (_id, since, upper) in dependent_frontiers {
+            max_as_of.meet_assign(&since.join(&upper));
         }
 
         // For compute reconciliation to recognize that an existing dataflow can be reused, we want
@@ -2301,7 +2257,14 @@ impl Coordinator {
                     !max_compaction_frontier.is_empty(),
                     "`max_compaction_frontier` unexpectedly empty",
                 );
-                max_compaction_frontier
+                // We hold back the `as_of` to near the current time. This is needed for indexes on
+                // REFRESH MVs, because otherwise the `as_of` would be near the next refresh time,
+                // making the index unreadable until then.
+                //
+                // This is fine for Compute reconciliation, because Adapter was keeping a read hold
+                // on indexes before the restart at the Oracle read ts (see `advance_timelines`),
+                // and the Oracle read ts can't go backwards between restarts.
+                max_compaction_frontier.meet(&Antichain::from_elem(local_read_ts))
             } else {
                 // The write frontier is empty. This can happen for constant collections, and for
                 // an index on a REFRESH MV that is past its last refresh. Installing an index with
@@ -2313,13 +2276,20 @@ impl Coordinator {
         } else if let Some(sink_id) = dataflow.persist_sink_ids().next() {
             // Materialized view dataflow.
 
-            write_frontier = self.storage_write_frontier(sink_id).clone();
+            let (_since, upper) = self
+                .controller
+                .storage
+                .collection_frontiers(sink_id)
+                .expect("collection does not exist");
+
             // Materialized view dataflows are only depended on by their target storage collection,
             // so `write_frontier` should never be greater than `max_as_of`.
             soft_assert_or_log!(
-                PartialOrder::less_equal(&write_frontier, &max_as_of),
+                PartialOrder::less_equal(&upper, &max_as_of),
                 "`write_frontier` unexpectedly greater than `max_as_of`",
             );
+
+            write_frontier = upper;
 
             // If the target storage collection of a materialized view is already sealed, there is
             // no need to install a dataflow in the first place.
@@ -2364,6 +2334,7 @@ impl Coordinator {
             min_as_of = ?min_as_of.elements(),
             max_as_of = ?max_as_of.elements(),
             warmup_frontier = ?warmup_frontier.elements(),
+            ?local_read_ts,
             write_frontier = ?write_frontier.elements(),
             ?compaction_window,
             ?storage_constraints,
@@ -2385,7 +2356,7 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
-        mut dropped_read_holds_rx: mpsc::UnboundedReceiver<InternalReadHolds<Timestamp>>,
+        mut dropped_read_holds_rx: mpsc::UnboundedReceiver<ReadHoldsInner<Timestamp>>,
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
@@ -2419,13 +2390,13 @@ impl Coordinator {
                     interval.tick().await;
 
                     // Wait for space in the channel, if we timeout then the coordinator is stuck!
-                    let duration = tokio::time::Duration::from_secs(60);
+                    let duration = tokio::time::Duration::from_secs(30);
                     let timeout = tokio::time::timeout(duration, idle_tx.reserve()).await;
                     let Ok(maybe_permit) = timeout else {
-                        // Only log the error if we're newly stuck, to prevent logging repeatedly.
+                        // Only log if we're newly stuck, to prevent logging repeatedly.
                         if !coord_stuck {
                             let last_message = last_message_watchdog.lock().expect("poisoned");
-                            tracing::error!(
+                            tracing::warn!(
                                 last_message_kind = %last_message.kind,
                                 last_message_sql = %last_message.stmt_to_string(),
                                 "coordinator stuck for {duration:?}",
@@ -2546,6 +2517,11 @@ impl Coordinator {
                         span.follows_from(Span::current());
                         Message::GroupCommitInitiate(span, None)
                     },
+                    // `tick()` on `Interval` is cancel-safe:
+                    // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                    _ = self.check_cluster_scheduling_policies_interval.tick() => {
+                        Message::CheckSchedulingPolicies
+                    },
 
                     // Process the idle metric at the lowest priority to sample queue non-idle time.
                     // `recv()` on `Receiver` is cancellation safe:
@@ -2603,7 +2579,7 @@ impl Coordinator {
                 // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
                 if duration > warn_threshold {
                     let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
-                    tracing::warn!(
+                    tracing::error!(
                         ?msg_kind,
                         ?trace_id,
                         ?duration,
@@ -3029,6 +3005,12 @@ pub fn serve(
         let segment_client_clone = segment_client.clone();
         let coord_now = now.clone();
         let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
+        let mut check_scheduling_policies_interval = tokio::time::interval(
+            catalog
+                .system_config()
+                .cluster_check_scheduling_policies_interval(),
+        );
+        check_scheduling_policies_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
             // Apply settings from system vars as early as possible because some
@@ -3098,6 +3080,8 @@ pub fn serve(
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
                     pg_timestamp_oracle_config,
+                    check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
+                    cluster_scheduling_decisions: BTreeMap::new(),
                 };
                 let bootstrap = handle.block_on(async {
                     coord

@@ -295,7 +295,7 @@ The HTTPS server exposes two APIs:
     SQL string to execute.
 
     - Requests may contain multiple SQL statements separated by semicolons.
-    - Statements are processed as if they were supplied via the the [Simple
+    - Statements are processed as if they were supplied via the [Simple
     Query][simple-query] flow of the PostgreSQL protocol.
     - Statements do not support parameters
 

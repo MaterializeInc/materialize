@@ -128,5 +128,5 @@ birdmore      geese   56
   ORDER BY s.name
 upsert true true
 
-> DROP SOURCE upsert
-> DROP SOURCE counter
+> DROP SOURCE upsert CASCADE
+> DROP SOURCE counter CASCADE

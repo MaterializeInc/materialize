@@ -31,7 +31,7 @@ const PROTO_HASHES: &str = "protos/hashes.json";
 fn main() -> anyhow::Result<()> {
     println!("cargo:rerun-if-changed={PROTO_DIRECTORY}");
 
-    env::set_var("PROTOC", protobuf_src::protoc());
+    env::set_var("PROTOC", mz_build_tools::protoc());
 
     // Read in the persisted hashes from disk.
     let hashes = fs::File::open(PROTO_HASHES).context("opening proto hashes")?;
@@ -166,6 +166,7 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("RoleVars.Entry.val", ATTR)
         .enum_attribute("StateUpdateKind.kind", ATTR)
         .enum_attribute("ClusterScheduleOptionValue.value", ATTR)
+        .enum_attribute("ClusterSchedule.value", ATTR)
         // Serialize/deserialize the top-level enum in the persist-backed
         // catalog as "internally tagged"[^1] to set up persist pushdown
         // statistics for success.

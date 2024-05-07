@@ -125,7 +125,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 
 > SELECT * FROM t CROSS JOIN mz_internal.mz_dataflow_operators LIMIT 0
 
-> DROP SOURCE data
+> DROP SOURCE data CASCADE
 
 # Ensure that tables work after creating a custom index, and that the custom
 # index is not subject to the same no-drop restriction as the default index.

@@ -41,7 +41,7 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
-use mz_sql_parser::ast::ClusterScheduleOptionValue;
+use mz_sql::plan::ClusterSchedule;
 use proptest_derive::Arbitrary;
 
 use crate::durable::objects::serialization::proto;
@@ -226,7 +226,7 @@ pub struct ClusterVariantManaged {
     pub replication_factor: u32,
     pub disk: bool,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
-    pub schedule: ClusterScheduleOptionValue,
+    pub schedule: ClusterSchedule,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -677,6 +677,83 @@ impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
             grantor: key.grantor,
             acl_mode: value.acl_mode,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditLog {
+    pub event: VersionedEvent,
+}
+
+impl DurableType<AuditLogKey, ()> for AuditLog {
+    fn into_key_value(self) -> (AuditLogKey, ()) {
+        (AuditLogKey { event: self.event }, ())
+    }
+
+    fn from_key_value(key: AuditLogKey, _value: ()) -> Self {
+        Self { event: key.event }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageUsage {
+    pub metric: VersionedStorageUsage,
+}
+
+impl DurableType<StorageUsageKey, ()> for StorageUsage {
+    fn into_key_value(self) -> (StorageUsageKey, ()) {
+        (
+            StorageUsageKey {
+                metric: self.metric,
+            },
+            (),
+        )
+    }
+
+    fn from_key_value(key: StorageUsageKey, _value: ()) -> Self {
+        Self { metric: key.metric }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageCollectionMetadata {
+    pub id: GlobalId,
+    pub shard: String,
+}
+
+impl DurableType<StorageCollectionMetadataKey, StorageCollectionMetadataValue>
+    for StorageCollectionMetadata
+{
+    fn into_key_value(self) -> (StorageCollectionMetadataKey, StorageCollectionMetadataValue) {
+        (
+            StorageCollectionMetadataKey { id: self.id },
+            StorageCollectionMetadataValue { shard: self.shard },
+        )
+    }
+
+    fn from_key_value(
+        key: StorageCollectionMetadataKey,
+        value: StorageCollectionMetadataValue,
+    ) -> Self {
+        Self {
+            id: key.id,
+            shard: value.shard,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnfinalizedShard {
+    pub shard: String,
+}
+
+impl DurableType<UnfinalizedShardKey, ()> for UnfinalizedShard {
+    fn into_key_value(self) -> (UnfinalizedShardKey, ()) {
+        (UnfinalizedShardKey { shard: self.shard }, ())
+    }
+
+    fn from_key_value(key: UnfinalizedShardKey, _value: ()) -> Self {
+        Self { shard: key.shard }
     }
 }
 

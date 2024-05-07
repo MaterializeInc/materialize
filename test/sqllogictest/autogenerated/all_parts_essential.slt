@@ -209,6 +209,8 @@ Used Indexes:
   - materialize.public.pk_orders_orderkey (differential join)
   - materialize.public.fk_lineitem_orderkey (differential join)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -259,6 +261,8 @@ Used Indexes:
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.fk_lineitem_orderkey (delta join 1st input (full scan))
+
+Target cluster: quickstart
 
 EOF
 
@@ -324,6 +328,8 @@ Used Indexes:
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.fk_lineitem_orderkey (delta join 1st input (full scan))
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -385,6 +391,8 @@ Used Indexes:
   - materialize.public.pk_customer_custkey (delta join lookup)
   - materialize.public.pk_orders_orderkey (*** full scan ***)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -453,6 +461,8 @@ Used Indexes:
   - materialize.public.pk_orders_orderkey (*** full scan ***)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -503,6 +513,8 @@ Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***)
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF
 
@@ -558,6 +570,8 @@ Used Indexes:
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.fk_lineitem_orderkey (delta join 1st input (full scan))
+
+Target cluster: quickstart
 
 EOF
 
@@ -618,6 +632,8 @@ Used Indexes:
   - materialize.public.pk_orders_orderkey (*** full scan ***)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
+Target cluster: quickstart
+
 EOF
 
 
@@ -670,6 +686,8 @@ Used Indexes:
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.fk_lineitem_orderkey (delta join 1st input (full scan))
+
+Target cluster: quickstart
 
 EOF
 
@@ -724,5 +742,7 @@ Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***)
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
+
+Target cluster: quickstart
 
 EOF

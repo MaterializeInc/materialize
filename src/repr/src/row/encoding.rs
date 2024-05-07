@@ -11,6 +11,8 @@
 //!
 //! See row.proto for details.
 
+use std::sync::Arc;
+
 use bytes::{BufMut, Bytes};
 use chrono::Timelike;
 use dec::Decimal;
@@ -19,7 +21,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::{
     ColumnCfg, ColumnGet, ColumnPush, Data, DataType, OpaqueData, PartDecoder, PartEncoder, Schema,
 };
-use mz_persist_types::dyn_col::DynColumnRef;
+use mz_persist_types::dyn_col::{DynColumnMut, DynColumnRef};
 use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg, ValidityRef};
 use mz_persist_types::stats::{AtomicBytesStats, BytesStats, DynStats, OptionStats, StatsFn};
 use mz_persist_types::Codec;
@@ -229,8 +231,8 @@ pub trait DatumToPersist {
 pub trait DatumToPersistFn<R> {
     fn call<T: DatumToPersist>(self) -> R
     where
-        for<'a> DatumDecoder<'a>: From<DataRef<'a, T>>,
-        for<'a> DatumEncoder<'a>: From<DataMut<'a, T>>;
+        DatumDecoder: From<DataRef<T>>,
+        DatumEncoder: From<DataMut<T>>;
 }
 
 macro_rules! data_to_persist_primitive {
@@ -365,9 +367,9 @@ impl DatumToPersist for ProtoDatumToPersist {
     type Cfg = ();
     const CFG: Self::Cfg = ();
     const STATS_FN: StatsFn = StatsFn::Custom(
-        |col: &DynColumnRef, validity: ValidityRef<'_>| -> Result<Box<dyn DynStats>, String> {
+        |col: &DynColumnRef, validity: ValidityRef| -> Result<Box<dyn DynStats>, String> {
             let (lower, upper, null_count) =
-                proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?, validity);
+                proto_datum_min_max_nulls(col.downcast_ref::<Vec<u8>>()?, validity);
             assert_eq!(null_count, 0);
             Ok(Box::new(BytesStats::Atomic(AtomicBytesStats {
                 lower,
@@ -401,8 +403,8 @@ impl DatumToPersist for NullableProtoDatumToPersist {
     type Cfg = ();
     const CFG: Self::Cfg = ();
     const STATS_FN: StatsFn = StatsFn::Custom(
-        |col: &DynColumnRef, validity: ValidityRef<'_>| -> Result<Box<dyn DynStats>, String> {
-            let col = col.downcast::<Option<Vec<u8>>>()?;
+        |col: &DynColumnRef, validity: ValidityRef| -> Result<Box<dyn DynStats>, String> {
+            let col = col.downcast_ref::<Option<Vec<u8>>>()?;
             debug_assert!(validity.is_superset(col.validity()));
             let (lower, upper, null_count) = proto_datum_min_max_nulls(col, ValidityRef::none());
             Ok(Box::new(OptionStats {
@@ -501,8 +503,8 @@ impl DatumToPersist for Jsonb {
     type Cfg = ();
     const CFG: Self::Cfg = ();
     const STATS_FN: StatsFn = StatsFn::Custom(
-        |col: &DynColumnRef, validity: ValidityRef<'_>| -> Result<Box<dyn DynStats>, String> {
-            let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Vec<u8>>()?, validity)?;
+        |col: &DynColumnRef, validity: ValidityRef| -> Result<Box<dyn DynStats>, String> {
+            let (stats, null_count) = jsonb_stats_nulls(col.downcast_ref::<Vec<u8>>()?, validity)?;
             assert_eq!(null_count, 0);
             Ok(Box::new(BytesStats::Json(stats)))
         },
@@ -520,8 +522,8 @@ impl DatumToPersist for Option<Jsonb> {
     type Cfg = ();
     const CFG: Self::Cfg = ();
     const STATS_FN: StatsFn = StatsFn::Custom(
-        |col: &DynColumnRef, validity: ValidityRef<'_>| -> Result<Box<dyn DynStats>, String> {
-            let col = col.downcast::<Option<Vec<u8>>>()?;
+        |col: &DynColumnRef, validity: ValidityRef| -> Result<Box<dyn DynStats>, String> {
+            let col = col.downcast_ref::<Option<Vec<u8>>>()?;
             debug_assert!(validity.is_superset(col.validity()));
             let (stats, null_count) = jsonb_stats_nulls(col, ValidityRef::none())?;
             Ok(Box::new(OptionStats {
@@ -541,41 +543,41 @@ impl DatumToPersist for Option<Jsonb> {
 /// A helper for adapting mz's [Datum] to persist's columnar [Data].
 #[enum_dispatch]
 #[derive(Debug)]
-pub enum DatumEncoder<'a> {
-    Bool(DataMut<'a, bool>),
-    OptBool(DataMut<'a, Option<bool>>),
-    Int16(DataMut<'a, i16>),
-    OptInt16(DataMut<'a, Option<i16>>),
-    Int32(DataMut<'a, i32>),
-    OptInt32(DataMut<'a, Option<i32>>),
-    Int64(DataMut<'a, i64>),
-    OptInt64(DataMut<'a, Option<i64>>),
-    UInt8(DataMut<'a, u8>),
-    OptUInt8(DataMut<'a, Option<u8>>),
-    UInt16(DataMut<'a, u16>),
-    OptUInt16(DataMut<'a, Option<u16>>),
-    UInt32(DataMut<'a, u32>),
-    OptUInt32(DataMut<'a, Option<u32>>),
-    UInt64(DataMut<'a, u64>),
-    OptUInt64(DataMut<'a, Option<u64>>),
-    Float32(DataMut<'a, f32>),
-    OptFloat32(DataMut<'a, Option<f32>>),
-    Float64(DataMut<'a, f64>),
-    OptFloat64(DataMut<'a, Option<f64>>),
-    Date(DataMut<'a, Date>),
-    OptDate(DataMut<'a, Option<Date>>),
-    Bytes(DataMut<'a, Vec<u8>>),
-    OptBytes(DataMut<'a, Option<Vec<u8>>>),
-    String(DataMut<'a, String>),
-    OptString(DataMut<'a, Option<String>>),
-    Jsonb(DataMut<'a, Jsonb>),
-    OptJsonb(DataMut<'a, Option<Jsonb>>),
-    MzTimestamp(DataMut<'a, Timestamp>),
-    OptMzTimestamp(DataMut<'a, Option<Timestamp>>),
-    Todo(DataMut<'a, ProtoDatumToPersist>),
-    OptTodo(DataMut<'a, NullableProtoDatumToPersist>),
-    TodoNoStats(DataMut<'a, ProtoDatumToPersistNoStats>),
-    OptTodoNoStats(DataMut<'a, NullableProtoDatumToPersistNoStats>),
+pub enum DatumEncoder {
+    Bool(DataMut<bool>),
+    OptBool(DataMut<Option<bool>>),
+    Int16(DataMut<i16>),
+    OptInt16(DataMut<Option<i16>>),
+    Int32(DataMut<i32>),
+    OptInt32(DataMut<Option<i32>>),
+    Int64(DataMut<i64>),
+    OptInt64(DataMut<Option<i64>>),
+    UInt8(DataMut<u8>),
+    OptUInt8(DataMut<Option<u8>>),
+    UInt16(DataMut<u16>),
+    OptUInt16(DataMut<Option<u16>>),
+    UInt32(DataMut<u32>),
+    OptUInt32(DataMut<Option<u32>>),
+    UInt64(DataMut<u64>),
+    OptUInt64(DataMut<Option<u64>>),
+    Float32(DataMut<f32>),
+    OptFloat32(DataMut<Option<f32>>),
+    Float64(DataMut<f64>),
+    OptFloat64(DataMut<Option<f64>>),
+    Date(DataMut<Date>),
+    OptDate(DataMut<Option<Date>>),
+    Bytes(DataMut<Vec<u8>>),
+    OptBytes(DataMut<Option<Vec<u8>>>),
+    String(DataMut<String>),
+    OptString(DataMut<Option<String>>),
+    Jsonb(DataMut<Jsonb>),
+    OptJsonb(DataMut<Option<Jsonb>>),
+    MzTimestamp(DataMut<Timestamp>),
+    OptMzTimestamp(DataMut<Option<Timestamp>>),
+    Todo(DataMut<ProtoDatumToPersist>),
+    OptTodo(DataMut<NullableProtoDatumToPersist>),
+    TodoNoStats(DataMut<ProtoDatumToPersistNoStats>),
+    OptTodoNoStats(DataMut<NullableProtoDatumToPersistNoStats>),
 }
 
 /// An `enum_dispatch` companion for `DatumEncoder`.
@@ -583,9 +585,10 @@ pub enum DatumEncoder<'a> {
 /// This allows us to do Datum encoding without dynamic dispatch. It's a pretty
 /// hot path, so the hassle is worth it.
 #[enum_dispatch(DatumEncoder)]
-pub trait DatumEncoderT<'a> {
+pub trait DatumEncoderT {
     fn encode(&mut self, datum: Datum);
     fn encode_default(&mut self);
+    fn finish(self) -> DynColumnMut;
 }
 
 /// A newtype wrapper for `&mut T::Mut`.
@@ -593,89 +596,101 @@ pub trait DatumEncoderT<'a> {
 /// This is necessary for enum_dispatch to create From/TryInto (conflicting
 /// impls if we try to store `&mut T::Mut` directly in the enum variants), but
 /// it's also a convenient place to hang a std::fmt::Debug impl.
-pub struct DataMut<'a, T: DatumToPersist>(&'a mut <T::Data as Data>::Mut);
+pub struct DataMut<T: DatumToPersist>(Box<<T::Data as Data>::Mut>);
 
-impl<T: DatumToPersist> std::fmt::Debug for DataMut<'_, T> {
+impl<T: DatumToPersist> std::fmt::Debug for DataMut<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(&format!("DataMut<{}>", std::any::type_name::<T>()))
             .finish_non_exhaustive()
     }
 }
 
-impl<'a, T: DatumToPersist> DatumEncoderT<'a> for DataMut<'a, T> {
+impl<T: DatumToPersist> DatumEncoderT for DataMut<T> {
     fn encode(&mut self, datum: Datum) {
-        T::encode(self.0, datum);
+        T::encode(&mut self.0, datum);
     }
     fn encode_default(&mut self) {
-        T::encode_default(self.0);
+        T::encode_default(&mut self.0);
+    }
+    fn finish(self) -> DynColumnMut {
+        DynColumnMut::new::<T::Data>(self.0)
     }
 }
 
 /// An implementation of [PartEncoder] for [Row].
 #[derive(Debug)]
-pub struct RowEncoder<'a> {
-    len: &'a mut usize,
-    col_encoders: Vec<DatumEncoder<'a>>,
+pub struct RowEncoder {
+    len: usize,
+    col_encoders: Vec<DatumEncoder>,
 }
 
-impl<'a> RowEncoder<'a> {
+impl RowEncoder {
     /// Returns the underlying DatumEncoders, one per column in the Row.
-    pub fn col_encoders(&mut self) -> &mut [DatumEncoder<'a>] {
+    pub fn col_encoders(&mut self) -> &mut [DatumEncoder] {
         &mut self.col_encoders
     }
 
     pub fn inc_len(&mut self) {
-        *self.len += 1;
+        self.len += 1;
     }
 }
 
-impl<'a> PartEncoder<'a, Row> for RowEncoder<'a> {
+impl PartEncoder<Row> for RowEncoder {
     fn encode(&mut self, val: &Row) {
-        *self.len += 1;
+        self.len += 1;
         for (encoder, datum) in self.col_encoders.iter_mut().zip(val.iter()) {
             encoder.encode(datum);
         }
+    }
+
+    fn finish(self) -> (usize, Vec<DynColumnMut>) {
+        let cols = self
+            .col_encoders
+            .into_iter()
+            .map(|encoder| encoder.finish())
+            .collect();
+        (self.len, cols)
     }
 }
 
 /// A helper for adapting mz's [Datum] to persist's columnar [Data].
 #[enum_dispatch]
 #[derive(Debug)]
-pub enum DatumDecoder<'a> {
-    Bool(DataRef<'a, bool>),
-    OptBool(DataRef<'a, Option<bool>>),
-    Int16(DataRef<'a, i16>),
-    OptInt16(DataRef<'a, Option<i16>>),
-    Int32(DataRef<'a, i32>),
-    OptInt32(DataRef<'a, Option<i32>>),
-    Int64(DataRef<'a, i64>),
-    OptInt64(DataRef<'a, Option<i64>>),
-    UInt8(DataRef<'a, u8>),
-    OptUInt8(DataRef<'a, Option<u8>>),
-    UInt16(DataRef<'a, u16>),
-    OptUInt16(DataRef<'a, Option<u16>>),
-    UInt32(DataRef<'a, u32>),
-    OptUInt32(DataRef<'a, Option<u32>>),
-    UInt64(DataRef<'a, u64>),
-    OptUInt64(DataRef<'a, Option<u64>>),
-    Float32(DataRef<'a, f32>),
-    OptFloat32(DataRef<'a, Option<f32>>),
-    Float64(DataRef<'a, f64>),
-    OptFloat64(DataRef<'a, Option<f64>>),
-    Date(DataRef<'a, Date>),
-    OptDate(DataRef<'a, Option<Date>>),
-    Bytes(DataRef<'a, Vec<u8>>),
-    OptBytes(DataRef<'a, Option<Vec<u8>>>),
-    String(DataRef<'a, String>),
-    OptString(DataRef<'a, Option<String>>),
-    Jsonb(DataRef<'a, Jsonb>),
-    OptJsonb(DataRef<'a, Option<Jsonb>>),
-    MzTimestamp(DataRef<'a, Timestamp>),
-    OptMzTimestamp(DataRef<'a, Option<Timestamp>>),
-    Todo(DataRef<'a, ProtoDatumToPersist>),
-    OptTodo(DataRef<'a, NullableProtoDatumToPersist>),
-    TodoNoStats(DataRef<'a, ProtoDatumToPersistNoStats>),
-    OptTodoNoStats(DataRef<'a, NullableProtoDatumToPersistNoStats>),
+pub enum DatumDecoder {
+    Bool(DataRef<bool>),
+    OptBool(DataRef<Option<bool>>),
+    Int16(DataRef<i16>),
+    OptInt16(DataRef<Option<i16>>),
+    Int32(DataRef<i32>),
+    OptInt32(DataRef<Option<i32>>),
+    Int64(DataRef<i64>),
+    OptInt64(DataRef<Option<i64>>),
+    UInt8(DataRef<u8>),
+    OptUInt8(DataRef<Option<u8>>),
+    UInt16(DataRef<u16>),
+    OptUInt16(DataRef<Option<u16>>),
+    UInt32(DataRef<u32>),
+    OptUInt32(DataRef<Option<u32>>),
+    UInt64(DataRef<u64>),
+    OptUInt64(DataRef<Option<u64>>),
+    Float32(DataRef<f32>),
+    OptFloat32(DataRef<Option<f32>>),
+    Float64(DataRef<f64>),
+    OptFloat64(DataRef<Option<f64>>),
+    Date(DataRef<Date>),
+    OptDate(DataRef<Option<Date>>),
+    Bytes(DataRef<Vec<u8>>),
+    OptBytes(DataRef<Option<Vec<u8>>>),
+    String(DataRef<String>),
+    OptString(DataRef<Option<String>>),
+    Jsonb(DataRef<Jsonb>),
+    OptJsonb(DataRef<Option<Jsonb>>),
+    MzTimestamp(DataRef<Timestamp>),
+    OptMzTimestamp(DataRef<Option<Timestamp>>),
+    Todo(DataRef<ProtoDatumToPersist>),
+    OptTodo(DataRef<NullableProtoDatumToPersist>),
+    TodoNoStats(DataRef<ProtoDatumToPersistNoStats>),
+    OptTodoNoStats(DataRef<NullableProtoDatumToPersistNoStats>),
 }
 
 /// An `enum_dispatch` companion for `DatumDecoder`.
@@ -683,7 +698,7 @@ pub enum DatumDecoder<'a> {
 /// This allows us to do Datum decoding without dynamic dispatch. It's a pretty
 /// hot path, so the hassle is worth it.
 #[enum_dispatch(DatumDecoder)]
-pub trait DatumDecoderT<'a> {
+pub trait DatumDecoderT {
     fn decode(&self, idx: usize, row: &mut RowPacker);
 }
 
@@ -692,35 +707,35 @@ pub trait DatumDecoderT<'a> {
 /// This is necessary for enum_dispatch to create From/TryInto (conflicting
 /// impls if we try to store `& T::Ref` directly in the enum variants), but it's
 /// also a convenient place to hang a std::fmt::Debug impl.
-pub struct DataRef<'a, T: DatumToPersist>(&'a <T::Data as Data>::Col);
+pub struct DataRef<T: DatumToPersist>(Arc<<T::Data as Data>::Col>);
 
-impl<T: DatumToPersist> std::fmt::Debug for DataRef<'_, T> {
+impl<T: DatumToPersist> std::fmt::Debug for DataRef<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(&format!("DataRef<{}>", std::any::type_name::<T>()))
             .finish_non_exhaustive()
     }
 }
 
-impl<'a, T: DatumToPersist> DatumDecoderT<'a> for DataRef<'a, T> {
+impl<T: DatumToPersist> DatumDecoderT for DataRef<T> {
     fn decode(&self, idx: usize, row: &mut RowPacker) {
-        T::decode(ColumnGet::<T::Data>::get(self.0, idx), row);
+        T::decode(ColumnGet::<T::Data>::get(self.0.as_ref(), idx), row);
     }
 }
 
 /// An implementation of [PartDecoder] for [Row].
 #[derive(Debug)]
-pub struct RowDecoder<'a> {
-    col_decoders: Vec<DatumDecoder<'a>>,
+pub struct RowDecoder {
+    col_decoders: Vec<DatumDecoder>,
 }
 
-impl<'a> RowDecoder<'a> {
+impl RowDecoder {
     /// Returns the underlying DatumDecoders, one per column in the Row.
-    pub fn col_decoders(&self) -> &[DatumDecoder<'a>] {
+    pub fn col_decoders(&self) -> &[DatumDecoder] {
         &self.col_decoders
     }
 }
 
-impl<'a> PartDecoder<'a, Row> for RowDecoder<'a> {
+impl PartDecoder<Row> for RowDecoder {
     fn decode(&self, idx: usize, val: &mut Row) {
         let mut packer = val.packer();
         for decoder in self.col_decoders.iter() {
@@ -730,15 +745,12 @@ impl<'a> PartDecoder<'a, Row> for RowDecoder<'a> {
 }
 
 impl RelationDesc {
-    pub fn decoder<'a, V>(
-        &self,
-        mut part: ColumnsRef<'a, V>,
-    ) -> Result<(V, RowDecoder<'a>), String> {
-        struct DatumDecoderFn<'a, 'b, V>(&'b str, &'b mut ColumnsRef<'a, V>);
-        impl<'a, 'b, V> DatumToPersistFn<DatumDecoder<'a>> for DatumDecoderFn<'a, 'b, V> {
-            fn call<T: DatumToPersist>(self) -> DatumDecoder<'a>
+    pub fn decoder<V>(&self, mut part: ColumnsRef<V>) -> Result<(V, RowDecoder), String> {
+        struct DatumDecoderFn<'b, V>(&'b str, &'b mut ColumnsRef<V>);
+        impl<'b, V> DatumToPersistFn<DatumDecoder> for DatumDecoderFn<'b, V> {
+            fn call<T: DatumToPersist>(self) -> DatumDecoder
             where
-                for<'c> DatumDecoder<'c>: From<DataRef<'c, T>>,
+                DatumDecoder: From<DataRef<T>>,
             {
                 let DatumDecoderFn(name, part) = self;
                 let col = part
@@ -757,15 +769,12 @@ impl RelationDesc {
         Ok((validity, RowDecoder { col_decoders }))
     }
 
-    pub fn encoder<'a, V>(
-        &self,
-        mut part: ColumnsMut<'a, V>,
-    ) -> Result<(V, RowEncoder<'a>), String> {
-        struct DatumEncoderFn<'a, 'b, V>(&'b str, &'b mut ColumnsMut<'a, V>);
-        impl<'a, 'b, V> DatumToPersistFn<DatumEncoder<'a>> for DatumEncoderFn<'a, 'b, V> {
-            fn call<T: DatumToPersist>(self) -> DatumEncoder<'a>
+    pub fn encoder<'a, V>(&self, mut part: ColumnsMut<V>) -> Result<(V, RowEncoder), String> {
+        struct DatumEncoderFn<'b, V>(&'b str, &'b mut ColumnsMut<V>);
+        impl<'b, V> DatumToPersistFn<DatumEncoder> for DatumEncoderFn<'b, V> {
+            fn call<T: DatumToPersist>(self) -> DatumEncoder
             where
-                for<'c> DatumEncoder<'c>: From<DataMut<'c, T>>,
+                DatumEncoder: From<DataMut<T>>,
             {
                 let DatumEncoderFn(name, part) = self;
                 let col = part
@@ -786,8 +795,8 @@ impl RelationDesc {
 }
 
 impl Schema<Row> for RelationDesc {
-    type Encoder<'a> = RowEncoder<'a>;
-    type Decoder<'a> = RowDecoder<'a>;
+    type Encoder = RowEncoder;
+    type Decoder = RowDecoder;
 
     fn columns(&self) -> DynStructCfg {
         struct ToPersist;
@@ -807,12 +816,12 @@ impl Schema<Row> for RelationDesc {
         DynStructCfg::from(cols)
     }
 
-    fn decoder<'a>(&self, part: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+    fn decoder(&self, part: ColumnsRef) -> Result<Self::Decoder, String> {
         let ((), decoder) = self.decoder(part)?;
         Ok(decoder)
     }
 
-    fn encoder<'a>(&self, part: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+    fn encoder<'a>(&self, part: ColumnsMut) -> Result<Self::Encoder, String> {
         let ((), encoder) = self.encoder(part)?;
         Ok(encoder)
     }

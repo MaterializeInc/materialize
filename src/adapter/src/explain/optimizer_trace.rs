@@ -10,24 +10,29 @@
 //! Tracing utilities for explainable plans.
 
 use std::fmt::{Debug, Display};
+use std::sync::Arc;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::explain::ExplainContext;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
-use mz_repr::explain::tracing::{DelegateSubscriber, PlanTrace, TraceEntry};
+use mz_ore::collections::CollectionExt;
+use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
 };
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{Datum, Row};
 use mz_sql::plan::{self, HirRelationExpr, HirScalarExpr};
 use mz_sql_parser::ast::{ExplainStage, NamedPlan};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::RawOptimizerNotice;
+use smallvec::SmallVec;
 use tracing::dispatcher;
 use tracing_subscriber::prelude::*;
 
 use crate::coord::peek::FastPathPlan;
+use crate::explain::insights;
 use crate::explain::Explainable;
 use crate::AdapterError;
 
@@ -35,14 +40,15 @@ use crate::AdapterError;
 /// optimization pipeline.
 ///
 /// Internally, this will create a layered [`tracing::subscriber::Subscriber`]
-/// consisting of one layer for each supported plan type `T`.
+/// consisting of one layer for each supported plan type `T` and wrap it into a
+/// [`dispatcher::Dispatch`] instance.
 ///
-/// Use `tracing::dispatcher::set_default` to trace in synchronous context.
-/// Use `tracing::instrument::WithSubscriber::with_subscriber(&optimizer_trace)` to trace the result of a `Future`.
+/// Use [`OptimizerTrace::as_guard`] to activate the [`dispatcher::Dispatch`]
+/// and collect a trace.
 ///
-/// The [`OptimizerTrace::drain_all`] method on the created instance can be
-/// then used to collect the trace, and [`OptimizerTrace::drain_all`] to obtain
-/// the collected trace as a vector of [`TraceEntry`] instances.
+/// Use [`OptimizerTrace::into_rows`] or [`OptimizerTrace::into_plan_insights`]
+/// to cleanly destroy the [`OptimizerTrace`] instance and obtain the tracing
+/// result.
 pub struct OptimizerTrace(dispatcher::Dispatch);
 
 impl std::fmt::Debug for OptimizerTrace {
@@ -57,41 +63,64 @@ impl OptimizerTrace {
     /// The instance will only accumulate [`TraceEntry`] instances along
     /// the prefix of the given `path` if `path` is present, or it will
     /// accumulate all [`TraceEntry`] instances otherwise.
-    pub fn new(broken: bool, filter: Option<&'static str>) -> OptimizerTrace {
-        if broken {
-            let subscriber = DelegateSubscriber::default()
+    pub fn new(filter: Option<SmallVec<[NamedPlan; 4]>>) -> OptimizerTrace {
+        let filter = || filter.clone();
+        if let Some(global_subscriber) = mz_ore::tracing::GLOBAL_SUBSCRIBER.get() {
+            let subscriber = Arc::clone(global_subscriber)
                 // Collect `explain_plan` types that are not used in the regular explain
                 // path, but are useful when instrumenting code for debugging purposes.
-                .with(PlanTrace::<String>::new(filter))
-                .with(PlanTrace::<HirScalarExpr>::new(filter))
-                .with(PlanTrace::<MirScalarExpr>::new(filter))
+                .with(PlanTrace::<String>::new(filter()))
+                .with(PlanTrace::<HirScalarExpr>::new(filter()))
+                .with(PlanTrace::<MirScalarExpr>::new(filter()))
                 // Collect `explain_plan` types that are used in the regular explain path.
-                .with(PlanTrace::<HirRelationExpr>::new(filter))
-                .with(PlanTrace::<MirRelationExpr>::new(filter))
-                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter))
-                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter))
+                .with(PlanTrace::<HirRelationExpr>::new(filter()))
+                .with(PlanTrace::<MirRelationExpr>::new(filter()))
+                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter()))
+                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter()))
                 // Don't filter for FastPathPlan entries (there can be at most one).
                 .with(PlanTrace::<FastPathPlan>::new(None))
-                .with(PlanTrace::<UsedIndexes>::new(None));
+                .with(PlanTrace::<UsedIndexes>::new(None))
+                // All optimizer spans are `TRACE` and up. Technically this slows down the system
+                // by skipping the tracing fast path DURING an `EXPLAIN`, but we haven't
+                // seen this be a problem (yet).
+                //
+                // Note that we typically do NOT use global filters like this, preferring
+                // per-layer ones, but we are forced to because per-layer filters
+                // require an `Arc<dyn Subscriber + LookupSpan>`, which isn't a trait
+                // exposed by tracing, for now.
+                .with(tracing::level_filters::LevelFilter::TRACE);
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         } else {
+            // This codepath should not be taken except in tests, and is left here as a
+            // convenience.
             let subscriber = tracing_subscriber::registry()
-                // Collect `explain_plan` types that are not used in the regular explain
-                // path, but are useful when instrumenting code for debugging purposes.
-                .with(PlanTrace::<String>::new(filter))
-                .with(PlanTrace::<HirScalarExpr>::new(filter))
-                .with(PlanTrace::<MirScalarExpr>::new(filter))
-                // Collect `explain_plan` types that are used in the regular explain path.
-                .with(PlanTrace::<HirRelationExpr>::new(filter))
-                .with(PlanTrace::<MirRelationExpr>::new(filter))
-                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter))
-                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter))
-                // Don't filter for FastPathPlan entries (there can be at most one).
+                .with(PlanTrace::<String>::new(filter()))
+                .with(PlanTrace::<HirScalarExpr>::new(filter()))
+                .with(PlanTrace::<MirScalarExpr>::new(filter()))
+                .with(PlanTrace::<HirRelationExpr>::new(filter()))
+                .with(PlanTrace::<MirRelationExpr>::new(filter()))
+                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter()))
+                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter()))
                 .with(PlanTrace::<FastPathPlan>::new(None))
-                .with(PlanTrace::<UsedIndexes>::new(None));
+                .with(PlanTrace::<UsedIndexes>::new(None))
+                .with(tracing::level_filters::LevelFilter::TRACE);
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
+        }
+    }
+
+    /// Enter this [`OptimizerTrace`]'s tracing [`dispatcher::Dispatch`], returning a guard.
+    ///
+    /// Linked to this [`OptimizerTrace`] with a lifetime to ensure
+    /// [`OptimizerTrace::into_rows`] isn't called until the guard is dropped.
+    pub fn as_guard<'s>(&'s self) -> DispatchGuard<'s> {
+        let dispatch = self.0.clone();
+        let tracing_guard = tracing::dispatcher::set_default(&dispatch);
+
+        DispatchGuard {
+            _tracing_guard: tracing_guard,
+            _life: std::marker::PhantomData,
         }
     }
 
@@ -101,25 +130,32 @@ impl OptimizerTrace {
         self,
         format: ExplainFormat,
         config: &ExplainConfig,
+        features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
+        target_cluster: Option<&str>,
         dataflow_metainfo: DataflowMetainfo,
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
     ) -> Result<Vec<Row>, AdapterError> {
-        let mut trace = self.drain_all(
-            format,
-            config,
-            humanizer,
-            row_set_finishing,
-            dataflow_metainfo,
-        )?;
+        let collect_all = |format| {
+            self.collect_all(
+                format,
+                config,
+                features,
+                humanizer,
+                row_set_finishing.clone(),
+                target_cluster,
+                dataflow_metainfo.clone(),
+            )
+        };
 
-        let rows = match stage.path() {
-            None => {
+        let rows = match stage {
+            ExplainStage::Trace => {
                 // For the `Trace` (pseudo-)stage, return the entire trace as
                 // triples of (time, path, plan) values.
-                let rows = trace
+                let rows = collect_all(format)?
+                    .0
                     .into_iter()
                     .map(|entry| {
                         // The trace would have to take over 584 years to overflow a u64.
@@ -133,24 +169,70 @@ impl OptimizerTrace {
                     .collect();
                 rows
             }
-            Some(path) => {
+            ExplainStage::PlanInsights => {
+                if format != ExplainFormat::Json {
+                    coord_bail!("EXPLAIN PLAN INSIGHTS only supports JSON format");
+                }
+
+                let mut text_traces = collect_all(ExplainFormat::Text)?;
+                let mut json_traces = collect_all(ExplainFormat::Json)?;
+                let global_plan = self.collect_global_plan();
+                let fast_path_plan = self.collect_fast_path_plan();
+
+                // Plans can be very large and exhaust the json serialization recursion limit.
+                // Convert those into error objects.
+                let mut get_plan = |name: NamedPlan| {
+                    let text_plan = match text_traces.remove(name.path()) {
+                        None => "<unknown>".into(),
+                        Some(entry) => entry.plan,
+                    };
+                    let json_plan = match json_traces.remove(name.path()) {
+                        None => serde_json::Value::Null,
+                        Some(entry) => serde_json::from_str(&entry.plan).unwrap_or_else(|e| {
+                            serde_json::json!({
+                                "error": format!("internal error: {e}"),
+                            })
+                        }),
+                    };
+                    serde_json::json!({
+                        "text": text_plan,
+                        "json": json_plan,
+                    })
+                };
+
+                let output = serde_json::json!({
+                    "plans": {
+                        "raw": get_plan(NamedPlan::Raw),
+                        "optimized": {
+                            "global": get_plan(NamedPlan::Global),
+                            "fast_path": get_plan(NamedPlan::FastPath),
+                        }
+                    },
+                    "insights": insights::plan_insights(humanizer, global_plan, fast_path_plan),
+                });
+                let output = serde_json::to_string_pretty(&output).expect("JSON string");
+                vec![Row::pack_slice(&[Datum::from(output.as_str())])]
+            }
+            _ => {
                 // For everything else, return the plan for the stage identified
                 // by the corresponding path.
 
-                // A helper struct hat removes the first (and by assumption the
-                // only) plan that matches the given path from the collected
-                // trace.
-                let mut remove_plan = |path: &'static str| {
-                    let index = trace.iter().position(|entry| entry.path == path);
-                    index.map(|index| trace.remove(index))
-                };
+                let path = stage
+                    .paths()
+                    .map(|path| path.into_element().path())
+                    .ok_or_else(|| {
+                        AdapterError::Internal("explain stage unexpectedly missing path".into())
+                    })?;
+                let mut traces = collect_all(format)?;
 
                 // For certain stages we want to return the resulting fast path
                 // plan instead of the selected stage if it is present.
                 let plan = if stage.show_fast_path() && !config.no_fast_path {
-                    remove_plan(NamedPlan::FastPath.path()).or_else(|| remove_plan(path))
+                    traces
+                        .remove(NamedPlan::FastPath.path())
+                        .or_else(|| traces.remove(path))
                 } else {
-                    remove_plan(path)
+                    traces.remove(path)
                 };
 
                 let row = plan
@@ -172,29 +254,72 @@ impl OptimizerTrace {
             }
         };
 
+        // We assume that any `Dispatch` cloned from this `OptimizerTrace` has long been dropped
+        // (`as_guard` tries to ensure this.). We rebuild the tracing interest cache, as
+        // this `OptimizerTrace` is acting like a reload-layer, and tracing needs to
+        // recalculate what the max level is, using this often-unknown
+        // API. Note that the reference to the `Dispatch` in self MUST be dropped before
+        // re-calculating interest.
+        //
+        // Before this is dropped and rebuilt, there is small extra cost to all `DEBUG` spans and
+        // events, if the other layers (otel and stderr) are only interested in `INFO`.
+        drop(self);
+        tracing_core::callsite::rebuild_interest_cache();
         Ok(rows)
+    }
+
+    /// Collect a [`insights::PlanInsights`] with insights about the the
+    /// optimized plans rendered as a JSON `String`.
+    pub fn into_plan_insights(
+        self,
+        features: &OptimizerFeatures,
+        humanizer: &dyn ExprHumanizer,
+        row_set_finishing: Option<RowSetFinishing>,
+        target_cluster: Option<&str>,
+        dataflow_metainfo: DataflowMetainfo,
+    ) -> Result<String, AdapterError> {
+        let rows = self.into_rows(
+            ExplainFormat::Json,
+            &ExplainConfig::default(),
+            features,
+            humanizer,
+            row_set_finishing,
+            target_cluster,
+            dataflow_metainfo,
+            ExplainStage::PlanInsights,
+            plan::ExplaineeStatementKind::Select,
+        )?;
+
+        // When using `ExplainStage::PlanInsights`, we're guaranteed that the
+        // output is a single row containing a single column containing the plan
+        // insights as a string.
+        Ok(rows.into_element().into_element().unwrap_str().into())
     }
 
     /// Collect all traced plans for all plan types `T` that are available in
     /// the wrapped [`dispatcher::Dispatch`].
-    pub fn drain_all(
-        self,
+    fn collect_all(
+        &self,
         format: ExplainFormat,
         config: &ExplainConfig,
+        features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
+        target_cluster: Option<&str>,
         dataflow_metainfo: DataflowMetainfo,
-    ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
+    ) -> Result<TraceEntries<String>, ExplainError> {
         let mut results = vec![];
 
-        // First, create an ExplainContext without `used_indexes`. We'll use this to, e.g., drain
+        // First, create an ExplainContext without `used_indexes`. We'll use this to, e.g., collect
         // HIR plans.
         let mut context = ExplainContext {
             config,
+            features,
             humanizer,
             used_indexes: Default::default(),
             finishing: row_set_finishing.clone(),
             duration: Default::default(),
+            target_cluster,
             optimizer_notices: RawOptimizerNotice::explain(
                 &dataflow_metainfo.optimizer_notices,
                 humanizer,
@@ -202,19 +327,21 @@ impl OptimizerTrace {
             )?,
         };
 
-        // Drain trace entries of types produced by local optimizer stages.
+        // Collect trace entries of types produced by local optimizer stages.
         results.extend(itertools::chain!(
-            self.drain_explainable_entries::<HirRelationExpr>(&format, &mut context)?,
-            self.drain_explainable_entries::<MirRelationExpr>(&format, &mut context)?,
+            self.collect_explainable_entries::<HirRelationExpr>(&format, &mut context)?,
+            self.collect_explainable_entries::<MirRelationExpr>(&format, &mut context)?,
         ));
 
-        // Drain trace entries of types produced by global optimizer stages.
+        // Collect trace entries of types produced by global optimizer stages.
         let mut context = ExplainContext {
             config,
+            features,
             humanizer,
             used_indexes: Default::default(),
             finishing: row_set_finishing,
             duration: Default::default(),
+            target_cluster,
             optimizer_notices: RawOptimizerNotice::explain(
                 &dataflow_metainfo.optimizer_notices,
                 humanizer,
@@ -222,20 +349,20 @@ impl OptimizerTrace {
             )?,
         };
         results.extend(itertools::chain!(
-            self.drain_explainable_entries::<DataflowDescription<OptimizedMirRelationExpr>>(
+            self.collect_explainable_entries::<DataflowDescription<OptimizedMirRelationExpr>>(
                 &format,
                 &mut context,
             )?,
-            self.drain_explainable_entries::<DataflowDescription<Plan>>(&format, &mut context)?,
-            self.drain_explainable_entries::<FastPathPlan>(&format, &mut context)?,
+            self.collect_explainable_entries::<DataflowDescription<Plan>>(&format, &mut context)?,
+            self.collect_explainable_entries::<FastPathPlan>(&format, &mut context)?,
         ));
 
-        // Drain trace entries of type String, HirScalarExpr, MirScalarExpr
+        // Collect trace entries of type String, HirScalarExpr, MirScalarExpr
         // which are useful for ad-hoc debugging.
         results.extend(itertools::chain!(
-            self.drain_scalar_entries::<HirScalarExpr>(),
-            self.drain_scalar_entries::<MirScalarExpr>(),
-            self.drain_string_entries(),
+            self.collect_scalar_entries::<HirScalarExpr>(),
+            self.collect_scalar_entries::<MirScalarExpr>(),
+            self.collect_string_entries(),
         ));
 
         // sort plans by instant (TODO: this can be implemented in a more
@@ -243,12 +370,28 @@ impl OptimizerTrace {
         // to `*.extend` the `results` vector is already sorted).
         results.sort_by_key(|x| x.instant);
 
-        Ok(results)
+        Ok(TraceEntries(results))
+    }
+
+    /// Collects the global optimized plan from the trace, if it exists.
+    fn collect_global_plan(&self) -> Option<DataflowDescription<OptimizedMirRelationExpr>> {
+        self.0
+            .downcast_ref::<PlanTrace<DataflowDescription<OptimizedMirRelationExpr>>>()
+            .and_then(|trace| trace.find(NamedPlan::Global.path()))
+            .map(|entry| entry.plan)
+    }
+
+    /// Collects the fast path plan from the trace, if it exists.
+    fn collect_fast_path_plan(&self) -> Option<FastPathPlan> {
+        self.0
+            .downcast_ref::<PlanTrace<FastPathPlan>>()
+            .and_then(|trace| trace.find(NamedPlan::FastPath.path()))
+            .map(|entry| entry.plan)
     }
 
     /// Collect all trace entries of a plan type `T` that implements
     /// [`Explainable`].
-    fn drain_explainable_entries<T>(
+    fn collect_explainable_entries<T>(
         &self,
         format: &ExplainFormat,
         context: &mut ExplainContext,
@@ -262,7 +405,7 @@ impl OptimizerTrace {
             let used_indexes_trace = self.0.downcast_ref::<PlanTrace<UsedIndexes>>();
 
             trace
-                .drain_as_vec()
+                .collect_as_vec()
                 .into_iter()
                 .map(|mut entry| {
                     // Update the context with the current time.
@@ -296,19 +439,19 @@ impl OptimizerTrace {
                 })
                 .collect()
         } else {
-            unreachable!("drain_explainable_entries called with wrong plan type T");
+            unreachable!("collect_explainable_entries called with wrong plan type T");
         }
     }
 
     /// Collect all trace entries of a plan type `T`.
-    fn drain_scalar_entries<T>(&self) -> Vec<TraceEntry<String>>
+    fn collect_scalar_entries<T>(&self) -> Vec<TraceEntry<String>>
     where
         T: Clone + Debug + 'static,
         T: Display,
     {
         if let Some(trace) = self.0.downcast_ref::<PlanTrace<T>>() {
             trace
-                .drain_as_vec()
+                .collect_as_vec()
                 .into_iter()
                 .map(|entry| TraceEntry {
                     instant: entry.instant,
@@ -324,19 +467,29 @@ impl OptimizerTrace {
     }
 
     /// Collect all trace entries with plans of type [`String`].
-    fn drain_string_entries(&self) -> Vec<TraceEntry<String>> {
+    fn collect_string_entries(&self) -> Vec<TraceEntry<String>> {
         if let Some(trace) = self.0.downcast_ref::<PlanTrace<String>>() {
-            trace.drain_as_vec()
+            trace.collect_as_vec()
         } else {
             vec![]
         }
     }
 }
 
-impl From<&OptimizerTrace> for tracing::Dispatch {
-    fn from(value: &OptimizerTrace) -> Self {
-        // be not afraid: value.0 is a Dispatcher, which is Arc<dyn Subscriber + ...>
-        // https://docs.rs/tracing-core/0.1.30/src/tracing_core/dispatcher.rs.html#451-453
-        value.0.clone()
+/// A wrapper around a `tracing::subscriber::DefaultGuard`.
+pub struct DispatchGuard<'a> {
+    _tracing_guard: tracing::subscriber::DefaultGuard,
+    _life: std::marker::PhantomData<&'a ()>,
+}
+
+/// A collection of optimizer trace entries with convenient accessor methods.
+pub struct TraceEntries<T>(pub Vec<TraceEntry<T>>);
+
+impl<T> TraceEntries<T> {
+    // Removes the first (and by assumption the only) trace that matches the
+    // given path from the collected trace.
+    pub fn remove(&mut self, path: &'static str) -> Option<TraceEntry<T>> {
+        let index = self.0.iter().position(|entry| entry.path == path);
+        index.map(|index| self.0.remove(index))
     }
 }

@@ -178,6 +178,10 @@ impl ExprHumanizer for TestCatalog {
         self.names.get(&id).map(|s| s.to_string())
     }
 
+    fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>> {
+        self.humanize_id_unqualified(id).map(|name| vec![name])
+    }
+
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         DummyHumanizer.humanize_scalar_type(ty)
     }

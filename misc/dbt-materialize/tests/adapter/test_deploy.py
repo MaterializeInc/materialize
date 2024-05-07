@@ -27,24 +27,31 @@ from fixtures import (
 class TestApplyGrantsAndPrivileges:
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
-        project.run_sql("DROP ROLE my_role")
+        role_exists = project.run_sql(
+            "SELECT count(*) = 1 FROM mz_roles WHERE name = 'my_role'",
+            fetch="one",
+        )[0]
+        if role_exists:
+            project.run_sql("DROP OWNED BY my_role")
+            project.run_sql("DROP ROLE IF EXISTS my_role")
         project.run_sql("DROP SCHEMA IF EXISTS blue_schema CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS green_schema CASCADE")
-        project.run_sql("DROP CLUSTER IF EXISTS blue_cluster  CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS blue_cluster CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS green_cluster CASCADE")
 
-    def apply_schema_default_privileges(self, project):
+    def test_apply_schema_default_privileges(self, project):
         project.run_sql("CREATE ROLE my_role")
+        project.run_sql("GRANT my_role TO materialize")
         project.run_sql("CREATE SCHEMA blue_schema")
         project.run_sql("CREATE SCHEMA green_schema")
         project.run_sql(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA blue_schema GRANT SELECT ON TABLES TO my_role"
+            "ALTER DEFAULT PRIVILEGES FOR ROLE my_role IN SCHEMA blue_schema GRANT SELECT ON TABLES TO my_role"
         )
 
         run_dbt(
             [
                 "run-operation",
-                "internal_copy_schema_grants",
+                "internal_copy_schema_default_privs",
                 "--args",
                 "{from: blue_schema, to: green_schema}",
             ]
@@ -61,10 +68,11 @@ class TestApplyGrantsAndPrivileges:
             fetch="one",
         )
 
-        assert bool(result[0])
+        assert result[0]
 
-    def apply_schema_grants(self, project):
+    def test_apply_schema_grants(self, project):
         project.run_sql("CREATE ROLE my_role")
+        project.run_sql("GRANT my_role TO materialize")
         project.run_sql("CREATE SCHEMA blue_schema")
         project.run_sql("CREATE SCHEMA green_schema")
 
@@ -89,7 +97,7 @@ class TestApplyGrantsAndPrivileges:
             fetch="one",
         )
 
-        assert bool(result[0])
+        assert result[0]
 
         result = project.run_sql(
             """
@@ -101,10 +109,11 @@ class TestApplyGrantsAndPrivileges:
             fetch="one",
         )
 
-        assert bool(result[0])
+        assert result[0]
 
-    def apply_cluster_grants(self, project):
+    def test_apply_cluster_grants(self, project):
         project.run_sql("CREATE ROLE my_role")
+        project.run_sql("GRANT my_role TO materialize")
         project.run_sql("CREATE CLUSTER blue_cluster SIZE = '1'")
         project.run_sql("CREATE CLUSTER green_cluster SIZE = '1'")
 
@@ -129,7 +138,7 @@ class TestApplyGrantsAndPrivileges:
             fetch="one",
         )
 
-        assert bool(result[0])
+        assert result[0]
 
         result = project.run_sql(
             """
@@ -141,7 +150,7 @@ class TestApplyGrantsAndPrivileges:
             fetch="one",
         )
 
-        assert bool(result[0])
+        assert result[0]
 
 
 class TestCIFixture:

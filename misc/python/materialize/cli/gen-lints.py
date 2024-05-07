@@ -161,6 +161,8 @@ WARN_CLIPPY_LINTS = [
     # Implementing `From` gives you `Into` for free, but the reverse is not
     # true.
     "from_over_into",
+    # We consistently don't use `mod.rs` files.
+    "mod_module_files",
 ]
 
 MESSAGE_LINT_MISSING = (

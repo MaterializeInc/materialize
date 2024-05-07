@@ -13,7 +13,7 @@ from textwrap import dedent
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
-from materialize.zippy.kafka_capabilities import Envelope, KafkaRunning, TopicExists
+from materialize.zippy.kafka_capabilities import KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.replica_capabilities import source_capable_clusters
 from materialize.zippy.source_capabilities import SourceExists
@@ -127,10 +127,6 @@ class AlterSourceConnection(Action):
         self, c: Composition, new_use_ssh_status: bool
     ) -> None:
         kafka_connection_name = f"{self.source.name}_kafka_conn"
-
-        if self.source.topic.envelope == Envelope.UPSERT:
-            # TODO: #25417 (alter upsert source)
-            return
 
         c.testdrive(
             dedent(

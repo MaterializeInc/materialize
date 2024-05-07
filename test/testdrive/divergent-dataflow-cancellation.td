@@ -77,20 +77,20 @@ contains: canceling statement due to statement timeout
 > SELECT count(*) FROM mz_internal.mz_arrangement_sharing_raw
 0
 
-> SELECT count(*) FROM mz_internal.mz_compute_delays_histogram_raw
-0
-
 > SELECT count(*) FROM mz_internal.mz_compute_error_counts_raw
 0
 
-> SELECT count(*) FROM mz_internal.mz_compute_exports_per_worker
-0
+# One export for each introspection arrangement.
+> SELECT count(*)
+  FROM mz_internal.mz_compute_exports_per_worker
+  WHERE worker_id = 0
+28
 
 # One frontier for each introspection arrangement.
 > SELECT count(*)
   FROM mz_internal.mz_compute_frontiers_per_worker
   WHERE worker_id = 0
-29
+28
 
 > SELECT count(*) FROM mz_internal.mz_compute_import_frontiers_per_worker
 0

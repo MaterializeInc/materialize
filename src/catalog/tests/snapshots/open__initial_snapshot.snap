@@ -1,5 +1,6 @@
 ---
 source: src/catalog/tests/open.rs
+assertion_line: 441
 expression: test_snapshot
 ---
 Snapshot {
@@ -991,7 +992,7 @@ Snapshot {
                                 disk: false,
                                 optimizer_feature_overrides: [],
                                 schedule: Some(
-                                    ClusterScheduleOptionValue {
+                                    ClusterSchedule {
                                         value: Some(
                                             Manual(
                                                 Empty,

@@ -41,6 +41,7 @@ use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -165,7 +166,8 @@ impl SourceRender for KafkaSourceConnection {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
         let (mut data_output, stream) = builder.new_output();
-        let (_progress_output, progress_stream) = builder.new_output();
+        let (_progress_output, progress_stream) =
+            builder.new_output::<CapacityContainerBuilder<_>>();
         let (mut health_output, health_stream) = builder.new_output();
         let (mut stats_output, stats_stream) = builder.new_output();
 
@@ -173,7 +175,11 @@ impl SourceRender for KafkaSourceConnection {
             let [mut data_cap, mut progress_cap, health_cap, stats_cap]: [_; 4] =
                 caps.try_into().unwrap();
 
-            let client_id = self.client_id(&config.config.connection_context, config.id);
+            let client_id = self.client_id(
+                config.config.config_set(),
+                &config.config.connection_context,
+                config.id,
+            );
             let group_id = self.group_id(&config.config.connection_context, config.id);
             let KafkaSourceConnection {
                 connection,

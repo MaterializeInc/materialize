@@ -119,6 +119,8 @@ Map ((smallint_to_integer(integer_to_smallint(1)) > 1))
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 # Check int2 promotes to numeric
@@ -129,6 +131,8 @@ EXPLAIN RAW PLAN FOR
 Map ((smallint_to_numeric(integer_to_smallint(1)) > 1.1))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -141,6 +145,8 @@ Map ((bigint_to_numeric(integer_to_bigint(1)) > 1.11111))
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 # Check int8 promotes to double precision
@@ -151,6 +157,8 @@ EXPLAIN RAW PLAN FOR
 Map ((bigint_to_double(integer_to_bigint(1)) > numeric_to_double(1.11111)))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -163,6 +171,8 @@ Map ((numeric_to_double(1.1) > integer_to_double(1)))
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 # Check numerics do not get promoted
@@ -173,6 +183,8 @@ EXPLAIN RAW PLAN FOR
 Map ((1.1 > 1.1))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -185,6 +197,8 @@ Map ((integer_to_double(1) > integer_to_double(1)))
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 # Checks that float8 is preferred type for int4
@@ -195,6 +209,8 @@ EXPLAIN RAW PLAN FOR
 Map (floorf64(integer_to_double(1)))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -214,6 +230,8 @@ EXPLAIN RAW PLAN FOR
 Map (coalesce(integer_to_double(1), numeric_to_double(integer_to_numeric(1)), integer_to_double(1)))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -238,6 +256,8 @@ Map ((text_to_timestamp_with_time_zone("2001 03-04") - date_to_timestamp_with_ti
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 # Check that ts promotes to tstz
@@ -248,6 +268,8 @@ EXPLAIN RAW PLAN FOR
 Map ((text_to_timestamp_with_time_zone("2001 03-04") - timestamp_to_timestamp_with_time_zone(text_to_timestamp("2002 03-04"))))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -260,6 +282,8 @@ Map ((text_to_timestamp("2001 03-04") - date_to_timestamp(text_to_date("2002 03-
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 # Check that tstz is most-common type
@@ -270,6 +294,8 @@ EXPLAIN RAW PLAN FOR
 Map (coalesce(date_to_timestamp_with_timezone(text_to_date("2001")), timestamp_to_timestamp_with_time_zone(text_to_timestamp("2002")), text_to_timestamp_with_time_zone("2003")))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -282,6 +308,8 @@ Map (lower(char_to_text(text_to_char(text_to_char("a")))))
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 # Check that "char" vs varchar promotes to text
@@ -292,6 +320,8 @@ EXPLAIN RAW PLAN FOR
 Map (("char"_to_text(text_to_"char"("a")) < varchar_to_text(text_to_varchar("a"))))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -304,6 +334,8 @@ Map (("char"_to_text(text_to_"char"("a")) < char_to_text(text_to_char(text_to_ch
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 # Check that varchar promotes to char
@@ -314,6 +346,8 @@ EXPLAIN RAW PLAN FOR
 Map ((text_to_char(text_to_char("a")) < text_to_char(text_to_varchar("a"))))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -327,6 +361,8 @@ Map ((char_to_text(text_to_char(text_to_char("a"))) < "a"))
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -336,6 +372,8 @@ EXPLAIN RAW PLAN FOR
 Map ((varchar_to_text(text_to_varchar("a")) < "a"))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -348,6 +386,8 @@ Map (coalesce(text_to_char(text_to_char("a")), text_to_char(text_to_varchar("a")
   Constant
     - ()
 
+Target cluster: quickstart
+
 EOF
 
 query T multiline
@@ -357,6 +397,8 @@ EXPLAIN RAW PLAN FOR
 Map (coalesce(text_to_char(text_to_char("a")), text_to_char("a"), text_to_char(text_to_varchar("a"))))
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 
@@ -1572,6 +1614,8 @@ SELECT jsonb_object_agg(1::uint8, 2::int);
 Reduce aggregates=[jsonb_object_agg[order_by=[]](row(row(uint8_to_text(integer_to_uint8(1)), coalesce(jsonbable_to_jsonb(integer_to_numeric(2)), json_null))))]
   Constant
     - ()
+
+Target cluster: quickstart
 
 EOF
 

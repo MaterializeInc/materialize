@@ -207,7 +207,7 @@ We can invest time proportional to the complexity of the transform to ensure tha
 
 1. **Integration tests.**
 We will add test scenarios inspired by the use cases of our prospects as end-to-end `*.slt` tests.
-We will also add at least one long-running `mzcompose` test runs [as part of our nightly tests](https://buildkite.com/materialize/nightlies) and is used when qualifying future releases.
+We will also add at least one long-running `mzcompose` test runs [as part of our nightly tests](https://buildkite.com/materialize/nightly) and is used when qualifying future releases.
 As those tests will include expected results, it will be great if we have a reference external iteration driver for the semantics proposed in the original design doc[^wmr].
 That way we can cross-check the results of the reference and the internal implementation of WMR support and ensure that both produce equal results.
 We can implement such driver in Python and integrate it in our `mzcompose` tests.
