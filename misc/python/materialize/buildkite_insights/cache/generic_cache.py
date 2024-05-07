@@ -34,8 +34,11 @@ class CacheFilePath(FilePath):
     params_hash: str
     file_extension: str = "json"
 
+    def get_path_to_directory(self):
+        return f"{PATH_TO_CACHE_DIR}/{self.cache_item_type}"
+
     def get(self) -> str:
-        return f"{PATH_TO_CACHE_DIR}/{self.cache_item_type}-{self.pipeline_slug}-params-{self.params_hash}.{self.file_extension}"
+        return f"{self.get_path_to_directory()}/{self.pipeline_slug}-params-{self.params_hash}.{self.file_extension}"
 
 
 def get_or_query_data(
@@ -46,7 +49,7 @@ def get_or_query_data(
     add_to_cache_if_not_present: bool = True,
     quiet_mode: bool = False,
 ) -> Any:
-    ensure_dir_exists(PATH_TO_CACHE_DIR)
+    ensure_dir_exists(cache_file_path.get_path_to_directory())
 
     no_fetch = fetch_mode == FetchMode.NEVER
 
