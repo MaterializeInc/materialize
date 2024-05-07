@@ -1012,6 +1012,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let partial_key = PartialBatchKey::new(&cfg.writer_key, &PartId::new());
         let key = partial_key.complete(&shard_metrics.shard_id);
         let goodbytes = updates.updates.iter().map(|x| x.goodbytes()).sum::<usize>();
+        let metrics_ = Arc::clone(&metrics);
 
         let (stats, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
@@ -1038,7 +1039,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
                 let encode_start = Instant::now();
                 let mut buf = Vec::new();
-                updates.encode(&mut buf);
+                updates.encode(&mut buf, &metrics_.columnar);
 
                 // Drop batch as soon as we can to reclaim its memory.
                 drop(updates);
