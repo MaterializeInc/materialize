@@ -23,7 +23,7 @@ bench = false
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
-arrow = "51.0.0"
+arrow = { version = "51.0.0", default-features = false }
 arrow2 = { version = "0.16.0", features = ["io_ipc", "io_parquet"] }
 async-trait = "0.1.68"
 async-stream = "0.3.3"
@@ -47,7 +47,7 @@ mz-postgres-client = { path = "../postgres-client" }
 mz-proto = { path = "../proto" }
 openssl = { version = "0.10.48", features = ["vendored"] }
 openssl-sys = { version = "0.9.80", features = ["vendored"] }
-parquet = "51.0.0"
+parquet = { version = "51.0.0", default-features = false, features = ["arrow"] }
 postgres-openssl = { version = "0.5.0" }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
