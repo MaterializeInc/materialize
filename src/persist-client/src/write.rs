@@ -503,12 +503,7 @@ where
             let res = self
                 .machine
                 .compare_and_append(
-                    &HollowBatch {
-                        desc: desc.clone(),
-                        parts,
-                        len: num_updates,
-                        runs,
-                    },
+                    &HollowBatch::new(desc.clone(), parts, num_updates, runs),
                     &self.writer_id,
                     &self.debug_state,
                     heartbeat_timestamp,

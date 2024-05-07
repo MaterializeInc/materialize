@@ -633,12 +633,7 @@ where
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch {
-                desc,
-                parts,
-                len: self.num_updates,
-                runs: self.runs,
-            },
+            HollowBatch::new(desc, parts, self.num_updates, self.runs),
         );
 
         Ok(batch)

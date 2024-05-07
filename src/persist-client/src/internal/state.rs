@@ -20,6 +20,7 @@ use differential_dataflow::trace::Description;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_ore::vec::PartialOrdVecExt;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
@@ -398,6 +399,41 @@ impl<T: Ord> Ord for HollowBatch<T> {
 }
 
 impl<T> HollowBatch<T> {
+    /// Construct an in-memory hollow batch from the given metadata.
+    ///
+    /// This method checks that `runs` is a sequence of valid indices into `parts`. The caller
+    /// is responsible for ensuring that the defined runs are valid.
+    ///
+    /// `len` should represent the number of valid updates in the referenced parts.
+    pub(crate) fn new(
+        desc: Description<T>,
+        parts: Vec<BatchPart<T>>,
+        len: usize,
+        runs: Vec<usize>,
+    ) -> Self {
+        debug_assert!(runs.is_sorted(), "run indices should be sorted");
+        debug_assert!(
+            runs.last().iter().all(|i| **i <= parts.len()),
+            "run indices should be a valid indices into parts"
+        );
+        Self {
+            desc,
+            len,
+            parts,
+            runs,
+        }
+    }
+
+    /// An empty hollow batch, representing no updates over the given desc.
+    pub(crate) fn empty(desc: Description<T>) -> Self {
+        Self {
+            desc,
+            len: 0,
+            parts: vec![],
+            runs: vec![],
+        }
+    }
+
     pub(crate) fn runs(&self) -> impl Iterator<Item = &[BatchPart<T>]> {
         let run_ends = self
             .runs
@@ -1161,16 +1197,11 @@ where
     }
 
     fn tombstone_batch() -> HollowBatch<T> {
-        HollowBatch {
-            desc: Description::new(
-                Antichain::from_elem(T::minimum()),
-                Antichain::new(),
-                Antichain::new(),
-            ),
-            parts: Vec::new(),
-            runs: Vec::new(),
-            len: 0,
-        }
+        HollowBatch::empty(Description::new(
+            Antichain::from_elem(T::minimum()),
+            Antichain::new(),
+            Antichain::new(),
+        ))
     }
 
     pub(crate) fn is_tombstone(&self) -> bool {
@@ -1223,12 +1254,7 @@ where
             // This should not produce an excessively large diff: if it did, we wouldn't have been
             // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
-                output: HollowBatch {
-                    desc,
-                    parts: vec![],
-                    len: 0,
-                    runs: vec![],
-                },
+                output: HollowBatch::empty(desc),
             };
             let result = self.trace.apply_merge_res(&fake_merge);
             assert!(
@@ -1987,14 +2013,13 @@ pub(crate) mod tests {
         keys: &[&str],
         len: usize,
     ) -> HollowBatch<T> {
-        HollowBatch {
-            desc: Description::new(
+        HollowBatch::new(
+            Description::new(
                 Antichain::from_elem(lower),
                 Antichain::from_elem(upper),
                 Antichain::from_elem(T::minimum()),
             ),
-            parts: keys
-                .iter()
+            keys.iter()
                 .map(|x| {
                     BatchPart::Hollow(HollowBatchPart {
                         key: PartialBatchKey((*x).to_owned()),
@@ -2007,8 +2032,8 @@ pub(crate) mod tests {
                 })
                 .collect(),
             len,
-            runs: vec![],
-        }
+            vec![],
+        )
     }
 
     #[mz_ore::test]

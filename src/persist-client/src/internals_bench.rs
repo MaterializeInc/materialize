@@ -37,16 +37,16 @@ pub fn trace_push_batch_one_iter(num_batches: usize) {
         // Other, much better handled, workloads include all empty or all
         // non-empty.
         let len = if ts == 0 { 1 } else { 0 };
-        let _ = trace.push_batch(HollowBatch {
-            desc: Description::new(
+        let _ = trace.push_batch(HollowBatch::new(
+            Description::new(
                 Antichain::from_elem(ts),
                 Antichain::from_elem(ts + 1),
                 Antichain::from_elem(0),
             ),
-            parts: vec![],
+            vec![],
             len,
-            runs: vec![],
-        });
+            vec![],
+        ));
     }
     black_box(trace);
 }
