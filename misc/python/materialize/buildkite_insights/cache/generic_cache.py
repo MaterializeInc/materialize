@@ -12,17 +12,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from materialize import MZ_ROOT
 from materialize.buildkite_insights.cache.cache_constants import (
     FetchMode,
 )
 from materialize.buildkite_insights.util.data_io import (
-    PATH_TO_TEMP_DIR,
     FilePath,
-    ensure_temp_dir_exists,
+    ensure_dir_exists,
     exists_file_with_recent_data,
     read_results_from_file,
     write_results_to_file,
 )
+
+PATH_TO_CACHE_DIR = MZ_ROOT / "temp"
 
 
 @dataclass
@@ -33,7 +35,7 @@ class CacheFilePath(FilePath):
     file_extension: str = "json"
 
     def get(self) -> str:
-        return f"{PATH_TO_TEMP_DIR}/{self.cache_item_type}-{self.pipeline_slug}-params-{self.params_hash}.{self.file_extension}"
+        return f"{PATH_TO_CACHE_DIR}/{self.cache_item_type}-{self.pipeline_slug}-params-{self.params_hash}.{self.file_extension}"
 
 
 def get_or_query_data(
@@ -44,7 +46,7 @@ def get_or_query_data(
     add_to_cache_if_not_present: bool = True,
     quiet_mode: bool = False,
 ) -> Any:
-    ensure_temp_dir_exists()
+    ensure_dir_exists(PATH_TO_CACHE_DIR)
 
     no_fetch = fetch_mode == FetchMode.NEVER
 

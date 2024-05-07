@@ -15,10 +15,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from materialize import MZ_ROOT
-
-PATH_TO_TEMP_DIR = MZ_ROOT / "temp"
-
 
 @dataclass
 class FilePath:
@@ -37,12 +33,12 @@ class SimpleFilePath(FilePath):
         return self.file_name
 
 
-def ensure_temp_dir_exists() -> None:
+def ensure_dir_exists(path_to_dir: str) -> None:
     subprocess.run(
         [
             "mkdir",
             "-p",
-            f"{PATH_TO_TEMP_DIR}",
+            f"{path_to_dir}",
         ],
         check=True,
     )
