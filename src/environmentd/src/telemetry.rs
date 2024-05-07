@@ -77,7 +77,7 @@
 // environment in real time:
 // https://app.segment.com/materializeinc/sources/cloud_dev/debugger.
 
-use mz_adapter::telemetry::SegmentClientExt;
+use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -202,25 +202,22 @@ async fn report_loop(
             subscribes: query_total.with_label_values(&["user", "subscribe"]).get(),
         };
         if let Some(last_stats) = &last_stats {
-            let mut event = json!({
+            let mut properties = json!({
                 "deletes": current_stats.deletes - last_stats.deletes,
                 "inserts": current_stats.inserts - last_stats.inserts,
                 "updates": current_stats.updates - last_stats.updates,
                 "selects": current_stats.selects - last_stats.selects,
                 "subscribes": current_stats.subscribes - last_stats.subscribes,
             });
-            event
+            properties
                 .as_object_mut()
                 .unwrap()
                 .extend(traits.as_object().unwrap().clone());
             segment_client.environment_track(
                 &environment_id,
-                "environmentd",
-                // We use the organization ID as the user ID for events
-                // that are not associated with a particular user.
-                environment_id.organization_id(),
                 "Environment Rolled Up",
-                event,
+                properties,
+                EventDetails::default(),
             );
         }
         last_stats = Some(current_stats);

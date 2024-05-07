@@ -15,18 +15,19 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::logging::{
     BatchEvent, BatcherEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
-use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::channels::pushers::buffer::Session;
+use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Filter, InputCapability};
+use timely::dataflow::operators::Filter;
 use timely::dataflow::Stream;
 
 use crate::extensions::arrange::MzArrange;
@@ -91,17 +92,17 @@ pub(super) fn construct<A: Allocate>(
                 let mut batcher_capacity = batcher_capacity_out.activate();
                 let mut batcher_allocations = batcher_allocations_out.activate();
 
-                let mut output_buffers = DemuxOutput {
-                    batches: ConsolidateBuffer::new(&mut batches, 0),
-                    records: ConsolidateBuffer::new(&mut records, 1),
-                    sharing: ConsolidateBuffer::new(&mut sharing, 2),
-                    batcher_records: ConsolidateBuffer::new(&mut batcher_records, 3),
-                    batcher_size: ConsolidateBuffer::new(&mut batcher_size, 4),
-                    batcher_capacity: ConsolidateBuffer::new(&mut batcher_capacity, 5),
-                    batcher_allocations: ConsolidateBuffer::new(&mut batcher_allocations, 6),
-                };
-
                 input.for_each(|cap, data| {
+                    let mut output_buffers = DemuxOutput {
+                        batches: batches.session_with_builder(&cap),
+                        records: records.session_with_builder(&cap),
+                        sharing: sharing.session_with_builder(&cap),
+                        batcher_records: batcher_records.session_with_builder(&cap),
+                        batcher_size: batcher_size.session_with_builder(&cap),
+                        batcher_capacity: batcher_capacity.session_with_builder(&cap),
+                        batcher_allocations: batcher_allocations.session_with_builder(&cap),
+                    };
+
                     data.swap(&mut demux_buffer);
 
                     for (time, logger_id, event) in demux_buffer.drain(..) {
@@ -115,7 +116,6 @@ pub(super) fn construct<A: Allocate>(
                             output: &mut output_buffers,
                             logging_interval_ms,
                             time,
-                            cap: &cap,
                             shared_state: &mut shared_state.borrow_mut(),
                         }
                         .handle(event);
@@ -187,18 +187,20 @@ pub(super) fn construct<A: Allocate>(
     })
 }
 
-type Pusher<D> = Tee<Timestamp, Vec<(D, Timestamp, Diff)>>;
-type OutputBuffer<'a, 'b, D> = ConsolidateBuffer<'a, 'b, Timestamp, D, Diff, Pusher<D>>;
+type Pusher<D> =
+    Counter<Timestamp, Vec<(D, Timestamp, Diff)>, Tee<Timestamp, Vec<(D, Timestamp, Diff)>>>;
+type OutputSession<'a, D> =
+    Session<'a, Timestamp, ConsolidatingContainerBuilder<Vec<(D, Timestamp, Diff)>>, Pusher<D>>;
 
 /// Bundled output buffers used by the demux operator.
-struct DemuxOutput<'a, 'b> {
-    batches: OutputBuffer<'a, 'b, (usize, ())>,
-    records: OutputBuffer<'a, 'b, (usize, ())>,
-    sharing: OutputBuffer<'a, 'b, (usize, ())>,
-    batcher_records: OutputBuffer<'a, 'b, (usize, ())>,
-    batcher_size: OutputBuffer<'a, 'b, (usize, ())>,
-    batcher_capacity: OutputBuffer<'a, 'b, (usize, ())>,
-    batcher_allocations: OutputBuffer<'a, 'b, (usize, ())>,
+struct DemuxOutput<'a> {
+    batches: OutputSession<'a, (usize, ())>,
+    records: OutputSession<'a, (usize, ())>,
+    sharing: OutputSession<'a, (usize, ())>,
+    batcher_records: OutputSession<'a, (usize, ())>,
+    batcher_size: OutputSession<'a, (usize, ())>,
+    batcher_capacity: OutputSession<'a, (usize, ())>,
+    batcher_allocations: OutputSession<'a, (usize, ())>,
 }
 
 /// State maintained by the demux operator.
@@ -209,22 +211,20 @@ struct DemuxState {
 }
 
 /// Event handler of the demux operator.
-struct DemuxHandler<'a, 'b, 'c> {
+struct DemuxHandler<'a, 'b> {
     /// State kept by the demux operator
     state: &'a mut DemuxState,
     /// Demux output buffers.
-    output: &'a mut DemuxOutput<'b, 'c>,
+    output: &'a mut DemuxOutput<'b>,
     /// The logging interval specifying the time granularity for the updates.
     logging_interval_ms: u128,
     /// The current event time.
     time: Duration,
-    /// A capability usable for emitting outputs.
-    cap: &'a InputCapability<Timestamp>,
     /// State shared across log receivers.
     shared_state: &'a mut SharedLoggingState,
 }
 
-impl DemuxHandler<'_, '_, '_> {
+impl DemuxHandler<'_, '_> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {
@@ -251,10 +251,10 @@ impl DemuxHandler<'_, '_, '_> {
     fn handle_batch(&mut self, event: BatchEvent) {
         let ts = self.ts();
         let op = event.operator;
-        self.output.batches.give(self.cap, ((op, ()), ts, 1));
+        self.output.batches.give(((op, ()), ts, 1));
 
         let diff = Diff::try_from(event.length).expect("must fit");
-        self.output.records.give(self.cap, ((op, ()), ts, diff));
+        self.output.records.give(((op, ()), ts, diff));
         self.notify_arrangement_size(op);
     }
 
@@ -263,12 +263,12 @@ impl DemuxHandler<'_, '_, '_> {
 
         let ts = self.ts();
         let op = event.operator;
-        self.output.batches.give(self.cap, ((op, ()), ts, -1));
+        self.output.batches.give(((op, ()), ts, -1));
 
         let diff = Diff::try_from(done).expect("must fit")
             - Diff::try_from(event.length1 + event.length2).expect("must fit");
         if diff != 0 {
-            self.output.records.give(self.cap, ((op, ()), ts, diff));
+            self.output.records.give(((op, ()), ts, diff));
         }
         self.notify_arrangement_size(op);
     }
@@ -276,11 +276,11 @@ impl DemuxHandler<'_, '_, '_> {
     fn handle_drop(&mut self, event: DropEvent) {
         let ts = self.ts();
         let op = event.operator;
-        self.output.batches.give(self.cap, ((op, ()), ts, -1));
+        self.output.batches.give(((op, ()), ts, -1));
 
         let diff = -Diff::try_from(event.length).expect("must fit");
         if diff != 0 {
-            self.output.records.give(self.cap, ((op, ()), ts, diff));
+            self.output.records.give(((op, ()), ts, diff));
         }
         self.notify_arrangement_size(op);
     }
@@ -290,7 +290,7 @@ impl DemuxHandler<'_, '_, '_> {
         let op = event.operator;
         let diff = Diff::cast_from(event.diff);
         debug_assert_ne!(diff, 0);
-        self.output.sharing.give(self.cap, ((op, ()), ts, diff));
+        self.output.sharing.give(((op, ()), ts, diff));
 
         if let Some(logger) = &mut self.shared_state.compute_logger {
             let sharing = self.state.sharing.entry(op).or_default();
@@ -313,16 +313,14 @@ impl DemuxHandler<'_, '_, '_> {
         let allocations_diff = Diff::cast_from(event.allocations_diff);
         self.output
             .batcher_records
-            .give(self.cap, ((op, ()), ts, records_diff));
-        self.output
-            .batcher_size
-            .give(self.cap, ((op, ()), ts, size_diff));
+            .give(((op, ()), ts, records_diff));
+        self.output.batcher_size.give(((op, ()), ts, size_diff));
         self.output
             .batcher_capacity
-            .give(self.cap, ((op, ()), ts, capacity_diff));
+            .give(((op, ()), ts, capacity_diff));
         self.output
             .batcher_allocations
-            .give(self.cap, ((op, ()), ts, allocations_diff));
+            .give(((op, ()), ts, allocations_diff));
     }
 
     fn notify_arrangement_size(&self, operator: usize) {

@@ -34,3 +34,15 @@ BYTEA_DATA_TYPE_WITH_VALUES.add_raw_value(
     "VAL_2",
     {ExpressionCharacteristics.TEXT_WITH_SPECIAL_NON_SPACE_CHARS},
 )
+# (R) symbol as text
+BYTEA_DATA_TYPE_WITH_VALUES.add_raw_value(
+    "'\\xc2ae'",
+    "VAL_3",
+    {ExpressionCharacteristics.TEXT_WITH_SPECIAL_NON_SPACE_CHARS},
+)
+# two Japanese characters
+BYTEA_DATA_TYPE_WITH_VALUES.add_raw_value(
+    "'\\xe381a1e381af'",
+    "VAL_4",
+    {ExpressionCharacteristics.TEXT_WITH_SPECIAL_NON_SPACE_CHARS},
+)

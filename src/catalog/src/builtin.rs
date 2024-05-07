@@ -1955,6 +1955,28 @@ pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_POSTGRES_SOURCE_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_postgres_source_tables",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_POSTGRES_SOURCE_TABLES_OID,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("schema_name", ScalarType::String.nullable(false))
+        .with_column("table_name", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: true,
+    access: vec![PUBLIC_SELECT],
+});
+pub static MZ_MYSQL_SOURCE_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_mysql_source_tables",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_MYSQL_SOURCE_TABLES_OID,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("schema_name", ScalarType::String.nullable(false))
+        .with_column("table_name", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: true,
+    access: vec![PUBLIC_SELECT],
+});
 pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_object_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2843,8 +2865,8 @@ pub static MZ_SOURCE_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
             mz_catalog.mz_sources AS subsources
                 JOIN
                     mz_internal.mz_object_dependencies AS deps
-                    ON subsources.id = deps.referenced_object_id
-                JOIN mz_catalog.mz_sources AS sources ON sources.id = deps.object_id
+                    ON subsources.id = deps.object_id
+                JOIN mz_catalog.mz_sources AS sources ON sources.id = deps.referenced_object_id
     ),
      -- Determine which collection's ID to use for the status
     id_of_status_to_use AS
@@ -3140,6 +3162,18 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_HISTORY_RETENTION_STRATEGIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_history_retention_strategies",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_HISTORY_RETENTION_STRATEGIES_OID,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("strategy", ScalarType::String.nullable(false))
+        .with_column("value", ScalarType::Jsonb.nullable(false)),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -3272,13 +3306,14 @@ pub static MZ_OBJECT_LIFETIMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_object_lifetimes",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_LIFETIMES_OID,
-    column_defs: Some("id, object_type, event_type, occurred_at"),
+    column_defs: Some("id, previous_id, object_type, event_type, occurred_at"),
     sql: "
     SELECT
         CASE
             WHEN a.object_type = 'cluster-replica' THEN a.details ->> 'replica_id'
             ELSE a.details ->> 'id'
         END id,
+        a.details ->> 'previous_id',
         a.object_type,
         a.event_type,
         a.occurred_at
@@ -6115,26 +6150,10 @@ materialized_views AS (
 -- dataflows, so we need to find the ones that are. Generally, sources that
 -- have a cluster ID are maintained by a dataflow running on that cluster.
 -- Webhook sources are an exception to this rule.
-sources_maintained_by_dataflows AS (
+sources_with_clusters AS (
     SELECT id, cluster_id
     FROM mz_catalog.mz_sources
     WHERE cluster_id IS NOT NULL AND type != 'webhook'
-),
--- Cluster IDs are missing for subsources in `mz_sources` (#24235), so we need
--- to add them manually here by looking up the parent sources.
-subsources_with_clusters AS (
-    SELECT ss.id, ps.cluster_id
-    FROM mz_catalog.mz_sources ss
-    JOIN mz_internal.mz_object_dependencies d
-        ON (d.referenced_object_id = ss.id)
-    JOIN sources_maintained_by_dataflows ps
-        ON (ps.id = d.object_id)
-    WHERE ss.type = 'subsource'
-),
-sources_with_clusters AS (
-    SELECT id, cluster_id FROM sources_maintained_by_dataflows
-    UNION ALL
-    SELECT id, cluster_id FROM subsources_with_clusters
 ),
 sources AS (
     SELECT
@@ -6665,6 +6684,24 @@ ON mz_internal.mz_recent_activity_log_thinned (sql_hash)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_KAFKA_SOURCES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_kafka_sources_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_KAFKA_SOURCES_IND_OID,
+    sql: "IN CLUSTER mz_introspection
+ON mz_internal.mz_kafka_sources (id)",
+    is_retained_metrics_object: true,
+};
+
+pub const MZ_WEBHOOK_SOURCES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_webhook_sources_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_WEBHOOK_SOURCES_IND_OID,
+    sql: "IN CLUSTER mz_introspection
+ON mz_internal.mz_webhook_sources (id)",
+    is_retained_metrics_object: true,
+};
+
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -6926,6 +6963,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_TABLES),
         Builtin::Table(&MZ_SOURCES),
         Builtin::Table(&MZ_POSTGRES_SOURCES),
+        Builtin::Table(&MZ_POSTGRES_SOURCE_TABLES),
+        Builtin::Table(&MZ_MYSQL_SOURCE_TABLES),
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEWS),
@@ -6964,6 +7003,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
         Builtin::Table(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
+        Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),
@@ -7161,6 +7201,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_FRONTIERS_IND),
+        Builtin::Index(&MZ_KAFKA_SOURCES_IND),
+        Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
     ]);
 
     builtins.extend(notice::builtins());

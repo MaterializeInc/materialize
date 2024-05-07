@@ -52,10 +52,6 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
-# TODO: remove this when implementing #25417
-! ALTER CONNECTION kafka_conn SET (BROKER = '${testdrive.kafka-addr}');
-contains:cannot currently alter connections depended on by upsert sources
-
 # we split avro unions into separate columns
 > SELECT * FROM upsert_input;
 fisch  42  <null>   1000  <null>  hello

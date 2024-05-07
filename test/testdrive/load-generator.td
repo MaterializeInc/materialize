@@ -20,13 +20,13 @@ exact:COUNTER load generators do not support SCALE FACTOR values
   FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES
-accounts                subsource      <null>                         <null>
+accounts                subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
 auction_house           load-generator ${arg.default-replica-size}    ${arg.single-replica-cluster}
-auction_house_progress  progress       <null>                         <null>
-auctions                subsource      <null>                         <null>
-bids                    subsource      <null>                         <null>
-organizations           subsource      <null>                         <null>
-users                   subsource      <null>                         <null>
+auction_house_progress  progress       <null> <null>
+auctions                subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
+bids                    subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
+organizations           subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
+users                   subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
 
 # FOR TABLES doesn't always work.
 # A previous test here checked bids, which worked.
@@ -44,13 +44,13 @@ contains:LOAD GENERATOR source validation: FOR TABLES (..) unsupported
   FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES FROM another;
-accounts                subsource      <null>                       <null>
+accounts                subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
 auction_house           load-generator ${arg.default-replica-size}  ${arg.single-replica-cluster}
-auction_house_progress  progress       <null>                       <null>
-auctions                subsource      <null>                       <null>
-bids                    subsource      <null>                       <null>
-organizations           subsource      <null>                       <null>
-users                   subsource      <null>                       <null>
+auction_house_progress  progress       <null> <null>
+auctions                subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
+bids                    subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
+organizations           subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
+users                   subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
@@ -65,7 +65,7 @@ users                   subsource      <null>                       <null>
 
 # Show that AST of subsource contains REFERENCES option
 > SHOW CREATE SOURCE accounts
-materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) WITH (REFERENCES = true)"
+materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) OF SOURCE \"materialize\".\"public\".\"auction_house\" WITH (EXTERNAL REFERENCE = \"mz_load_generators\".\"auction\".\"accounts\")"
 
 # Check that non-append-only `COUNTER` sources reach the proper size
 

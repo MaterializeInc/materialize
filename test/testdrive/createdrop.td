@@ -148,7 +148,7 @@ exact:s is a source not a view
 
 > DROP MATERIALIZED VIEW v
 
-> DROP SOURCE s
+> DROP SOURCE s CASCADE
 
 # test that the names of the deleted objects can be used to create objects of other types
 > CREATE MATERIALIZED VIEW s AS SELECT 84 AS b
@@ -166,7 +166,7 @@ exact:s is a source not a view
 
 > DROP MATERIALIZED VIEW IF EXISTS s
 
-> DROP SOURCE IF EXISTS i
+> DROP SOURCE IF EXISTS i CASCADE
 
 # Test that if exists works when the referred objects do not exist
 
@@ -174,7 +174,7 @@ exact:s is a source not a view
 
 > DROP VIEW IF EXISTS nonexistent
 
-> DROP SOURCE IF EXISTS nonexistent
+> DROP SOURCE IF EXISTS nonexistent CASCADE
 
 # Test that drop without if exists does not work if the object does not exist
 

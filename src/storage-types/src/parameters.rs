@@ -28,6 +28,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.parameters.rs"));
 pub struct StorageParameters {
     pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
     pub pg_source_snapshot_statement_timeout: Duration,
+    pub pg_source_wal_sender_timeout: Duration,
     pub mysql_source_timeouts: mz_mysql_util::TimeoutConfig,
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
@@ -86,7 +87,9 @@ impl Default for StorageParameters {
     fn default() -> Self {
         Self {
             pg_source_tcp_timeouts: Default::default(),
-            pg_source_snapshot_statement_timeout: Default::default(),
+            pg_source_snapshot_statement_timeout:
+                mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT,
+            pg_source_wal_sender_timeout: mz_postgres_util::DEFAULT_WAL_SENDER_TIMEOUT,
             mysql_source_timeouts: Default::default(),
             keep_n_source_status_history_entries: Default::default(),
             keep_n_sink_status_history_entries: Default::default(),
@@ -186,6 +189,7 @@ impl StorageParameters {
         StorageParameters {
             pg_source_tcp_timeouts,
             pg_source_snapshot_statement_timeout,
+            pg_source_wal_sender_timeout,
             mysql_source_timeouts,
             keep_n_source_status_history_entries,
             keep_n_sink_status_history_entries,
@@ -210,6 +214,7 @@ impl StorageParameters {
     ) {
         self.pg_source_tcp_timeouts = pg_source_tcp_timeouts;
         self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
+        self.pg_source_wal_sender_timeout = pg_source_wal_sender_timeout;
         self.mysql_source_timeouts = mysql_source_timeouts;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
@@ -244,6 +249,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             pg_source_snapshot_statement_timeout: Some(
                 self.pg_source_snapshot_statement_timeout.into_proto(),
             ),
+            pg_source_wal_sender_timeout: Some(self.pg_source_wal_sender_timeout.into_proto()),
             mysql_source_timeouts: Some(self.mysql_source_timeouts.into_proto()),
             keep_n_source_status_history_entries: u64::cast_from(
                 self.keep_n_source_status_history_entries,
@@ -290,6 +296,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 .into_rust_if_some(
                     "ProtoStorageParameters::pg_source_snapshot_statement_timeout",
                 )?,
+            pg_source_wal_sender_timeout: proto
+                .pg_source_wal_sender_timeout
+                .into_rust_if_some("ProtoStorageParameters::pg_source_wal_sender_timeout")?,
             mysql_source_timeouts: proto
                 .mysql_source_timeouts
                 .into_rust_if_some("ProtoStorageParameters::mysql_source_timeouts")?,

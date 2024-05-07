@@ -39,12 +39,12 @@ INSERT INTO other.t VALUES (1);
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
 contains:multiple subsources would be named t
-detail:referenced tables with duplicate name: mysql.other.t, mysql.public.t
+detail:referenced tables with duplicate name: other.t, public.t
 
 ! CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR TABLES (public.t AS x, public.t as Y);
-contains:multiple subsources refer to table mysql.public.t
+contains:multiple subsources refer to table public.t
 detail: subsources referencing table: x, y
 
 > CREATE SOURCE mz_source
@@ -54,7 +54,7 @@ detail: subsources referencing table: x, y
 > SHOW sources
  mz_source          mysql     ${arg.default-replica-size} quickstart
  mz_source_progress progress  <null> <null>
- t                  subsource <null> <null>
+ t                  subsource ${arg.default-replica-size} quickstart
 
 $ mysql-execute name=mysql
 DROP DATABASE other;

@@ -18,13 +18,13 @@ use mz_rocksdb::RocksDBConfig;
 use prometheus::core::AtomicU64;
 use serde::{de::DeserializeOwned, Serialize};
 
-use super::upsert_bincode_opts;
-use crate::render::upsert::memory::InMemoryHashMap;
-use crate::render::upsert::rocksdb::RocksDB;
-use crate::render::upsert::types::{
+use super::memory::InMemoryHashMap;
+use super::rocksdb::RocksDB;
+use super::types::{
     GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize,
 };
-use crate::render::upsert::UpsertKey;
+use super::upsert_bincode_opts;
+use super::UpsertKey;
 
 pub enum BackendType<O> {
     InMemory(InMemoryHashMap<O>),
@@ -33,11 +33,11 @@ pub enum BackendType<O> {
 /// Params required to create rocksdb instance
 pub(crate) struct RocksDBParams {
     pub(crate) instance_path: PathBuf,
-    pub(crate) legacy_instance_path: PathBuf,
     pub(crate) env: rocksdb::Env,
     pub(crate) tuning_config: RocksDBConfig,
     pub(crate) shared_metrics: Arc<mz_rocksdb::RocksDBSharedMetrics>,
     pub(crate) instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
+    pub(crate) cleanup_tries: usize,
 }
 
 pub struct AutoSpillBackend<O> {
@@ -69,19 +69,18 @@ where
     async fn init_rocksdb(rocksdb_params: &RocksDBParams) -> RocksDB<O> {
         let RocksDBParams {
             instance_path,
-            legacy_instance_path,
             env,
             tuning_config,
             shared_metrics,
             instance_metrics,
+            cleanup_tries,
         } = rocksdb_params;
         tracing::info!("spilling to disk for upsert at {:?}", instance_path);
 
         RocksDB::new(
             mz_rocksdb::RocksDBInstance::new(
                 instance_path,
-                legacy_instance_path,
-                mz_rocksdb::InstanceOptions::defaults_with_env(env.clone()),
+                mz_rocksdb::InstanceOptions::defaults_with_env(env.clone(), *cleanup_tries),
                 tuning_config.clone(),
                 Arc::clone(shared_metrics),
                 Arc::clone(instance_metrics),

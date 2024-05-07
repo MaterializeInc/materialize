@@ -18,6 +18,7 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::top_k::{
@@ -363,8 +364,13 @@ where
             (hash_key, row)
         });
         let (oks, errs) = if validating {
-            let stage = build_topk_negated_stage::<S, RowValSpine<Result<Row, Row>, _, _>>(
-                &input, order_key, offset, limit, arity,
+            let stage = build_topk_negated_stage::<S, _, _, RowValSpine<Result<Row, Row>, _, _>>(
+                &input,
+                |v| v.into_owned(),
+                order_key,
+                offset,
+                limit,
+                arity,
             )
             .as_collection(|k, v| (SharedRow::pack(k), v.clone()));
 
@@ -384,8 +390,13 @@ where
             (oks, Some(errs))
         } else {
             (
-                build_topk_negated_stage::<S, RowRowSpine<_, _>>(
-                    &input, order_key, offset, limit, arity,
+                build_topk_negated_stage::<S, _, _, RowRowSpine<_, _>>(
+                    &input,
+                    |v| v.into_owned(),
+                    order_key,
+                    offset,
+                    limit,
+                    arity,
                 )
                 .as_collection(|k, v| {
                     let binding = SharedRow::get();
@@ -459,20 +470,22 @@ where
             .into();
         let result = partial
             .mz_arrange::<RowSpine<_, _>>("Arranged MonotonicTop1 partial [val: empty]")
-            .mz_reduce_abelian::<_, RowRowSpine<_, _>>("MonotonicTop1", {
+            .mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(
+                "MonotonicTop1",
+                |v| v.into_owned(),
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
                     output.push((accum.row.clone(), 1));
-                }
-            });
+                },
+            );
         // TODO(#7331): Here we discard the arranged output.
-        use differential_dataflow::trace::cursor::MyTrait;
         (result.as_collection(|_k, v| v.into_owned()), errs)
     }
 }
 
-fn build_topk_negated_stage<G, Tr>(
+fn build_topk_negated_stage<G, V, F, Tr>(
     input: &Collection<G, (Row, Row), Diff>,
+    from: F,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
     limit: Option<mz_expr::MirScalarExpr>,
@@ -481,12 +494,13 @@ fn build_topk_negated_stage<G, Tr>(
 where
     G: Scope,
     G::Timestamp: Lattice + Columnation,
-    Tr::ValOwned: MaybeValidatingRow<Row, Row>,
+    F: Fn(Tr::Val<'_>) -> V + 'static,
+    V: MaybeValidatingRow<Row, Row>,
     Tr: Trace
         + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
         + 'static,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
+    Tr::Builder: Builder<Input = ((Row, V), G::Timestamp, Diff)>,
     Arranged<G, TraceAgent<Tr>>: ArrangementSize,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
@@ -497,8 +511,8 @@ where
     // built-in view mz_internal.mz_expected_group_size_advice.
     input
         .mz_arrange::<RowRowSpine<_, _>>("Arranged TopK input")
-        .mz_reduce_abelian::<_, Tr>("Reduced TopK input", {
-            move |mut hash_key, source, target: &mut Vec<(Tr::ValOwned, Diff)>| {
+        .mz_reduce_abelian::<_, _, _, Tr>("Reduced TopK input", from, {
+            move |mut hash_key, source, target: &mut Vec<(V, Diff)>| {
                 // Unpack the limit, either into an integer literal or an expression to evaluate.
                 let limit: Option<i64> = limit.as_ref().map(|l| {
                     if let Some(l) = l.as_literal_int64() {
@@ -521,7 +535,7 @@ where
                     }
                 });
 
-                if let Some(err) = Tr::ValOwned::into_error() {
+                if let Some(err) = V::into_error() {
                     for (datums, diff) in source.iter() {
                         if diff.is_positive() {
                             continue;
@@ -549,10 +563,7 @@ where
                 // dependencies on the user-provided (potentially unbounded) limit.
                 target.reserve(source.len());
                 for (datums, diff) in source.iter() {
-                    target.push((
-                        Tr::ValOwned::ok(row_builder.pack_using(*datums)),
-                        diff.clone(),
-                    ));
+                    target.push((V::ok(row_builder.pack_using(*datums)), diff.clone()));
                 }
                 // local copies that may count down to zero.
                 let mut offset = offset;
@@ -603,7 +614,7 @@ where
                         // Emit retractions for the elements actually part of
                         // the set of TopK elements.
                         row_builder.packer().extend(datums);
-                        target.push((Tr::ValOwned::ok(row_builder.clone()), -diff));
+                        target.push((V::ok(row_builder.clone()), -diff));
                     }
                 }
             }

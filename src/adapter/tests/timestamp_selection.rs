@@ -22,6 +22,7 @@ use mz_repr::{Datum, GlobalId, ScalarType, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::MutableAntichain;
@@ -139,9 +140,10 @@ impl TimestampProvider for Frontiers {
         }
         for id in id_bundle.storage_ids.iter() {
             let frontiers = self.storage.get(id).unwrap();
-            read_holds
-                .storage_holds
-                .insert(*id, MutableAntichain::from(frontiers.read.to_owned()));
+
+            let (dummy_tx, _dummy_rx) = tokio::sync::mpsc::unbounded_channel();
+            let mock_storage_hold = ReadHold::new(*id, frontiers.read.to_owned(), dummy_tx);
+            read_holds.storage_holds.insert(*id, mock_storage_hold);
         }
 
         let (dummy_tx, _dummy_rx) = tokio::sync::mpsc::unbounded_channel();

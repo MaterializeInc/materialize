@@ -41,9 +41,9 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
-use crate::render::upsert::UpsertKey;
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig};
+use crate::upsert::UpsertKey;
 
 /// The output index for health streams, used to handle multiplexed streams
 pub(crate) type OutputIndex = usize;
@@ -328,7 +328,7 @@ where
                         } else {
                             (Collection::new(empty(scope)), None, None, None)
                         };
-                    let (upsert, health_update, upsert_token) = crate::render::upsert::upsert(
+                    let (upsert, health_update, upsert_token) = crate::upsert::upsert(
                         &upsert_input.enter(scope),
                         upsert_envelope.clone(),
                         refine_antichain(&resume_upper),
@@ -362,7 +362,7 @@ where
                     if dyncfgs::DELAY_SOURCES_PAST_REHYDRATION
                         .get(storage_state.storage_configuration.config_set())
                     {
-                        crate::render::upsert::rehydration_finished(
+                        crate::upsert::rehydration_finished(
                             scope.clone(),
                             &base_source_config,
                             rehydrated_token,

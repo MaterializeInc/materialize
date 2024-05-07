@@ -43,7 +43,7 @@ CREATE PUBLICATION mz_source FOR TABLE t1;
 > SELECT * FROM t1;
 1
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')

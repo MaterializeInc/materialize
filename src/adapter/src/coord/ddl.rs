@@ -59,7 +59,7 @@ use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::telemetry::SegmentClientExt;
+use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
 use crate::{catalog, flags, AdapterError, TimestampProvider};
 
@@ -219,8 +219,10 @@ impl Coordinator {
                         }
                         CatalogItem::Source(source) => {
                             sources_to_drop.push(*id);
-                            if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
-                                match &ingestion.desc.connection {
+                            if let DataSourceDesc::Ingestion { ingestion_desc, .. } =
+                                &source.data_source
+                            {
+                                match &ingestion_desc.desc.connection {
                                     GenericSourceConnection::Postgres(conn) => {
                                         let conn = conn
                                             .clone()
@@ -628,25 +630,24 @@ impl Coordinator {
         .await;
 
         let conn = conn_id.and_then(|id| self.active_conns.get(id));
-        if let (Some(segment_client), Some(user_metadata)) = (
-            &self.segment_client,
-            conn.and_then(|s| s.user().external_metadata.as_ref()),
-        ) {
+        if let Some(segment_client) = &self.segment_client {
             for VersionedEvent::V1(event) in audit_events {
                 let event_type = format!(
                     "{} {}",
                     event.object_type.as_title_case(),
                     event.event_type.as_title_case()
                 );
-                // Note: when there is no ConnMeta, that means something internal to
-                // environmentd initiated the transaction, hence the default name.
-                let application_name = conn.map(|s| s.application_name()).unwrap_or("environmentd");
                 segment_client.environment_track(
                     &self.catalog().config().environment_id,
-                    application_name,
-                    user_metadata.user_id,
                     event_type,
                     json!({ "details": event.details.as_json() }),
+                    EventDetails {
+                        user_id: conn
+                            .and_then(|c| c.user().external_metadata.as_ref())
+                            .map(|m| m.user_id),
+                        application_name: conn.map(|c| c.application_name()),
+                        ..Default::default()
+                    },
                 );
             }
         }
@@ -682,6 +683,7 @@ impl Coordinator {
             .expect("dropping replica must not fail");
     }
 
+    /// A convenience method for dropping sources.
     fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
             self.active_webhooks.remove(id);
@@ -701,7 +703,7 @@ impl Coordinator {
         self.controller
             .storage
             .drop_tables(tables, ts)
-            .unwrap_or_terminate("cannot fail to drop sources");
+            .unwrap_or_terminate("cannot fail to drop tables");
     }
 
     fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = GlobalId>) {
@@ -835,6 +837,7 @@ impl Coordinator {
         }
     }
 
+    /// A convenience method for dropping materialized views.
     fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();

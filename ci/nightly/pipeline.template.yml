@@ -218,7 +218,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
@@ -253,6 +253,8 @@ steps:
         label: Full Testdrive in Cloudtest (K8s)
         depends_on: build-aarch64
         timeout_in_minutes: 300
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
           queue: linux-aarch64-large
         plugins:
@@ -798,6 +800,17 @@ steps:
               args: [--scenario=MigrateX86Aarch64]
         sanitizer: skip
 
+      - id: checks-toggle-persist-roundtrip-spine
+        label: "Checks toggling persist roundtrip spine"
+        depends_on: build-aarch64
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=TogglePersistRoundtripSpine, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-migrate-aarch64-x86-64
         label: "Checks migrate from aarch64 to x86-64"
         depends_on: [build-x86_64, build-aarch64]
@@ -815,12 +828,28 @@ steps:
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-aarch64
         timeout_in_minutes: 60
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
           queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_upgrade.py]
+        sanitizer: skip
+
+      - id: cloudtest-slow
+        label: "Slow Cloudtest"
+        depends_on: build-aarch64
+        timeout_in_minutes: 35
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+        agents:
+          queue: linux-aarch64
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/cloudtest:
+              args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
         sanitizer: skip
 
   - group: "K8s node recovery cloudtest"
@@ -1241,7 +1270,7 @@ steps:
       - id: rqg-left-join-stacks
         label: "RQG left join stacks workload"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-small
         plugins:

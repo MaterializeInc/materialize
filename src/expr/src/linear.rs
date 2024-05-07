@@ -1953,6 +1953,17 @@ pub mod plan {
                 || self.lower_bounds.iter().any(|e| e.could_error())
                 || self.upper_bounds.iter().any(|e| e.could_error())
         }
+
+        /// Indicates that `Self` ignores its input to the extent that it can be evaluated on `&[]`.
+        ///
+        /// At the moment, this is only true if it projects away all columns and applies no filters,
+        /// but it could be extended to plans that produce literals independent of the input.
+        pub fn ignores_input(&self) -> bool {
+            self.lower_bounds.is_empty()
+                && self.upper_bounds.is_empty()
+                && self.mfp.mfp.projection.is_empty()
+                && self.mfp.mfp.predicates.is_empty()
+        }
     }
 }
 

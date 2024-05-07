@@ -94,6 +94,10 @@ impl Default for TcpTimeoutConfig {
 }
 
 pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
+// In PG16, this value defaults to 60 seconds, so we want to esnure we get at
+// least that much time.
+// https://www.postgresql.org/docs/current/runtime-config-replication.html
+pub const DEFAULT_WAL_SENDER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Configuration for PostgreSQL connections.
 ///

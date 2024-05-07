@@ -222,7 +222,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             (
                 db_operation.is_tagged(TAG_EQUALITY_ORDERING)
                 or db_operation.is_tagged(TAG_EQUALITY)
-                or db_operation.pattern == "$ IN $"
+                or db_operation.pattern == "$ IN ($)"
             )
             and expression.args[0].resolve_return_type_category()
             == DataTypeCategory.NUMERIC
@@ -412,6 +412,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if _error_message_is_about_zero_or_value_ranges(mz_error_msg):
             return YesIgnore("Caused by a different precision")
 
+        if query_template.limit == 0:
+            return YesIgnore("#17189: LIMIT 0 does not swallow errors")
+
         return NoIgnore()
 
     def _shall_ignore_content_mismatch(
@@ -543,6 +546,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
             if value1_str == value2_str:
                 return YesIgnore("#24687: different representation of DECIMAL type")
+
+        if query_template.matches_any_expression(
+            lambda expression: expression.has_any_characteristic(
+                {ExpressionCharacteristics.TEXT_WITH_ESZETT},
+            ),
+            True,
+        ) and query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="upper"), True
+        ):
+            return YesIgnore("#26846: eszett in upper")
 
         return NoIgnore()
 

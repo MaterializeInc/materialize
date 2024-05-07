@@ -1973,7 +1973,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#07ed40c3c44e6fc43efa5decdaa6e57ba9ce7fac"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#a3f0f31d280b41254fd98fe51ef614622addd949"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -2029,7 +2029,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#07ed40c3c44e6fc43efa5decdaa6e57ba9ce7fac"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#a3f0f31d280b41254fd98fe51ef614622addd949"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4032,6 +4032,8 @@ dependencies = [
  "chrono",
  "mz-ore",
  "mz-repr",
+ "serde",
+ "serde_json",
  "workspace-hack",
 ]
 
@@ -4115,7 +4117,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.98.0-dev"
+version = "0.99.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4240,7 +4242,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.98.0-dev"
+version = "0.99.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -4393,7 +4395,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.98.0-dev"
+version = "0.99.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -4629,7 +4631,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.98.0-dev"
+version = "0.99.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -5362,7 +5364,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.98.0-dev"
+version = "0.99.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5467,6 +5469,7 @@ dependencies = [
  "prost-build",
  "serde",
  "serde_json",
+ "timely",
  "uuid",
  "workspace-hack",
 ]
@@ -5907,9 +5910,11 @@ dependencies = [
 name = "mz-segment"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "mz-ore",
  "segment",
  "serde_json",
+ "time",
  "tokio",
  "tracing",
  "uuid",
@@ -5997,6 +6002,7 @@ dependencies = [
  "mysql_async",
  "mz-adapter-types",
  "mz-arrow-util",
+ "mz-audit-log",
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
@@ -6284,6 +6290,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-service",
+ "mz-sql-parser",
  "mz-storage-types",
  "mz-timely-util",
  "once_cell",
@@ -6464,7 +6471,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.98.0-dev"
+version = "0.99.0-dev"
 dependencies = [
  "anyhow",
  "arrow",
@@ -9341,7 +9348,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -9358,12 +9365,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -9379,7 +9386,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9389,7 +9396,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 
 [[package]]
 name = "tiny-keccak"

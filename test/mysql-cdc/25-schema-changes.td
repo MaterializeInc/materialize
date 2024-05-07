@@ -56,8 +56,7 @@ ALTER TABLE add_columns DROP COLUMN f2;
 > SELECT * FROM add_columns;
 1
 
-> DROP SOURCE mz_source;
-
+> DROP SOURCE mz_source CASCADE;
 
 #
 # ALTER TABLE <tbl> DROP COLUMN
@@ -79,7 +78,7 @@ ALTER TABLE drop_columns DROP COLUMN f2;
 ! SELECT * FROM drop_columns;
 contains:incompatible schema change
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # ALTER TABLE <tbl> MODIFY <col> TYPE
@@ -99,7 +98,7 @@ INSERT INTO alter_column VALUES (3, 23);
 ! SELECT * from alter_column;
 contains:incompatible schema change
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # ALTER TABLE reorder column
@@ -119,7 +118,7 @@ INSERT INTO reorder_column VALUES (20, 10);
 ! SELECT * from reorder_column;
 contains:incompatible schema change
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 
 #
@@ -140,7 +139,7 @@ INSERT INTO rename_column VALUES (10, 20);
 ! SELECT * from rename_column;
 contains:incompatible schema change
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 
 #
@@ -162,7 +161,7 @@ INSERT INTO no_column_change VALUES (10);
 1
 10
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # Alter a column type using a fully-qualified name
@@ -186,7 +185,7 @@ INSERT INTO public.alter_column_2 VALUES (3, 23);
 ! SELECT * from alter_column_2;
 contains:incompatible schema change
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # ALTER TABLE <tbl> MODIFY <col> TYPE NON NULLABLE
@@ -209,7 +208,7 @@ INSERT INTO alter_column_nullable VALUES (3, '23');
 2 12
 3 23
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # ALTER TABLE <tbl> MODIFY <col> TYPE NULLABLE
@@ -230,7 +229,7 @@ INSERT INTO alter_column_nullable_2 VALUES (3, '23');
 ! SELECT * from alter_column_nullable_2;
 contains:incompatible schema change
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # ALTER TABLE <tbl> ADD CONSTRAINT <uq> UNIQUE (col);
@@ -252,7 +251,7 @@ INSERT INTO alter_column_uq VALUES (3, '23');
 2 12
 3 23
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # ALTER TABLE <tbl> DROP INDEX <uq>;
@@ -274,7 +273,7 @@ INSERT INTO alter_column_uq_2 VALUES (3, '23');
 ! SELECT * from alter_column_uq_2;
 contains:incompatible schema change
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # ALTER TABLE old_table RENAME new_table
@@ -294,7 +293,7 @@ ALTER TABLE alter_table_rename RENAME TO alter_table_renamed;
 ! SELECT * FROM alter_table_rename;
 contains:table was dropped
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # RENAME TABLE old_table TO new_table
@@ -313,7 +312,7 @@ RENAME TABLE alter_table_rename_2 TO alter_table_rename_3;
 ! SELECT * FROM alter_table_rename_2;
 contains:table was dropped
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # DROP TABLE <tbl>
@@ -332,7 +331,7 @@ DROP TABLE drop_table;
 ! SELECT * FROM drop_table;
 contains:table was dropped
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # TRUNCATE TABLE <tbl>
@@ -351,7 +350,7 @@ TRUNCATE TABLE trunc_table;
 ! SELECT * FROM trunc_table;
 contains:table was truncated
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 #
 # TRUNCATE <tbl>
@@ -370,4 +369,4 @@ TRUNCATE trunc_table_2;
 ! SELECT * FROM trunc_table_2;
 contains:table was truncated
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;

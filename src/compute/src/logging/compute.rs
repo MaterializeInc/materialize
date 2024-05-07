@@ -22,6 +22,7 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
@@ -473,7 +474,8 @@ struct ArrangementSizeState {
 
 type Update<D> = (D, Timestamp, Diff);
 type Pusher<D> = Counter<Timestamp, Vec<Update<D>>, Tee<Timestamp, Vec<Update<D>>>>;
-type OutputSession<'a, D> = Session<'a, Timestamp, Vec<Update<D>>, Pusher<D>>;
+type OutputSession<'a, D> =
+    Session<'a, Timestamp, CapacityContainerBuilder<Vec<Update<D>>>, Pusher<D>>;
 
 /// Bundled output sessions used by the demux operator.
 struct DemuxOutput<'a> {
@@ -978,7 +980,7 @@ where
                         let diff = buffer.iter().map(|(_d, _t, r)| r).sum();
                         logger.log(ComputeEvent::ErrorCount { export_id, diff });
 
-                        output.session(&cap).give_vec(&mut buffer);
+                        output.session(&cap).give_container(&mut buffer);
                     });
                 }
             })
@@ -1001,7 +1003,7 @@ where
                     let diff = buffer.iter().map(sum_batch_diffs).sum();
                     logger.log(ComputeEvent::ErrorCount { export_id, diff });
 
-                    output.session(&cap).give_vec(&mut buffer);
+                    output.session(&cap).give_container(&mut buffer);
                 });
             }
         })

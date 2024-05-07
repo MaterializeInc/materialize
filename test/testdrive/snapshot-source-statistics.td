@@ -139,4 +139,4 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
   ORDER BY s.name
 upsert true 9 9
 
-> DROP SOURCE upsert
+> DROP SOURCE upsert CASCADE

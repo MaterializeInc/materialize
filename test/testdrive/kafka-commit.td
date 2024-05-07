@@ -48,7 +48,7 @@ WHERE s.name = 'topic'
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0
 3
 
-> DROP SOURCE topic
+> DROP SOURCE topic CASCADE
 
 # Test than an arbitrary prefix can be prepended to the consumer group.
 

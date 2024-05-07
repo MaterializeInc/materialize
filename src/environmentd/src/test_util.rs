@@ -1151,7 +1151,7 @@ pub async fn create_postgres_source_with_table<'a>(
         move |mz_client: &'a Client, pg_client: &'a Client| {
             let f: Pin<Box<dyn Future<Output = ()> + 'a>> = Box::pin(async move {
                 mz_client
-                    .batch_execute(&format!("DROP SOURCE {source_name};"))
+                    .batch_execute(&format!("DROP SOURCE {source_name} CASCADE;"))
                     .await
                     .unwrap();
                 mz_client

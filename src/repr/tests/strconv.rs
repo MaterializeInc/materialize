@@ -756,12 +756,11 @@ fn test_format_timestamptz() {
         sec: u32,
         nano: u32,
     ) -> DateTime<Utc> {
-        DateTime::from_utc(
-            NaiveDate::from_ymd_opt(year, month, day)
+        Utc.from_utc_datetime(
+            &NaiveDate::from_ymd_opt(year, month, day)
                 .unwrap()
                 .and_hms_nano_opt(hour, min, sec, nano)
                 .unwrap(),
-            Utc,
         )
     }
 

@@ -36,6 +36,7 @@ use mz_proto::RustType;
 use mz_timely_util::order::Reverse;
 use proptest_derive::Arbitrary;
 use semver::Version;
+use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, error, trace_span, warn, Instrument};
@@ -47,7 +48,9 @@ use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
-use crate::internal::state::{BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart};
+use crate::internal::state::{
+    BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, WRITE_DIFFS_SUM,
+};
 use crate::stats::{
     part_stats_for_legacy_part, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
 };
@@ -144,37 +147,6 @@ where
         self.batch.desc.lower()
     }
 
-    /// Efficiently rewrites the timestamps in this not-yet-committed batch.
-    ///
-    /// This [Batch] represents potentially large amounts of data, which may
-    /// have partly or entirely been spilled to s3. This call bulk edits the
-    /// timestamps of all data in this batch in a metadata-only operation (i.e.
-    /// without network calls).
-    ///
-    /// Specifically, every timestamp in the batch is logically advanced_by the
-    /// provided `frontier`.
-    ///
-    /// This method may be called multiple times, with later calls overriding
-    /// previous ones, but the rewrite frontier may not regress across calls.
-    ///
-    /// When this batch was created, it was given an `upper`, which bounds the
-    /// staged data it represents. To allow rewrite past this original `upper`,
-    /// this call accepts a new `upper` which replaces the previous one. Like
-    /// the rewrite frontier, the upper may not regress across calls.
-    ///
-    /// Multiple batches with various rewrite frontiers may be used in a single
-    /// [crate::write::WriteHandle::compare_and_append_batch] call. This is an
-    /// expected usage.
-    pub fn rewrite_ts(
-        &mut self,
-        frontier: &Antichain<T>,
-        new_upper: Antichain<T>,
-    ) -> Result<(), InvalidUsage<T>> {
-        self.batch
-            .rewrite_ts(frontier, new_upper)
-            .map_err(InvalidUsage::InvalidRewrite)
-    }
-
     /// Marks the blobs that this batch handle points to as consumed, likely
     /// because they were appended to a shard.
     ///
@@ -260,6 +232,7 @@ where
                 .decode::<T>(&self.metrics.columnar)
                 .expect("valid inline part");
             let key_lower = updates.key_lower().to_vec();
+            let diffs_sum = diffs_sum::<D>(&updates.updates).expect("inline parts are not empty");
 
             let write_span =
                 debug_span!("batch::flush_to_blob", shard = %self.shard_metrics.shard_id)
@@ -276,6 +249,7 @@ where
                     updates,
                     key_lower,
                     ts_rewrite,
+                    D::encode(&diffs_sum),
                     stats_schemas.clone(),
                 )
                 .instrument(write_span),
@@ -284,6 +258,57 @@ where
             parts.push(part);
         }
         self.batch.parts = parts;
+    }
+}
+
+impl<K, V, T, D> Batch<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64 + TotalOrder,
+    D: Semigroup + Codec64,
+{
+    /// Efficiently rewrites the timestamps in this not-yet-committed batch.
+    ///
+    /// This [Batch] represents potentially large amounts of data, which may
+    /// have partly or entirely been spilled to s3. This call bulk edits the
+    /// timestamps of all data in this batch in a metadata-only operation (i.e.
+    /// without network calls).
+    ///
+    /// Specifically, every timestamp in the batch is logically advanced_by the
+    /// provided `frontier`.
+    ///
+    /// This method may be called multiple times, with later calls overriding
+    /// previous ones, but the rewrite frontier may not regress across calls.
+    ///
+    /// When this batch was created, it was given an `upper`, which bounds the
+    /// staged data it represents. To allow rewrite past this original `upper`,
+    /// this call accepts a new `upper` which replaces the previous one. Like
+    /// the rewrite frontier, the upper may not regress across calls.
+    ///
+    /// Multiple batches with various rewrite frontiers may be used in a single
+    /// [crate::write::WriteHandle::compare_and_append_batch] call. This is an
+    /// expected usage.
+    ///
+    /// This feature requires that the timestamp impls `TotalOrder`. This is
+    /// because we need to be able to verify that the contained data, after the
+    /// rewrite forward operation, still respects the new upper. It turns out
+    /// that, given the metadata persist currently collects during batch
+    /// collection, this is possible for totally ordered times, but it's known
+    /// to be _not possible_ for partially ordered times. It is believed that we
+    /// could fix this by collecting different metadata in batch creation (e.g.
+    /// the join of or an antichain of the original contained timestamps), but
+    /// the experience of #26384 has shaken our confidence in our own abilities
+    /// to reason about partially ordered times and anyway all the initial uses
+    /// have totally ordered times.
+    pub fn rewrite_ts(
+        &mut self,
+        frontier: &Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<(), InvalidUsage<T>> {
+        self.batch
+            .rewrite_ts(frontier, new_upper)
+            .map_err(InvalidUsage::InvalidRewrite)
     }
 }
 
@@ -309,6 +334,7 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
+    pub(crate) write_diffs_sum: bool,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -359,6 +385,7 @@ impl BatchBuilderConfig {
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
             stats_untrimmable_columns: Arc::new(untrimmable_columns(value)),
+            write_diffs_sum: WRITE_DIFFS_SUM.get(value),
         }
     }
 }
@@ -663,6 +690,7 @@ where
         if num_updates == 0 {
             return;
         }
+        let diffs_sum = diffs_sum::<D>(std::iter::once(&columnar)).expect("part is non empty");
 
         if self.consolidate {
             // if our parts are consolidated, we can rely on their sorted order to
@@ -708,6 +736,7 @@ where
                 columnar,
                 self.inline_upper.clone(),
                 self.since.clone(),
+                diffs_sum,
             )
             .await;
         self.metrics
@@ -901,13 +930,14 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    pub(crate) async fn write<K: Codec, V: Codec>(
+    pub(crate) async fn write<K: Codec, V: Codec, D: Codec64>(
         &mut self,
         schemas: &Schemas<K, V>,
         key_lower: Vec<u8>,
         updates: ColumnarRecords,
         upper: Antichain<T>,
         since: Antichain<T>,
+        diffs_sum: D,
     ) {
         let desc = Description::new(self.lower.clone(), upper, since);
         let batch_metrics = self.batch_metrics.clone();
@@ -955,6 +985,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     part,
                     key_lower,
                     ts_rewrite,
+                    D::encode(&diffs_sum),
                     schemas.clone(),
                 )
                 .instrument(write_span),
@@ -986,6 +1017,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         updates: BlobTraceBatchPart<T>,
         key_lower: Vec<u8>,
         ts_rewrite: Option<Antichain<T>>,
+        diffs_sum: [u8; 8],
         schemas: Schemas<K, V>,
     ) -> BatchPart<T> {
         let partial_key = PartialBatchKey::new(&cfg.writer_key, &PartId::new());
@@ -1065,6 +1097,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             key_lower,
             stats,
             ts_rewrite,
+            diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
         })
     }
 
@@ -1168,13 +1201,31 @@ impl Deref for PartDeletes {
     }
 }
 
+/// Returns the total sum of diffs or None if there were no updates.
+fn diffs_sum<'a, D: Semigroup + Codec64>(
+    updates: impl IntoIterator<Item = &'a ColumnarRecords>,
+) -> Option<D> {
+    let mut sum = None;
+    for updates in updates.into_iter() {
+        for (_kv, _t, d) in updates.iter() {
+            let d = D::decode(d);
+            match &mut sum {
+                None => sum = Some(d),
+                Some(x) => x.plus_equals(&d),
+            }
+        }
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     use mz_dyncfg::ConfigUpdates;
+    use timely::order::Product;
 
     use crate::cache::PersistClientCache;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
-    use crate::tests::{all_ok, new_test_client, CodecProduct};
+    use crate::tests::{all_ok, new_test_client};
     use crate::PersistLocation;
 
     use super::*;
@@ -1324,25 +1375,17 @@ mod tests {
             .expect("client construction failed");
         let shard_id = ShardId::new();
         let (mut write, _) = client
-            .expect_open::<String, String, CodecProduct, i64>(shard_id)
+            .expect_open::<String, String, Product<u32, u32>, i64>(shard_id)
             .await;
 
         let batch = write
             .batch(
                 &[
-                    (
-                        ("1".to_owned(), "one".to_owned()),
-                        CodecProduct::new(0, 10),
-                        1,
-                    ),
-                    (
-                        ("2".to_owned(), "two".to_owned()),
-                        CodecProduct::new(10, 0),
-                        1,
-                    ),
+                    (("1".to_owned(), "one".to_owned()), Product::new(0, 10), 1),
+                    (("2".to_owned(), "two".to_owned()), Product::new(10, 0), 1),
                 ],
-                Antichain::from_elem(CodecProduct::new(0, 0)),
-                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 1)]),
+                Antichain::from_elem(Product::new(0, 0)),
+                Antichain::from_iter([Product::new(0, 11), Product::new(10, 1)]),
             )
             .await
             .expect("invalid usage");

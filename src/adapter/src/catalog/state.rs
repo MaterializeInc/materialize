@@ -489,13 +489,17 @@ impl CatalogState {
         let object_id = ObjectId::Item(item_id);
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
-            for dependent_id in self.get_entry(&item_id).used_by() {
+            let entry = self.get_entry(&item_id);
+            for dependent_id in entry.used_by() {
                 dependents.extend_from_slice(&self.item_dependents(*dependent_id, seen));
             }
-            for subsource_id in self.get_entry(&item_id).subsources() {
-                dependents.extend_from_slice(&self.item_dependents(subsource_id, seen));
-            }
             dependents.push(object_id);
+            // We treat the progress collection as if it depends on the source
+            // for dropping. We have additional code in planning to create a
+            // kind of special-case "CASCADE" for this dependency.
+            if let Some(progress_id) = entry.progress_id() {
+                dependents.extend_from_slice(&self.item_dependents(progress_id, seen));
+            }
         }
         dependents
     }
@@ -844,19 +848,14 @@ impl CatalogState {
         return Ok((plan, resolved_ids));
     }
 
-    pub(crate) fn deserialize_item(
-        &self,
-        id: GlobalId,
-        create_sql: &str,
-    ) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(id, create_sql, None, false, None)
+    pub(crate) fn deserialize_item(&self, create_sql: &str) -> Result<CatalogItem, AdapterError> {
+        self.parse_item(create_sql, None, false, None)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
     #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
-        id: GlobalId,
         create_sql: &str,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
@@ -885,11 +884,10 @@ impl CatalogState {
             }) => CatalogItem::Source(Source {
                 create_sql: Some(source.create_sql),
                 data_source: match source.data_source {
-                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
-                        DataSourceDesc::ingestion(
-                            id,
-                            ingestion,
-                            match in_cluster {
+                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion_desc) => {
+                        DataSourceDesc::Ingestion {
+                            ingestion_desc,
+                            cluster_id: match in_cluster {
                                 Some(id) => id,
                                 None => {
                                     return Err(AdapterError::Unstructured(anyhow::anyhow!(
@@ -897,10 +895,16 @@ impl CatalogState {
                                     )))
                                 }
                             },
-                        )
+                        }
                     }
+                    mz_sql::plan::DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                    } => DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                    },
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
-                    mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
                     mz_sql::plan::DataSourceDesc::Webhook {
                         validate_using,
                         body_format,
@@ -2371,6 +2375,54 @@ impl CatalogState {
     /// call to `update_storage_metadata`.
     pub fn storage_metadata(&self) -> &StorageMetadata {
         &self.storage_metadata
+    }
+
+    /// For the Sources ids in `ids`, return the compaction windows for all `ids` and additional ids
+    /// that propagate from them. Specifically, if `ids` contains a source, it and all of its
+    /// subsources will be added to the result.
+    pub fn source_compaction_windows(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> BTreeMap<CompactionWindow, BTreeSet<GlobalId>> {
+        let mut cws: BTreeMap<CompactionWindow, BTreeSet<GlobalId>> = BTreeMap::new();
+        let mut ids = VecDeque::from_iter(ids);
+        let mut seen = BTreeSet::new();
+        while let Some(id) = ids.pop_front() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let entry = self.get_entry(&id);
+            let Some(source) = entry.source() else {
+                // Views could depend on sources, so ignore them if added by used_by below.
+                continue;
+            };
+            let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
+            match source.data_source {
+                DataSourceDesc::Ingestion { .. } => {
+                    // For sources, look up each dependent subsource and propagate.
+                    cws.entry(source_cw).or_default().insert(id);
+                    ids.extend(entry.used_by());
+                }
+                DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                    // For subsources, look up the parent source and propagate the compaction
+                    // window.
+                    let ingestion = self
+                        .get_entry(&ingestion_id)
+                        .source()
+                        .expect("must be source");
+                    let cw = ingestion
+                        .custom_logical_compaction_window
+                        .unwrap_or(source_cw);
+                    cws.entry(cw).or_default().insert(id);
+                }
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Webhook { .. } => {
+                    cws.entry(source_cw).or_default().insert(id);
+                }
+            }
+        }
+        cws
     }
 }
 

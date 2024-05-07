@@ -13,6 +13,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::Data;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
@@ -28,35 +29,37 @@ use crate::extensions::reduce::MzReduce;
 use crate::render::context::{
     ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport,
 };
+use crate::row_spine::DatumSeq;
 
 /// Shared function to compute an arrangement of values matching `logic`.
-fn threshold_arrangement<G, T1, T2, L>(
+fn threshold_arrangement<G, V, F, T1, T2, L>(
     arrangement: &Arranged<G, T1>,
     name: &str,
+    from: F,
     logic: L,
 ) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope,
     G::Timestamp: Lattice + Columnation,
+    F: Fn(T2::Val<'_>) -> V + Clone + 'static,
+    V: Data,
     T1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     T1::KeyOwned: Columnation + Data,
     T2: for<'a> Trace<
             Key<'a> = T1::Key<'a>,
-            ValOwned = T1::ValOwned,
+            Val<'a> = T1::Val<'a>,
             Time = G::Timestamp,
             Diff = Diff,
         > + 'static,
-    T2::ValOwned: Columnation + Data,
     T2::Batch: Batch,
-    T2::Builder: Builder<Input = ((T1::KeyOwned, T2::ValOwned), G::Timestamp, Diff)>,
+    T2::Builder: Builder<Input = ((T1::KeyOwned, V), G::Timestamp, Diff)>,
     L: Fn(&Diff) -> bool + 'static,
     Arranged<G, TraceAgent<T2>>: ArrangementSize,
 {
-    arrangement.mz_reduce_abelian(name, move |_key, s, t| {
+    arrangement.mz_reduce_abelian(name, from.clone(), move |_key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
-                use differential_dataflow::trace::cursor::MyTrait;
-                t.push(((*record).into_owned(), *count));
+                t.push((from(*record), *count));
             }
         }
     })
@@ -76,7 +79,7 @@ where
 {
     match oks {
         MzArrangement::RowRow(inner) => {
-            let oks = threshold_arrangement(inner, name, logic);
+            let oks = threshold_arrangement(inner, name, |v: DatumSeq| v.into_owned(), logic);
             MzArrangement::RowRow(oks)
         }
     }
@@ -96,7 +99,7 @@ where
 {
     match oks {
         MzArrangementImport::RowRow(inner) => {
-            let oks = threshold_arrangement(inner, name, logic);
+            let oks = threshold_arrangement(inner, name, |v: DatumSeq| v.into_owned(), logic);
             MzArrangement::RowRow(oks)
         }
     }

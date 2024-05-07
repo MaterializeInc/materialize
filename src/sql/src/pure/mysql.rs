@@ -12,13 +12,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_mysql_util::{validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef};
-use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
-    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    DeferredItemName, Ident, IdentError, Value, WithOptionValue,
+    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
+    IdentError, WithOptionValue,
 };
-use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 
 use crate::catalog::SubsourceCatalog;
 use crate::names::Aug;
@@ -30,13 +29,12 @@ use super::RequestedSubsource;
 /// The name of the fake database that we use for MySQL sources
 /// to fit our model of a 3-layer catalog. MySQL doesn't have a concept
 /// of databases AND schemas, it treats both as the same thing.
-static MYSQL_DATABASE_FAKE_NAME: &str = "mysql";
+pub(crate) static MYSQL_DATABASE_FAKE_NAME: &str = "mysql";
 
 pub(super) fn mysql_upstream_name(
     table: &MySqlTableDesc,
 ) -> Result<UnresolvedItemName, IdentError> {
     Ok(UnresolvedItemName::qualified(&[
-        Ident::new(MYSQL_DATABASE_FAKE_NAME)?,
         Ident::new(&table.schema_name)?,
         Ident::new(&table.name)?,
     ]))
@@ -46,15 +44,12 @@ pub(super) fn mysql_upstream_name(
 fn upstream_name_to_table(
     name: &UnresolvedItemName,
 ) -> Result<QualifiedTableRef, MySqlSourcePurificationError> {
-    if name.0.len() != 3 {
-        Err(MySqlSourcePurificationError::InvalidTableReference(name.to_string()).into())?
-    }
-    if name.0.get(0).map(|s| s.as_str()) != Some(MYSQL_DATABASE_FAKE_NAME) {
+    if name.0.len() != 2 {
         Err(MySqlSourcePurificationError::InvalidTableReference(name.to_string()).into())?
     }
     Ok(QualifiedTableRef {
-        schema_name: name.0[1].as_str(),
-        table_name: name.0[2].as_str(),
+        schema_name: name.0[0].as_str(),
+        table_name: name.0[1].as_str(),
     })
 }
 
@@ -76,21 +71,10 @@ pub(super) fn derive_catalog_from_tables<'a>(
     Ok(SubsourceCatalog(tables_by_name))
 }
 
-pub(super) fn generate_targeted_subsources<F>(
+pub(super) fn generate_targeted_subsources(
     scx: &StatementContext,
     validated_requested_subsources: Vec<RequestedSubsource<MySqlTableDesc>>,
-    mut get_transient_subsource_id: F,
-) -> Result<
-    (
-        Vec<CreateSourceSubsource<Aug>>,
-        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-    ),
-    PlanError,
->
-where
-    F: FnMut() -> u64,
-{
-    let mut targeted_subsources = vec![];
+) -> Result<Vec<CreateSubsourceStatement<Aug>>, PlanError> {
     let mut subsources = vec![];
 
     // Now that we have an explicit list of validated requested subsources we can create them
@@ -150,33 +134,24 @@ where
             }
         }
 
-        // Create the targeted AST node for the original CREATE SOURCE statement
-        let transient_id = GlobalId::Transient(get_transient_subsource_id());
-
-        let subsource = scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
-
-        targeted_subsources.push(CreateSourceSubsource {
-            reference: upstream_name,
-            subsource: Some(DeferredItemName::Named(subsource)),
-        });
-
         // Create the subsource statement
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
             columns,
+            // We don't know the primary source's `GlobalId` yet; fill it in
+            // once we generate it.
+            of_source: None,
             constraints,
             if_not_exists: false,
             with_options: vec![CreateSubsourceOption {
-                name: CreateSubsourceOptionName::References,
-                value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                name: CreateSubsourceOptionName::ExternalReference,
+                value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
             }],
         };
-        subsources.push((transient_id, subsource));
+        subsources.push(subsource);
     }
 
-    targeted_subsources.sort();
-
-    Ok((targeted_subsources, subsources))
+    Ok(subsources)
 }
 
 /// Map a list of column references to a map of table references to column names.
@@ -214,6 +189,8 @@ pub(super) fn normalize_column_refs<'a>(
     let (seq, unknown): (Vec<_>, Vec<_>) = cols.into_iter().partition(|name| {
         let (column_name, qual) = name.0.split_last().expect("non-empty");
         match catalog.resolve(UnresolvedItemName::qualified(qual)) {
+            // TODO: this needs to also introduce the maximum qualification on
+            // the columns, i.e. ensure they have the schema name.
             Ok((_, desc)) => desc.columns.iter().any(|n| &n.name == column_name.as_str()),
             Err(_) => false,
         }

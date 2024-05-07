@@ -9,6 +9,7 @@
 
 //! Telemetry utilities.
 
+use chrono::{DateTime, Utc};
 use mz_audit_log::ObjectType;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::StatementKind;
@@ -16,16 +17,27 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
+/// Details to attach to a Segment event.
+#[derive(Debug, Clone, Default)]
+pub struct EventDetails<'a> {
+    /// The ID of the user that triggered the event, if any.
+    pub user_id: Option<Uuid>,
+    /// The value of the `application_name` parameter for the session that
+    /// triggered the event, if any.
+    pub application_name: Option<&'a str>,
+    /// The timestamp at which the event occurred, if not the current time.
+    pub timestamp: Option<DateTime<Utc>>,
+}
+
 /// Extension trait for [`mz_segment::Client`].
 pub trait SegmentClientExt {
     /// Tracks an event associated with an environment.
     fn environment_track<S>(
         &self,
         environment_id: &EnvironmentId,
-        app_name: &str,
-        user_id: Uuid,
         event: S,
         properties: serde_json::Value,
+        details: EventDetails<'_>,
     ) where
         S: Into<String>;
 }
@@ -42,10 +54,13 @@ impl SegmentClientExt for mz_segment::Client {
     fn environment_track<S>(
         &self,
         environment_id: &EnvironmentId,
-        app_name: &str,
-        user_id: Uuid,
         event: S,
         mut properties: serde_json::Value,
+        EventDetails {
+            user_id,
+            timestamp,
+            application_name,
+        }: EventDetails<'_>,
     ) where
         S: Into<String>,
     {
@@ -65,7 +80,9 @@ impl SegmentClientExt for mz_segment::Client {
                 "cloud_provider_region".into(),
                 json!(environment_id.cloud_provider_region()),
             );
-            properties.insert("application_name".into(), json!(app_name));
+            if let Some(application_name) = application_name {
+                properties.insert("application_name".into(), json!(application_name));
+            }
         }
 
         // "Context" is a defined dictionary of extra information related to a datapoint. Please
@@ -74,7 +91,11 @@ impl SegmentClientExt for mz_segment::Client {
             "group_id": environment_id.organization_id()
         });
 
-        self.track(user_id, event, properties, Some(context));
+        // We use the organization ID as the user ID for events that are not
+        // associated with a particular user.
+        let user_id = user_id.unwrap_or_else(|| environment_id.organization_id());
+
+        self.track(user_id, event, properties, Some(context), timestamp);
     }
 }
 

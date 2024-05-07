@@ -899,9 +899,8 @@ pub static WEBHOOKS_SECRETS_CACHING_TTL_SECS: VarDefinition = VarDefinition::new
 
 pub static COORD_SLOW_MESSAGE_WARN_THRESHOLD: VarDefinition = VarDefinition::new(
     "coord_slow_message_warn_threshold",
-    // Note(parkmycar): This value was chosen arbitrarily.
-    value!(Duration; Duration::from_secs(5)),
-    "Sets the threshold at which we will warn! for a coordinator message being slow.",
+    value!(Duration; Duration::from_secs(30)),
+    "Sets the threshold at which we will error! for a coordinator message being slow.",
     true,
 );
 
@@ -957,6 +956,15 @@ pub static PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: VarDefinition = VarDefinition::
     "pg_source_snapshot_statement_timeout",
     value!(Duration; mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT),
     "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
+    true,
+);
+
+/// Sets the `wal_sender_timeout` value to use during the replication phase of
+/// PG sources.
+pub static PG_SOURCE_WAL_SENDER_TIMEOUT: VarDefinition = VarDefinition::new(
+    "pg_source_wal_sender_timeout",
+    value!(Duration; mz_postgres_util::DEFAULT_WAL_SENDER_TIMEOUT),
+    "Sets the `wal_sender_timeout` value to use during the replication phase of PG sources (Materialize)",
     true,
 );
 
@@ -2069,6 +2077,13 @@ feature_flags!(
         default: true, // This is just a failsafe switch for the deployment of #25591.
         internal: true,
         enable_for_item_parsing: false,
+    },
+    {
+        name: enable_kafka_sink_headers,
+        desc: "Enable the HEADERS option for Kafka sinks",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
     },
 );
 

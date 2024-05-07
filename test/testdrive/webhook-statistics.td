@@ -51,7 +51,7 @@ b
   WHERE s.name IN ('webhook_text')
 webhook_text 2 true 2 2
 
-> DROP SOURCE webhook_text;
+> DROP SOURCE webhook_text CASCADE;
 
 > SELECT
     count(*)

@@ -55,7 +55,7 @@ contains:No tables found
 1
 2
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 ! CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn

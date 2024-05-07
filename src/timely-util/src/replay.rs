@@ -125,7 +125,7 @@ where
                             }
                             Event::Messages(time, data) => {
                                 buffer.extend_from_slice(data);
-                                output.session(time).give_vec(&mut buffer);
+                                output.session(time).give_container(&mut buffer);
                             }
                         }
                     }

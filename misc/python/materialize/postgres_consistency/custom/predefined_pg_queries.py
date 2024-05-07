@@ -94,11 +94,14 @@ def create_pg_timezone_names_query() -> QueryTemplate:
 
     # TODO #26521: time zones differ
     excluded_timezones = [
-        # abbrev, utc_offset, is_dst differ
+        # abbrev, utc_offset, is_dst differ (as of 2024-04-08)
         "America/Godthab",
         "America/Nuuk",
         "Asia/Gaza",
         "Asia/Hebron",
+        # abbrev, utc_offset, is_dst differ (as of 2024-04-25)
+        "Africa/Cairo",
+        "Egypt",
         # abbrev differs
         "Europe/Kirov",
         "Europe/Volgograd",

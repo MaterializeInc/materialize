@@ -57,7 +57,9 @@ use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
+use mz_storage_types::sources::SourceExport;
 use serde::{Deserialize, Serialize};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
@@ -124,14 +126,16 @@ impl SourceRender for MySqlSourceConnection {
 
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
-        for (i, desc) in self.details.tables.iter().enumerate() {
+        for (_id, SourceExport { output_index, .. }) in &config.source_exports {
+            // Output index 0 is the primary source which is not a table.
+            if *output_index == 0 {
+                continue;
+            }
+
+            let desc = &self.details.tables[output_index - 1];
             table_info.insert(
                 MySqlTableName::new(&desc.schema_name, &desc.name),
-                (
-                    // Index zero maps to the main source
-                    i + 1,
-                    desc.clone(),
-                ),
+                (*output_index, desc.clone()),
             );
         }
 
@@ -309,13 +313,13 @@ async fn return_definite_error(
     outputs: &[usize],
     data_handle: &mut AsyncOutputHandle<
         GtidPartition,
-        Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
+        CapacityContainerBuilder<Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
         Tee<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
     >,
     data_cap_set: &CapabilitySet<GtidPartition>,
     definite_error_handle: &mut AsyncOutputHandle<
         GtidPartition,
-        Vec<ReplicationError>,
+        CapacityContainerBuilder<Vec<ReplicationError>>,
         Tee<GtidPartition, Vec<ReplicationError>>,
     >,
     definite_error_cap_set: &CapabilitySet<GtidPartition>,

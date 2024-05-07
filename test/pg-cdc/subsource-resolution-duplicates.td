@@ -56,7 +56,7 @@ detail: subsources referencing table: x, y
 > SHOW sources
  mz_source          postgres  ${arg.default-replica-size} quickstart
  mz_source_progress progress  <null> <null>
- t                  subsource <null> <null>
+ t                  subsource ${arg.default-replica-size} quickstart
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA other CASCADE;

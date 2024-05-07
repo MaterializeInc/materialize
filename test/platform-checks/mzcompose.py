@@ -15,7 +15,7 @@ from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorParallel
 from materialize.checks.scenarios import *  # noqa: F401 F403
-from materialize.checks.scenarios import Scenario
+from materialize.checks.scenarios import Scenario, SystemVarChange
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
 from materialize.checks.scenarios_migration import *  # noqa: F401 F403
 from materialize.checks.scenarios_platform_v2 import *  # noqa: F401 F403
@@ -188,7 +188,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert args.scenario in globals(), f"scenario {args.scenario} does not exist"
         scenarios = [globals()[args.scenario]]
     else:
-        scenarios = all_subclasses(Scenario)
+        base_scenarios = {SystemVarChange}
+        scenarios = all_subclasses(Scenario) - base_scenarios
 
     if args.check:
         all_checks = {check.__name__: check for check in all_subclasses(Check)}
@@ -229,7 +230,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             for check in checks:
                 print(f"Running individual check {check}, scenario {scenario_class}")
                 setup(c)
-                scenario = scenario_class(checks=[check], executor=executor)
+                scenario = scenario_class(
+                    checks=[check], executor=executor, seed=args.seed
+                )
                 scenario.run()
                 teardown(c)
         else:

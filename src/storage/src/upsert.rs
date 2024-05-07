@@ -44,12 +44,10 @@ use timely::progress::{Antichain, Timestamp};
 use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::render::sources::OutputIndex;
-use crate::render::upsert::autospill::{AutoSpillBackend, RocksDBParams};
-use crate::render::upsert::memory::InMemoryHashMap;
-use crate::render::upsert::types::{
-    upsert_bincode_opts, StateValue, UpsertState, UpsertStateBackend, Value,
-};
 use crate::storage_state::StorageInstanceContext;
+use autospill::{AutoSpillBackend, RocksDBParams};
+use memory::InMemoryHashMap;
+use types::{upsert_bincode_opts, StateValue, UpsertState, UpsertStateBackend, Value};
 
 mod autospill;
 mod memory;
@@ -143,6 +141,7 @@ impl<H: Digest> Hasher for DigestHasher<H> {
 }
 
 use std::convert::Infallible;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 
 use self::types::ValueMetadata;
@@ -219,6 +218,8 @@ where
     // this, to prevent unnecessary work.
     let wait_for_input_resumption =
         dyncfgs::DELAY_SOURCES_PAST_REHYDRATION.get(storage_configuration.config_set());
+    let rocksdb_cleanup_tries =
+        dyncfgs::STORAGE_ROCKSDB_CLEANUP_TRIES.get(storage_configuration.config_set());
 
     // Whether or not to partially drain the input buffer
     // to prevent buffering of the _upstream_ snapshot.
@@ -261,9 +262,6 @@ where
             .join("upsert")
             .join(source_config.id.to_string())
             .join(source_config.worker_id.to_string());
-        let legacy_rocksdb_dir = scratch_directory
-            .join(source_config.id.to_string())
-            .join(source_config.worker_id.to_string());
 
         let env = instance_context.rocksdb_env.clone();
 
@@ -282,11 +280,11 @@ where
                     AutoSpillBackend::new(
                         RocksDBParams {
                             instance_path: rocksdb_dir,
-                            legacy_instance_path: legacy_rocksdb_dir,
                             env,
                             tuning_config: tuning,
                             shared_metrics: rocksdb_shared_metrics,
                             instance_metrics: rocksdb_instance_metrics,
+                            cleanup_tries: rocksdb_cleanup_tries,
                         },
                         spill_threshold,
                         rocksdb_in_use_metric,
@@ -309,8 +307,10 @@ where
                     rocksdb::RocksDB::new(
                         mz_rocksdb::RocksDBInstance::new(
                             &rocksdb_dir,
-                            &legacy_rocksdb_dir,
-                            mz_rocksdb::InstanceOptions::defaults_with_env(env),
+                            mz_rocksdb::InstanceOptions::defaults_with_env(
+                                env,
+                                rocksdb_cleanup_tries,
+                            ),
                             tuning,
                             rocksdb_shared_metrics,
                             rocksdb_instance_metrics,
@@ -916,7 +916,7 @@ impl<G: Scope> UpsertErrorEmitter<G>
     for (
         &mut AsyncOutputHandle<
             <G as ScopeParent>::Timestamp,
-            Vec<(OutputIndex, HealthStatusUpdate)>,
+            CapacityContainerBuilder<Vec<(OutputIndex, HealthStatusUpdate)>>,
             Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
         >,
         &Capability<<G as ScopeParent>::Timestamp>,
@@ -933,7 +933,7 @@ async fn process_upsert_state_error<G: Scope>(
     e: anyhow::Error,
     health_output: &mut AsyncOutputHandle<
         <G as ScopeParent>::Timestamp,
-        Vec<(OutputIndex, HealthStatusUpdate)>,
+        CapacityContainerBuilder<Vec<(OutputIndex, HealthStatusUpdate)>>,
         Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,

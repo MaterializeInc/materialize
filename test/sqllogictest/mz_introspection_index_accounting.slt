@@ -56,6 +56,7 @@ mz_dataflow_operators_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_o
 mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_dataflow_shutdown_durations_histogram_raw"␠("worker_id",␠"duration_ns")
 mz_frontiers_ind  CREATE␠INDEX␠"mz_frontiers_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_frontiers"␠("object_id")
 mz_indexes_ind  CREATE␠INDEX␠"mz_indexes_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_indexes"␠("id")
+mz_kafka_sources_ind  CREATE␠INDEX␠"mz_kafka_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_kafka_sources"␠("id")
 mz_materialized_views_ind  CREATE␠INDEX␠"mz_materialized_views_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_materialized_views"␠("id")
 mz_message_batch_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_batch_counts_received_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_message_batch_counts_received_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_batch_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_batch_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_message_batch_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
@@ -94,6 +95,7 @@ mz_source_statistics_ind  CREATE␠INDEX␠"mz_source_statistics_ind"␠IN␠CLU
 mz_source_status_history_ind  CREATE␠INDEX␠"mz_source_status_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_source_status_history"␠("source_id")
 mz_source_statuses_ind  CREATE␠INDEX␠"mz_source_statuses_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_source_statuses"␠("id")
 mz_sources_ind  CREATE␠INDEX␠"mz_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_sources"␠("id")
+mz_webhook_sources_ind  CREATE␠INDEX␠"mz_webhook_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_webhook_sources"␠("id")
 
 # Record all transitive dependencies (tables, sources, views, mvs) of indexes on
 # the mz_introspection cluster.
@@ -290,6 +292,9 @@ mz_indexes  oid
 mz_indexes  on_id
 mz_indexes  owner_id
 mz_indexes  redacted_create_sql
+mz_kafka_sources  group_id_prefix
+mz_kafka_sources  id
+mz_kafka_sources  topic
 mz_materialized_views  cluster_id
 mz_materialized_views  create_sql
 mz_materialized_views  definition
@@ -329,6 +334,7 @@ mz_object_lifetimes  event_type
 mz_object_lifetimes  id
 mz_object_lifetimes  object_type
 mz_object_lifetimes  occurred_at
+mz_object_lifetimes  previous_id
 mz_object_transitive_dependencies  object_id
 mz_object_transitive_dependencies  referenced_object_id
 mz_objects  id
@@ -584,3 +590,6 @@ mz_views  owner_id
 mz_views  privileges
 mz_views  redacted_create_sql
 mz_views  schema_id
+mz_webhook_sources  id
+mz_webhook_sources  name
+mz_webhook_sources  url

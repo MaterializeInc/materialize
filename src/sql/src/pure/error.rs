@@ -16,7 +16,6 @@ use mz_sql_parser::ast::{ReferencedSubsources, UnresolvedItemName};
 use mz_storage_types::errors::{ContextCreationError, CsrConnectError};
 
 use crate::names::{FullItemName, PartialItemName};
-use crate::pure::Aug;
 
 /// Logical errors detectable during purification for a POSTGRES SOURCE.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -129,7 +128,7 @@ impl PgSourcePurificationError {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum KafkaSourcePurificationError {
     #[error("{} is only valid for multi-output sources", .0.to_ast_string())]
-    ReferencedSubsources(ReferencedSubsources<Aug>),
+    ReferencedSubsources(ReferencedSubsources),
     #[error("KAFKA CONNECTION without TOPIC")]
     ConnectionMissingTopic,
     #[error("{0} is not a KAFKA CONNECTION")]

@@ -36,6 +36,10 @@ def get_ancestor_overrides_for_performance_regressions(
         min_ancestor_mz_version_per_commit[
             "96c22562745f59010860bd825de5b4007a172c70"
         ] = MzVersion.parse_mz("v0.97.0")
+        # PR#24155 (equivalence propagation) significantly increased wallclock for OptbenchTPCH
+        min_ancestor_mz_version_per_commit[
+            "3cfaa8207faa7df087942cd44311a3e7b4534c25"
+        ] = MzVersion.parse_mz("v0.92.0")
 
     if scenario_class_name == "FastPathFilterNoIndex":
         # PR#26084 (Optimize OffsetList) increased wallclock

@@ -28,6 +28,3 @@ one
 
 !ALTER SOURCE data ADD SUBSOURCE t;
 contains:data is a kafka source, which does not support ALTER SOURCE.
-
-!ALTER SOURCE data DROP SUBSOURCE t;
-contains:data is a kafka source, which does not support ALTER SOURCE.

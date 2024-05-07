@@ -84,6 +84,7 @@ message ProtoKafkaSinkConnectionV2 {
     string topic = 3;
     optional ProtoKeyDescAndIndices key_desc_and_indices = 4;
     optional ProtoRelationKeyIndicesVec relation_key_indices = 5;
+    optional uint64 headers_index = 22;
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 6;
     ProtoKafkaSinkFormat format = 11;
     oneof compression_type {

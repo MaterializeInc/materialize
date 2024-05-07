@@ -14,6 +14,7 @@ use mz_rocksdb::{
 };
 use mz_rocksdb_types::RocksDBTuningParameters;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts};
+use rocksdb::DB;
 
 fn shared_metrics_for_tests() -> Result<Box<RocksDBSharedMetrics>, anyhow::Error> {
     let fake_hist_vec =
@@ -49,8 +50,7 @@ async fn basic() -> Result<(), anyhow::Error> {
 
     let mut instance = RocksDBInstance::<String, String>::new(
         t.path(),
-        t.path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?),
+        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
         RocksDBConfig::new(Default::default(), None),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
@@ -141,8 +141,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance1 = RocksDBInstance::<String, String>::new(
         t.path().join("1").as_path(),
-        t.path().join("1").as_path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?),
+        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
         rocksdb_config.clone(),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
@@ -164,8 +163,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance2 = RocksDBInstance::<String, String>::new(
         t.path().join("2").as_path(),
-        t.path().join("2").as_path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?),
+        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
         rocksdb_config.clone(),
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
@@ -190,8 +188,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance3 = RocksDBInstance::<String, String>::new(
         t.path().join("3").as_path(),
-        t.path().join("3").as_path(),
-        InstanceOptions::defaults_with_env(rocksdb::Env::new()?),
+        InstanceOptions::defaults_with_env(rocksdb::Env::new()?, 2),
         rocksdb_config,
         shared_metrics_for_tests()?,
         instance_metrics_for_tests()?,
@@ -210,5 +207,14 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
     instance3.close().await?;
     assert!(shared_write_buffer_manager.get().is_none());
 
+    Ok(())
+}
+
+/// A small validation test; Ensure that if a directory is empty, we don't fail to destroy.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
+async fn destroy() -> Result<(), anyhow::Error> {
+    let t = tempfile::tempdir()?;
+    DB::destroy(&Default::default(), t.path())?;
     Ok(())
 }

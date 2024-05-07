@@ -165,6 +165,10 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
     }
+
+    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
+        self.details.output_idx_for_name(name)
+    }
 }
 
 impl<C: ConnectionAccess> AlterCompatible for MySqlSourceConnection<C> {
@@ -247,6 +251,20 @@ pub struct MySqlSourceDetails {
     /// one or more tables before the initial snapshot of all tables is complete.
     #[proptest(strategy = "any_gtidset()")]
     pub initial_gtid_set: String,
+}
+
+impl MySqlSourceDetails {
+    pub fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
+        let (schema_name, name) = match &name.0[..] {
+            [schema_name, name] => (schema_name.as_str(), name.as_str()),
+            _ => return None,
+        };
+
+        self.tables
+            .iter()
+            .position(|t| t.schema_name == schema_name && t.name == name)
+            .map(|idx| idx + 1)
+    }
 }
 
 fn any_gtidset() -> impl Strategy<Value = String> {

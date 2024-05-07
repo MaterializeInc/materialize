@@ -146,8 +146,8 @@ GRANT SELECT ON other.z TO 'r1';
 1
 
 # cleanup the 'other' database to avoid issues in other testdrive files
-> DROP SOURCE mz_source;
-> DROP SOURCE mz_source_other;
+> DROP SOURCE mz_source CASCADE;
+> DROP SOURCE mz_source_other CASCADE;
 
 $ mysql-execute name=mysql
 DROP DATABASE other;

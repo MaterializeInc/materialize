@@ -70,7 +70,15 @@ CREATE INDEX idx_c ON view_c (b)
 statement ok
 ALTER INDEX idx_c SET (RETAIN HISTORY FOR '1m')
 
-# a 5m, b 3m, c 1m
+query TTT
+SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_objects o ON o.id = h.id
+WHERE o.id LIKE 'u%' AND o.name LIKE 'idx_%'
+ORDER BY o.name
+----
+idx_a  FOR  300000
+idx_b  FOR  180000
+idx_c  FOR  60000
 
 statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 300s, but must be at least 360s
 ALTER INDEX idx_b SET (RETAIN HISTORY FOR '6m')
@@ -78,17 +86,132 @@ ALTER INDEX idx_b SET (RETAIN HISTORY FOR '6m')
 statement error db error: ERROR: dependent index materialize\.public\.idx_b has a RETAIN HISTORY of 180s, but must be at least 240s
 ALTER INDEX idx_c SET (RETAIN HISTORY FOR '4m')
 
-# a 6m, b 3m, c 1m
-
 statement ok
 ALTER INDEX idx_a SET (RETAIN HISTORY FOR '7m')
 
-# a 7m, b 3m, c 1m
+query TTT
+SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_objects o ON o.id = h.id
+WHERE o.id LIKE 'u%' AND o.name LIKE 'idx_%'
+ORDER BY o.name
+----
+idx_a  FOR  420000
+idx_b  FOR  180000
+idx_c  FOR  60000
 
 statement ok
 ALTER INDEX idx_b SET (RETAIN HISTORY FOR '6m')
 
-# a 7m, b 6m, c 1m
+statement ok
+ALTER INDEX idx_c SET (RETAIN HISTORY FOR '4m')
+
+query TTT
+SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_objects o ON o.id = h.id
+WHERE o.id LIKE 'u%' AND o.name LIKE 'idx_%'
+ORDER BY o.name
+----
+idx_a  FOR  420000
+idx_b  FOR  360000
+idx_c  FOR  240000
+
+# Test subsource propagation. Test sources with and without subsources and view dependencies to
+# ensure the alter code correctly ignores the views.
+statement ok
+CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+----
 
 statement ok
-ALTER INDEX idx_b SET (RETAIN HISTORY FOR '4m')
+CREATE VIEW auction_house_view AS SELECT * FROM users
+----
+
+statement ok
+CREATE SOURCE counter FROM LOAD GENERATOR COUNTER
+----
+
+statement ok
+CREATE VIEW counter_view AS SELECT * FROM counter
+----
+
+query TTT
+SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_objects o ON o.id = h.id
+WHERE o.id LIKE 'u%'
+ORDER BY o.name
+----
+accounts  FOR  1000
+auction_house  FOR  1000
+auction_house_progress  FOR  1000
+auctions  FOR  1000
+bids  FOR  1000
+counter  FOR  1000
+counter_progress  FOR  1000
+idx_a  FOR  420000
+idx_b  FOR  360000
+idx_c  FOR  240000
+organizations  FOR  1000
+tab_a  FOR  1000
+users  FOR  1000
+
+statement ok
+ALTER SOURCE auction_house SET (RETAIN HISTORY FOR '1m')
+----
+
+statement ok
+ALTER SOURCE counter SET (RETAIN HISTORY FOR '1m')
+----
+
+query TTT
+SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_objects o ON o.id = h.id
+WHERE o.id LIKE 'u%'
+ORDER BY o.name
+----
+accounts  FOR  60000
+auction_house  FOR  60000
+auction_house_progress  FOR  1000
+auctions  FOR  60000
+bids  FOR  60000
+counter  FOR  60000
+counter_progress  FOR  1000
+idx_a  FOR  420000
+idx_b  FOR  360000
+idx_c  FOR  240000
+organizations  FOR  60000
+tab_a  FOR  1000
+users  FOR  60000
+
+statement ok
+ALTER SOURCE counter RESET (RETAIN HISTORY)
+
+statement ok
+ALTER SOURCE auction_house RESET (RETAIN HISTORY)
+
+statement error db error: ERROR: dependent index materialize\.public\.idx_c has a RETAIN HISTORY of 1s, but must be at least 240s
+ALTER INDEX idx_b RESET (RETAIN HISTORY)
+
+statement ok
+ALTER INDEX idx_c RESET (RETAIN HISTORY)
+
+statement ok
+ALTER INDEX idx_b RESET (RETAIN HISTORY)
+
+query TTT
+SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_objects o ON o.id = h.id
+WHERE o.id LIKE 'u%'
+ORDER BY o.name
+----
+accounts  FOR  1000
+auction_house  FOR  1000
+auction_house_progress  FOR  1000
+auctions  FOR  1000
+bids  FOR  1000
+counter  FOR  1000
+counter_progress  FOR  1000
+idx_a  FOR  420000
+idx_b  FOR  1000
+idx_c  FOR  1000
+organizations  FOR  1000
+tab_a  FOR  1000
+users  FOR  1000

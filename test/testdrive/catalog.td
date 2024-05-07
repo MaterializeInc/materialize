@@ -599,9 +599,11 @@ mz_comments
 mz_internal_cluster_replicas
 mz_kafka_sources
 mz_materialized_view_refresh_strategies
+mz_mysql_source_tables
 mz_object_dependencies
 mz_optimizer_notices
 mz_postgres_sources
+mz_postgres_source_tables
 mz_sessions
 mz_storage_usage_by_shard
 mz_subscriptions
@@ -716,7 +718,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-180
+182
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

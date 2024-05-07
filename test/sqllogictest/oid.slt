@@ -1056,3 +1056,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16945  mz_role_parameters
 16946  mz_materialized_view_refresh_strategies
 16947  mz_cluster_schedules
+16948  mz_postgres_source_tables
+16949  mz_mysql_source_tables
+16950  mz_kafka_sources_ind
+16951  mz_webhook_sources_ind
+16952  mz_history_retention_strategies

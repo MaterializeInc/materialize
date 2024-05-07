@@ -208,7 +208,7 @@ provide these values as raw text for debugging.
 
 Given any number of conditions, e.g. a network hiccup, it's possible for your application to send
 an event more than once. If your event contains a unique identifier, you can de-duplicate these events
-using a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) and the `DISCINCT ON` clause.
+using a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) and the `DISTINCT ON` clause.
 
 ```sql
 CREATE MATERIALIZED VIEW my_webhook_idempotent AS (

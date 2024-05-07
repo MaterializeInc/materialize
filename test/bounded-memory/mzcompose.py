@@ -281,6 +281,69 @@ SCENARIOS = [
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
+    Scenario(
+        name="pg-cdc-gh-15044",
+        pre_restart=dedent(
+            f"""
+            > CREATE SECRET pgpass AS 'postgres'
+            > CREATE CONNECTION pg FOR POSTGRES
+              HOST postgres,
+              DATABASE postgres,
+              USER postgres,
+              PASSWORD SECRET pgpass
+
+            # Insert data pre-snapshot
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            ALTER USER postgres WITH replication;
+            DROP SCHEMA IF EXISTS public CASCADE;
+            DROP PUBLICATION IF EXISTS mz_source;
+
+            CREATE SCHEMA public;
+
+            CREATE TABLE t1 (f1 SERIAL PRIMARY KEY, f2 INTEGER DEFAULT 0, f3 TEXT);
+            ALTER TABLE t1 REPLICA IDENTITY FULL;
+
+            INSERT INTO t1 (f3) SELECT REPEAT('a', 1024 * 1024) FROM generate_series(1, 16);
+
+            CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+            > CREATE SOURCE mz_source
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+              FOR TABLES (t1);
+
+            > SELECT COUNT(*) > 0 FROM t1;
+            true
+
+            # > CREATE MATERIALIZED VIEW v1 AS SELECT f1 + 1, f2 FROM t1;
+
+            > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM t1;
+
+            # Update data post-snapshot
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+
+            {'UPDATE t1 SET f2 = f2 + 1;' * 300}
+            INSERT INTO t1 (f3) VALUES ('eof');
+
+            > SELECT * FROM v2;
+            17
+            """
+        ),
+        post_restart=dedent(
+            """
+            > SELECT * FROM v2;
+            17
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            DELETE FROM t1;
+
+            > SELECT * FROM v2;
+            0
+            """
+        ),
+        materialized_memory="8Gb",
+        clusterd_memory="6Gb",
+        disabled=True,
+    ),
     PgCdcScenario(
         name="pg-cdc-large-tx",
         pre_restart=PgCdcScenario.PG_SETUP
@@ -400,29 +463,28 @@ SCENARIOS = [
             [
                 dedent(
                     f"""
-                    INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper LIMIT {int(REPEAT / 24)};
+                    INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper LIMIT {int(REPEAT / 128)};
                     """
                 )
-                for i in range(0, ITERATIONS * 20)
+                for i in range(0, ITERATIONS * 10)
             ]
         )
         + "COMMIT;\n"
         + dedent(
             f"""
-            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20) * int(REPEAT / 24)} */
-            {int(ITERATIONS * 20) * int(REPEAT / 24)}
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
+            {int(ITERATIONS * 10) * int(REPEAT / 128)}
             """
         ),
         post_restart=dedent(
             f"""
             # We do not do DELETE post-restart, as it will cause OOM for clusterd
-            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20) * int(REPEAT / 24)} */
-            {int(ITERATIONS * 20) * int(REPEAT / 24)}
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
+            {int(ITERATIONS * 10) * int(REPEAT / 128)}
             """
         ),
-        materialized_memory="4.5Gb",
-        clusterd_memory="8.0Gb",
-        disabled=True,
+        materialized_memory="3.5Gb",
+        clusterd_memory="8.5Gb",
     ),
     KafkaScenario(
         name="upsert-snapshot",
@@ -960,10 +1022,12 @@ def find_minimal_memory(
     reduce_materialized_memory_by_gb: float,
     reduce_clusterd_memory_by_gb: float,
 ) -> tuple[str, str]:
-    assert reduce_materialized_memory_by_gb > 0 or reduce_clusterd_memory_by_gb > 0
+    assert (
+        reduce_materialized_memory_by_gb >= 0.1 or reduce_clusterd_memory_by_gb >= 0.1
+    )
 
-    min_allowed_materialized_memory_in_gb = 4.5
-    min_allowed_clusterd_memory_in_gb = 3.5
+    min_allowed_materialized_memory_in_gb = 4.0
+    min_allowed_clusterd_memory_in_gb = 2.0
 
     materialized_memory = initial_materialized_memory
     clusterd_memory = initial_clusterd_memory
@@ -1063,13 +1127,16 @@ def _reduce_memory(
         raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
 
     if math.isclose(reduce_by_gb, 0.0, abs_tol=0.01):
+        # allow staying at the same value
         return memory_spec
 
     current_gb = float(memory_spec.removesuffix("Gb"))
-    new_gb = current_gb - reduce_by_gb
 
-    if new_gb == lower_bound_in_gb:
+    if math.isclose(current_gb, lower_bound_in_gb, abs_tol=0.01):
+        # lower bound already reached
         return None
+
+    new_gb = current_gb - reduce_by_gb
 
     if new_gb < lower_bound_in_gb:
         new_gb = lower_bound_in_gb

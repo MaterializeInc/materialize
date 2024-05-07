@@ -12,10 +12,10 @@
 use mz_rocksdb::RocksDBInstance;
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::render::upsert::types::{
+use super::types::{
     GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize, ValueMetadata,
 };
-use crate::render::upsert::UpsertKey;
+use super::UpsertKey;
 
 /// A `UpsertStateBackend` implementation backed by RocksDB.
 /// This is currently untested, and simply compiles.

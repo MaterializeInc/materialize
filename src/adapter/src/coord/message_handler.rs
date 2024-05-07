@@ -17,18 +17,20 @@ use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
-use mz_controller::clusters::ClusterEvent;
+use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
+use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
-use mz_sql::plan::{CreateSourcePlans, Plan};
+use mz_sql::pure::PurifiedStatement;
 use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
+use serde_json::json;
 use tracing::{event, info_span, warn, Instrument, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -43,6 +45,7 @@ use crate::coord::{
 };
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
+use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, TimestampContext};
 
@@ -471,99 +474,66 @@ impl Coordinator {
             return;
         }
 
-        let (subsource_stmts, stmt) = match result {
+        let purified_statement = match result {
             Ok(ok) => ok,
             Err(e) => return ctx.retire(Err(e)),
         };
 
-        let mut create_source_plans: Vec<CreateSourcePlans> = vec![];
-        let mut id_allocation = BTreeMap::new();
-
-        // First we'll allocate global ids for each subsource and plan them
-        for (transient_id, subsource_stmt) in subsource_stmts {
-            let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
-            let source_id = match self.catalog_mut().allocate_user_id().await {
-                Ok(id) => id,
-                Err(e) => return ctx.retire(Err(e.into())),
-            };
-            let plan = match self.plan_statement(
-                ctx.session(),
-                Statement::CreateSubsource(subsource_stmt),
-                &params,
-                &resolved_ids,
-            ) {
-                Ok(Plan::CreateSource(plan)) => plan,
-                Ok(_) => {
-                    unreachable!("planning CREATE SUBSOURCE must result in a Plan::CreateSource")
-                }
-                Err(e) => return ctx.retire(Err(e)),
-            };
-            id_allocation.insert(transient_id, source_id);
-            create_source_plans.push(CreateSourcePlans {
-                source_id,
-                plan,
-                resolved_ids,
-            });
-        }
-
-        // Then, we'll rewrite the source statement to point to the newly minted global ids and
-        // plan it too
-        let stmt = match mz_sql::names::resolve_transient_ids(&id_allocation, stmt) {
-            Ok(ok) => ok,
-            Err(e) => return ctx.retire(Err(e.into())),
-        };
-
-        let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
-
-        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
-            Ok(Plan::CreateSource(plan)) => {
-                let source_id = match self.catalog_mut().allocate_user_id().await {
-                    Ok(id) => id,
-                    Err(e) => return ctx.retire(Err(e.into())),
+        let plan = match purified_statement {
+            PurifiedStatement::PurifiedCreateSource {
+                create_progress_subsource_stmt,
+                create_source_stmt,
+                create_subsource_stmts,
+            } => {
+                self.plan_purified_create_source(
+                    &ctx,
+                    params,
+                    create_progress_subsource_stmt,
+                    create_source_stmt,
+                    create_subsource_stmts,
+                )
+                .await
+            }
+            PurifiedStatement::PurifiedAlterSourceAddSubsources {
+                altered_id,
+                options,
+                create_subsource_stmts,
+            } => {
+                self.plan_purified_alter_source_add_subsource(
+                    ctx.session(),
+                    params,
+                    altered_id,
+                    options,
+                    create_subsource_stmts,
+                )
+                .await
+            }
+            o @ (PurifiedStatement::PurifiedAlterSource { .. }
+            | PurifiedStatement::PurifiedCreateSink(..)) => {
+                // Unify these into a `Statement`.
+                let stmt = match o {
+                    PurifiedStatement::PurifiedAlterSource { alter_source_stmt } => {
+                        Statement::AlterSource(alter_source_stmt)
+                    }
+                    PurifiedStatement::PurifiedCreateSink(stmt) => Statement::CreateSink(stmt),
+                    PurifiedStatement::PurifiedCreateSource { .. }
+                    | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. } => {
+                        unreachable!("not part of exterior match stmt")
+                    }
                 };
 
-                create_source_plans.push(CreateSourcePlans {
-                    source_id,
-                    plan,
-                    resolved_ids,
-                });
-
-                // Finally, sequence all plans in one go
-                self.sequence_plan(
-                    ctx,
-                    Plan::CreateSources(create_source_plans),
-                    ResolvedIds(BTreeSet::new()),
-                )
-                .await;
+                // Determine all dependencies, not just those in the statement
+                // itself.
+                let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+                self.plan_statement(ctx.session(), stmt, &params, &resolved_ids)
+                    .map(|plan| (plan, resolved_ids))
             }
-            Ok(Plan::AlterSource(alter_source)) => {
-                self.sequence_plan(
-                    ctx,
-                    Plan::PurifiedAlterSource {
-                        alter_source,
-                        subsources: create_source_plans,
-                    },
-                    ResolvedIds(BTreeSet::new()),
-                )
-                .await;
-            }
-            Ok(plan @ Plan::AlterNoop(..)) => {
-                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                    .await
-            }
-            Ok(plan @ Plan::CreateSink(_)) => {
-                assert!(
-                    create_source_plans.is_empty(),
-                    "CREATE SINK does not generate source plans"
-                );
-
-                self.sequence_plan(ctx, plan, resolved_ids).await
-            }
-            Ok(p) => {
-                unreachable!("{:?} is not purified", p)
-            }
-            Err(e) => ctx.retire(Err(e)),
         };
+
+        match plan {
+            Ok((plan, resolved_ids)) => self.sequence_plan(ctx, plan, resolved_ids).await,
+            Err(e) => ctx.retire(Err(e)),
+        }
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -677,6 +647,38 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     async fn message_cluster_event(&mut self, event: ClusterEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
+
+        if let Some(segment_client) = &self.segment_client {
+            let env_id = &self.catalog().config().environment_id;
+            let mut properties = json!({
+                "cluster_id": event.cluster_id.to_string(),
+                "replica_id": event.replica_id.to_string(),
+                "process_id": event.process_id,
+                "status": event.status.as_kebab_case_str(),
+            });
+            match event.status {
+                ClusterStatus::Ready => (),
+                ClusterStatus::NotReady(reason) => {
+                    let properties = match &mut properties {
+                        serde_json::Value::Object(map) => map,
+                        _ => unreachable!(),
+                    };
+                    properties.insert(
+                        "reason".into(),
+                        json!(reason.display_or("unknown").to_string()),
+                    );
+                }
+            };
+            segment_client.environment_track(
+                env_id,
+                "Cluster Changed Status",
+                properties,
+                EventDetails {
+                    timestamp: Some(event.time),
+                    ..Default::default()
+                },
+            );
+        }
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.

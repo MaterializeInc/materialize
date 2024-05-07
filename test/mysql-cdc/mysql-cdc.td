@@ -147,7 +147,7 @@ ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 1000
 pk_table subsource
 test_slot_source_progress progress
 
-> DROP SOURCE test_slot_source
+> DROP SOURCE test_slot_source CASCADE;
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 0
@@ -176,7 +176,7 @@ ROLLBACK;
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'test_slot_source';
 running
 
-> DROP SOURCE test_slot_source
+> DROP SOURCE test_slot_source CASCADE;
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_lock_wait_timeout = 3600
@@ -302,24 +302,42 @@ contains: CREATE SOURCE specifies DETAILS option
   );
 
 > SHOW SOURCES
-conflict_table        subsource <null>  <null>
-create                subsource <null>  <null>
-escaped_text_table    subsource <null>  <null>
-large_text            subsource <null>  <null>
-mixED_CAse            subsource <null>  <null>
-multipart_pk          subsource <null>  <null>
-mz_source             mysql  ${arg.default-replica-size}  cdc_cluster
-mz_source_progress    progress  <null>  <null>
-nonpk_table           subsource <null>  <null>
-nulls_table           subsource <null>  <null>
-pk_table              subsource <null>  <null>
-trailing_space_nopk   subsource <null>  <null>
-trailing_space_pk     subsource <null>  <null>
-types_table           subsource <null>  <null>
-utf8_table            subsource <null>  <null>
-"\"literal_quotes\""  subsource <null>  <null>
-"space table"         subsource <null>  <null>
-таблица               subsource <null>  <null>
+conflict_table        subsource  ${arg.default-replica-size}  cdc_cluster
+create                subsource  ${arg.default-replica-size}  cdc_cluster
+escaped_text_table    subsource  ${arg.default-replica-size}  cdc_cluster
+large_text            subsource  ${arg.default-replica-size}  cdc_cluster
+mixED_CAse            subsource  ${arg.default-replica-size}  cdc_cluster
+multipart_pk          subsource  ${arg.default-replica-size}  cdc_cluster
+mz_source             mysql      ${arg.default-replica-size}  cdc_cluster
+mz_source_progress    progress   <null> <null>
+nonpk_table           subsource  ${arg.default-replica-size}  cdc_cluster
+nulls_table           subsource  ${arg.default-replica-size}  cdc_cluster
+pk_table              subsource  ${arg.default-replica-size}  cdc_cluster
+trailing_space_nopk   subsource  ${arg.default-replica-size}  cdc_cluster
+trailing_space_pk     subsource  ${arg.default-replica-size}  cdc_cluster
+types_table           subsource  ${arg.default-replica-size}  cdc_cluster
+utf8_table            subsource  ${arg.default-replica-size}  cdc_cluster
+"\"literal_quotes\""  subsource  ${arg.default-replica-size}  cdc_cluster
+"space table"         subsource  ${arg.default-replica-size}  cdc_cluster
+таблица               subsource  ${arg.default-replica-size}  cdc_cluster
+
+> SELECT schema_name, table_name FROM mz_internal.mz_mysql_source_tables
+public          create
+public          pk_table
+public          large_text
+public          utf8_table
+public          nonpk_table
+public          types_table
+public          nulls_table
+public          multipart_pk
+public          "\"mixED_CAse\""
+public          "\"space table\""
+public          "\"таблица\""
+public          trailing_space_pk
+public          escaped_text_table
+public          trailing_space_nopk
+public          "\"\"\"literal_quotes\"\"\""
+conflict_schema conflict_table
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
@@ -331,13 +349,6 @@ running
 1
 
 # There is no such thing like mz_internal.mz_mysql_sources because MySQL does not have replication slots.
-
-# Cannot drop subsources independent of primary source
-! DROP SOURCE conflict_table
-contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
-
-! DROP SOURCE conflict_table CASCADE
-contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 #
 # Perform sanity checks of the initial snapshot
@@ -559,7 +570,7 @@ true
 > SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table';
 true
 
-> DROP SOURCE large_cluster_source;
+> DROP SOURCE large_cluster_source CASCADE;
 
 #
 # Remove all data on the Postgres side
@@ -700,10 +711,10 @@ contains:TEXT COLUMNS refers to columns not currently being added
   );
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
-another_enum_table      subsource <null> <null>
+another_enum_table      subsource ${arg.default-replica-size} cdc_cluster
 enum_source             mysql     ${arg.default-replica-size} cdc_cluster
 enum_source_progress    progress  <null> <null>
-enum_table              subsource <null> <null>
+enum_table              subsource ${arg.default-replica-size} cdc_cluster
 
 > SELECT * FROM enum_table
 var0
@@ -737,9 +748,10 @@ INSERT INTO pk_table VALUES (99999, 'abc');
 > SHOW SOURCES
 another_source          mysql  ${arg.default-replica-size} cdc_cluster
 another_source_progress progress  <null> <null>
-another_table           subsource <null> <null>
+another_table           subsource ${arg.default-replica-size} cdc_cluster
 
-> DROP SOURCE another_source
+> DROP SOURCE another_source CASCADE;
 
 $ mysql-execute name=mysql
 DROP SCHEMA conflict_schema;
+DROP SCHEMA another_schema;

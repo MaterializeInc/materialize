@@ -9,6 +9,7 @@
 
 //! A source that reads from an a persist shard.
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -29,13 +30,13 @@ use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec64;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationType, Row, RowArena, Timestamp};
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
-use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -45,6 +46,7 @@ use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
@@ -398,7 +400,8 @@ where
     let operator_info = builder.operator_info();
 
     let mut fetched_input = builder.new_input(fetched, Pipeline);
-    let (mut updates_output, updates_stream) = builder.new_output();
+    let (mut updates_output, updates_stream) =
+        builder.new_output::<ConsolidatingContainerBuilder<_>>();
 
     // Re-used state for processing and building rows.
     let mut datum_vec = mz_repr::DatumVec::new();
@@ -423,31 +426,32 @@ where
                 for fetched_blob in buffer.drain(..) {
                     pending_work.push_back(PendingWork {
                         capability: capability.clone(),
-                        part: PendingPart::Blob(fetched_blob),
+                        part: PendingPart::Unparsed(fetched_blob),
                     })
                 }
             });
 
-            // Get the yield fuel once per schedule to amortize the cost of
-            // loading the atomic.
+            // Get dyncfg values once per schedule to amortize the cost of
+            // loading the atomics.
             let yield_fuel = cfg.storage_source_decode_fuel();
             let yield_fn = |_, work| work >= yield_fuel;
+            let optimize_ignored_data_decode = cfg.optimize_ignored_data_decode();
 
             let mut work = 0;
             let start_time = Instant::now();
             let mut output = updates_output.activate();
-            let mut handle = ConsolidateBuffer::new(&mut output, 0);
             while !pending_work.is_empty() && !yield_fn(start_time, work) {
                 let done = pending_work.front_mut().unwrap().do_work(
                     &mut work,
                     &name,
+                    optimize_ignored_data_decode,
                     start_time,
                     yield_fn,
                     &until,
                     map_filter_project.as_ref(),
                     &mut datum_vec,
                     &mut row_builder,
-                    &mut handle,
+                    &mut output,
                 );
                 if done {
                     pending_work.pop_front();
@@ -471,21 +475,32 @@ struct PendingWork {
 }
 
 enum PendingPart {
-    Blob(FetchedBlob<SourceData, (), Timestamp, Diff>),
-    Part(FetchedPart<SourceData, (), Timestamp, Diff>),
+    Unparsed(FetchedBlob<SourceData, (), Timestamp, Diff>),
+    Parsed {
+        part: FetchedPart<SourceData, (), Timestamp, Diff>,
+        error_free: bool,
+    },
 }
 
 impl PendingPart {
     /// Returns the contained `FetchedPart`, first parsing it from a
     /// `FetchedBlob` if necessary.
-    fn part_mut(&mut self) -> &mut FetchedPart<SourceData, (), Timestamp, Diff> {
+    ///
+    /// Also returns a bool, which is true if the part is known (from pushdown
+    /// stats) to be free of `SourceData(Err(_))`s. It will be false if the part
+    /// is known to contain errors or if it's unknown.
+    fn part_mut(&mut self) -> (&mut FetchedPart<SourceData, (), Timestamp, Diff>, bool) {
         match self {
-            PendingPart::Blob(x) => {
-                *self = PendingPart::Part(x.parse());
+            PendingPart::Unparsed(x) => {
+                let error_free = error_free(x.stats()).unwrap_or(false);
+                *self = PendingPart::Parsed {
+                    part: x.parse(),
+                    error_free,
+                };
                 // Won't recurse any further.
                 self.part_mut()
             }
-            PendingPart::Part(x) => x,
+            PendingPart::Parsed { part, error_free } => (part, *error_free),
         }
     }
 }
@@ -497,16 +512,23 @@ impl PendingWork {
         &mut self,
         work: &mut usize,
         name: &str,
+        optimize_ignored_data_decode: bool,
         start_time: Instant,
         yield_fn: YFn,
         until: &Antichain<Timestamp>,
         map_filter_project: Option<&MfpPlan>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
-        output: &mut ConsolidateBuffer<
+        output: &mut OutputHandleCore<
+            '_,
             (mz_repr::Timestamp, Subtime),
-            Result<Row, DataflowError>,
-            Diff,
+            ConsolidatingContainerBuilder<
+                Vec<(
+                    Result<Row, DataflowError>,
+                    (mz_repr::Timestamp, Subtime),
+                    Diff,
+                )>,
+            >,
             P,
         >,
     ) -> bool
@@ -523,11 +545,17 @@ impl PendingWork {
         >,
         YFn: Fn(Instant, usize) -> bool,
     {
-        let fetched_part = self.part.part_mut();
+        let mut session = output.session_with_builder(&self.capability);
+        let (fetched_part, part_is_error_free) = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
         let mut row_buf = None;
+        let row_override = map_filter_project
+            .as_ref()
+            .map(|p| optimize_ignored_data_decode && part_is_error_free && p.ignores_input())
+            .unwrap_or(false)
+            .then(|| (SourceData(Ok(Row::default())), ()));
         while let Some(((key, val), time, diff)) =
-            fetched_part.next_with_storage(&mut row_buf, &mut None)
+            fetched_part.next_with_storage(&mut row_buf, &mut None, row_override.clone())
         {
             if until.less_equal(&time) {
                 continue;
@@ -576,8 +604,7 @@ impl PendingWork {
                                     if !until.less_equal(&time) {
                                         let mut emit_time = *self.capability.time();
                                         emit_time.0 = time;
-                                        output
-                                            .give_at(&self.capability, (Ok(row), emit_time, diff));
+                                        session.give((Ok(row), emit_time, diff));
                                         *work += 1;
                                     }
                                 }
@@ -586,8 +613,7 @@ impl PendingWork {
                                     if !until.less_equal(&time) {
                                         let mut emit_time = *self.capability.time();
                                         emit_time.0 = time;
-                                        output
-                                            .give_at(&self.capability, (Err(err), emit_time, diff));
+                                        session.give((Err(err), emit_time, diff));
                                         *work += 1;
                                     }
                                 }
@@ -601,14 +627,14 @@ impl PendingWork {
                     } else {
                         let mut emit_time = *self.capability.time();
                         emit_time.0 = time;
-                        output.give_at(&self.capability, (Ok(row), emit_time, diff));
+                        session.give((Ok(row), emit_time, diff));
                         *work += 1;
                     }
                 }
                 (Ok(SourceData(Err(err))), Ok(())) => {
                     let mut emit_time = *self.capability.time();
                     emit_time.0 = time;
-                    output.give_at(&self.capability, (Err(err), emit_time, diff));
+                    session.give((Err(err), emit_time, diff));
                     *work += 1;
                 }
                 // TODO(petrosagg): error handling
@@ -622,6 +648,26 @@ impl PendingWork {
         }
         true
     }
+}
+
+/// Returns whether the part is provably free of `SourceData(Err(_))`s.
+///
+/// Will return false if the part is known to contain errors or None if it's
+/// unknown.
+fn error_free(part_stats: Option<PartStats>) -> Option<bool> {
+    let part_stats = part_stats?;
+    // Counter-intuitive: We can easily calculate the number of errors that
+    // were None from the column stats, but not how many were Some. So, what
+    // we do is count the number of Nones, which is the number of Oks, and
+    // then subtract that from the total.
+    let num_results = part_stats.key.len;
+    // The number of OKs is the number of rows whose error is None.
+    let num_oks = part_stats
+        .key
+        .col::<Option<Vec<u8>>>("err")
+        .expect("err column should be a Option<Vec<u8>>")
+        .map(|x| x.none)?;
+    Some(num_results == num_oks)
 }
 
 /// A trait representing a type that can be used in `backpressure`.
@@ -930,6 +976,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use timely::container::CapacityContainerBuilder;
     use timely::dataflow::operators::{Enter, Probe};
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::sync::oneshot;
@@ -1354,7 +1401,8 @@ mod tests {
     ) -> (Stream<G, Part>, oneshot::Sender<()>) {
         let (finalizer_tx, finalizer_rx) = oneshot::channel();
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope);
-        let (mut output_handle, output) = iterator.new_output::<Vec<Part>>();
+        let (mut output_handle, output) =
+            iterator.new_output::<CapacityContainerBuilder<Vec<Part>>>();
 
         iterator.build(|mut caps| async move {
             let mut capability = Some(caps.pop().unwrap());
@@ -1391,7 +1439,8 @@ mod tests {
     ) -> UnboundedSender<()> {
         let (tx, mut rx) = unbounded_channel::<()>();
         let mut consumer = AsyncOperatorBuilder::new("consumer".to_string(), scope);
-        let (output_handle, output) = consumer.new_output::<Vec<std::convert::Infallible>>();
+        let (output_handle, output) =
+            consumer.new_output::<CapacityContainerBuilder<Vec<std::convert::Infallible>>>();
         let mut input = consumer.new_input_for(input, Pipeline, &output_handle);
 
         consumer.build(|_caps| async move {

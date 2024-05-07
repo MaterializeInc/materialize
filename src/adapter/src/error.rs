@@ -25,6 +25,7 @@ use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
 use mz_repr::{NotNullViolation, Timestamp};
+use mz_sql::ast::UnresolvedItemName;
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
@@ -220,6 +221,10 @@ pub enum AdapterError {
         found: Duration,
         name: String,
     },
+    /// An ALTER SOURCE referred to an upstream table that's already referred to.
+    SubsourceAlreadyReferredTo {
+        name: UnresolvedItemName,
+    },
 }
 
 impl AdapterError {
@@ -395,6 +400,9 @@ impl AdapterError {
                  either at the explicitly specified timestamp, or now if the given timestamp would \
                  be in the past.".to_string()
             ),
+            Self::SubsourceAlreadyReferredTo { .. } => {
+                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
+            },
             _ => None,
         }
     }
@@ -517,6 +525,9 @@ impl AdapterError {
             AdapterError::MaterializedViewWouldNeverRefresh(_, _) => SqlState::DATA_EXCEPTION,
             AdapterError::InputNotReadableAtRefreshAtTime(_, _) => SqlState::DATA_EXCEPTION,
             AdapterError::RequiredRetainHistory { .. } => SqlState::INTERNAL_ERROR,
+            // Calling this `FEATURE_NOT_SUPPORTED` because we will eventually allow multiple
+            // references to the same subsource (albeit with different schemas).
+            AdapterError::SubsourceAlreadyReferredTo { .. } => SqlState::FEATURE_NOT_SUPPORTED,
         }
     }
 
@@ -741,6 +752,9 @@ impl fmt::Display for AdapterError {
                     f,
                     "dependent index {name} has a RETAIN HISTORY of {found:?}, but must be at least {required:?}"
                 )
+            }
+            Self::SubsourceAlreadyReferredTo { name } => {
+                write!(f, "another subsource already refers to {}", name)
             }
         }
     }

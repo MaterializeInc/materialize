@@ -31,6 +31,7 @@ use mz_timely_util::builder_async::{
     AsyncInputHandle, Event as AsyncEvent, InputConnection,
     OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::{Broadcast, Capture, Leave, Map, Probe};
@@ -312,7 +313,8 @@ where
         passthrough.scope().peers(),
         data_id.to_string(),
     );
-    let (mut passthrough_output, passthrough_stream) = builder.new_output();
+    let (mut passthrough_output, passthrough_stream) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
     let mut remap_input = builder.new_disconnected_input(&remap, Pipeline);
     let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
 

@@ -88,17 +88,7 @@ class PgCdcBase:
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'C', i, REPEAT('C', {self.repeats} - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
-                """
-                + (
-                    f"""
-                # Wait until Pg snapshot is complete in order to avoid #18940
-                > SELECT COUNT(*) > 0 FROM postgres_source_tableA{self.suffix}
-                true
-                """
-                    if self.wait
-                    else ""
-                ),
-                f"""
+
                 $[version>=5200] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
                 GRANT USAGE ON CONNECTION pg2{self.suffix} TO materialize
 
@@ -110,6 +100,28 @@ class PgCdcBase:
                   FROM POSTGRES CONNECTION pg2{self.suffix}
                   (PUBLICATION 'postgres_source{self.suffix}')
                   FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableB{self.suffix});
+
+                # Create a view with a complex dependency structure
+                > CREATE VIEW IF NOT EXISTS table_a_b_count_sum AS SELECT SUM(total_count) AS total_rows FROM (
+                        SELECT COUNT(*) AS total_count FROM postgres_source_tableA{self.suffix}
+                        UNION ALL
+                        SELECT COUNT(*) AS total_count FROM postgres_source_tableB{self.suffix}
+                    );
+                """
+                + (
+                    f"""
+                # Wait until Pg snapshot is complete in order to avoid #18940
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableA{self.suffix}
+                true
+
+                # Wait until Pg snapshot is complete in order to avoid #18940
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableB{self.suffix}
+                true
+                """
+                    if self.wait
+                    else ""
+                ),
+                f"""
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'E', i, REPEAT('E', {self.repeats} - i) FROM generate_series(1,100) AS i;
@@ -195,6 +207,9 @@ class PgCdcBase:
             F 400 {self.expects}
             G 300 {self.expects}
             H 200 {self.expects}
+
+            > SELECT total_rows FROM table_a_b_count_sum;
+            1600
             """
         )
 

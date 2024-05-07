@@ -66,7 +66,7 @@ granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-role
 | `mz_version`               | [`text`]                     | The version of Materialize that was running when the statement was executed.                                                                                                                                                                                                  |
 | `began_at`                 | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
 | `finished_at`              | [`timestamp with time zone`] | The wall-clock time at which the statement finished executing.                                                                                                                                                                                                                |
-| `finished_status`          | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `errored`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
+| `finished_status`          | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
 | `error_message`            | [`text`]                     | The error message, if the statement failed.                                                                                                                                                                                                                                   |
 | `rows_returned`            | [`bigint`]                   | The number of rows returned, for statements that return rows.                                                                                                                                                                                                                 |
 | `execution_strategy`       | [`text`]                     | For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow. |
@@ -340,6 +340,17 @@ At this time, we do not make any guarantees about the freshness of these numbers
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
 
+### `mz_history_retention_strategies`
+
+The `mz_history_retention_strategies` table describes the history retention strategies of objects that have compaction windows (tables, sources, indexes, materialized views).
+
+<!-- RELATION_SPEC mz_internal.mz_history_retention_strategies -->
+| Field | Type | Meaning |
+| - | - | - |
+| `id` | [`text`] | The ID of the object. |
+| `strategy` | [`text`] | The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field. |
+| `value` | [`jsonb]` | The value of the strategy. For `FOR`, is a number of milliseconds. |
+
 ### `mz_hydration_statuses`
 
 The `mz_hydration_statuses` view describes the per-replica hydration status of
@@ -430,6 +441,7 @@ The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/syste
 | Field          | Type                         | Meaning                                          |
 | ---------------|------------------------------|------------------------------------------------- |
 | `id`           | [`text`]                     | Materialize's unique ID for the object.          |
+| `previous_id`  | [`text`]                     | The object's previous ID, if one exists.          |
 | `object_type`  | [`text`]                     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                                              |
 | `event_type`   | [`text`]                     | The lifetime event, either `create` or `drop`.   |
 | `occurred_at`  | [`timestamp with time zone`] | Wall-clock timestamp of when the event occurred. |
@@ -501,6 +513,28 @@ system.
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
 | `replication_slot`  | [`text`]         | The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from. |
 | `timeline_id`       | [`uint8`]        | The PostgreSQL [timeline ID](https://www.postgresql.org/docs/current/continuous-archiving.html#BACKUP-TIMELINES) determined on source creation.
+
+### `mz_postgres_source_tables`
+
+The `mz_postgres_source_tables` table contains a row for each PostgreSQL table ingested by a subsource.
+
+<!-- RELATION_SPEC mz_internal.mz_postgres_source_tables -->
+| Field               | Type             | Meaning                                                                                                        |
+| ------------------- | ---------------- | --------                                                                                                       |
+| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `schema_name`  | [`text`]         | The ingested upstream table's schema name. |
+| `table_name`  | [`text`]         | The ingested upstream table's name. |
+
+### `mz_mysql_source_tables`
+
+The `mz_mysql_source_tables` table contains a row for each MySQL table ingested by a subsource.
+
+<!-- RELATION_SPEC mz_internal.mz_mysql_source_tables -->
+| Field               | Type             | Meaning                                                                                                        |
+| ------------------- | ---------------- | --------                                                                                                       |
+| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `schema_name`  | [`text`]         | The ingested upstream table's schema name. This is also sometimes referred to as the upstream table's database name.|
+| `table_name`  | [`text`]         | The ingested upstream table's name. |
 
 <!--
 ### `mz_prepared_statement_history`

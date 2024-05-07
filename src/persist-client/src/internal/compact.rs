@@ -843,11 +843,12 @@ impl Timings {
 mod tests {
     use mz_dyncfg::ConfigUpdates;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+    use timely::order::Product;
     use timely::progress::Antichain;
 
     use crate::batch::BLOB_TARGET_SIZE;
 
-    use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache, CodecProduct};
+    use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
     use crate::PersistLocation;
 
     use super::*;
@@ -927,16 +928,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compaction_partial_order(dyncfgs: ConfigUpdates) {
         let data = vec![
-            (
-                ("0".to_owned(), "zero".to_owned()),
-                CodecProduct::new(0, 10),
-                1,
-            ),
-            (
-                ("1".to_owned(), "one".to_owned()),
-                CodecProduct::new(10, 0),
-                1,
-            ),
+            (("0".to_owned(), "zero".to_owned()), Product::new(0, 10), 1),
+            (("1".to_owned(), "one".to_owned()), Product::new(10, 0), 1),
         ];
 
         let cache = new_test_client_cache(&dyncfgs);
@@ -945,13 +938,13 @@ mod tests {
             .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed")
-            .expect_open::<String, String, CodecProduct, i64>(ShardId::new())
+            .expect_open::<String, String, Product<u32, u32>, i64>(ShardId::new())
             .await;
         let b0 = write
             .batch(
                 &data[..1],
-                Antichain::from_elem(CodecProduct::new(0, 0)),
-                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 0)]),
+                Antichain::from_elem(Product::new(0, 0)),
+                Antichain::from_iter([Product::new(0, 11), Product::new(10, 0)]),
             )
             .await
             .expect("invalid usage")
@@ -960,8 +953,8 @@ mod tests {
         let b1 = write
             .batch(
                 &data[1..],
-                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 0)]),
-                Antichain::from_elem(CodecProduct::new(10, 1)),
+                Antichain::from_iter([Product::new(0, 11), Product::new(10, 0)]),
+                Antichain::from_elem(Product::new(10, 1)),
             )
             .await
             .expect("invalid usage")
@@ -972,7 +965,7 @@ mod tests {
             desc: Description::new(
                 b0.desc.lower().clone(),
                 b1.desc.upper().clone(),
-                Antichain::from_elem(CodecProduct::new(10, 0)),
+                Antichain::from_elem(Product::new(10, 0)),
             ),
             inputs: vec![b0, b1],
         };
@@ -980,7 +973,7 @@ mod tests {
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
         };
-        let res = Compactor::<String, (), CodecProduct, i64>::compact(
+        let res = Compactor::<String, (), Product<u32, u32>, i64>::compact(
             CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
@@ -1006,6 +999,6 @@ mod tests {
         )
         .await;
         assert_eq!(part.desc, res.output.desc);
-        assert_eq!(updates, all_ok(&data, CodecProduct::new(10, 0)));
+        assert_eq!(updates, all_ok(&data, Product::new(10, 0)));
     }
 }
