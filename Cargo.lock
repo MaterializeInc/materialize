@@ -58,6 +58,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94fb8275041c72129eb51b7d0322c29b8387a0386127718b096429201a5d6ece"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -121,7 +136,10 @@ dependencies = [
  "arrow-array",
  "arrow-buffer",
  "arrow-cast",
+ "arrow-csv",
  "arrow-data",
+ "arrow-ipc",
+ "arrow-json",
  "arrow-ord",
  "arrow-row",
  "arrow-schema",
@@ -192,6 +210,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-csv"
+version = "51.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95cbcba196b862270bf2a5edb75927380a7f3a163622c61d40cbba416a6305f2"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-data",
+ "arrow-schema",
+ "chrono",
+ "csv",
+ "csv-core",
+ "lazy_static",
+ "lexical-core",
+ "regex",
+]
+
+[[package]]
 name = "arrow-data"
 version = "51.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -225,6 +262,26 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "flatbuffers",
+]
+
+[[package]]
+name = "arrow-json"
+version = "51.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaafb5714d4e59feae964714d724f880511500e3569cc2a94d02456b403a2a49"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-data",
+ "arrow-schema",
+ "chrono",
+ "half 2.4.1",
+ "indexmap 2.0.0",
+ "lexical-core",
+ "num",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1081,6 +1138,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1d36a02058e76b040de25a4464ba1c80935655595b661505c8b39b664828b95"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "brotli"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d640d25bc63c50fb1f0b545ffd80207d2e10a4c965530809b40ba3386825c391"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+ "brotli-decompressor",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "2.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e2e4afe60d7dd600fdd3de8d0f08c2b7ec039712e3b6137ff98b7004e82de4f"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
 ]
 
 [[package]]
@@ -3636,6 +3714,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz4_flex"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75761162ae2b0e580d7e7c390558127e5f01b4194debd6221fd8c207fc80e3f5"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "mach2"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5277,6 +5364,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "parquet",
  "paste",
  "pin-project",
  "prometheus",
@@ -5319,6 +5407,7 @@ name = "mz-persist"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arrow",
  "arrow2",
  "async-stream",
  "async-trait",
@@ -5343,6 +5432,7 @@ dependencies = [
  "once_cell",
  "openssl",
  "openssl-sys",
+ "parquet",
  "postgres-openssl",
  "prometheus",
  "proptest",
@@ -7180,10 +7270,13 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "base64 0.22.0",
+ "brotli",
  "bytes",
  "chrono",
+ "flate2",
  "half 2.4.1",
  "hashbrown 0.14.0",
+ "lz4_flex",
  "num",
  "num-bigint",
  "paste",
@@ -7191,6 +7284,7 @@ dependencies = [
  "snap",
  "thrift",
  "twox-hash",
+ "zstd",
 ]
 
 [[package]]
@@ -9928,9 +10022,9 @@ dependencies = [
 
 [[package]]
 name = "twox-hash"
-version = "1.6.2"
+version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ee73e6e4924fe940354b8d4d98cad5231175d615cd855b758adc658c0aac6a0"
+checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
  "rand",
@@ -10515,6 +10609,7 @@ version = "0.0.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "arrow",
  "async-compression",
  "aws-config",
  "aws-credential-types",
@@ -10581,7 +10676,6 @@ dependencies = [
  "openssl-sys",
  "ordered-float 4.2.0",
  "parking_lot",
- "parquet",
  "phf",
  "phf_shared",
  "postgres",
@@ -10630,6 +10724,7 @@ dependencies = [
  "tracing-core",
  "tracing-subscriber",
  "tungstenite",
+ "twox-hash",
  "uncased",
  "unicode-bidi",
  "unicode-normalization",
