@@ -38,7 +38,7 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 {{< diagram "strat.svg" >}}
 
-### `WITH` options
+### `with_options`
 
 {{< diagram "with-options-retain-history.svg" >}}
 
