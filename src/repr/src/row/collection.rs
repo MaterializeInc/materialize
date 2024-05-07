@@ -229,12 +229,6 @@ impl SortedRowCollection {
             .get(idx)
             .and_then(|inner_idx| self.collection.get(*inner_idx))
     }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&RowRef, &EncodedRowMetadata)> {
-        self.sorted_view
-            .iter()
-            .map(|idx| self.collection.get(*idx).expect("invalid view"))
-    }
 }
 
 #[derive(Debug, Clone)]
