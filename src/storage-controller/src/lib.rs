@@ -637,8 +637,7 @@ where
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has another dependency.
-            let storage_dependency =
-                self.determine_collection_dependency(&description.data_source)?;
+            let storage_dependency = description.data_source.collection_dependency();
 
             // Determine the intial since of the collection.
             let initial_since = match storage_dependency {
@@ -1910,7 +1909,11 @@ where
         // Repeatedly extract the maximum id, and updates for it.
         while let Some(key) = updates.keys().rev().next().cloned() {
             let mut update = updates.remove(&key).unwrap();
-            if let Some(collection) = self.collections.get_mut(&key) {
+            if let Ok(collection) = self.collection(key) {
+                let cluster_id = self
+                    .determine_collection_cluster_id(&collection.description.data_source)
+                    .expect("collection is well structured");
+
                 let current_read_capabilities = collection.read_capabilities.frontier().to_owned();
                 for (time, diff) in update.iter() {
                     assert!(
@@ -1933,6 +1936,11 @@ where
                     }
                 }
 
+                let collection = self
+                    .collections
+                    .get_mut(&key)
+                    .expect("collection must still exists");
+
                 let changes = collection.read_capabilities.update_iter(update.drain());
                 update.extend(changes);
 
@@ -1943,14 +1951,9 @@ where
                         .extend(update.iter().cloned());
                 }
 
-                let (changes, frontier, _cluster_id) =
-                    collections_net.entry(key).or_insert_with(|| {
-                        (
-                            ChangeBatch::new(),
-                            Antichain::new(),
-                            collection.cluster_id(),
-                        )
-                    });
+                let (changes, frontier, _cluster_id) = collections_net
+                    .entry(key)
+                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), cluster_id));
 
                 changes.extend(update.drain());
                 *frontier = collection.read_capabilities.frontier().to_owned();
@@ -2236,17 +2239,6 @@ where
                         };
                         Some(drop_fut.boxed())
                     }
-                    DataSource::IngestionExport { .. } if read_frontier.is_empty() => {
-                        // Dropping an ingestion is a form of dropping a source.
-                        // This won't be handled above because ingestion exports
-                        // do not yet track the cluster on pending compaction
-                        // commands.
-                        //
-                        // TODO(#24235): place the cluster ID in the pending compaction
-                        // commands of IngestionExports.
-                        pending_source_drops.push(id);
-                        None
-                    }
                     // These sources are manged by `clusterd`.
                     DataSource::Webhook
                     | DataSource::Introspection(_)
@@ -2424,10 +2416,12 @@ where
 
         // Enrich `frontiers` with storage frontiers.
         for (object_id, collection) in self.collections.iter().filter(|(_id, c)| !c.is_dropped()) {
-            let replica_id = collection
-                .cluster_id()
+            let replica_id = self
+                .determine_collection_cluster_id(&collection.description.data_source)
+                .expect("collection is well structured")
                 .and_then(|c| self.replicas.get(&c))
                 .copied();
+
             if let Some(replica_id) = replica_id {
                 let upper = collection.write_frontier.clone();
                 frontiers.insert((*object_id, replica_id), upper);
@@ -3521,38 +3515,32 @@ where
         }
     }
 
-    /// Determine if this collection has another dependency.
-    ///
-    /// Currently, collections have either 0 or 1 dependencies.
-    fn determine_collection_dependency(
+    /// Determine which, if any, cluster this `DataSource` runs on.
+    fn determine_collection_cluster_id(
         &self,
         data_source: &DataSource,
-    ) -> Result<Option<GlobalId>, StorageError<T>> {
-        let dependency = match &data_source {
-            DataSource::Introspection(_)
-            | DataSource::Webhook
-            | DataSource::Other(DataSourceOther::TableWrites)
-            | DataSource::Progress
-            | DataSource::Other(DataSourceOther::Compute) => None,
+    ) -> Result<Option<StorageInstanceId>, StorageError<T>> {
+        let instance_id = match data_source {
+            DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
             DataSource::IngestionExport { ingestion_id, .. } => {
-                // Ingestion exports depend on their primary source's remap
-                // collection.
-                let source_collection = self.collection(*ingestion_id)?;
-                match &source_collection.description {
-                    CollectionDescription {
-                        data_source: DataSource::Ingestion(ingestion_desc),
-                        ..
-                    } => Some(ingestion_desc.remap_collection_id),
-                    _ => unreachable!(
-                        "SourceExport must only refer to primary sources that already exist"
-                    ),
+                let ingestion_collection = self.collection(*ingestion_id)?;
+                match &ingestion_collection.description.data_source {
+                    DataSource::Ingestion(i) => Some(i.instance_id),
+                    _ => {
+                        tracing::error!(
+                            "IngestionExport relies on {ingestion_id}, which is not an ingestion"
+                        );
+                        Err(StorageError::IdentifierInvalid(*ingestion_id))?
+                    }
                 }
             }
-            // Ingestions depend on their remap collection.
-            DataSource::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
+            DataSource::Webhook
+            | DataSource::Introspection(_)
+            | DataSource::Other(_)
+            | DataSource::Progress => None,
         };
 
-        Ok(dependency)
+        Ok(instance_id)
     }
 
     /// If this identified collection has a dependency, install a read hold on
@@ -3809,21 +3797,6 @@ impl<T: Timestamp> CollectionState<T> {
             storage_dependency,
             write_frontier,
             collection_metadata: metadata,
-        }
-    }
-
-    /// Returns the cluster to which the collection is bound, if applicable.
-    pub fn cluster_id(&self) -> Option<StorageInstanceId> {
-        match &self.description.data_source {
-            DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
-            DataSource::Webhook
-            | DataSource::Introspection(_)
-            | DataSource::Other(_)
-            // TODO(#24235) This isn't quite right because a source export runs on the
-            // ingestion's cluster, but we don't have the ability to perform
-            // cross-referenced lookups here (at least not yet).
-            | DataSource::IngestionExport { .. }
-            | DataSource::Progress => None,
         }
     }
 

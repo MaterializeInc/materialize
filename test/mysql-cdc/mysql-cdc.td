@@ -302,24 +302,24 @@ contains: CREATE SOURCE specifies DETAILS option
   );
 
 > SHOW SOURCES
-conflict_table        subsource <null>  <null>
-create                subsource <null>  <null>
-escaped_text_table    subsource <null>  <null>
-large_text            subsource <null>  <null>
-mixED_CAse            subsource <null>  <null>
-multipart_pk          subsource <null>  <null>
-mz_source             mysql  ${arg.default-replica-size}  cdc_cluster
-mz_source_progress    progress  <null>  <null>
-nonpk_table           subsource <null>  <null>
-nulls_table           subsource <null>  <null>
-pk_table              subsource <null>  <null>
-trailing_space_nopk   subsource <null>  <null>
-trailing_space_pk     subsource <null>  <null>
-types_table           subsource <null>  <null>
-utf8_table            subsource <null>  <null>
-"\"literal_quotes\""  subsource <null>  <null>
-"space table"         subsource <null>  <null>
-таблица               subsource <null>  <null>
+conflict_table        subsource  ${arg.default-replica-size}  cdc_cluster
+create                subsource  ${arg.default-replica-size}  cdc_cluster
+escaped_text_table    subsource  ${arg.default-replica-size}  cdc_cluster
+large_text            subsource  ${arg.default-replica-size}  cdc_cluster
+mixED_CAse            subsource  ${arg.default-replica-size}  cdc_cluster
+multipart_pk          subsource  ${arg.default-replica-size}  cdc_cluster
+mz_source             mysql      ${arg.default-replica-size}  cdc_cluster
+mz_source_progress    progress   <null> <null>
+nonpk_table           subsource  ${arg.default-replica-size}  cdc_cluster
+nulls_table           subsource  ${arg.default-replica-size}  cdc_cluster
+pk_table              subsource  ${arg.default-replica-size}  cdc_cluster
+trailing_space_nopk   subsource  ${arg.default-replica-size}  cdc_cluster
+trailing_space_pk     subsource  ${arg.default-replica-size}  cdc_cluster
+types_table           subsource  ${arg.default-replica-size}  cdc_cluster
+utf8_table            subsource  ${arg.default-replica-size}  cdc_cluster
+"\"literal_quotes\""  subsource  ${arg.default-replica-size}  cdc_cluster
+"space table"         subsource  ${arg.default-replica-size}  cdc_cluster
+таблица               subsource  ${arg.default-replica-size}  cdc_cluster
 
 > SELECT schema_name, table_name FROM mz_internal.mz_mysql_source_tables
 public          create
@@ -711,10 +711,10 @@ contains:TEXT COLUMNS refers to columns not currently being added
   );
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
-another_enum_table      subsource <null> <null>
+another_enum_table      subsource ${arg.default-replica-size} cdc_cluster
 enum_source             mysql     ${arg.default-replica-size} cdc_cluster
 enum_source_progress    progress  <null> <null>
-enum_table              subsource <null> <null>
+enum_table              subsource ${arg.default-replica-size} cdc_cluster
 
 > SELECT * FROM enum_table
 var0
@@ -748,7 +748,7 @@ INSERT INTO pk_table VALUES (99999, 'abc');
 > SHOW SOURCES
 another_source          mysql  ${arg.default-replica-size} cdc_cluster
 another_source_progress progress  <null> <null>
-another_table           subsource <null> <null>
+another_table           subsource ${arg.default-replica-size} cdc_cluster
 
 > DROP SOURCE another_source CASCADE;
 
