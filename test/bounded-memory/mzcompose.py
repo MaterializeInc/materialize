@@ -1023,10 +1023,12 @@ def find_minimal_memory(
     reduce_materialized_memory_by_gb: float,
     reduce_clusterd_memory_by_gb: float,
 ) -> tuple[str, str]:
-    assert reduce_materialized_memory_by_gb > 0 or reduce_clusterd_memory_by_gb > 0
+    assert (
+        reduce_materialized_memory_by_gb >= 0.1 or reduce_clusterd_memory_by_gb >= 0.1
+    )
 
-    min_allowed_materialized_memory_in_gb = 4.5
-    min_allowed_clusterd_memory_in_gb = 3.5
+    min_allowed_materialized_memory_in_gb = 4.0
+    min_allowed_clusterd_memory_in_gb = 2.0
 
     materialized_memory = initial_materialized_memory
     clusterd_memory = initial_clusterd_memory
