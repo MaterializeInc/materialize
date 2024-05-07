@@ -67,6 +67,12 @@ pub(crate) const ROLLUP_THRESHOLD: Config<usize> = Config::new(
     "The number of seqnos between rollups.",
 );
 
+pub(crate) const WRITE_DIFFS_SUM: Config<bool> = Config::new(
+    "persist_write_diffs_sum",
+    true,
+    "CYA to skip writing the diffs_sum field on HollowBatchPart",
+);
+
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -277,6 +283,15 @@ pub struct HollowBatchPart<T> {
     /// checking of invariants as well as metrics. If this ever becomes an
     /// issue, everything still works with this as just `Antichain<T>`.
     pub ts_rewrite: Option<Antichain<T>>,
+    /// A Codec64 encoded sum of all diffs in this part, if known.
+    ///
+    /// This is `None` if this part was written before we started storing this
+    /// information, or if it was written when the dyncfg was off.
+    ///
+    /// It could also make sense to model this as part of the pushdown stats, if
+    /// we later decide that's of some benefit.
+    #[serde(serialize_with = "serialize_diffs_sum")]
+    pub diffs_sum: Option<[u8; 8]>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -519,6 +534,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             key_lower: self_key_lower,
             stats: self_stats,
             ts_rewrite: self_ts_rewrite,
+            diffs_sum: self_diffs_sum,
         } = self;
         let HollowBatchPart {
             key: other_key,
@@ -526,6 +542,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             key_lower: other_key_lower,
             stats: other_stats,
             ts_rewrite: other_ts_rewrite,
+            diffs_sum: other_diffs_sum,
         } = other;
         (
             self_key,
@@ -533,6 +550,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             self_key_lower,
             self_stats,
             self_ts_rewrite.as_ref().map(|x| x.elements()),
+            self_diffs_sum,
         )
             .cmp(&(
                 other_key,
@@ -540,6 +558,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
                 other_key_lower,
                 other_stats,
                 other_ts_rewrite.as_ref().map(|x| x.elements()),
+                other_diffs_sum,
             ))
     }
 }
@@ -1679,6 +1698,12 @@ fn serialize_part_stats<S: Serializer>(
     val.serialize(s)
 }
 
+fn serialize_diffs_sum<S: Serializer>(val: &Option<[u8; 8]>, s: S) -> Result<S::Ok, S::Error> {
+    // This is only used for debugging, so hack to assume that D is i64.
+    let val = val.map(i64::decode);
+    val.serialize(s)
+}
+
 // This Serialize impl is used for debugging/testing and exposed via SQL. It's
 // intentionally gated from users, so not strictly subject to our backward
 // compatibility guarantees, but still probably best to be thoughtful about
@@ -1837,13 +1862,15 @@ pub(crate) mod tests {
                 any::<Vec<u8>>(),
                 any_some_lazy_part_stats(),
                 any::<Option<T>>(),
+                any::<[u8; 8]>(),
             ),
-            |(key, encoded_size_bytes, key_lower, stats, ts_rewrite)| HollowBatchPart {
+            |(key, encoded_size_bytes, key_lower, stats, ts_rewrite, diffs_sum)| HollowBatchPart {
                 key,
                 encoded_size_bytes,
                 key_lower,
                 stats,
                 ts_rewrite: ts_rewrite.map(Antichain::from_elem),
+                diffs_sum: Some(diffs_sum),
             },
         )
     }
@@ -1993,6 +2020,7 @@ pub(crate) mod tests {
                         key_lower: vec![],
                         stats: None,
                         ts_rewrite: None,
+                        diffs_sum: None,
                     })
                 })
                 .collect(),

@@ -332,6 +332,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
+        .add(&crate::internal::state::WRITE_DIFFS_SUM)
         .add(&crate::internal::apply::ROUNDTRIP_SPINE)
         .add(&crate::iter::SPLIT_OLD_RUNS)
         .add(&crate::operators::OPTIMIZE_IGNORED_DATA_DECODE)
