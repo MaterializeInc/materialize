@@ -91,8 +91,8 @@ when it falls outside the retention period and when it is cleaned up.
 
 Given the additional memory costs associated with increasing the history
 retention period on indexes, if you don't need the performance benefits of an
-index - in particular for the use case of [durable subscriptions](/sql/subscribe#durable-subscriptions)
-- you should consider creating a materialized view for your subscription query
+index - in particular for the use case of [durable subscriptions](/sql/subscribe#durable-subscriptions) -
+you should consider creating a materialized view for your subscription query
 and configure the history retention period on that materialized view
 instead.
 
