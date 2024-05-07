@@ -12,8 +12,8 @@
 use mz_proto::RustType;
 use mz_repr::RelationDesc;
 use mz_sql_parser::ast::{
-    CreateSourceConnection, CreateSourceStatement, MySqlConfigOption, MySqlConfigOptionName,
-    SourceEnvelope, UnresolvedItemName,
+    CreateSourceConnection, MySqlConfigOption, MySqlConfigOptionName, SourceEnvelope,
+    UnresolvedItemName,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::Connection;
@@ -39,27 +39,14 @@ generate_extracted_config!(
 
 pub(super) fn plan_create_source_desc_mysql(
     scx: &StatementContext,
-    stmt: &CreateSourceStatement<Aug>,
+    stmt: super::CreateSourceDescFields,
 ) -> Result<(SourceDesc<ReferencedConnection>, RelationDesc), PlanError> {
-    mz_ore::soft_assert_or_log!(
-        stmt.referenced_subsources.is_none(),
-        "referenced subsources must be cleared in purification"
-    );
-
-    let CreateSourceStatement {
-        name: _,
-        in_cluster: _,
-        col_names: _,
+    let super::CreateSourceDescFields {
         connection,
         envelope,
-        if_not_exists: _,
         format,
-        key_constraint: _,
         include_metadata,
-        with_options: _,
-        referenced_subsources: _,
-        progress_subsource: _,
-    } = &stmt;
+    } = stmt;
 
     for (check, feature) in [
         (

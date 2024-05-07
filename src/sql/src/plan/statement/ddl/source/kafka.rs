@@ -14,37 +14,26 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use mz_repr::RelationDesc;
-use mz_sql_parser::ast::{
-    self, CreateSourceConnection, CreateSourceStatement, SourceIncludeMetadata,
-};
+use mz_sql_parser::ast::{self, CreateSourceConnection, SourceIncludeMetadata};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
 
 use crate::kafka_util::KafkaSourceConfigOptionExtracted;
-use crate::names::Aug;
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
 
 pub(super) fn plan_create_source_desc_kafka(
     scx: &StatementContext,
-    stmt: &CreateSourceStatement<Aug>,
+    stmt: super::CreateSourceDescFields,
 ) -> Result<(SourceDesc<ReferencedConnection>, RelationDesc), PlanError> {
-    let CreateSourceStatement {
-        name: _,
-        in_cluster: _,
-        col_names: _,
+    let super::CreateSourceDescFields {
         connection,
         envelope,
-        if_not_exists: _,
         format,
-        key_constraint: _,
         include_metadata,
-        with_options: _,
-        referenced_subsources: _,
-        progress_subsource: _,
-    } = &stmt;
+    } = stmt;
 
     let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
 

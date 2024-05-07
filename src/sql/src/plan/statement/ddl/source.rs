@@ -25,8 +25,8 @@ use mz_sql_parser::ast::{
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
     CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    Format, KeyConstraint, ProtobufSchema, SourceIncludeMetadata, Statement, TableConstraint,
-    UnresolvedItemName,
+    Format, Ident, KeyConstraint, ProtobufSchema, SourceIncludeMetadata, Statement,
+    TableConstraint, UnresolvedItemName,
 };
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
@@ -74,6 +74,86 @@ pub fn describe_create_subsource(
     Ok(StatementDesc::new(None))
 }
 
+/// The fields of [`CreateSourceStatement`] which should be exposed to generate
+/// [`mz_storage_types::sources::SourceDesc`].
+///
+/// This struct in conjunction with [`CreateSourceCommonFields`] tries to make
+/// concrete the abstractions around planning sources.
+struct CreateSourceDescFields<'a> {
+    connection: &'a CreateSourceConnection<Aug>,
+    envelope: &'a Option<ast::SourceEnvelope>,
+    format: &'a Option<CreateSourceFormat<Aug>>,
+    include_metadata: &'a [SourceIncludeMetadata],
+}
+
+impl<'a> From<&'a CreateSourceStatement<Aug>> for CreateSourceDescFields<'a> {
+    fn from(stmt: &'a CreateSourceStatement<Aug>) -> Self {
+        let CreateSourceStatement {
+            name: _,
+            in_cluster: _,
+            col_names: _,
+            connection,
+            include_metadata,
+            format,
+            envelope,
+            if_not_exists: _,
+            key_constraint: _,
+            with_options: _,
+            referenced_subsources: _,
+            progress_subsource: _,
+        } = stmt;
+        CreateSourceDescFields {
+            connection,
+            envelope,
+            format,
+            include_metadata,
+        }
+    }
+}
+
+/// The fields of [`CreateSourceStatement`] which should be exposed to generate
+/// the fields of [`Plan::CreateSource`] other than
+/// [`mz_storage_types::sources::SourceDesc`].
+///
+/// This struct in conjunction with [`CreateSourceDescFields`] tries to make
+/// concrete the abstractions around planning sources.
+struct CreateSourceCommonFields<'a> {
+    name: &'a UnresolvedItemName,
+    if_not_exists: bool,
+    with_options: &'a [CreateSourceOption<Aug>],
+    progress_subsource: &'a Option<DeferredItemName<Aug>>,
+    key_constraint: &'a Option<KeyConstraint>,
+    col_names: &'a [Ident],
+}
+
+impl<'a> From<&'a CreateSourceStatement<Aug>> for CreateSourceCommonFields<'a> {
+    fn from(stmt: &'a CreateSourceStatement<Aug>) -> Self {
+        let CreateSourceStatement {
+            name,
+            in_cluster: _,
+            col_names,
+            connection: _,
+            include_metadata: _,
+            format: _,
+            envelope: _,
+            if_not_exists,
+            key_constraint,
+            with_options,
+            referenced_subsources: _,
+            progress_subsource,
+        } = stmt;
+
+        CreateSourceCommonFields {
+            name,
+            if_not_exists: *if_not_exists,
+            with_options,
+            progress_subsource,
+            key_constraint,
+            col_names,
+        }
+    }
+}
+
 generate_extracted_config!(
     CreateSourceOption,
     (IgnoreKeys, bool),
@@ -110,27 +190,30 @@ pub fn plan_create_source(
         )?;
     }
 
+    let desc_fields = CreateSourceDescFields::from(&stmt);
     let (source_desc, mut desc) = match stmt.connection {
-        CreateSourceConnection::Kafka { .. } => kafka::plan_create_source_desc_kafka(scx, &stmt)?,
-        CreateSourceConnection::LoadGenerator { .. } => {
-            load_generator::plan_create_source_desc_load_gen(scx, &stmt)?
+        CreateSourceConnection::Kafka { .. } => {
+            kafka::plan_create_source_desc_kafka(scx, desc_fields)?
         }
-        CreateSourceConnection::MySql { .. } => mysql::plan_create_source_desc_mysql(scx, &stmt)?,
+        CreateSourceConnection::LoadGenerator { .. } => {
+            load_generator::plan_create_source_desc_load_gen(scx, desc_fields)?
+        }
+        CreateSourceConnection::MySql { .. } => {
+            mysql::plan_create_source_desc_mysql(scx, desc_fields)?
+        }
         CreateSourceConnection::Postgres { .. } => {
-            postgres::plan_create_source_desc_postgres(scx, &stmt)?
+            postgres::plan_create_source_desc_postgres(scx, desc_fields)?
         }
     };
 
-    // The are the common elements for all sources.
-    let CreateSourceStatement {
+    let CreateSourceCommonFields {
         name,
         if_not_exists,
         with_options,
         progress_subsource,
         key_constraint,
         col_names,
-        ..
-    } = &stmt;
+    } = (&stmt).into();
 
     let CreateSourceOptionExtracted {
         timeline,
@@ -138,7 +221,7 @@ pub fn plan_create_source(
         ignore_keys,
         retain_history,
         seen: _,
-    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
+    } = CreateSourceOptionExtracted::try_from(with_options.to_vec())?;
 
     if ignore_keys.unwrap_or(false) {
         desc = desc.without_keys();
@@ -205,7 +288,6 @@ pub fn plan_create_source(
         _ => sql_bail!("[internal error] progress subsource must be named during purification"),
     };
 
-    let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
 
     // Check for an object in the catalog with this same name

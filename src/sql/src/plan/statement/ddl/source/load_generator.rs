@@ -14,11 +14,10 @@ use std::time::Duration;
 
 use itertools::Itertools;
 use mz_ore::cast::TryCastFrom;
-use mz_ore::str::StrExt;
 use mz_repr::RelationDesc;
 use mz_sql_parser::ast::{
-    self, CreateSourceConnection, CreateSourceStatement, LoadGeneratorOption,
-    LoadGeneratorOptionName, SourceEnvelope, SourceIncludeMetadata,
+    self, CreateSourceConnection, LoadGeneratorOption, LoadGeneratorOptionName, SourceEnvelope,
+    SourceIncludeMetadata,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sources::load_generator::{
@@ -30,7 +29,6 @@ use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
 use crate::ast::display::AstDisplay;
 use crate::names::{Aug, FullItemName, RawDatabaseSpecifier};
 use crate::plan::error::PlanError;
-use crate::plan::plan_utils;
 use crate::plan::statement::StatementContext;
 use crate::plan::with_options::TryFromValue;
 use crate::session::vars;
@@ -259,22 +257,14 @@ pub(crate) fn load_generator_ast_to_generator(
 
 pub(super) fn plan_create_source_desc_load_gen(
     scx: &StatementContext,
-    stmt: &CreateSourceStatement<Aug>,
+    stmt: super::CreateSourceDescFields,
 ) -> Result<(SourceDesc<ReferencedConnection>, RelationDesc), PlanError> {
-    let CreateSourceStatement {
-        name,
-        in_cluster: _,
-        col_names,
+    let super::CreateSourceDescFields {
         connection,
         envelope,
-        if_not_exists: _,
         format,
-        key_constraint: _,
         include_metadata,
-        with_options: _,
-        referenced_subsources: _,
-        progress_subsource: _,
-    } = &stmt;
+    } = stmt;
 
     let CreateSourceConnection::LoadGenerator { generator, options } = connection else {
         panic!("must be Load Generator connection")
