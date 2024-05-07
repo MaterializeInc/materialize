@@ -32,7 +32,7 @@ use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, RowIterator, Timestamp};
 use mz_sql::ast::{CreateSubsourceStatement, Ident, UnresolvedItemName, Value};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
@@ -1555,9 +1555,8 @@ impl Coordinator {
         })?;
 
         let json_string = json_string(&json_value);
-        Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[
-            Datum::String(&json_string),
-        ])]))
+        let row = Row::pack_slice(&[Datum::String(&json_string)]);
+        Ok(Self::send_immediate_rows(row))
     }
 
     pub(super) fn sequence_show_all_variables(
@@ -1568,17 +1567,19 @@ impl Coordinator {
             .map(|v| (v.name(), v.value(), v.description()))
             .collect::<Vec<_>>();
         rows.sort_by_cached_key(|(name, _, _)| name.to_lowercase());
-        Ok(Self::send_immediate_rows(
-            rows.into_iter()
-                .map(|(name, val, desc)| {
-                    Row::pack_slice(&[
-                        Datum::String(name),
-                        Datum::String(&val),
-                        Datum::String(desc),
-                    ])
-                })
-                .collect(),
-        ))
+
+        // TODO(parkmycar): Pack all of these into a single RowCollection.
+        let rows: Vec<_> = rows
+            .into_iter()
+            .map(|(name, val, desc)| {
+                Row::pack_slice(&[
+                    Datum::String(name),
+                    Datum::String(&val),
+                    Datum::String(desc),
+                ])
+            })
+            .collect();
+        Ok(Self::send_immediate_rows(rows))
     }
 
     pub(super) fn sequence_show_variable(
@@ -1597,7 +1598,7 @@ impl Coordinator {
                         .name()
                         .schema;
                     let row = Row::pack_slice(&[Datum::String(schema_name)]);
-                    Ok(Self::send_immediate_rows(vec![row]))
+                    Ok(Self::send_immediate_rows(row))
                 }
                 None => {
                     session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
@@ -1608,9 +1609,7 @@ impl Coordinator {
                             .map(|schema| schema.to_string())
                             .collect(),
                     });
-                    Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[
-                        Datum::Null,
-                    ])]))
+                    Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::Null])))
                 }
             };
         }
@@ -1642,7 +1641,7 @@ impl Coordinator {
             let name = variable.value();
             session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
         }
-        Ok(Self::send_immediate_rows(vec![row]))
+        Ok(Self::send_immediate_rows(row))
     }
 
     #[instrument]
@@ -1666,7 +1665,7 @@ impl Coordinator {
             .inspect_persist_state(plan.id)
             .await?;
         let jsonb = Jsonb::from_serde_json(state)?;
-        Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))
+        Ok(Self::send_immediate_rows(jsonb.into_row()))
     }
 
     #[instrument]
@@ -1988,7 +1987,7 @@ impl Coordinator {
                 } else {
                     Datum::False
                 };
-                ctx.retire(Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[res])])));
+                ctx.retire(Ok(Self::send_immediate_rows(Row::pack_slice(&[res]))));
             }
         }
     }
@@ -2573,49 +2572,52 @@ impl Coordinator {
                 timeout_dur = Duration::MAX;
             }
 
-            let make_diffs = move |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, AdapterError> {
-                let arena = RowArena::new();
-                // Use 2x row len incase there's some assignments.
-                let mut diffs = Vec::with_capacity(rows.len() * 2);
-                let mut datum_vec = mz_repr::DatumVec::new();
-                for row in rows {
-                    if !assignments.is_empty() {
-                        assert!(
-                            matches!(kind, MutationKind::Update),
-                            "only updates support assignments"
-                        );
-                        let mut datums = datum_vec.borrow_with(&row);
-                        let mut updates = vec![];
-                        for (idx, expr) in &assignments {
-                            let updated = match expr.eval(&datums, &arena) {
-                                Ok(updated) => updated,
-                                Err(e) => return Err(AdapterError::Unstructured(anyhow!(e))),
-                            };
-                            updates.push((*idx, updated));
+            let make_diffs =
+                move |mut rows: Box<dyn RowIterator>| -> Result<Vec<(Row, Diff)>, AdapterError> {
+                    let arena = RowArena::new();
+                    let mut diffs = Vec::new();
+                    let mut datum_vec = mz_repr::DatumVec::new();
+
+                    while let Some(row) = rows.next() {
+                        if !assignments.is_empty() {
+                            assert!(
+                                matches!(kind, MutationKind::Update),
+                                "only updates support assignments"
+                            );
+                            let mut datums = datum_vec.borrow_with(row);
+                            let mut updates = vec![];
+                            for (idx, expr) in &assignments {
+                                let updated = match expr.eval(&datums, &arena) {
+                                    Ok(updated) => updated,
+                                    Err(e) => return Err(AdapterError::Unstructured(anyhow!(e))),
+                                };
+                                updates.push((*idx, updated));
+                            }
+                            for (idx, new_value) in updates {
+                                datums[idx] = new_value;
+                            }
+                            let updated = Row::pack_slice(&datums);
+                            diffs.push((updated, 1));
                         }
-                        for (idx, new_value) in updates {
-                            datums[idx] = new_value;
-                        }
-                        let updated = Row::pack_slice(&datums);
-                        diffs.push((updated, 1));
-                    }
-                    match kind {
-                        // Updates and deletes always remove the
-                        // current row. Updates will also add an
-                        // updated value.
-                        MutationKind::Update | MutationKind::Delete => diffs.push((row, -1)),
-                        MutationKind::Insert => diffs.push((row, 1)),
-                    }
-                }
-                for (row, diff) in &diffs {
-                    if *diff > 0 {
-                        for (idx, datum) in row.iter().enumerate() {
-                            desc.constraints_met(idx, &datum)?;
+                        match kind {
+                            // Updates and deletes always remove the
+                            // current row. Updates will also add an
+                            // updated value.
+                            MutationKind::Update | MutationKind::Delete => {
+                                diffs.push((row.to_owned(), -1))
+                            }
+                            MutationKind::Insert => diffs.push((row.to_owned(), 1)),
                         }
                     }
-                }
-                Ok(diffs)
-            };
+                    for (row, diff) in &diffs {
+                        if *diff > 0 {
+                            for (idx, datum) in row.iter().enumerate() {
+                                desc.constraints_met(idx, &datum)?;
+                            }
+                        }
+                    }
+                    Ok(diffs)
+                };
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows { future: batch } => {
                     // TODO(jkosh44): This timeout should be removed;

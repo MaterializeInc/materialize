@@ -51,12 +51,14 @@ pub use crate::relation::{
     ColumnName, ColumnType, NotNullViolation, ProtoColumnName, ProtoColumnType, ProtoRelationDesc,
     ProtoRelationType, RelationDesc, RelationType,
 };
+pub use crate::row::collection::{ProtoRowCollection, RowCollection, SortedRowCollectionIter};
 pub use crate::row::encoding::{
     DatumDecoderT, DatumEncoderT, DatumToPersist, DatumToPersistFn, RowDecoder, RowEncoder,
 };
+pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{
     datum_list_size, datum_size, datums_size, read_datum, row_size, DatumList, DatumMap, ProtoRow,
-    Row, RowArena, RowPacker, SharedRow,
+    Row, RowArena, RowPacker, RowRef, SharedRow,
 };
 pub use crate::scalar::{
     arb_datum, arb_range_type, ArrayRustType, AsColumnType, Datum, DatumType, PropArray, PropDatum,

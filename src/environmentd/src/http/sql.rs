@@ -34,7 +34,7 @@ use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
-use mz_repr::{Datum, RelationDesc, Row, RowArena};
+use mz_repr::{Datum, RelationDesc, RowArena, RowIterator};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::parse::StatementParseResult;
@@ -411,18 +411,24 @@ pub enum SqlResult {
 impl SqlResult {
     /// Convert adapter Row results into the web row result format. Error if the row format does not
     /// match the expected descriptor.
-    fn rows(client: &mut SessionClient, sql_rows: Vec<Row>, desc: &RelationDesc) -> SqlResult {
-        if let Err(err) = verify_datum_desc(desc, &sql_rows) {
+    fn rows(
+        client: &mut SessionClient,
+        mut sql_rows: Box<dyn RowIterator>,
+        desc: &RelationDesc,
+    ) -> SqlResult {
+        if let Err(err) = verify_datum_desc(desc, &mut sql_rows) {
             return SqlResult::Err {
                 error: err.into(),
                 notices: make_notices(client),
             };
         }
+
         let mut rows: Vec<Vec<serde_json::Value>> = vec![];
         let mut datum_vec = mz_repr::DatumVec::new();
         let types = &desc.typ().column_types;
-        for row in sql_rows {
-            let datums = datum_vec.borrow_with(&row);
+
+        while let Some(row) = sql_rows.next() {
+            let datums = datum_vec.borrow_with(row);
             rows.push(
                 datums
                     .iter()
@@ -434,6 +440,7 @@ impl SqlResult {
                     .collect(),
             );
         }
+
         let tag = format!("SELECT {}", rows.len());
         SqlResult::Rows {
             tag,
@@ -755,8 +762,8 @@ impl ResultSender for WebSocket {
                         }
                     };
                     match res {
-                        Some(PeekResponseUnary::Rows(rows)) => {
-                            if let Err(err) = verify_datum_desc(desc, &rows) {
+                        Some(PeekResponseUnary::Rows(mut rows)) => {
+                            if let Err(err) = verify_datum_desc(desc, &mut rows) {
                                 let error = err.to_string();
                                 break (
                                     true,
@@ -767,9 +774,10 @@ impl ResultSender for WebSocket {
                                     )),
                                 );
                             }
-                            rows_returned += rows.len();
-                            for row in rows {
-                                let datums = datum_vec.borrow_with(&row);
+
+                            rows_returned += rows.count();
+                            while let Some(row) = rows.next() {
+                                let datums = datum_vec.borrow_with(row);
                                 let types = &desc.typ().column_types;
                                 if let Err(e) = send_ws_response(
                                     self,

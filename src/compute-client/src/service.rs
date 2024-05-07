@@ -14,14 +14,13 @@
 //! Compute layer client and server.
 
 use std::collections::BTreeMap;
-use std::num::NonZeroUsize;
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, RowCollection};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use timely::progress::frontier::{Antichain, MutableAntichain};
@@ -308,30 +307,18 @@ where
                 assert!(novel.is_none(), "Duplicate peek response");
                 // We may be ready to respond.
                 if entry.len() == self.parts {
-                    let mut response = PeekResponse::Rows(Vec::new());
+                    let mut response = PeekResponse::Rows(RowCollection::default());
                     for (_part, r) in std::mem::take(entry).into_iter() {
                         response = match (response, r) {
                             (_, PeekResponse::Canceled) => PeekResponse::Canceled,
                             (PeekResponse::Canceled, _) => PeekResponse::Canceled,
                             (_, PeekResponse::Error(e)) => PeekResponse::Error(e),
                             (PeekResponse::Error(e), _) => PeekResponse::Error(e),
-                            (PeekResponse::Rows(mut rows), PeekResponse::Rows(r)) => {
-                                rows.extend(r.into_iter());
+                            (PeekResponse::Rows(mut rows), PeekResponse::Rows(other)) => {
+                                let total_byte_size =
+                                    rows.byte_len().saturating_add(other.byte_len());
 
-                                let total_size: u64 = rows
-                                    .iter()
-                                    // Note: if the type of count changes in the future to be a
-                                    // signed integer, then we'll need to consolidate rows before
-                                    // taking this summation.
-                                    .map(|(row, count): &(Row, NonZeroUsize)| {
-                                        let size = row
-                                            .byte_len()
-                                            .saturating_add(std::mem::size_of_val(count));
-                                        u64::cast_from(size)
-                                    })
-                                    .sum();
-
-                                if total_size > self.max_result_size {
+                                if total_byte_size > usize::cast_from(self.max_result_size) {
                                     // Note: We match on this specific error message in tests
                                     // so it's important that nothing else returns the same
                                     // string.
@@ -341,6 +328,7 @@ where
                                     );
                                     PeekResponse::Error(err)
                                 } else {
+                                    rows.merge(&other);
                                     PeekResponse::Rows(rows)
                                 }
                             }

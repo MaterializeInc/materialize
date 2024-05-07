@@ -245,9 +245,9 @@ impl Coordinator {
             }
         };
 
-        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
+        let row = Row::pack_slice(&[Datum::from(explain.as_str())]);
 
-        Ok(Self::send_immediate_rows(rows))
+        Ok(Self::send_immediate_rows(row))
     }
 
     // `explain_ctx` is an optional context set iff the state machine is initiated from

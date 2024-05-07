@@ -15,6 +15,7 @@ import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
+import "repr/src/row/collection.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -57,17 +58,8 @@ message ProtoFrontiersResponse {
 }
 
 message ProtoPeekResponse {
-    message ProtoRow {
-        mz_repr.row.ProtoRow row = 1;
-        uint64 diff = 2;
-    }
-
-    message ProtoRows {
-        repeated ProtoRow rows = 1;
-    }
-
     oneof kind {
-        ProtoRows rows = 1;
+        mz_repr.row.collection.ProtoRowCollection rows = 1;
         string error = 2;
         google.protobuf.Empty canceled = 3;
     }
