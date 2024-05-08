@@ -83,20 +83,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
 
                     i = 0
-
                     while time.time() - start_time < args.runtime:
-                        current_time = time.time()
-                        update_data(c, i)
-
-                        validate_cursor_on_table(cursor_on_table, current_time, i)
-                        validate_cursor_on_mv(cursor_on_mv, current_time, i)
-
-                        # Token can run out, so refresh it occasionally
-                        token = fetch_token(USERNAME, PASSWORD)
-
-                        validate_data(
+                        print(f"Running iteration {i}")
+                        c.override_current_testcase_name(
+                            f"iteration {i} of workflow_default"
+                        )
+                        perform_test(
+                            c,
                             host,
-                            token,
+                            USERNAME,
+                            PASSWORD,
+                            cursor_on_table,
+                            cursor_on_mv,
                             i,
                         )
                         i += 1
@@ -170,6 +168,31 @@ def close_connection_and_cursor(
     cursor.execute("ROLLBACK")
     cursor.close()
     connection.close()
+
+
+def perform_test(
+    c: Composition,
+    host: str,
+    user_name: str,
+    password: str,
+    cursor_on_table: Cursor,
+    cursor_on_mv: Cursor,
+    i: int,
+) -> None:
+    current_time = time.time()
+    update_data(c, i)
+
+    validate_cursor_on_table(cursor_on_table, current_time, i)
+    validate_cursor_on_mv(cursor_on_mv, current_time, i)
+
+    # Token can run out, so refresh it occasionally
+    token = fetch_token(user_name, password)
+
+    validate_data(
+        host,
+        token,
+        i,
+    )
 
 
 def update_data(c: Composition, i: int) -> None:
