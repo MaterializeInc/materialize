@@ -30,6 +30,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
 use mz_storage_types::read_holds::ReadHoldError;
@@ -261,10 +262,19 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         storage_dependencies: Vec<GlobalId>,
         compute_dependencies: Vec<GlobalId>,
         write_only: bool,
+        initial_as_of: Option<Antichain<T>>,
+        refresh_schedule: Option<RefreshSchedule>,
     ) {
         // Add global collection state.
-        let mut state =
-            CollectionState::new(as_of.clone(), storage_dependencies, compute_dependencies);
+        let mut state = CollectionState::new(
+            id,
+            as_of.clone(),
+            storage_dependencies,
+            compute_dependencies,
+            self.introspection_tx.clone(),
+            initial_as_of,
+            refresh_schedule,
+        );
         // If the collection is write-only, clear its read policy to reflect that.
         if write_only {
             state.read_policy = None;
@@ -647,7 +657,8 @@ where
         let collections = arranged_logs
             .iter()
             .map(|(_, id)| {
-                let state = CollectionState::new_log_collection();
+                let state =
+                    CollectionState::new_log_collection(id.clone(), introspection_tx.clone());
                 (*id, state)
             })
             .collect();
@@ -1100,6 +1111,8 @@ where
                 storage_dependencies.clone(),
                 compute_dependencies.clone(),
                 write_only,
+                dataflow.initial_storage_as_of.clone(),
+                dataflow.refresh_schedule.clone(),
             );
         }
 
@@ -1198,6 +1211,8 @@ where
             index_exports: dataflow.index_exports,
             as_of: dataflow.as_of.clone(),
             until: dataflow.until,
+            initial_storage_as_of: dataflow.initial_storage_as_of,
+            refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
         };
 
@@ -1858,6 +1873,11 @@ where
 
             self.compute
                 .update_hydration_status(id, replica_id, &new_frontier);
+            self.compute
+                .collection_mut(id)
+                .expect("we know about the collection")
+                .collection_introspection
+                .frontier_update(&new_frontier);
             self.update_write_frontiers(replica_id, &[(id, new_frontier.clone())].into());
 
             if let Ok(coll) = self.compute.collection(id) {

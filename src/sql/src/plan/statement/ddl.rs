@@ -22,7 +22,6 @@ use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_
 use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
 };
-use mz_expr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
@@ -34,6 +33,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,

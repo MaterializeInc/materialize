@@ -9,8 +9,8 @@
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::{AsCollection, Collection, Data};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_ore::soft_panic_or_log;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Diff, Timestamp};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;

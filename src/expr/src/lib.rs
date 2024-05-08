@@ -24,7 +24,6 @@ mod relation;
 mod scalar;
 
 pub mod explain;
-pub mod refresh_schedule;
 pub mod virtual_syntax;
 pub mod visit;
 

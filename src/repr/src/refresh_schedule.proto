@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 syntax = "proto3";
 
-package mz_expr.refresh_schedule;
+package mz_repr.refresh_schedule;
 
 import "proto/src/proto.proto";
 import "repr/src/timestamp.proto";

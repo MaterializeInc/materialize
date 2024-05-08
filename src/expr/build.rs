@@ -18,7 +18,6 @@ fn main() {
         .extern_path(".mz_repr.adt.array", "::mz_repr::adt::array")
         .extern_path(".mz_repr.adt.char", "::mz_repr::adt::char")
         .extern_path(".mz_repr.adt.datetime", "::mz_repr::adt::datetime")
-        .extern_path(".mz_repr.adt.interval", "::mz_repr::adt::interval")
         .extern_path(".mz_repr.adt.numeric", "::mz_repr::adt::numeric")
         .extern_path(".mz_repr.adt.range", "::mz_repr::adt::range")
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
@@ -27,7 +26,6 @@ fn main() {
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
-        .extern_path(".mz_repr.timestamp", "::mz_repr::timestamp")
         .extern_path(".mz_repr.strconv", "::mz_repr::strconv")
         .type_attribute(".", "#[allow(missing_docs)]")
         .btree_map(["."])
@@ -35,7 +33,6 @@ fn main() {
             &[
                 "expr/src/id.proto",
                 "expr/src/linear.proto",
-                "expr/src/refresh_schedule.proto",
                 "expr/src/relation.proto",
                 "expr/src/relation/func.proto",
                 "expr/src/scalar.proto",

@@ -1544,3 +1544,40 @@ mz_probe  manual  NULL
 mz_support  manual  NULL
 mz_system  manual  NULL
 quickstart  manual  NULL
+
+statement ok
+SELECT mz_unsafe.mz_sleep(3);
+
+# If this fails with a recently created MV not yet being present, then bump the above sleep.
+query TBB
+SELECT
+  name,
+  now() - INTERVAL '30 minutes' < last_completed_refresh,
+  next_refresh > now() - INTERVAL '5 seconds'
+FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+WHERE mv.id = mvr.materialized_view_id
+ORDER BY name;
+----
+const_mv  true  NULL
+const_mv2  true  NULL
+mv10  true  NULL
+mv11  true  NULL
+mv12  true  false
+mv3  true  NULL
+mv4  true  NULL
+mv5  NULL  true
+mv6  true  NULL
+mv7  true  NULL
+mv8  true  NULL
+mv9  true  true
+mv_aligned_to_future  true  true
+mv_aligned_to_past  true  true
+mv_assertion_plus_refresh_every  true  true
+mv_desugar1  true  NULL
+mv_desugar2  true  true
+mv_greatest  true  NULL
+mv_multiple_refresh_options  true  true
+mv_no_creation_refresh  true  true
+mvi1  true  true
+mvi2  true  true
+mvi3  true  NULL

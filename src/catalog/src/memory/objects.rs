@@ -23,11 +23,11 @@ use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_sql::ast::display::AstDisplay;
@@ -710,8 +710,9 @@ pub struct MaterializedView {
     pub non_null_assertions: Vec<usize>,
     pub custom_logical_compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
-    // The initial `as_of` of the storage collection associated with the materialized view.
-    // (The dataflow's initial `as_of` can be different.)
+    /// The initial `as_of` of the storage collection associated with the materialized view.
+    /// Note that this doesn't change upon restarts.
+    /// (The dataflow's initial `as_of` can be different.)
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
 }
 

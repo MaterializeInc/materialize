@@ -27,7 +27,7 @@ fn main() {
         .extern_path(".mz_ccsr.config", "::mz_ccsr")
         .extern_path(".mz_expr.id", "::mz_expr")
         .extern_path(".mz_expr.linear", "::mz_expr")
-        .extern_path(".mz_expr.refresh_schedule", "::mz_expr::refresh_schedule")
+        .extern_path(".mz_repr.refresh_schedule", "::mz_repr::refresh_schedule")
         .extern_path(".mz_expr.relation", "::mz_expr")
         .extern_path(".mz_expr.scalar", "::mz_expr")
         .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")

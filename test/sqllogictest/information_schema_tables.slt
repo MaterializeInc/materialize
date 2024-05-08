@@ -549,6 +549,10 @@ mz_materialized_view_refresh_strategies
 BASE TABLE
 materialize
 mz_internal
+mz_materialized_view_refreshes
+SOURCE
+materialize
+mz_internal
 mz_message_batch_counts_received_raw
 SOURCE
 materialize

@@ -568,6 +568,7 @@ mz_dataflow_operator_reachability_raw        log   <null>   <null>
 mz_dataflow_operators_per_worker             log   <null>   <null>
 mz_dataflow_shutdown_durations_histogram_raw log   <null>   <null>
 mz_frontiers                                 source <null>  <null>
+mz_materialized_view_refreshes               source <null>  <null>
 mz_message_counts_received_raw               log   <null>   <null>
 mz_message_counts_sent_raw                   log   <null>   <null>
 mz_message_batch_counts_received_raw         log   <null>   <null>
