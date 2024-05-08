@@ -13,7 +13,10 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 
-from materialize.buildkite_insights.util.data_io import read_results_from_file
+from materialize.buildkite_insights.util.data_io import (
+    SimpleFilePath,
+    read_results_from_file,
+)
 
 # https://instances.vantage.sh/aws/ec2
 instance_cost = {
@@ -66,7 +69,7 @@ def main() -> None:
     )
     job_to_pipeline = {}
 
-    data = read_results_from_file("data.json")
+    data = read_results_from_file(SimpleFilePath("data.json"))
 
     for build in data:
         pipeline_name = build["pipeline"]["name"]

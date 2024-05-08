@@ -14,7 +14,7 @@ from typing import Any
 from materialize.buildkite_insights.buildkite_api import artifacts_api
 from materialize.buildkite_insights.cache import generic_cache
 from materialize.buildkite_insights.cache.cache_constants import FetchMode
-from materialize.buildkite_insights.util.data_io import get_file_path
+from materialize.buildkite_insights.cache.generic_cache import CacheFilePath
 
 
 def get_or_query_job_artifact_list(
@@ -63,11 +63,11 @@ def _get_file_path_for_job_artifact_list(
     pipeline_slug: str,
     build_number: int,
     job_id: str,
-) -> str:
+) -> CacheFilePath:
     meta_data = f"{build_number}-{job_id}"
     hash_value = hashlib.sha256(bytes(meta_data, encoding="utf-8")).hexdigest()[:8]
-    return get_file_path(
-        file_prefix="build_job_artifact_list",
+    return CacheFilePath(
+        cache_item_type="build_job_artifact_list",
         pipeline_slug=pipeline_slug,
         params_hash=hash_value,
     )
@@ -76,10 +76,10 @@ def _get_file_path_for_job_artifact_list(
 def _get_file_path_for_artifact(
     pipeline_slug: str,
     artifact_id: str,
-) -> str:
+) -> CacheFilePath:
     # artifacts are text but also stored as string json
-    return get_file_path(
-        file_prefix="artifact",
+    return CacheFilePath(
+        cache_item_type="artifact",
         pipeline_slug=pipeline_slug,
         params_hash=artifact_id,
     )
