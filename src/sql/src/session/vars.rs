@@ -1200,6 +1200,7 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
             &cluster_scheduling::CLUSTER_ALWAYS_USE_DISK,
             &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
+            &cluster_scheduling::CLUSTER_ENABLE_SECURITY_CONTEXT,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
             &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
             &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
@@ -2039,6 +2040,10 @@ impl SystemVars {
 
     pub fn cluster_check_scheduling_policies_interval(&self) -> Duration {
         *self.expect_value(&cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL)
+    }
+
+    pub fn cluster_security_context_enabled(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED)
     }
 
     /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.

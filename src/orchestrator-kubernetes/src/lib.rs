@@ -975,20 +975,24 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .context("`image` is not ORG/NAME:VERSION")?
             .to_string();
 
-        let container_security_context = Some(SecurityContext {
-            privileged: Some(false),
-            run_as_non_root: Some(true),
-            allow_privilege_escalation: Some(false),
-            seccomp_profile: Some(SeccompProfile {
-                type_: "RuntimeDefault".to_string(),
+        let container_security_context = if scheduling_config.security_context_enabled {
+            Some(SecurityContext {
+                privileged: Some(false),
+                run_as_non_root: Some(true),
+                allow_privilege_escalation: Some(false),
+                seccomp_profile: Some(SeccompProfile {
+                    type_: "RuntimeDefault".to_string(),
+                    ..Default::default()
+                }),
+                capabilities: Some(Capabilities {
+                    drop: Some(vec!["ALL".to_string()]),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            capabilities: Some(Capabilities {
-                drop: Some(vec!["ALL".to_string()]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
+            })
+        } else {
+            None
+        };
 
         let init_containers = init_container_image.map(|image| {
             vec![Container {
