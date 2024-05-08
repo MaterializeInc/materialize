@@ -11,4 +11,4 @@
 #
 # buildkite-artifact-search - buildkite artifact search
 
-exec "$(dirname "$0")"/pyactivate -m materialize.buildkite_insights.artifact_search.search "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.buildkite_insights.artifact_search.artifact_search "$@"

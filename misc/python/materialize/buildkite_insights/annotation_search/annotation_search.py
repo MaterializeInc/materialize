@@ -13,7 +13,7 @@ import argparse
 import re
 from typing import Any
 
-from materialize.buildkite_insights.annotation_search.search_result_presentation import (
+from materialize.buildkite_insights.annotation_search.annotation_search_presentation import (
     print_annotation_match,
     print_before_search_results,
     print_summary,

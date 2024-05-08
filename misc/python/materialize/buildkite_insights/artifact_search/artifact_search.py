@@ -11,7 +11,7 @@
 
 import argparse
 
-from materialize.buildkite_insights.artifact_search.search_result_presentation import (
+from materialize.buildkite_insights.artifact_search.artifact_search_presentation import (
     print_artifact_match,
     print_before_search_results,
     print_summary,

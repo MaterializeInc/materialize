@@ -11,4 +11,4 @@
 #
 # buildkite-annotation-search - buildkite annotation search
 
-exec "$(dirname "$0")"/pyactivate -m materialize.buildkite_insights.annotation_search.search "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.buildkite_insights.annotation_search.annotation_search "$@"
