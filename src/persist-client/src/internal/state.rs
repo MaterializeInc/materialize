@@ -1226,6 +1226,10 @@ where
         assert_eq!(self.trace.upper(), &Antichain::new());
         assert_eq!(self.trace.since(), &Antichain::new());
 
+        // Remember our current state, so we can decide whether we have to
+        // record a transition in durable state.
+        let was_tombstone = self.is_tombstone();
+
         // Enter the "tombstone" state, if we're not in it already.
         self.writers.clear();
         self.leased_readers.clear();
@@ -1272,6 +1276,10 @@ where
             let merge_reqs = new_trace.push_batch(Self::tombstone_batch());
             assert_eq!(merge_reqs, Vec::new());
             self.trace = new_trace;
+            Continue(())
+        } else if !was_tombstone {
+            // We were not tombstoned before, so have to make sure this state
+            // transition is recorded.
             Continue(())
         } else {
             // All our batches are empty, and there's only one... there's no shrinking this
