@@ -1589,14 +1589,13 @@ mod tests {
 
     #[mz_ore::test]
     fn hollow_batch_migration_keys() {
-        let x = HollowBatch {
-            desc: Description::new(
+        let x = HollowBatch::new(
+            Description::new(
                 Antichain::from_elem(1u64),
                 Antichain::from_elem(2u64),
                 Antichain::from_elem(3u64),
             ),
-            len: 4,
-            parts: vec![BatchPart::Hollow(HollowBatchPart {
+            vec![BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
                 key_lower: vec![],
@@ -1604,8 +1603,9 @@ mod tests {
                 ts_rewrite: None,
                 diffs_sum: None,
             })],
-            runs: vec![],
-        };
+            4,
+            vec![],
+        );
         let mut old = x.into_proto();
         // Old ProtoHollowBatch had keys instead of parts.
         old.deprecated_keys = vec!["b".into()];

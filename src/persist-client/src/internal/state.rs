@@ -10,11 +10,9 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
-use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
-use std::slice;
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
@@ -22,6 +20,7 @@ use differential_dataflow::trace::Description;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_ore::vec::PartialOrdVecExt;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
@@ -301,10 +300,10 @@ pub struct HollowBatchPart<T> {
 pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
-    /// Pointers usable to retrieve the updates.
-    pub parts: Vec<BatchPart<T>>,
     /// The number of updates in the batch.
     pub len: usize,
+    /// Pointers usable to retrieve the updates.
+    pub(crate) parts: Vec<BatchPart<T>>,
     /// Runs of sequential sorted batch parts, stored as indices into `parts`.
     /// ex.
     /// ```text
@@ -312,7 +311,7 @@ pub struct HollowBatch<T> {
     ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
     ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
     /// ```
-    pub runs: Vec<usize>,
+    pub(crate) runs: Vec<usize>,
 }
 
 impl<T: Debug> Debug for HollowBatch<T> {
@@ -400,12 +399,55 @@ impl<T: Ord> Ord for HollowBatch<T> {
 }
 
 impl<T> HollowBatch<T> {
-    pub(crate) fn runs(&self) -> HollowBatchRunIter<T> {
-        HollowBatchRunIter {
-            batch: self,
-            inner: self.runs.iter().peekable(),
-            emitted_implicit: false,
+    /// Construct an in-memory hollow batch from the given metadata.
+    ///
+    /// This method checks that `runs` is a sequence of valid indices into `parts`. The caller
+    /// is responsible for ensuring that the defined runs are valid.
+    ///
+    /// `len` should represent the number of valid updates in the referenced parts.
+    pub(crate) fn new(
+        desc: Description<T>,
+        parts: Vec<BatchPart<T>>,
+        len: usize,
+        runs: Vec<usize>,
+    ) -> Self {
+        debug_assert!(runs.is_sorted(), "run indices should be sorted");
+        debug_assert!(
+            runs.last().iter().all(|i| **i <= parts.len()),
+            "run indices should be a valid indices into parts"
+        );
+        Self {
+            desc,
+            len,
+            parts,
+            runs,
         }
+    }
+
+    /// An empty hollow batch, representing no updates over the given desc.
+    pub(crate) fn empty(desc: Description<T>) -> Self {
+        Self {
+            desc,
+            len: 0,
+            parts: vec![],
+            runs: vec![],
+        }
+    }
+
+    pub(crate) fn runs(&self) -> impl Iterator<Item = &[BatchPart<T>]> {
+        let run_ends = self
+            .runs
+            .iter()
+            .copied()
+            .chain(std::iter::once(self.parts.len()));
+        run_ends
+            .scan(0, |start, end| {
+                let range = *start..end;
+                *start = end;
+                Some(range)
+            })
+            .filter(|range| !range.is_empty())
+            .map(|range| &self.parts[range])
     }
 
     pub(crate) fn inline_bytes(&self) -> usize {
@@ -417,38 +459,18 @@ impl<T> HollowBatch<T> {
             })
             .sum()
     }
-}
 
-pub(crate) struct HollowBatchRunIter<'a, T> {
-    batch: &'a HollowBatch<T>,
-    inner: Peekable<slice::Iter<'a, usize>>,
-    emitted_implicit: bool,
-}
+    pub fn is_empty(&self) -> bool {
+        self.parts.is_empty()
+    }
 
-impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
-    type Item = &'a [BatchPart<T>];
+    pub fn part_count(&self) -> usize {
+        self.parts.len()
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.batch.parts.is_empty() {
-            return None;
-        }
-
-        if !self.emitted_implicit {
-            self.emitted_implicit = true;
-            return Some(match self.inner.peek() {
-                None => &self.batch.parts,
-                Some(run_end) => &self.batch.parts[0..**run_end],
-            });
-        }
-
-        if let Some(run_start) = self.inner.next() {
-            return Some(match self.inner.peek() {
-                Some(run_end) => &self.batch.parts[*run_start..**run_end],
-                None => &self.batch.parts[*run_start..],
-            });
-        }
-
-        None
+    /// The sum of the encoded sizes of all parts in the batch.
+    pub fn encoded_size_bytes(&self) -> usize {
+        self.parts.iter().map(|p| p.encoded_size_bytes()).sum()
     }
 }
 
@@ -806,7 +828,7 @@ where
 
         // If the time interval is empty, the list of updates must also be
         // empty.
-        if batch.desc.upper() == batch.desc.lower() && !batch.parts.is_empty() {
+        if batch.desc.upper() == batch.desc.lower() && !batch.is_empty() {
             return Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidUsage::InvalidEmptyTimeInterval {
                     lower: batch.desc.lower().clone(),
@@ -1175,16 +1197,11 @@ where
     }
 
     fn tombstone_batch() -> HollowBatch<T> {
-        HollowBatch {
-            desc: Description::new(
-                Antichain::from_elem(T::minimum()),
-                Antichain::new(),
-                Antichain::new(),
-            ),
-            parts: Vec::new(),
-            runs: Vec::new(),
-            len: 0,
-        }
+        HollowBatch::empty(Description::new(
+            Antichain::from_elem(T::minimum()),
+            Antichain::new(),
+            Antichain::new(),
+        ))
     }
 
     pub(crate) fn is_tombstone(&self) -> bool {
@@ -1200,7 +1217,7 @@ where
         let mut is_empty = true;
         self.trace.map_batches(|b| {
             batch_count += 1;
-            is_empty &= b.parts.is_empty()
+            is_empty &= b.is_empty()
         });
         batch_count <= 1 && is_empty
     }
@@ -1228,7 +1245,7 @@ where
         let mut batch_count = 0;
         self.trace.map_batches(|b| {
             batch_count += 1;
-            if !b.parts.is_empty() && to_replace.is_none() {
+            if !b.is_empty() && to_replace.is_none() {
                 to_replace = Some(b.desc.clone());
             }
         });
@@ -1237,12 +1254,7 @@ where
             // This should not produce an excessively large diff: if it did, we wouldn't have been
             // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
-                output: HollowBatch {
-                    desc,
-                    parts: vec![],
-                    len: 0,
-                    runs: vec![],
-                },
+                output: HollowBatch::empty(desc),
             };
             let result = self.trace.apply_merge_res(&fake_merge);
             assert!(
@@ -1469,15 +1481,14 @@ where
 
     pub fn size_metrics(&self) -> StateSizeMetrics {
         let mut ret = StateSizeMetrics::default();
-        self.map_blobs(|x| match x {
+        self.blobs().for_each(|x| match x {
             HollowBlobRef::Batch(x) => {
                 ret.hollow_batch_count += 1;
-                ret.batch_part_count += x.parts.len();
+                ret.batch_part_count += x.part_count();
                 ret.num_updates += x.len;
 
-                let mut batch_size = 0;
+                let batch_size = x.encoded_size_bytes();
                 for x in x.parts.iter() {
-                    batch_size += x.encoded_size_bytes();
                     if x.ts_rewrite().is_some() {
                         ret.rewrite_part_count += 1;
                     }
@@ -1675,13 +1686,10 @@ where
         None
     }
 
-    pub(crate) fn map_blobs<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
-        self.collections
-            .trace
-            .map_batches(|x| f(HollowBlobRef::Batch(x)));
-        for x in self.collections.rollups.values() {
-            f(HollowBlobRef::Rollup(x));
-        }
+    pub(crate) fn blobs(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
+        let batches = self.collections.trace.batches().map(HollowBlobRef::Batch);
+        let rollups = self.collections.rollups.values().map(HollowBlobRef::Rollup);
+        batches.chain(rollups)
     }
 }
 
@@ -2005,14 +2013,13 @@ pub(crate) mod tests {
         keys: &[&str],
         len: usize,
     ) -> HollowBatch<T> {
-        HollowBatch {
-            desc: Description::new(
+        HollowBatch::new(
+            Description::new(
                 Antichain::from_elem(lower),
                 Antichain::from_elem(upper),
                 Antichain::from_elem(T::minimum()),
             ),
-            parts: keys
-                .iter()
+            keys.iter()
                 .map(|x| {
                     BatchPart::Hollow(HollowBatchPart {
                         key: PartialBatchKey((*x).to_owned()),
@@ -2025,8 +2032,8 @@ pub(crate) mod tests {
                 })
                 .collect(),
             len,
-            runs: vec![],
-        }
+            vec![],
+        )
     }
 
     #[mz_ore::test]

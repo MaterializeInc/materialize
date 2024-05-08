@@ -335,7 +335,7 @@ where
             InspectDiff::Diff(diff) => {
                 diff.map_blob_deletes(|blob| match blob {
                     HollowBlobRef::Batch(batch) => {
-                        seqno_held_parts += batch.parts.len();
+                        seqno_held_parts += batch.part_count();
                     }
                     HollowBlobRef::Rollup(_) => {}
                 });
@@ -464,7 +464,7 @@ where
             // Extra paranoia: verify that none of the blobs we're about to delete
             // are in our current state (we should only be truncating blobs from
             // before this state!)
-            states.state().map_blobs(|blob| match blob {
+            states.state().blobs().for_each(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     for live_part in &batch.parts {
                         match live_part {

@@ -310,11 +310,11 @@ where
                     .map(|b| Arc::unwrap_or_clone(b.batch))
                     .collect(),
             };
-            let parts = req.inputs.iter().map(|x| x.parts.len()).sum::<usize>();
+            let parts = req.inputs.iter().map(|x| x.part_count()).sum::<usize>();
             let bytes = req
                 .inputs
                 .iter()
-                .flat_map(|x| x.parts.iter().map(|x| x.encoded_size_bytes()))
+                .map(|x| x.encoded_size_bytes())
                 .sum::<usize>();
             let start = Instant::now();
             info!(
@@ -351,12 +351,8 @@ where
                 "attempt {} req {}: compacted into {} parts {} bytes in {:?}",
                 attempt,
                 idx,
-                res.output.parts.len(),
-                res.output
-                    .parts
-                    .iter()
-                    .map(|x| x.encoded_size_bytes())
-                    .sum::<usize>(),
+                res.output.part_count(),
+                res.output.encoded_size_bytes(),
                 start.elapsed(),
             );
             let (apply_res, maintenance) = machine
