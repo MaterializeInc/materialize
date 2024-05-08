@@ -949,9 +949,6 @@ fn humanize_sql_for_show_create(
                             // Dropping a subsource does not remove any `TEXT
                             // COLUMNS` values that refer to the table it
                             // ingests, which we'll handle below.
-                            //
-                            // TODO(#26774): is this better if this is an option
-                            // on the subsources?
                             PgConfigOptionName::TextColumns => {}
                             // Drop details, which does not rountrip.
                             PgConfigOptionName::Details => return false,
@@ -984,9 +981,6 @@ fn humanize_sql_for_show_create(
                             // Dropping a subsource does not remove any `TEXT
                             // COLUMNS` values that refer to the table it
                             // ingests, which we'll handle below.
-                            //
-                            // TODO(#26774): is this better if this is an option
-                            // on the subsources?
                             MySqlConfigOptionName::TextColumns
                             | MySqlConfigOptionName::IgnoreColumns => {}
                             // Drop details, which does not rountrip.

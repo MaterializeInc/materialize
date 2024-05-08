@@ -118,29 +118,6 @@ pub enum DataSource {
     Other(DataSourceOther),
 }
 
-impl DataSource {
-    /// If this data source depends on the frontier of another collection,
-    /// return it.
-    ///
-    /// Dependencies offer the ability to tie the frontiers of collections
-    /// together, e.g. we expect that you cannot drop a collection with any
-    /// dependents that have not been dropped yet.
-    pub fn collection_dependency(&self) -> Option<GlobalId> {
-        match self {
-            DataSource::Introspection(_)
-            | DataSource::Webhook
-            | DataSource::Other(DataSourceOther::TableWrites)
-            | DataSource::Progress
-            | DataSource::Other(DataSourceOther::Compute) => None,
-            // Exports depend on their ingestion. n.b. we expect this dependency
-            // to carry transitively to the ingestion's remap collection.
-            DataSource::IngestionExport { ingestion_id, .. } => Some(*ingestion_id),
-            // Ingestions depend on their remap collection.
-            DataSource::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
-        }
-    }
-}
-
 /// Describes how data is written to a collection maintained outside of the
 /// storage controller.
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -494,8 +494,7 @@ where
                         Some(export) => {
                             export.description.as_of.clone_from(frontier);
                         }
-                        // uppers contains both ingestions and their exports
-                        None if self.uppers.contains_key(id) => continue,
+                        None if self.sources.contains_key(id) => continue,
                         None => panic!("AllowCompaction command for non-existent {id}"),
                     }
                 }
