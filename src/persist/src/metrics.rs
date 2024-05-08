@@ -75,10 +75,38 @@ impl S3BlobMetrics {
     }
 }
 
+/// Metrics specific to our usage of Arrow and Parquet.
+#[derive(Debug, Clone)]
+pub struct ArrowMetrics {
+    pub(crate) encode_arrow2: IntCounter,
+    pub(crate) decode_arrow2: IntCounter,
+    pub(crate) encode_arrow_rs: IntCounter,
+    pub(crate) decode_arrow_rs: IntCounter,
+}
+
+impl ArrowMetrics {
+    /// Returns a new [ArrowMetrics] instance connected to the given registry.
+    pub fn new(registry: &MetricsRegistry) -> Self {
+        let operations: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_arrow_operations",
+            help: "number of raw Arrow operations",
+            var_labels: ["op", "library"],
+        ));
+
+        ArrowMetrics {
+            encode_arrow2: operations.with_label_values(&["encode", "arrow2"]),
+            decode_arrow2: operations.with_label_values(&["decode", "arrow2"]),
+            encode_arrow_rs: operations.with_label_values(&["encode", "arrow_rs"]),
+            decode_arrow_rs: operations.with_label_values(&["decode", "arrow_rs"]),
+        }
+    }
+}
+
 /// Metrics for `ColumnarRecords`.
 #[derive(Debug)]
 pub struct ColumnarMetrics {
     pub(crate) lgbytes_arrow: LgBytesOpMetrics,
+    pub(crate) arrow_metrics: ArrowMetrics,
     // TODO: Having these two here isn't quite the right thing to do, but it
     // saves a LOT of plumbing.
     pub(crate) cfg: ConfigSet,
@@ -87,9 +115,15 @@ pub struct ColumnarMetrics {
 
 impl ColumnarMetrics {
     /// Returns a new [ColumnarMetrics].
-    pub fn new(lgbytes: &LgBytesMetrics, cfg: ConfigSet, is_cc_active: bool) -> Self {
+    pub fn new(
+        registry: &MetricsRegistry,
+        lgbytes: &LgBytesMetrics,
+        cfg: ConfigSet,
+        is_cc_active: bool,
+    ) -> Self {
         ColumnarMetrics {
             lgbytes_arrow: lgbytes.persist_arrow.clone(),
+            arrow_metrics: ArrowMetrics::new(registry),
             cfg,
             is_cc_active,
         }
@@ -99,8 +133,10 @@ impl ColumnarMetrics {
     ///
     /// Exposed for testing.
     pub fn disconnected() -> Self {
-        let lgbytes = LgBytesMetrics::new(&MetricsRegistry::new());
+        let registry = MetricsRegistry::new();
+        let lgbytes = LgBytesMetrics::new(&registry);
         let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
-        Self::new(&lgbytes, cfg, false)
+
+        Self::new(&registry, &lgbytes, cfg, false)
     }
 }

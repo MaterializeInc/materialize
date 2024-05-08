@@ -131,8 +131,12 @@ impl Metrics {
             move || start.elapsed().as_secs_f64(),
         );
         let s3_blob = S3BlobMetrics::new(registry);
-        let columnar =
-            ColumnarMetrics::new(&s3_blob.lgbytes, cfg.configs.clone(), cfg.is_cc_active);
+        let columnar = ColumnarMetrics::new(
+            registry,
+            &s3_blob.lgbytes,
+            cfg.configs.clone(),
+            cfg.is_cc_active,
+        );
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),

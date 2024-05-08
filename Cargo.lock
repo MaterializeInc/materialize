@@ -5278,6 +5278,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "parquet",
  "paste",
  "pin-project",
  "prometheus",
@@ -5320,6 +5321,7 @@ name = "mz-persist"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arrow",
  "arrow2",
  "async-stream",
  "async-trait",
@@ -5344,6 +5346,7 @@ dependencies = [
  "once_cell",
  "openssl",
  "openssl-sys",
+ "parquet",
  "postgres-openssl",
  "prometheus",
  "proptest",
@@ -9929,9 +9932,9 @@ dependencies = [
 
 [[package]]
 name = "twox-hash"
-version = "1.6.2"
+version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ee73e6e4924fe940354b8d4d98cad5231175d615cd855b758adc658c0aac6a0"
+checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
  "rand",
@@ -10631,6 +10634,7 @@ dependencies = [
  "tracing-core",
  "tracing-subscriber",
  "tungstenite",
+ "twox-hash",
  "uncased",
  "unicode-bidi",
  "unicode-normalization",
