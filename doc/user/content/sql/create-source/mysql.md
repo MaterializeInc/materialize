@@ -22,6 +22,12 @@ access and authentication parameters.
 
 ## Syntax
 
+{{< note >}}
+Although `schema` and `database` are [synonyms in MySQL](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema),
+the MySQL source documentation and syntax **standardize on `schema`** as the
+preferred keyword.
+{{< /note >}}
+
 {{< diagram "create-source-mysql.svg" >}}
 
 Field | Use
