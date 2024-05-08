@@ -20,11 +20,9 @@ PATH_TO_TEMP_DIR = MZ_ROOT / "temp"
 
 
 def get_file_path(
-    file_prefix: str,
-    pipeline_slug: str,
-    params_hash: str,
+    file_prefix: str, pipeline_slug: str, params_hash: str, file_extension: str = "json"
 ) -> str:
-    return f"{PATH_TO_TEMP_DIR}/{file_prefix}-{pipeline_slug}-params-{params_hash}.json"
+    return f"{PATH_TO_TEMP_DIR}/{file_prefix}-{pipeline_slug}-params-{params_hash}.{file_extension}"
 
 
 def ensure_temp_dir_exists() -> None:

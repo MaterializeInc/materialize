@@ -14,12 +14,9 @@ import re
 from typing import Any
 
 from materialize.buildkite_insights.annotation_search.search_result_presentation import (
+    print_annotation_match,
     print_before_search_results,
-    print_match,
     print_summary,
-)
-from materialize.buildkite_insights.annotation_search.search_utility import (
-    _search_value_to_pattern,
 )
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
@@ -36,6 +33,9 @@ from materialize.buildkite_insights.cache.cache_constants import (
 from materialize.buildkite_insights.steps.build_step import (
     BuildStepMatcher,
     extract_build_step_outcomes,
+)
+from materialize.buildkite_insights.util.search_utility import (
+    _search_value_to_pattern,
 )
 
 
@@ -73,7 +73,7 @@ def search_build(
         if i >= max_entries_to_print:
             break
 
-        print_match(
+        print_annotation_match(
             build_number,
             build_pipeline,
             branch,
