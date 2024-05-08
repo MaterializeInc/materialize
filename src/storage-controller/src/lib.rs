@@ -2243,7 +2243,7 @@ where
                         // do not yet track the cluster on pending compaction
                         // commands.
                         //
-                        // TODO(#24235): place the cluster ID in the pending compaction
+                        // TODO(#8185): place the cluster ID in the pending compaction
                         // commands of IngestionExports.
                         pending_source_drops.push(id);
                         None
@@ -3820,9 +3820,9 @@ impl<T: Timestamp> CollectionState<T> {
             DataSource::Webhook
             | DataSource::Introspection(_)
             | DataSource::Other(_)
-            // TODO(#24235) This isn't quite right because a source export runs on the
-            // ingestion's cluster, but we don't have the ability to perform
-            // cross-referenced lookups here (at least not yet).
+            // TODO(#8185) This isn't quite right because a source export runs
+            // on the ingestion's cluster, but we don't yet support announcing
+            // that.
             | DataSource::IngestionExport { .. }
             | DataSource::Progress => None,
         }
