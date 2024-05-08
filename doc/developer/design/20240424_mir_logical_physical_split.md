@@ -15,7 +15,7 @@ MIR optimization is split into several phases; following [`optimize_dataflow()`]
    + [per dataflow physical optimization](https://github.com/MaterializeInc/materialize/blob/8f5f8df8a08eaab6dffbad6ae71ee70abd57ac70/src/transform/src/dataflow.rs#L77-L81)
    + [inter-dataflow monotonicity tracking](https://github.com/MaterializeInc/materialize/blob/8f5f8df8a08eaab6dffbad6ae71ee70abd57ac70/src/transform/src/dataflow.rs#L83)
    + [inter-dataflow pruning](https://github.com/MaterializeInc/materialize/blob/8f5f8df8a08eaab6dffbad6ae71ee70abd57ac70/src/transform/src/dataflow.rs#L85-L89)
-   
+
 The logical/physical split as it exists now is somewhat arbitrary, and many passes are used in both phases.
 It would simplify some work with the optimizer to realize the logical/physical distinction in the MIR AST itself.
 This design doc proposes splitting the MIR AST in two parts: a logical MIR AST and a physical MIR AST.
@@ -75,7 +75,7 @@ I have not done the prototyping, settling instead for planning. The changes here
     + `NonNullable`
     + `ReductionPushdown`
     + `ReduceElision`
-  - `logical_cleanup_pass` passes 
+  - `logical_cleanup_pass` passes
     + `SemijoinIdempotence`
   - inter-view passes
     + `ProjectionPushdown`
@@ -120,11 +120,11 @@ We'll want to write these passes and have them typecheck and pass tests... but w
 - Try other alterations to the AST instead/at the same time. Some possibilities:
 
   + unified `Mfp` nodes or nodes for outer joins
-  
+
   + ANF-ized ASTs
-  
+
   + blackbox MIR node
-  
+
   + n-ary outer join MIR node (logical only?)
 
 - Reduce the surface of the optimizer in other ways.
