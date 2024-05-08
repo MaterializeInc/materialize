@@ -637,7 +637,8 @@ where
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has another dependency.
-            let storage_dependency = description.data_source.collection_dependency();
+            let storage_dependency =
+                self.determine_collection_dependency(&description.data_source)?;
 
             // Determine the intial since of the collection.
             let initial_since = match storage_dependency {
@@ -3514,6 +3515,40 @@ where
             self.finalizable_shards.remove(&id);
             self.finalized_shards.insert(id);
         }
+    }
+
+    /// Determine if this collection has another dependency.
+    ///
+    /// Currently, collections have either 0 or 1 dependencies.
+    fn determine_collection_dependency(
+        &self,
+        data_source: &DataSource,
+    ) -> Result<Option<GlobalId>, StorageError<T>> {
+        let dependency = match &data_source {
+            DataSource::Introspection(_)
+            | DataSource::Webhook
+            | DataSource::Other(DataSourceOther::TableWrites)
+            | DataSource::Progress
+            | DataSource::Other(DataSourceOther::Compute) => None,
+            DataSource::IngestionExport { ingestion_id, .. } => {
+                // Ingestion exports depend on their primary source's remap
+                // collection.
+                let source_collection = self.collection(*ingestion_id)?;
+                match &source_collection.description {
+                    CollectionDescription {
+                        data_source: DataSource::Ingestion(ingestion_desc),
+                        ..
+                    } => Some(ingestion_desc.remap_collection_id),
+                    _ => unreachable!(
+                        "SourceExport must only refer to primary sources that already exist"
+                    ),
+                }
+            }
+            // Ingestions depend on their remap collection.
+            DataSource::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
+        };
+
+        Ok(dependency)
     }
 
     /// Determine which, if any, cluster this `DataSource` runs on.
