@@ -135,6 +135,9 @@ def http_sql_query(host: str, query: str, token: str) -> list[list[str]]:
     assert r.status_code == 200, f"{r}\n{r.text}"
     results = r.json()["results"]
     assert len(results) == 1, results
+    assert (
+        "rows" in results[0].keys()
+    ), f"'rows' does not exist in results[0] (available keys are: {results[0].keys()})"
     return results[0]["rows"]
 
 
