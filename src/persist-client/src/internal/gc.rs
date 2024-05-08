@@ -333,7 +333,7 @@ where
         while let Some(_) = states.next(|diff| match diff {
             InspectDiff::FromInitial(_) => {}
             InspectDiff::Diff(diff) => {
-                diff.map_blob_deletes(|blob| match blob {
+                diff.blob_deletes().for_each(|blob| match blob {
                     HollowBlobRef::Batch(batch) => {
                         seqno_held_parts += batch.part_count();
                     }
@@ -524,7 +524,7 @@ where
         while let Some(state) = states.next(|diff| match diff {
             InspectDiff::FromInitial(_) => {}
             InspectDiff::Diff(diff) => {
-                diff.map_blob_deletes(|blob| match blob {
+                diff.blob_deletes().for_each(|blob| match blob {
                     HollowBlobRef::Batch(batch) => {
                         for part in &batch.parts {
                             // we use BTreeSets for fast lookups elsewhere, but we should never

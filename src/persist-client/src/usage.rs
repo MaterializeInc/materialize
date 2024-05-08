@@ -212,7 +212,7 @@ impl StorageUsageClient {
         let mut batches_bytes = 0;
         let mut rollup_bytes = 0;
         while let Some(_) = states_iter.next(|diff| {
-            diff.referenced_blob_fn(|blob| match blob {
+            diff.referenced_blobs().for_each(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     batches_bytes += batch.encoded_size_bytes();
                 }
@@ -447,7 +447,7 @@ impl StorageUsageClient {
         let mut referenced_batches_bytes = BTreeMap::new();
         let mut referenced_other_bytes = 0;
         while let Some(_) = states_iter.next(|x| {
-            x.referenced_blob_fn(|x| match x {
+            x.referenced_blobs().for_each(|x| match x {
                 HollowBlobRef::Batch(x) => {
                     for part in x.parts.iter() {
                         let part = match part {

@@ -1006,14 +1006,18 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
             let inspect = InspectDiff::FromInitial(&self.state);
             #[cfg(debug_assertions)]
             {
-                inspect.referenced_blob_fn(|x| self.validator.add_inc_blob(x));
+                inspect
+                    .referenced_blobs()
+                    .for_each(|x| self.validator.add_inc_blob(x));
             }
             inspect_diff_fn(inspect);
         } else {
             let inspect = InspectDiff::Diff(&diff);
             #[cfg(debug_assertions)]
             {
-                inspect.referenced_blob_fn(|x| self.validator.add_inc_blob(x));
+                inspect
+                    .referenced_blobs()
+                    .for_each(|x| self.validator.add_inc_blob(x));
             }
             inspect_diff_fn(inspect);
         }
@@ -1066,11 +1070,14 @@ impl<T: Timestamp + Lattice + Codec64> InspectDiff<'_, T> {
     /// A callback invoked for each blob added this state transition.
     ///
     /// Blob removals, along with all other diffs, are ignored.
-    pub fn referenced_blob_fn<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, f: F) {
-        match self {
-            InspectDiff::FromInitial(x) => x.blobs().for_each(f),
-            InspectDiff::Diff(x) => x.map_blob_inserts(f),
-        }
+    pub fn referenced_blobs(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
+        let (state, diff) = match self {
+            InspectDiff::FromInitial(x) => (Some(x), None),
+            InspectDiff::Diff(x) => (None, Some(x)),
+        };
+        let state_blobs = state.into_iter().flat_map(|s| s.blobs());
+        let diff_blobs = diff.into_iter().flat_map(|d| d.blob_inserts());
+        state_blobs.chain(diff_blobs)
     }
 }
 

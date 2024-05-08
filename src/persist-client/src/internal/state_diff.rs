@@ -217,43 +217,40 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         diffs
     }
 
-    pub(crate) fn map_blob_inserts<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
-        for spine_diff in self.referenced_batches() {
-            match spine_diff {
-                Insert(b) | Update(_, b) => {
-                    f(HollowBlobRef::Batch(b));
-                }
-                Delete(_) => {} // No-op
-            }
-        }
-        for rollups_diff in self.rollups.iter() {
-            match &rollups_diff.val {
+    pub(crate) fn blob_inserts(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
+        let batches = self
+            .referenced_batches()
+            .filter_map(|spine_diff| match spine_diff {
+                Insert(b) | Update(_, b) => Some(HollowBlobRef::Batch(b)),
+                Delete(_) => None, // No-op
+            });
+        let rollups = self
+            .rollups
+            .iter()
+            .filter_map(|rollups_diff| match &rollups_diff.val {
                 StateFieldValDiff::Insert(x) | StateFieldValDiff::Update(_, x) => {
-                    f(HollowBlobRef::Rollup(x));
+                    Some(HollowBlobRef::Rollup(x))
                 }
-                StateFieldValDiff::Delete(_) => {} // No-op
-            }
-        }
+                StateFieldValDiff::Delete(_) => None, // No-op
+            });
+        batches.chain(rollups)
     }
 
-    pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
-        for spine_diff in self.referenced_batches() {
-            match spine_diff {
-                Insert(_) => {} // No-op
-                Update(b, _) | Delete(b) => {
-                    f(HollowBlobRef::Batch(b));
-                }
-            }
-        }
-        for rollups_diff in self.rollups.iter() {
-            match &rollups_diff.val {
-                StateFieldValDiff::Insert(_) => {}    // No-op
-                StateFieldValDiff::Update(_, _) => {} // No-op. Should never occur
-                StateFieldValDiff::Delete(x) => {
-                    f(HollowBlobRef::Rollup(x));
-                }
-            }
-        }
+    pub(crate) fn blob_deletes(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
+        let batches = self
+            .referenced_batches()
+            .filter_map(|spine_diff| match spine_diff {
+                Insert(_) => None,
+                Update(a, _) | Delete(a) => Some(HollowBlobRef::Batch(a)),
+            });
+        let rollups = self
+            .rollups
+            .iter()
+            .filter_map(|rollups_diff| match &rollups_diff.val {
+                Insert(_) => None,
+                Update(a, _) | Delete(a) => Some(HollowBlobRef::Rollup(a)),
+            });
+        batches.chain(rollups)
     }
 
     #[cfg(any(test, debug_assertions))]
