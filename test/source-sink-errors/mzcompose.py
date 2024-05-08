@@ -551,6 +551,9 @@ def workflow_default(c: Composition) -> None:
         f"Disruptions in shard with index {buildkite.get_parallelism_index()}: {[d.name for d in sharded_disruptions]}"
     )
     for disruption in sharded_disruptions:
+        c.override_current_testcase_name(
+            f"Disruption '{disruption.name}' in workflow_default"
+        )
         disruption.run_test(c)
 
 

@@ -116,6 +116,7 @@ class Composition:
         self.files = {}
         self.sources_and_sinks_ignored_from_validation = set()
         self.is_sanity_restart_mz = sanity_restart_mz
+        self.current_test_case_name_override: str | None = None
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -179,6 +180,13 @@ class Composition:
             self.dependencies = self._munge_services(self.compose["services"].items())
 
         self.files = {}
+
+    def override_current_testcase_name(self, test_case_name: str) -> None:
+        """
+        This allows to override the name of the test case (usually the workflow name) with more information
+        (e.g., the current scenario).
+        """
+        self.current_test_case_name_override = test_case_name
 
     def _munge_services(
         self, services: list[tuple[str, dict]]
@@ -583,13 +591,19 @@ class Composition:
     ) -> list[TestFailureDetails]:
         errors = [
             TestFailureDetails(
-                error_message, details=None, location=None, line_number=None
+                error_message,
+                details=None,
+                test_case_name_override=self.current_test_case_name_override,
+                location=None,
+                line_number=None,
             )
         ]
 
         if isinstance(e, CommandFailureCausedUIError):
             try:
-                extracted_errors = try_determine_errors_from_cmd_execution(e)
+                extracted_errors = try_determine_errors_from_cmd_execution(
+                    e, self.current_test_case_name_override
+                )
             except:
                 extracted_errors = []
             errors = extracted_errors if len(extracted_errors) > 0 else errors
@@ -599,7 +613,11 @@ class Composition:
         elif isinstance(e, WorkerFailedException):
             errors = [
                 TestFailureDetails(
-                    error_message, details=str(e.cause), location=None, line_number=None
+                    error_message,
+                    details=str(e.cause),
+                    location=None,
+                    line_number=None,
+                    test_case_name_override=self.current_test_case_name_override,
                 )
             ]
 

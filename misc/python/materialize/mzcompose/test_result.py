@@ -35,9 +35,11 @@ class TestFailureDetails:
     message: str
     details: str | None
     test_class_name_override: str | None = None
+    """The test class usually describes the framework."""
     test_case_name_override: str | None = None
-    # depending on the check, this may either be a file name or a path
+    """The test case usually describes the workflow, unless more fine-grained information is available."""
     location: str | None = None
+    """depending on the check, this may either be a file name or a path"""
     line_number: int | None = None
 
     def location_as_file_name(self) -> str | None:
@@ -65,12 +67,12 @@ class FailedTestExecutionError(UIError):
 
 
 def try_determine_errors_from_cmd_execution(
-    e: CommandFailureCausedUIError,
+    e: CommandFailureCausedUIError, test_context: str | None
 ) -> list[TestFailureDetails]:
     output = e.stderr or e.stdout
 
     if "running docker compose failed" in str(e):
-        return [determine_error_from_docker_compose_failure(e, output)]
+        return [determine_error_from_docker_compose_failure(e, output, test_context)]
 
     if output is None:
         return []
@@ -101,6 +103,7 @@ def try_determine_errors_from_cmd_execution(
         failure_details = TestFailureDetails(
             message,
             details=chunk,
+            test_case_name_override=test_context,
             location=file_path,
             line_number=line_number,
         )
@@ -115,12 +118,14 @@ def try_determine_errors_from_cmd_execution(
 
 
 def determine_error_from_docker_compose_failure(
-    e: CommandFailureCausedUIError, output: str | None
+    e: CommandFailureCausedUIError, output: str | None, test_context: str | None
 ) -> TestFailureDetails:
     command = to_sanitized_command_str(e.cmd)
+    context_prefix = f"{test_context}: " if test_context else None
     return TestFailureDetails(
-        f"Docker compose failed: {command}",
+        f"{context_prefix}Docker compose failed: {command}",
         details=output,
+        test_case_name_override=test_context,
         location=None,
         line_number=None,
     )
