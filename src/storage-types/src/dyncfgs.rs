@@ -11,6 +11,7 @@
 //! "statically" during rendering, or dynamically within timely operators.
 
 use mz_dyncfg::{Config, ConfigSet};
+use std::time::Duration;
 
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 /// Configuration for basic hydration backpressure.
@@ -94,6 +95,13 @@ pub const STORAGE_ROCKSDB_CLEANUP_TRIES: Config<usize> = Config::new(
     "How many times to try to cleanup old RocksDB DB's on disk before giving up.",
 );
 
+/// Delay interval when reconnecting to a source / sink after halt.
+pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
+    "storage_suspend_and_restart_delay",
+    Duration::from_secs(5),
+    "Delay interval when reconnecting to a source / sink after halt.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -104,4 +112,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
+        .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
 }
