@@ -34,6 +34,7 @@ netstat -ant > netstat-ant.log
 netstat -panelot > netstat-panelot.log
 ps aux > ps-aux.log
 docker ps -a --no-trunc > docker-ps-a.log
+docker stats --all --no-stream > docker-stats.log
 
 mv "$HOME"/cores .
 
