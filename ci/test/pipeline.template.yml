@@ -477,7 +477,7 @@ steps:
         label: Kafka RTR tests
         depends_on: build-aarch64
         timeout_in_minutes: 30
-        inputs: [test/kafka-rtr]
+        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-rtr
@@ -683,17 +683,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: skip-version-upgrade
-    agents:
-      queue: linux-aarch64-small
-
-  - id: kafka-rtr
-    label: "Kafka RTR"
-    depends_on: build-aarch64
-    timeout_in_minutes: 20
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-rtr
     agents:
       queue: linux-aarch64-small
 
