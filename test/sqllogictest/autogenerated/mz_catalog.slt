@@ -57,6 +57,17 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 1  id  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replica_sizes' ORDER BY position
+----
+1  size  text
+2  processes  uint8
+3  workers  uint8
+4  cpu_nano_cores  uint8
+5  memory_bytes  uint8
+6  disk_bytes  uint8
+7  credits_per_hour  numeric
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replicas' ORDER BY position
 ----
 1  id  text

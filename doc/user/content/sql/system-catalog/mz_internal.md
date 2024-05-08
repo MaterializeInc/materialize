@@ -181,6 +181,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
 | `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes.                                                                                                                             |
 
+<!-- TODO(chaas): remove after v0.99 release -->
 ### `mz_cluster_replica_sizes`
 
 The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
