@@ -637,61 +637,40 @@ where
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has another dependency.
-            let storage_dependency =
-                self.determine_collection_dependency(&description.data_source)?;
+            let storage_dependencies =
+                self.determine_collection_dependencies(&description.data_source)?;
 
-            // Determine the intial since of the collection.
-            let initial_since = match storage_dependency {
-                Some(dep) => {
-                    let dependency_collection = self.collection(dep)?;
-                    let dependency_since = dependency_collection.implied_capability.clone();
+            let dependencies_since =
+                self.determine_collection_since_joins(&storage_dependencies)?;
 
-                    // If an item has a dependency, its initial since must be
-                    // advanced as far as its dependency, i.e. a dependency's
-                    // since may never be in advance of its dependents.
-                    //
-                    // We have to do this every time we initialize the
-                    // collection, though––the invariant might have been upheld
-                    // correctly in the previous epoch, but the
-                    // `data_shard_since` might not have compacted and, on
-                    // establishing a new persist connection, still have data we
-                    // said _could_ be compacted.
-                    if PartialOrder::less_than(&data_shard_since, &dependency_since) {
-                        // The dependency since cannot be in advance of the
-                        // dependent upper unless the collection is new. If the
-                        // dependency since advanced past the dependent's upper,
-                        // the dependent cannot read data from the dependency at
-                        // its upper.
-                        //
-                        // Another way of understanding that this is a problem
-                        // is that this means that the read hold installed on
-                        // the dependency was probably not been upheld––if it
-                        // were, the dependency's since could not have advanced
-                        // as far the dependent's upper.
-                        mz_ore::soft_assert_or_log!(
-                            write_frontier.elements() == &[T::minimum()]
-                                || PartialOrder::less_than(&dependency_since, write_frontier),
-                            "dependency ({dep}) since has advanced past dependent ({id}) upper \n
-                            dependent ({id}): since {:?}, upper {:?} \n
-                            dependency ({dep}): since {:?}",
-                            data_shard_since,
-                            write_frontier,
-                            dependency_since
-                        );
-
-                        dependency_since
-                    } else {
-                        data_shard_since
-                    }
-                }
-                None => data_shard_since,
+            // If an item has dependencies, its initial since must be advanced
+            // as far as its dependency, i.e. a dependency's since may never be
+            // in advance of its dependents.
+            //
+            // We have to do this every time we initialize the collection,
+            // though––the previously mentioned invariant might have been upheld
+            // correctly in the previous epoch, but the `data_shard_since` might
+            // not have compacted and, on establishing a new persist connection,
+            // still have data we said _could_ be compacted that the
+            // dependency's since is in advance of.
+            let initial_since = if PartialOrder::less_than(&data_shard_since, &dependencies_since) {
+                dependencies_since
+            } else {
+                data_shard_since
             };
+
+            mz_ore::soft_assert_or_log!(
+                // New collections can always have an initial since beyond T::minimum()
+                write_frontier.elements() == &[T::minimum()]
+                    || PartialOrder::less_than(&initial_since, &write_frontier),
+                "Collection {id} w/ deps {storage_dependencies:?}: since {initial_since:?} beyond non-min upper {write_frontier:?}",
+            );
 
             let collection_state = CollectionState::new(
                 description,
                 initial_since,
                 write_frontier.clone(),
-                storage_dependency,
+                storage_dependencies,
                 metadata.clone(),
             );
 
@@ -1232,9 +1211,8 @@ where
 
         for (id, description) in exports {
             let from_id = description.sink.from;
-            let dep_collection = self.collection(from_id)?;
-            let dependency_since = dep_collection.implied_capability.clone();
-            self.install_read_capability(id, from_id, dependency_since.clone())?;
+            let dependency_since = self.determine_collection_since_joins(&[from_id])?;
+            self.install_read_capabilities(id, &[from_id], dependency_since.clone())?;
 
             info!(
                 sink_id = id.to_string(),
@@ -1946,7 +1924,7 @@ where
                 let changes = collection.read_capabilities.update_iter(update.drain());
                 update.extend(changes);
 
-                for id in collection.storage_dependency.iter() {
+                for id in collection.storage_dependencies.iter() {
                     updates
                         .entry(*id)
                         .or_insert_with(ChangeBatch::new)
@@ -2929,19 +2907,44 @@ where
         res
     }
 
+    /// Return the since frontier at which we can read from all the given
+    /// collections.
+    fn determine_collection_since_joins(
+        &self,
+        collections: &[GlobalId],
+    ) -> Result<Antichain<T>, StorageError<T>> {
+        let mut joined_since = Antichain::from_elem(T::minimum());
+        for id in collections {
+            let collection = self.collection(*id)?;
+
+            let since = collection.implied_capability.clone();
+            joined_since.join_assign(&since);
+        }
+
+        Ok(joined_since)
+    }
+
     /// Install read capabilities on the given `storage_dependency`.
-    fn install_read_capability(
+    fn install_read_capabilities(
         &mut self,
         _from_id: GlobalId,
-        storage_dependency: GlobalId,
+        storage_dependencies: &[GlobalId],
         read_capability: Antichain<T>,
     ) -> Result<(), StorageError<T>> {
+        if storage_dependencies.is_empty() {
+            return Ok(());
+        }
+
         let mut changes = ChangeBatch::new();
         for time in read_capability.iter() {
             changes.update(time.clone(), 1);
         }
 
-        let mut storage_read_updates = BTreeMap::from_iter([(storage_dependency, changes)]);
+        let mut storage_read_updates = storage_dependencies
+            .iter()
+            .map(|id| (*id, changes.clone()))
+            .collect();
+
         self.update_read_capabilities(&mut storage_read_updates);
 
         Ok(())
@@ -3520,35 +3523,36 @@ where
     /// Determine if this collection has another dependency.
     ///
     /// Currently, collections have either 0 or 1 dependencies.
-    fn determine_collection_dependency(
+    fn determine_collection_dependencies(
         &self,
         data_source: &DataSource,
-    ) -> Result<Option<GlobalId>, StorageError<T>> {
-        let dependency = match &data_source {
+    ) -> Result<Vec<GlobalId>, StorageError<T>> {
+        let dependencies = match &data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
             | DataSource::Other(DataSourceOther::TableWrites)
             | DataSource::Progress
-            | DataSource::Other(DataSourceOther::Compute) => None,
+            | DataSource::Other(DataSourceOther::Compute) => vec![],
             DataSource::IngestionExport { ingestion_id, .. } => {
                 // Ingestion exports depend on their primary source's remap
                 // collection.
                 let source_collection = self.collection(*ingestion_id)?;
-                match &source_collection.description {
+                let remap_collection = match &source_collection.description {
                     CollectionDescription {
                         data_source: DataSource::Ingestion(ingestion_desc),
                         ..
-                    } => Some(ingestion_desc.remap_collection_id),
+                    } => ingestion_desc.remap_collection_id,
                     _ => unreachable!(
                         "SourceExport must only refer to primary sources that already exist"
                     ),
-                }
+                };
+                vec![remap_collection, *ingestion_id]
             }
             // Ingestions depend on their remap collection.
-            DataSource::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
+            DataSource::Ingestion(ingestion) => vec![ingestion.remap_collection_id],
         };
 
-        Ok(dependency)
+        Ok(dependencies)
     }
 
     /// Determine which, if any, cluster this `DataSource` runs on.
@@ -3588,26 +3592,28 @@ where
         &mut self,
         id: GlobalId,
     ) -> Result<(), StorageError<T>> {
-        let (dep, collection_implied_capability) = match self.collection(id) {
-            Ok(CollectionState {
-                storage_dependency: Some(dep),
-                implied_capability,
-                ..
-            }) => (dep, implied_capability),
-            _ => return Ok(()),
+        let CollectionState {
+            storage_dependencies,
+            implied_capability,
+            ..
+        } = match self.collection(id) {
+            Ok(coll) => coll,
+            // If this item doesn't exist as a collection, it's likely tracked
+            // elsewhere (e.g. we've registered it as a table). In the context
+            // of this function, that isn't an error; it just means we aren't
+            // responsible for handling the dependency read capabilities.
+            Err(_) => return Ok(()),
         };
 
-        let dep_collection = self.collection(*dep)?;
+        let deps = storage_dependencies.as_slice();
+        let deps_since_joins = self.determine_collection_since_joins(deps)?;
 
         mz_ore::soft_assert_or_log!(
-            PartialOrder::less_equal(
-                &dep_collection.implied_capability,
-                collection_implied_capability
-            ),
+            PartialOrder::less_equal(&deps_since_joins, implied_capability),
             "dependency since cannot be in advance of dependent's since"
         );
 
-        self.install_read_capability(id, *dep, collection_implied_capability.clone())
+        self.install_read_capabilities(id, &deps.to_vec(), deps_since_joins)
     }
 
     async fn read_handle_for_snapshot(
@@ -3800,11 +3806,13 @@ pub struct CollectionState<T> {
     /// The policy to use to downgrade `self.implied_capability`.
     pub read_policy: ReadPolicy<T>,
 
-    /// An optional storage identify that this collection may depend on.
+    /// Collections on which this collection depends.
     ///
-    /// This could become a vec in the future, we just currently have either 0
-    /// or 1 dependencies.
-    pub storage_dependency: Option<GlobalId>,
+    /// If an item has a dependency, its initial since must be advanced as far
+    /// as its dependency, i.e. a dependency's since may never be in advance of
+    /// its dependents. We enforce this relationship through
+    /// `Controller::install_collection_dependency_read_holds`.
+    pub storage_dependencies: Vec<GlobalId>,
 
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
@@ -3818,7 +3826,7 @@ impl<T: Timestamp> CollectionState<T> {
         description: CollectionDescription<T>,
         since: Antichain<T>,
         write_frontier: Antichain<T>,
-        storage_dependency: Option<GlobalId>,
+        storage_dependencies: Vec<GlobalId>,
         metadata: CollectionMetadata,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -3830,7 +3838,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::NoPolicy {
                 initial_since: since,
             },
-            storage_dependency,
+            storage_dependencies,
             write_frontier,
             collection_metadata: metadata,
         }
