@@ -12,6 +12,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::num::FpCategory;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -20,8 +21,6 @@ use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metrics::MetricsRegistry;
@@ -35,6 +34,7 @@ use mz_proto::RustType;
 use prost::Message;
 use serde::Serialize;
 use serde_json::json;
+use tokio::sync::mpsc;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
@@ -650,6 +650,14 @@ pub async fn arrow_rs_roundtrip(blob_uri: &str) -> Result<impl Serialize, anyhow
     let metrics_registry = MetricsRegistry::new();
     let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
 
+    // Updates the 'persist_use_arrow_rs_library' feature flag.
+    let update_feature_flag = |val: &str| {
+        let mut updates = mz_dyncfg::ConfigUpdates::default();
+        let val = mz_dyncfg::ConfigVal::String(val.to_string());
+        updates.add_dynamic("persist_use_arrow_rs_library", val);
+        updates.apply(&cfg.configs);
+    };
+
     #[derive(Debug, Default, Serialize)]
     struct BlobReport {
         num_shards: usize,
@@ -671,7 +679,7 @@ pub async fn arrow_rs_roundtrip(blob_uri: &str) -> Result<impl Serialize, anyhow
                     partial_keys.push(PartialBatchKey::new(&writer_key, &part_id));
                 }
                 Err(err) => {
-                    eprintln!("error parsing blob: {}", err);
+                    tracing::warn!("error parsing blob: {}", err);
                 }
                 _ => (),
             }
@@ -690,8 +698,11 @@ pub async fn arrow_rs_roundtrip(blob_uri: &str) -> Result<impl Serialize, anyhow
     // List all shards.
     let shards = mz_ore::retry::Retry::default()
         .max_tries(5)
-        .retry_async(|_| {
+        .retry_async(|state| {
             let blob = Arc::clone(&blob);
+            if state.i > 0 {
+                tracing::warn!(attempt = state.i + 1, ?blob_uri, "listing shards");
+            }
             async move { list_shards(Arc::clone(&blob)).await }
         })
         .await?;
@@ -706,33 +717,41 @@ pub async fn arrow_rs_roundtrip(blob_uri: &str) -> Result<impl Serialize, anyhow
 
     let mut report = BlobReport::default();
     for (shard_id, partial_keys) in shards {
-        // Drives all of the GET futures concurrently.
+        // Using a bounded channel prevents us from fetching too many blobs at once.
         //
-        // Note(parkmycar): We should limit the number of blobs we fetch in parallel to reduce
-        // memory usage.
-        let mut blob_stream: FuturesUnordered<_> = partial_keys
-            .iter()
-            .map(|partial_key| {
-                let blob = Arc::clone(&blob);
-                let key = partial_key.complete(&shard_id);
-                mz_ore::retry::Retry::default().retry_async(move |_| {
-                    let blob = Arc::clone(&blob);
-                    let key = key.clone();
-                    async move { blob.get(&key).await }
-                })
-            })
-            .collect();
+        // 128MiB max blob size * 12 = 1.5GiB.
+        let (blob_tx, mut blob_rx) = mpsc::channel(12);
 
-        // Updates the 'persist_use_arrow_rs_library' feature flag.
-        let update_feature_flag = |val: &str| {
-            let mut updates = mz_dyncfg::ConfigUpdates::default();
-            let val = mz_dyncfg::ConfigVal::String(val.to_string());
-            updates.add_dynamic("persist_use_arrow_rs_library", val);
-            updates.apply(metrics.columnar.cfg());
-        };
+        // Spawn an individual task to fetch each blob.
+        for partial_key in &partial_keys {
+            let blob = Arc::clone(&blob);
+            let blob_tx = blob_tx.clone();
+            let key = partial_key.complete(&shard_id);
 
-        while let Some(blob_result) = blob_stream.next().await {
-            let Some(blob) = blob_result? else {
+            mz_ore::task::spawn(|| "persistcli-fetch", async move {
+                // Reserving a permit bounds the number of inflight requests.
+                let permit = blob_tx.reserve().await.expect("shutting down");
+                let blob_result = mz_ore::retry::Retry::default()
+                    .retry_async(move |state| {
+                        let blob = Arc::clone(&blob);
+                        let key = key.clone();
+                        if state.i > 0 {
+                            tracing::warn!(attempt = state.i + 1, ?key, "fetching blob");
+                        }
+                        async move { blob.get(&key).await.map(|b| (b, key)) }
+                    })
+                    .await;
+                permit.send(blob_result);
+            });
+        }
+        // Make sure we drop our sender so the below channel will close when
+        // all of our blob fetches have completed.
+        drop(blob_tx);
+
+        // Validate each blob.
+        while let Some(blob_result) = blob_rx.recv().await {
+            let (maybe_blob, key) = blob_result?;
+            let Some(blob) = maybe_blob else {
                 report.missing_blobs += 1;
                 continue;
             };
@@ -749,7 +768,9 @@ pub async fn arrow_rs_roundtrip(blob_uri: &str) -> Result<impl Serialize, anyhow
 
             // Make sure the records match.
             if arrow2_records != arrow_rs_records {
-                anyhow::bail!("arrow2 and arrow-rs return different values, {blob_uri:?}");
+                anyhow::bail!(
+                    "arrow2 and arrow-rs return different values, {key:?} @ {blob_uri:?}"
+                );
             }
 
             report.num_rows += arrow2_records
@@ -799,7 +820,7 @@ pub async fn arrow_rs_roundtrip(blob_uri: &str) -> Result<impl Serialize, anyhow
     // Make sure our metrics indicated we did the right things.
     let metrics = metrics_registry.gather();
     let arrow_metrics = metrics
-        .into_iter()
+        .iter()
         .find(|family| family.get_name() == "mz_persist_arrow_operations")
         .expect("failed to get metrics");
     let get_arrow_metric = |library: &str, op: &str| {
@@ -836,7 +857,19 @@ pub async fn arrow_rs_roundtrip(blob_uri: &str) -> Result<impl Serialize, anyhow
     assert_eq!(arrow2_encode, 0);
     assert!(arrow_rs_encode > 0);
 
-    tracing::info!(?blob_uri, "completed");
+    // Also log any "interesting" metrics.
+    let interesting_metrics: Vec<_> = metrics
+        .iter()
+        .flat_map(|m| {
+            m.get_metric().iter().filter(|m| {
+                m.get_counter().get_value().classify() != FpCategory::Zero
+                    || m.get_gauge().get_value().classify() != FpCategory::Zero
+                    || m.get_histogram().get_sample_count() > 0
+            })
+        })
+        .collect();
+
+    tracing::info!(?blob_uri, ?interesting_metrics, "DONE");
 
     Ok(report)
 }
