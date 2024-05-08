@@ -19,6 +19,7 @@ MZ_PIPELINES = [
     "deploy-website",
     "license",
     "nightly",
+    "qa-canary",
     "release-qualification",
     "security",
     "slt",
