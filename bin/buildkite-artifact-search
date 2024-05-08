@@ -9,6 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# buildkite-annotation-search - buildkite annotation search
+# buildkite-artifact-search - buildkite artifact search
 
-exec "$(dirname "$0")"/pyactivate -m materialize.buildkite_insights.annotation_search.annotation_search "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.buildkite_insights.artifact_search.artifact_search "$@"
