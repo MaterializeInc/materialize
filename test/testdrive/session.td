@@ -60,6 +60,7 @@ max_sinks                           25                      "The maximum number 
 max_sources                         25                      "The maximum number of sources in the region, across all schemas (Materialize)."
 max_tables                          25                      "The maximum number of tables in the region, across all schemas (Materialize)."
 mz_version                          <VARIES>                "Shows the Materialize server version (Materialize)."
+real_time_recency                   off                     "Feature flag indicating whether real time recency is enabled (Materialize)."
 search_path                         public                  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
 server_version                      9.5.0                   "Shows the PostgreSQL compatible server version (PostgreSQL)."
 server_version_num                  90500                   "Shows the PostgreSQL compatible server version as an integer (PostgreSQL)."
