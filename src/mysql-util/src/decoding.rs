@@ -174,6 +174,50 @@ fn val_to_datum<'a>(
                         temp_strs.push(val.to_string());
                         Datum::from(temp_strs.last().unwrap().as_str())
                     }
+                    Some(MySqlColumnMeta::Date) => {
+                        // Some MySQL dates are invalid in chrono/NaiveDate (e.g. 0000-00-00), so
+                        // we need to handle them directly as strings
+                        if let Value::Date(y, m, d, 0, 0, 0, 0) = value {
+                            temp_strs.push(format!("{:04}-{:02}-{:02}", y, m, d));
+                        } else {
+                            Err(anyhow::anyhow!(
+                                "received unexpected value for date type: {:?}",
+                                value
+                            ))?
+                        }
+                        Datum::from(temp_strs.last().unwrap().as_str())
+                    }
+                    Some(MySqlColumnMeta::Timestamp(precision)) => {
+                        // Some MySQL dates are invalid in chrono/NaiveDate (e.g. 0000-00-00), so
+                        // we need to handle them directly as strings
+                        if let Value::Date(y, m, d, h, mm, s, ms) = value {
+                            if *precision > 0 {
+                                let precision: usize = (*precision).try_into()?;
+                                temp_strs.push(format!(
+                                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:0precision$}",
+                                    y,
+                                    m,
+                                    d,
+                                    h,
+                                    mm,
+                                    s,
+                                    ms,
+                                    precision = precision
+                                ));
+                            } else {
+                                temp_strs.push(format!(
+                                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                                    y, m, d, h, mm, s
+                                ));
+                            }
+                        } else {
+                            Err(anyhow::anyhow!(
+                                "received unexpected value for timestamp type: {:?}",
+                                value
+                            ))?
+                        }
+                        Datum::from(temp_strs.last().unwrap().as_str())
+                    }
                     None => {
                         temp_strs.push(from_value_opt::<String>(value)?);
                         Datum::from(temp_strs.last().unwrap().as_str())

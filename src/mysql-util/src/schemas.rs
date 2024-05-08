@@ -428,6 +428,22 @@ fn parse_as_text_column(
                 })?,
             })),
         )),
+        "date" => Ok((ScalarType::String, Some(MySqlColumnMeta::Date))),
+        "datetime" | "timestamp" => Ok((
+            ScalarType::String,
+            Some(MySqlColumnMeta::Timestamp(
+                info.datetime_precision
+                    // Default precision is 0 in MySQL if not specified
+                    .unwrap_or_default()
+                    .try_into()
+                    .map_err(|_| UnsupportedDataType {
+                        column_type: info.column_type.clone(),
+                        qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                        column_name: info.column_name.clone(),
+                        intended_type: Some("text".to_string()),
+                    })?,
+            )),
+        )),
         _ => Err(UnsupportedDataType {
             column_type: info.column_type.clone(),
             qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
