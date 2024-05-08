@@ -83,7 +83,9 @@ class PostgresConsistencyTest(OutputConsistencyTest):
     ) -> GenericInconsistencyIgnoreFilter:
         return PgInconsistencyIgnoreFilter()
 
-    def create_evaluation_strategies(self) -> list[EvaluationStrategy]:
+    def create_evaluation_strategies(
+        self, sql_executors: SqlExecutors
+    ) -> list[EvaluationStrategy]:
         mz_evaluation_strategy = DataFlowRenderingEvaluation()
         mz_evaluation_strategy.name = "Materialize evaluation"
         mz_evaluation_strategy.simple_db_object_name = "mz_evaluation"

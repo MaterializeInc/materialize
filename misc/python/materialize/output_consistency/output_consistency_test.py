@@ -140,11 +140,11 @@ class OutputConsistencyTest:
         if config.postgres_compatible_mode:
             input_data.remove_postgres_incompatible_data()
 
-        evaluation_strategies = self.create_evaluation_strategies()
-
         randomized_picker = RandomizedPicker(config)
 
         sql_executors = self.create_sql_executors(config, connection, output_printer)
+
+        evaluation_strategies = self.create_evaluation_strategies(sql_executors)
 
         ignore_filter = self.create_inconsistency_ignore_filter(sql_executors)
 
@@ -223,7 +223,9 @@ class OutputConsistencyTest:
     ) -> GenericInconsistencyIgnoreFilter:
         return InternalOutputInconsistencyIgnoreFilter()
 
-    def create_evaluation_strategies(self) -> list[EvaluationStrategy]:
+    def create_evaluation_strategies(
+        self, sql_executors: SqlExecutors
+    ) -> list[EvaluationStrategy]:
         return [
             DataFlowRenderingEvaluation(),
             ConstantFoldingEvaluation(),
