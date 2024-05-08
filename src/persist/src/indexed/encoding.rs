@@ -84,7 +84,7 @@ pub struct TraceBatchMeta {
 ///
 /// TODO: disallow empty trace batch parts in the future so there is one unique
 /// way to represent an empty trace batch.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BlobTraceBatchPart<T> {
     /// Which updates are included in this batch.
     ///
