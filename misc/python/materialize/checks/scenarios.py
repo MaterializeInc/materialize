@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from dataclasses import dataclass
 from random import Random
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
@@ -252,6 +253,19 @@ class RestartRedpandaDebezium(Scenario):
         ]
 
 
+@dataclass
+class SystemVarChangeEntry:
+    name: str
+    value_for_manipulate_phase_1: str
+    value_for_manipulate_phase_2: str
+
+    def value_for_validation_1(self) -> str:
+        return self.value_for_manipulate_phase_1
+
+    def value_for_validation_2(self) -> str:
+        return self.value_for_manipulate_phase_2
+
+
 # This scenario is not instantiated. Create a subclass to use it.
 class SystemVarChange(Scenario):
     def __init__(
@@ -259,27 +273,52 @@ class SystemVarChange(Scenario):
         checks: list[type[Check]],
         executor: Executor,
         seed: str | None,
-        name: str,
-        value_1: str,
-        value_2: str,
+        change_entries: list[SystemVarChangeEntry],
     ):
         super().__init__(checks, executor, seed)
-        self.name = name
-        self.value_1 = value_1
-        self.value_2 = value_2
+        self.change_entries = change_entries
 
     def actions(self) -> list[Action]:
+        validations = []
+
+        for var in self.change_entries:
+            validations.append(
+                SystemVarChangeAction(
+                    name=var.name, value=var.value_for_manipulate_phase_2
+                )
+            )
+            validations.append(Validate(self))
+
         return [
             StartMz(self),
             Initialize(self),
-            SystemVarChangeAction(name=self.name, value=self.value_1),
+            # manipulate phase 1
+            *[
+                SystemVarChangeAction(
+                    name=var.name, value=var.value_for_manipulate_phase_1
+                )
+                for var in self.change_entries
+            ],
             Manipulate(self, phase=1),
-            SystemVarChangeAction(name=self.name, value=self.value_2),
+            # manipulate phase 2
+            *[
+                SystemVarChangeAction(
+                    name=var.name, value=var.value_for_manipulate_phase_2
+                )
+                for var in self.change_entries
+            ],
             Manipulate(self, phase=2),
-            # validate with value_2
+            # validation 1
+            *[
+                SystemVarChangeAction(name=var.name, value=var.value_for_validation_1())
+                for var in self.change_entries
+            ],
             Validate(self),
-            SystemVarChangeAction(name=self.name, value=self.value_1),
-            # validate with value_1
+            # validation 2
+            *[
+                SystemVarChangeAction(name=var.name, value=var.value_for_validation_2())
+                for var in self.change_entries
+            ],
             Validate(self),
         ]
 
@@ -290,9 +329,13 @@ class TogglePersistRoundtripSpine(SystemVarChange):
             checks,
             executor,
             seed,
-            name="persist_roundtrip_spine",
-            value_1="FALSE",
-            value_2="TRUE",
+            [
+                SystemVarChangeEntry(
+                    name="persist_roundtrip_spine",
+                    value_for_manipulate_phase_1="FALSE",
+                    value_for_manipulate_phase_2="TRUE",
+                )
+            ],
         )
 
 
@@ -302,7 +345,11 @@ class TogglePersistUseArrowRsLibrary(SystemVarChange):
             checks,
             executor,
             seed,
-            name="persist_use_arrow_rs_library",
-            value_1="read",
-            value_2="read_and_write",
+            [
+                SystemVarChangeEntry(
+                    name="persist_use_arrow_rs_library",
+                    value_for_manipulate_phase_1="read",
+                    value_for_manipulate_phase_2="read_and_write",
+                )
+            ],
         )
