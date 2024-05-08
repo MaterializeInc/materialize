@@ -1784,6 +1784,123 @@ mod tests {
         read.maybe_heartbeat_reader().await;
     }
 
+    /// Verify that shard finalization works with empty shards, shards that have
+    /// an empty write up to the empty upper Antichain.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn finalize_empty_shard(dyncfgs: ConfigUpdates) {
+        const EMPTY: &[(((), ()), u64, i64)] = &[];
+        let persist_client = new_test_client(&dyncfgs).await;
+
+        let shard_id = ShardId::new();
+        pub const CRITICAL_SINCE: CriticalReaderId =
+            CriticalReaderId([0, 0, 0, 0, 17, 17, 34, 34, 51, 51, 68, 68, 68, 68, 68, 68]);
+
+        let (mut write, mut read) = persist_client
+            .expect_open::<(), (), u64, i64>(shard_id)
+            .await;
+
+        // Advance since and upper to empty, which is a pre-requisite for
+        // finalization/tombstoning.
+        let () = read.downgrade_since(&Antichain::new()).await;
+        let () = write
+            .compare_and_append(EMPTY, Antichain::from_elem(0), Antichain::new())
+            .await
+            .expect("usage should be valid")
+            .expect("upper should match");
+
+        let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
+            .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
+            .await
+            .expect("invalid persist usage");
+
+        let epoch = since_handle.opaque().clone();
+        let new_since = Antichain::new();
+        let downgrade = since_handle
+            .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+            .await;
+
+        assert!(
+            downgrade.is_ok(),
+            "downgrade of critical handle must succeed"
+        );
+
+        let finalize = persist_client
+            .finalize_shard::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await;
+
+        assert!(finalize.is_ok(), "finalization must succeed");
+
+        let is_finalized = persist_client
+            .is_finalized::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("invalid persist usage");
+        assert!(is_finalized, "shard must still be finalized");
+    }
+
+    /// Verify that shard finalization works with shards that had some data
+    /// written to them, plus then an empty batch to bring their upper to the
+    /// empty Antichain.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn finalize_shard(dyncfgs: ConfigUpdates) {
+        const EMPTY: &[(((), ()), u64, i64)] = &[];
+        const DATA: &[(((), ()), u64, i64)] = &[(((), ()), 0, 1)];
+        let persist_client = new_test_client(&dyncfgs).await;
+
+        let shard_id = ShardId::new();
+        pub const CRITICAL_SINCE: CriticalReaderId =
+            CriticalReaderId([0, 0, 0, 0, 17, 17, 34, 34, 51, 51, 68, 68, 68, 68, 68, 68]);
+
+        let (mut write, mut read) = persist_client
+            .expect_open::<(), (), u64, i64>(shard_id)
+            .await;
+
+        // Write some data.
+        let () = write
+            .compare_and_append(DATA, Antichain::from_elem(0), Antichain::from_elem(1))
+            .await
+            .expect("usage should be valid")
+            .expect("upper should match");
+
+        // Advance since and upper to empty, which is a pre-requisite for
+        // finalization/tombstoning.
+        let () = read.downgrade_since(&Antichain::new()).await;
+        let () = write
+            .compare_and_append(EMPTY, Antichain::from_elem(1), Antichain::new())
+            .await
+            .expect("usage should be valid")
+            .expect("upper should match");
+
+        let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
+            .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
+            .await
+            .expect("invalid persist usage");
+
+        let epoch = since_handle.opaque().clone();
+        let new_since = Antichain::new();
+        let downgrade = since_handle
+            .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+            .await;
+
+        assert!(
+            downgrade.is_ok(),
+            "downgrade of critical handle must succeed"
+        );
+
+        let finalize = persist_client
+            .finalize_shard::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await;
+
+        assert!(finalize.is_ok(), "finalization must succeed");
+
+        let is_finalized = persist_client
+            .is_finalized::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("invalid persist usage");
+        assert!(is_finalized, "shard must still be finalized");
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
