@@ -2043,7 +2043,7 @@ impl SystemVars {
     }
 
     pub fn cluster_security_context_enabled(&self) -> bool {
-        *self.expect_value(&cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED)
+        *self.expect_value(&cluster_scheduling::CLUSTER_ENABLE_SECURITY_CONTEXT)
     }
 
     /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
