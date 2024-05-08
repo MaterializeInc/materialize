@@ -12,7 +12,6 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::num::FpCategory;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -38,6 +37,7 @@ use tokio::sync::mpsc;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
+use crate::cli::admin::info_log_non_zero_metrics;
 use crate::cli::args::{make_blob, make_consensus, StateArgs, NO_COMMIT, READ_ALL_BUILD_INFO};
 use crate::error::CodecConcreteType;
 use crate::fetch::{Cursor, EncodedPart};
@@ -858,18 +858,8 @@ pub async fn arrow_rs_roundtrip(blob_uri: &str) -> Result<impl Serialize, anyhow
     assert!(arrow_rs_encode > 0);
 
     // Also log any "interesting" metrics.
-    let interesting_metrics: Vec<_> = metrics
-        .iter()
-        .flat_map(|m| {
-            m.get_metric().iter().filter(|m| {
-                m.get_counter().get_value().classify() != FpCategory::Zero
-                    || m.get_gauge().get_value().classify() != FpCategory::Zero
-                    || m.get_histogram().get_sample_count() > 0
-            })
-        })
-        .collect();
-
-    tracing::info!(?blob_uri, ?interesting_metrics, "DONE");
+    info_log_non_zero_metrics(&metrics);
+    tracing::info!(?blob_uri, "DONE");
 
     Ok(report)
 }
