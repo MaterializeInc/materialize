@@ -141,7 +141,7 @@ impl ColumnarMetrics {
     }
 
     /// Returns a reference to the inner [`ConfigSet`].
-    /// 
+    ///
     /// Exposed to allow updating the inner [`ConfigSet`] during testing.
     pub fn cfg(&self) -> &ConfigSet {
         &self.cfg
