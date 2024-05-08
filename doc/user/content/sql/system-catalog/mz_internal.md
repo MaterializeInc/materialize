@@ -181,6 +181,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
 | `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes.                                                                                                                             |
 
+<!-- TODO(chaas): remove after v0.99 release -->
 ### `mz_cluster_replica_sizes`
 
 The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
@@ -191,7 +192,6 @@ The values in this table may change at any time. You should not rely on them for
 any kind of capacity planning.
 {{< /warning >}}
 
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_sizes -->
 | Field                  | Type        | Meaning                                                                                                                                                      |
 |------------------------|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `size`                 | [`text`]    | The human-readable replica size.                                                                                                                             |

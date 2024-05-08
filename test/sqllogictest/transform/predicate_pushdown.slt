@@ -923,7 +923,7 @@ with
         FROM
             creates
                 LEFT JOIN
-                    mz_internal.mz_cluster_replica_sizes
+                    mz_catalog.mz_cluster_replica_sizes
                     ON mz_cluster_replica_sizes.size = creates.size
   )
 select * from v1

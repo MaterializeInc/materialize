@@ -18,7 +18,7 @@ statement ok
 CREATE CLUSTER c1 SIZE 'mem-2';
 
 query I
-SELECT workers FROM mz_internal.mz_cluster_replica_sizes JOIN mz_cluster_replicas USING (size);
+SELECT workers FROM mz_catalog.mz_cluster_replica_sizes JOIN mz_cluster_replicas USING (size);
 ----
 2
 2

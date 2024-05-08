@@ -333,7 +333,7 @@ mz_system  r1  2
 quickstart  r1  2
 
 query TTTTTTT
-SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
+SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
 ----
 r1  2  1  18446744073709000000  18446744073709551615  2  1
 r1  2  1  18446744073709000000  18446744073709551615  2  1
