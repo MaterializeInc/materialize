@@ -203,6 +203,7 @@ use std::rc::Rc;
 use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription};
 use timely::communication::Allocate;
@@ -375,6 +376,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     .storage_configuration
                     .parameters
                     .record_namespaced_errors,
+                dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
+                    .get(storage_state.storage_configuration.config_set()),
             );
             tokens.push(health_token);
 
@@ -436,6 +439,8 @@ pub fn build_export_dataflow<A: Allocate>(
                     .storage_configuration
                     .parameters
                     .record_namespaced_errors,
+                dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
+                    .get(storage_state.storage_configuration.config_set()),
             );
             tokens.push(health_token);
 

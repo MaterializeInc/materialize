@@ -10,9 +10,8 @@
 //! Dyncfgs used by the storage layer. Despite their name, these can be used
 //! "statically" during rendering, or dynamically within timely operators.
 
-use std::time::Duration;
-
 use mz_dyncfg::{Config, ConfigSet};
+use std::time::Duration;
 
 /// When dataflows observe an invariant violation it is either due to a bug or due to the cluster
 /// being shut down. This configuration defines the amount of time to wait before panicking the
@@ -167,6 +166,13 @@ pub const STORAGE_ROCKSDB_CLEANUP_TRIES: Config<usize> = Config::new(
     "How many times to try to cleanup old RocksDB DB's on disk before giving up.",
 );
 
+/// Delay interval when reconnecting to a source / sink after halt.
+pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
+    "storage_suspend_and_restart_delay",
+    Duration::from_secs(5),
+    "Delay interval when reconnecting to a source / sink after halt.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -184,4 +190,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
+        .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
 }
