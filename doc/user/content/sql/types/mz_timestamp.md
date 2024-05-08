@@ -38,6 +38,7 @@ From | To | Required context
 `uint8` | `mz_timestamp` | Implicit
 `int4` | `mz_timestamp` | Implicit
 `int8` | `mz_timestamp` | Implicit
+`interval` | `mz_timestamp` | Implicit
 `numeric` | `mz_timestamp` | Implicit
 `timestamp` | `mz_timestamp` | Implicit
 `timestamptz` | `mz_timestamp` | Implicit

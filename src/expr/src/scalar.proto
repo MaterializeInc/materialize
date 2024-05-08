@@ -441,6 +441,7 @@ message ProtoUnaryFunc {
         mz_repr.adt.regex.ProtoRegex regexp_split_to_array = 305;
         mz_repr.relation_and_scalar.ProtoScalarType map_build_from_record_list = 317;
         google.protobuf.Empty initcap = 320;
+        google.protobuf.Empty cast_interval_to_mz_timestamp = 321;
     }
 }
 
