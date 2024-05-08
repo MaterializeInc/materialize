@@ -594,6 +594,9 @@ pub trait UpsertStateBackend<O>
 where
     O: 'static,
 {
+    /// Whether this backend supports the `multi_merge` operation.
+    fn supports_merge(&self) -> bool;
+
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
     ///
@@ -623,6 +626,30 @@ where
     where
         G: IntoIterator<Item = UpsertKey>,
         R: IntoIterator<Item = &'r mut UpsertValueAndSize<O>>;
+
+    /// Merge values for all `merges` keys. The values for each key are merged into the existing
+    /// key value using the `snapshot_merge_function` when the backend decides to run the merge
+    /// operation. This allows avoiding the read-modify-write method of updating many values to
+    /// improve performance.
+    ///
+    /// TODO: Figure out stats for this
+    async fn multi_merge<P>(&mut self, merges: P) -> Result<PutStats, anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, StateValue<O>)>;
+}
+
+/// A function that merges a set of updates for a key into the existing value for the key.
+/// The function should return the new value for the key, or None if the key should be deleted.
+/// The function is called with the following arguments:
+/// - The key for which the merge is being performed.
+/// - An iterator over the current value and merge-operations queued for the key.
+pub(crate) fn snapshot_merge_function<O>(
+    _key: UpsertKey,
+    updates: impl Iterator<Item = StateValue<O>>,
+) -> Option<StateValue<O>> {
+    // TODO: Implement
+
+    updates.into_iter().last()
 }
 
 /// An `UpsertStateBackend` wrapper that supports
@@ -658,19 +685,15 @@ pub struct UpsertState<'metrics, S, O> {
 }
 
 impl<'metrics, S, O> UpsertState<'metrics, S, O> {
-    pub(crate) async fn new<F, Fut>(
-        inner_init: F,
+    pub(crate) async fn new(
+        inner: S,
         metrics: Arc<UpsertSharedMetrics>,
         worker_metrics: &'metrics UpsertMetrics,
         stats: SourceStatistics,
         shrink_upsert_unused_buffers_by_ratio: usize,
-    ) -> Self
-    where
-        F: FnOnce() -> Fut + 'static,
-        Fut: std::future::Future<Output = S>,
-    {
+    ) -> Self {
         Self {
-            inner: inner_init().await,
+            inner,
             snapshot_start: Instant::now(),
             snapshot_stats: MergeStats::default(),
             snapshot_completed: false,

@@ -23,6 +23,7 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_rocksdb::ValueIterator;
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::dyncfgs;
@@ -47,7 +48,10 @@ use crate::render::sources::OutputIndex;
 use crate::storage_state::StorageInstanceContext;
 use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
-use types::{upsert_bincode_opts, StateValue, UpsertState, UpsertStateBackend, Value};
+use types::{
+    snapshot_merge_function, upsert_bincode_opts, BincodeOpts, StateValue, UpsertState,
+    UpsertStateBackend, Value,
+};
 
 mod autospill;
 mod memory;
@@ -66,6 +70,12 @@ impl AsRef<[u8]> for UpsertKey {
     // Easy!!
     fn as_ref(&self) -> &[u8] {
         &self.0
+    }
+}
+
+impl From<&[u8]> for UpsertKey {
+    fn from(bytes: &[u8]) -> Self {
+        UpsertKey(bytes.try_into().expect("invalid key length"))
     }
 }
 
@@ -229,6 +239,11 @@ where
     let snapshot_buffering_max = dyncfgs::STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING
         .get(storage_configuration.config_set());
 
+    // Whether we should provide the upsert state merge operator to the RocksDB instance
+    // (for faster performance during snapshot hydration).
+    let rocksdb_use_native_merge_operator =
+        dyncfgs::STORAGE_ROCKSDB_USE_MERGE_OPERATOR.get(storage_configuration.config_set());
+
     let upsert_config = UpsertConfig {
         wait_for_input_resumption,
         shrink_upsert_unused_buffers_by_ratio: storage_configuration
@@ -269,14 +284,25 @@ where
 
         let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
 
+        // A closure that will initialize and return a configured RocksDB instance
         let rocksdb_init_fn = move || async move {
+            let merge_operator = if rocksdb_use_native_merge_operator {
+                Some((
+                    "upsert_state_snapshot_merge_v1".to_string(),
+                    |a: &[u8], b: ValueIterator<BincodeOpts, StateValue<Option<FromTime>>>| {
+                        snapshot_merge_function::<Option<FromTime>>(a.into(), b)
+                    },
+                ))
+            } else {
+                None
+            };
             rocksdb::RocksDB::new(
                 mz_rocksdb::RocksDBInstance::new(
                     &rocksdb_dir,
                     mz_rocksdb::InstanceOptions::new(
                         env,
                         rocksdb_cleanup_tries,
-                        None,
+                        merge_operator,
                         // For now, just use the same config as the one used for
                         // merging snapshots.
                         upsert_bincode_opts(),
@@ -658,7 +684,7 @@ where
         // (as required for `merge_snapshot_chunk`), with slightly more efficient serialization
         // than a default `Partitioned`.
         let mut state = UpsertState::<_, Option<FromTime>>::new(
-            state,
+            state().await,
             upsert_shared_metrics,
             &upsert_metrics,
             source_config.source_statistics,

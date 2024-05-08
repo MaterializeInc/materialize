@@ -64,6 +64,15 @@ where
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = RocksDB<O>>,
 {
+    fn supports_merge(&self) -> bool {
+        // We only support merge if the backend supports it; the in-memory backend does not
+        // and the rocksdb backend does if configure to do so.
+        match &self.backend_type {
+            BackendType::InMemory(_) => false,
+            BackendType::RocksDb(backend) => backend.supports_merge(),
+        }
+    }
+
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
@@ -79,7 +88,6 @@ where
                     .expect("unexpected error while casting");
                 if in_memory_size > self.auto_spill_threshold_bytes {
                     tracing::info!("spilling to disk for upsert");
-
                     let mut rocksdb_backend =
                         self.rocksdb_init_fn
                             .take()
@@ -109,6 +117,18 @@ where
                 Ok(put_stats)
             }
             BackendType::RocksDb(rocks_db) => rocks_db.multi_put(puts).await,
+        }
+    }
+
+    async fn multi_merge<M>(&mut self, merges: M) -> Result<PutStats, anyhow::Error>
+    where
+        M: IntoIterator<Item = (UpsertKey, StateValue<O>)>,
+    {
+        match &mut self.backend_type {
+            BackendType::InMemory(_) => {
+                anyhow::bail!("InMemoryHashMap does not support merging");
+            }
+            BackendType::RocksDb(rocks_db) => rocks_db.multi_merge(merges).await,
         }
     }
 

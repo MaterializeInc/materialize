@@ -34,6 +34,10 @@ impl<O> UpsertStateBackend<O> for RocksDB<O>
 where
     O: Send + Sync + Serialize + DeserializeOwned + 'static,
 {
+    fn supports_merge(&self) -> bool {
+        self.rocksdb.supports_merges
+    }
+
     // TODO: Refactor this to allow using using Merge instead of Put for updates.
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
@@ -64,6 +68,14 @@ where
         p_stats.size_diff += size;
 
         Ok(p_stats)
+    }
+
+    async fn multi_merge<M>(&mut self, _merges: M) -> Result<PutStats, anyhow::Error>
+    where
+        M: IntoIterator<Item = (UpsertKey, StateValue<O>)>,
+    {
+        // TODO: Implement
+        Ok(PutStats::default())
     }
 
     async fn multi_get<'r, G, R>(

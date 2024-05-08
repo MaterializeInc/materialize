@@ -308,6 +308,10 @@ pub struct RocksDBInstance<K, V> {
 
     // Configuration that can change dynamically.
     dynamic_config: config::RocksDBDynamicConfig,
+
+    /// Whether this instance supports merge operations (whether a
+    /// merge operator was set at creation time)
+    pub supports_merges: bool,
 }
 
 impl<K, V> RocksDBInstance<K, V>
@@ -340,6 +344,7 @@ where
             + 'static,
     {
         let dynamic_config = tuning_config.dynamic.clone();
+        let supports_merges = options.merge_operator.is_some();
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
 
@@ -411,6 +416,7 @@ where
             multi_get_results_scratch: Vec::new(),
             multi_update_scratch: Vec::new(),
             dynamic_config,
+            supports_merges,
         })
     }
 
