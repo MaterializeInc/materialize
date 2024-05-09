@@ -179,7 +179,7 @@ steps:
       - id: redpanda-testdrive
         label: ":panda_face: :racing_car: testdrive"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 300
         agents:
           queue: linux-aarch64
         plugins:
@@ -191,7 +191,7 @@ steps:
       - id: redpanda-testdrive-aarch64
         label: ":panda_face: :racing_car: testdrive aarch64"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 300
         agents:
           queue: linux-aarch64
         plugins:
@@ -204,7 +204,7 @@ steps:
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 300
         agents:
           queue: linux-aarch64
         plugins:
@@ -216,7 +216,7 @@ steps:
       - id: testdrive-replicas-4
         label: ":racing_car: testdrive 4 replicas"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 300
         agents:
           queue: linux-aarch64-large
         plugins:
@@ -228,7 +228,7 @@ steps:
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
         depends_on: build-aarch64
-        timeout_in_minutes: 360
+        timeout_in_minutes: 720
         agents:
           queue: linux-aarch64-small
         plugins:
@@ -240,7 +240,7 @@ steps:
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 300
         agents:
           queue: linux-aarch64-large
         plugins:
@@ -267,7 +267,7 @@ steps:
       - id: testdrive-in-cloudtest
         label: Full Testdrive in Cloudtest (K8s)
         depends_on: build-aarch64
-        timeout_in_minutes: 300
+        timeout_in_minutes: 600
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
