@@ -22,12 +22,14 @@
 //! to add these trait impls.
 //!
 
+#[cfg(feature = "parquet")]
 use std::io::{Read, Seek};
 
 use bytes::{Buf, Bytes};
 use internal::SegmentedReader;
 use smallvec::SmallVec;
 
+#[cfg(feature = "parquet")]
 use crate::cast::CastFrom;
 use crate::lgbytes::LgBytes;
 
