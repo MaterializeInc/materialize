@@ -537,6 +537,7 @@ mod columnation {
                         | e @ EvalError::FloatUnderflow
                         | e @ EvalError::NumericFieldOverflow
                         | e @ EvalError::MzTimestampStepOverflow
+                        | e @ EvalError::MzTimestampOverflow
                         | e @ EvalError::TimestampCannotBeNan
                         | e @ EvalError::TimestampOutOfRange
                         | e @ EvalError::NegSqrt

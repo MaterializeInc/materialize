@@ -79,3 +79,17 @@ query T
 SELECT '1 hour'::interval::mz_timestamp
 ----
 3600000
+
+query T
+SELECT '1 hour'::interval::mz_timestamp + 3
+----
+3600003
+
+query T
+SELECT '1 hour'::interval::mz_timestamp - '30m'::interval
+----
+1800000
+
+query error db error: ERROR: mz_timestamp overflow
+SELECT '1 hour'::interval::mz_timestamp - '2 hours'::interval
+----

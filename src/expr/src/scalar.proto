@@ -641,6 +641,8 @@ message ProtoBinaryFunc {
         google.protobuf.Empty constant_time_eq_bytes = 189;
         google.protobuf.Empty timezone_offset = 190;
         google.protobuf.Empty pretty_sql = 191;
+        google.protobuf.Empty add_mz_timestamp = 192;
+        google.protobuf.Empty sub_mz_timestamp = 193;
     }
 }
 
@@ -835,5 +837,6 @@ message ProtoEvalError {
         string pretty_error = 78;
         google.protobuf.Empty neg_limit = 79;
         google.protobuf.Empty key_cannot_be_null = 80;
+        google.protobuf.Empty mz_timestamp_overflow = 81;
     }
 }
