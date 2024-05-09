@@ -2290,6 +2290,8 @@ pub struct PushdownMetrics {
     pub(crate) parts_audited_bytes: IntCounter,
     pub(crate) parts_inline_count: IntCounter,
     pub(crate) parts_inline_bytes: IntCounter,
+    pub(crate) parts_faked_count: IntCounter,
+    pub(crate) parts_faked_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
     pub part_stats: PartStatsMetrics,
@@ -2329,6 +2331,14 @@ impl PushdownMetrics {
             parts_inline_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_inline_bytes",
                 help: "total size of parts not fetched because they were inline",
+            )),
+            parts_faked_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_faked_count",
+                help: "count of parts faked because of aggressive projection pushdown",
+            )),
+            parts_faked_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_faked_bytes",
+                help: "total size of parts replaced with fakes by aggressive projection pushdown",
             )),
             parts_stats_trimmed_count: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_count",

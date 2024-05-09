@@ -23,6 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::RetryParameters;
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
+use mz_persist_client::project::ProjectionPushdown;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::txn::TxnsCodec;
@@ -558,6 +559,7 @@ impl DataSubscribe {
                     |_, _| true,
                     false.then_some(|| unreachable!()),
                     async {},
+                    ProjectionPushdown::FetchAll,
                 );
                 (data_stream.leave(), token)
             });

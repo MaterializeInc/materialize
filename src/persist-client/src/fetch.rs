@@ -18,6 +18,7 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_dyncfg::ConfigSet;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -41,6 +42,7 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::BlobKey;
 use crate::internal::state::{BatchPart, HollowBatchPart};
+use crate::project::ProjectionPushdown;
 use crate::read::LeasedReaderId;
 use crate::ShardId;
 
@@ -451,6 +453,27 @@ where
     /// Returns the pushdown stats for this part.
     pub fn stats(&self) -> Option<PartStats> {
         self.part.stats().map(|x| x.decode())
+    }
+
+    /// Apply any relevant projection pushdown optimizations.
+    ///
+    /// NB: Until we implement full projection pushdown, this doesn't guarantee
+    /// any projection.
+    pub fn maybe_optimize(&mut self, cfg: &ConfigSet, project: &ProjectionPushdown) {
+        let as_of = match &self.filter {
+            FetchBatchFilter::Snapshot { as_of } => as_of,
+            FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,
+        };
+        let faked_part = project.try_optimize_ignored_data_fetch(
+            cfg,
+            &self.metrics,
+            as_of,
+            &self.desc,
+            &self.part,
+        );
+        if let Some(faked_part) = faked_part {
+            self.part = faked_part;
+        }
     }
 }
 

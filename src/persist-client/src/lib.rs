@@ -59,6 +59,7 @@ pub mod critical;
 pub mod error;
 pub mod fetch;
 pub mod internals_bench;
+pub mod iter;
 pub mod metrics {
     //! Utilities related to metrics.
     pub use crate::internal::metrics::{
@@ -103,15 +104,8 @@ pub mod operators {
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",
     );
-
-    // TODO(cfg): Move this next to the use.
-    pub(crate) const OPTIMIZE_IGNORED_DATA_DECODE: Config<bool> = Config::new(
-        "persist_optimize_ignored_data_decode",
-        true,
-        "CYA to allow opt-out of a performance optimization to skip decoding ignored data",
-    );
 }
-pub mod iter;
+pub mod project;
 pub mod read;
 pub mod rpc;
 pub mod stats;

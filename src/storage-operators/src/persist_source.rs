@@ -10,6 +10,7 @@
 //! A source that reads from an a persist shard.
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use mz_persist_client::project::{error_free, ProjectionPushdown};
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -30,8 +31,7 @@ use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::stats::PartStats;
-use mz_persist_types::Codec64;
+use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationType, Row, RowArena, Timestamp};
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
@@ -289,6 +289,21 @@ where
     let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
     let desc = metadata.relation_desc.clone();
+    let ignores_data = map_filter_project
+        .as_ref()
+        .map_or(false, |x| x.ignores_input());
+    let project = if ignores_data {
+        let (mut key_bytes, mut val_bytes) = (Vec::new(), Vec::new());
+        Codec::encode(&SourceData(Ok(Row::default())), &mut key_bytes);
+        Codec::encode(&(), &mut val_bytes);
+        ProjectionPushdown::IgnoreAllNonErr {
+            err_col_name: "err",
+            key_bytes,
+            val_bytes,
+        }
+    } else {
+        ProjectionPushdown::FetchAll
+    };
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
 
     let desc_transformer = match flow_control {
@@ -354,6 +369,7 @@ where
         },
         listen_sleep,
         start_signal,
+        project,
     );
     let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
     (rows, token)
@@ -492,7 +508,7 @@ impl PendingPart {
     fn part_mut(&mut self) -> (&mut FetchedPart<SourceData, (), Timestamp, Diff>, bool) {
         match self {
             PendingPart::Unparsed(x) => {
-                let error_free = error_free(x.stats()).unwrap_or(false);
+                let error_free = error_free(x.stats(), "err").unwrap_or(false);
                 *self = PendingPart::Parsed {
                     part: x.parse(),
                     error_free,
@@ -648,26 +664,6 @@ impl PendingWork {
         }
         true
     }
-}
-
-/// Returns whether the part is provably free of `SourceData(Err(_))`s.
-///
-/// Will return false if the part is known to contain errors or None if it's
-/// unknown.
-fn error_free(part_stats: Option<PartStats>) -> Option<bool> {
-    let part_stats = part_stats?;
-    // Counter-intuitive: We can easily calculate the number of errors that
-    // were None from the column stats, but not how many were Some. So, what
-    // we do is count the number of Nones, which is the number of Oks, and
-    // then subtract that from the total.
-    let num_results = part_stats.key.len;
-    // The number of OKs is the number of rows whose error is None.
-    let num_oks = part_stats
-        .key
-        .col::<Option<Vec<u8>>>("err")
-        .expect("err column should be a Option<Vec<u8>>")
-        .map(|x| x.none)?;
-    Some(num_results == num_oks)
 }
 
 /// A trait representing a type that can be used in `backpressure`.
