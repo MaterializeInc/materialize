@@ -26,7 +26,7 @@ setup(
     # This adapter's minor version should match the required dbt-postgres version,
     # but patch versions may differ.
     # If you bump this version, bump it in __version__.py too.
-    version="1.7.8",
+    version="1.8.0",
     description="The Materialize adapter plugin for dbt.",
     long_description=(Path(__file__).parent / "README.md").open().read(),
     long_description_content_type="text/markdown",
@@ -41,8 +41,13 @@ setup(
             "include/materialize/macros/**/*.sql",
         ]
     },
-    install_requires=["dbt-postgres~=1.7.0"],
+    install_requires=[
+        "dbt-common>=0.1.0a1,<2.0",
+        "dbt-adapters>=0.1.0a1,<2.0",
+        "dbt-core>=1.8.0b3",
+        "dbt-postgres~=1.8.0rc1",
+    ],
     extras_require={
-        "dev": ["dbt-tests-adapter~=1.7.0"],
+        "dev": ["dbt-tests-adapter~=1.8.0rc2"],
     },
 )

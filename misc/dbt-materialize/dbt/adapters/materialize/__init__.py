@@ -19,7 +19,7 @@ from dbt.adapters.materialize.connections import (
     MaterializeCredentials,
 )
 from dbt.adapters.materialize.impl import MaterializeAdapter
-from dbt.include import materialize
+from dbt.adapters.include import materialize
 
 Plugin = AdapterPlugin(
     adapter=MaterializeAdapter,

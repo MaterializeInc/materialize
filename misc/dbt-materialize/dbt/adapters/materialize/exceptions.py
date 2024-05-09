@@ -15,7 +15,7 @@
 
 from typing import Any
 
-from dbt.exceptions import CompilationError
+from dbt_common.exceptions import CompilationError
 
 
 class RefreshIntervalConfigNotDictError(CompilationError):
