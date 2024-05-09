@@ -15,8 +15,7 @@ from materialize.buildkite_insights.buildkite_api import artifacts_api
 from materialize.buildkite_insights.cache import generic_cache
 from materialize.buildkite_insights.cache.cache_constants import FetchMode
 from materialize.buildkite_insights.cache.generic_cache import CacheFilePath
-from materialize.buildkite_insights.util.data_io import ensure_dir_exists
-from materialize.util import decompress_zst_to_directory
+from materialize.util import decompress_zst_to_directory, ensure_dir_exists
 
 
 def get_or_query_job_artifact_list(
@@ -58,6 +57,7 @@ def get_or_download_artifact(
             artifact_id=artifact_id,
         )
     else:
+
         def action() -> str:
             zst_file_path = _get_file_path_for_artifact(
                 pipeline_slug=pipeline_slug,

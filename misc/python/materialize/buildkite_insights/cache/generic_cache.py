@@ -18,11 +18,11 @@ from materialize.buildkite_insights.cache.cache_constants import (
 )
 from materialize.buildkite_insights.util.data_io import (
     FilePath,
-    ensure_dir_exists,
     exists_file_with_recent_data,
     read_results_from_file,
     write_results_to_file,
 )
+from materialize.util import ensure_dir_exists
 
 PATH_TO_CACHE_DIR = MZ_ROOT / "temp"
 

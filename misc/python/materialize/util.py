@@ -15,6 +15,7 @@ import json
 import os
 import pathlib
 import random
+import subprocess
 from enum import Enum
 from pathlib import Path
 from typing import TypeVar
@@ -73,3 +74,14 @@ def decompress_zst_to_directory(
             decompressor.copy_stream(compressed, destination)
 
     return output_paths
+
+
+def ensure_dir_exists(path_to_dir: str) -> None:
+    subprocess.run(
+        [
+            "mkdir",
+            "-p",
+            f"{path_to_dir}",
+        ],
+        check=True,
+    )
