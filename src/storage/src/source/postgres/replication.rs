@@ -73,6 +73,7 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -85,6 +86,7 @@ use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
+use mz_postgres_util::simple_query_opt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
@@ -122,15 +124,6 @@ use crate::source::RawSourceCreationConfig;
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
 static PG_EPOCH: Lazy<SystemTime> = Lazy::new(|| UNIX_EPOCH + Duration::from_secs(946_684_800));
-
-/// How often a proactive standby status update message should be sent to the server.
-///
-/// The upstream will periodically request status updates by setting the keepalive's reply field to
-/// 1. However, we cannot rely on these messages arriving on time. For example, when the upstream
-/// is sending a big transaction its keepalive messages are queued and can be delayed arbitrarily.
-///
-/// See: <https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com>
-const FEEDBACK_INTERVAL: Duration = Duration::from_secs(30);
 
 // A request to rewind a snapshot taken at `snapshot_lsn` to the initial LSN of the replication
 // slot. This is accomplished by emitting `(data, 0, -diff)` for all updates `(data, lsn, diff)`
@@ -475,6 +468,28 @@ async fn raw_stream<'a>(
         }
     }
 
+    // How often a proactive standby status update message should be sent to the server.
+    //
+    // The upstream will periodically request status updates by setting the keepalive's reply field
+    // value to 1. However, we cannot rely on these messages arriving on time. For example, when
+    // the upstream is sending a big transaction its keepalive messages are queued and can be
+    // delayed arbitrarily.
+    //
+    // See: <https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com>
+    //
+    // For this reason we query the server's timeout value and proactively send a keepalive at
+    // twice the frequency to have a healthy margin from the deadline.
+    let row = simple_query_opt(&replication_client, "SHOW wal_sender_timeout;")
+        .await?
+        .unwrap();
+    let wal_sender_timeout: &str = row.get("wal_sender_timeout").unwrap();
+
+    let timeout = mz_repr::adt::interval::Interval::from_str(wal_sender_timeout)
+        .unwrap()
+        .duration()
+        .unwrap();
+    let feedback_interval = timeout.checked_div(2).unwrap();
+
     // Postgres will return all transactions that commit *at or after* after the provided LSN,
     // following the timely upper semantics.
     let lsn = PgLsn::from(resume_lsn.offset);
@@ -538,7 +553,7 @@ async fn raw_stream<'a>(
                 future::Either::Left((next_message, _)) => match next_message.transpose()? {
                     Some(ReplicationMessage::XLogData(data)) => {
                         yield ReplicationMessage::XLogData(data);
-                        last_feedback.elapsed() > FEEDBACK_INTERVAL
+                        last_feedback.elapsed() > feedback_interval
                     }
                     Some(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
                         let send_feedback = keepalive.reply() == 1;
