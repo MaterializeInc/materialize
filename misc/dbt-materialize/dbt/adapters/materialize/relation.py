@@ -17,8 +17,8 @@
 from dataclasses import dataclass
 from typing import Optional, Type
 
-from dbt.adapters.postgres import PostgresRelation
-from dbt.common.dataclass_schema import StrEnum
+from dbt.adapters.postgres.relation import PostgresRelation
+from dbt_common.dataclass_schema import StrEnum
 from dbt.adapters.utils import classproperty
 
 

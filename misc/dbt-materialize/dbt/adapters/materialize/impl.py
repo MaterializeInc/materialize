@@ -32,15 +32,14 @@ from dbt.adapters.materialize.exceptions import (
     RefreshIntervalConfigNotDictError,
 )
 from dbt.adapters.materialize.relation import MaterializeRelation
-from dbt.adapters.postgres import PostgresAdapter
+from dbt.adapters.postgres.impl import PostgresAdapter
 from dbt.adapters.postgres.column import PostgresColumn
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
 from dbt_common.contracts.constraints import (
     ColumnLevelConstraint,
     ConstraintType,
 )
-from dbt.common.dataclass_schema import ValidationError, dbtClassMixin
-
+from dbt_common.dataclass_schema import ValidationError, dbtClassMixin
 
 # types in ./misc/dbt-materialize need to import generic types from typing
 @dataclass
@@ -58,10 +57,10 @@ class MaterializeIndexConfig(dbtClassMixin):
             cls.validate(raw_index)
             return cls.from_dict(raw_index)
         except ValidationError as exc:
-            msg = dbt.exceptions.validator_error_message(exc)
-            dbt.exceptions.CompilationError(f"Could not parse index config: {msg}")
+            msg = dbt_common.exceptions.validator_error_message(exc)
+            dbt_common.exceptions.CompilationError(f"Could not parse index config: {msg}")
         except TypeError:
-            dbt.exceptions.CompilationError(
+            dbt_common.exceptions.CompilationError(
                 "Invalid index config:\n"
                 f"  Got: {raw_index}\n"
                 '  Expected a dictionary with at minimum a "columns" key'
