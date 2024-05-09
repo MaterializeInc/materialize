@@ -76,6 +76,15 @@ def get_multiple(
     return results
 
 
+def get_and_download_to_file(
+    request_path: str, params: dict[str, Any], file_path: str
+) -> Any:
+    response = _perform_get_request(request_path, params)
+
+    with open(file_path, "wb") as f:
+        f.write(response.content)
+
+
 def _perform_get_request(request_path: str, params: dict[str, Any]) -> Response:
     headers = {}
     token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
