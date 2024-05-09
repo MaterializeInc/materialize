@@ -13,6 +13,7 @@ import os
 from typing import Any
 
 import requests
+from requests import Response
 
 BUILDKITE_API_URL = "https://api.buildkite.com/v2"
 
@@ -25,24 +26,12 @@ class RateLimitExceeded(Exception):
 
 
 def get(request_path: str, params: dict[str, Any], as_json: bool = True) -> Any:
-    headers = {}
-    token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
-
-    if token is not None and len(token) > 0:
-        headers["Authorization"] = f"Bearer {token}"
-    else:
-        print("Authentication token is not specified or empty!")
-
-    url = f"{BUILDKITE_API_URL}/{request_path}"
-    r = requests.get(headers=headers, url=url, params=params)
-
-    if r.status_code == STATUS_CODE_RATE_LIMIT_EXCEEDED:
-        raise RateLimitExceeded([])
+    response = _perform_get_request(request_path, params)
 
     if as_json:
-        return r.json()
+        return response.json()
     else:
-        return r.text
+        return response.text
 
 
 def get_multiple(
@@ -85,3 +74,21 @@ def get_multiple(
             break
 
     return results
+
+
+def _perform_get_request(request_path: str, params: dict[str, Any]) -> Response:
+    headers = {}
+    token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
+
+    if token is not None and len(token) > 0:
+        headers["Authorization"] = f"Bearer {token}"
+    else:
+        print("Authentication token is not specified or empty!")
+
+    url = f"{BUILDKITE_API_URL}/{request_path}"
+    response = requests.get(headers=headers, url=url, params=params)
+
+    if response.status_code == STATUS_CODE_RATE_LIMIT_EXCEEDED:
+        raise RateLimitExceeded([])
+
+    return response
