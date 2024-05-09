@@ -75,6 +75,7 @@
 /src/lowertest                      @MaterializeInc/compute
 /src/lowertest-derive               @MaterializeInc/compute
 /src/metabase                       @benesch
+/src/mysql-util                     @MaterializeInc/storage
 /src/mz                             @MaterializeInc/integrations
 /src/npm                            @benesch
 /src/orchestrator                   @benesch
