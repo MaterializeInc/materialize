@@ -12,11 +12,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow2::array::Array;
-use arrow2::io::parquet::write::Encoding;
+use arrow::array::Array;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
-use crate::columnar::{ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData};
+use crate::columnar::{
+    ColumnCfg, ColumnFinish, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData,
+};
 use crate::dyn_struct::{DynStruct, ValidityRef};
 use crate::stats::{DynStats, StatsFrom};
 
@@ -82,9 +83,8 @@ impl DynColumnRef {
             .expect("DynColumnRef DataType should be internally consistent")
     }
 
-    #[allow(clippy::borrowed_box)]
-    pub(crate) fn from_arrow(data_type: &DataType, array: &Box<dyn Array>) -> Result<Self, String> {
-        struct FromArrowDataFn<'a>(&'a Box<dyn Array>);
+    pub(crate) fn from_arrow(data_type: &DataType, array: &dyn Array) -> Result<Self, String> {
+        struct FromArrowDataFn<'a>(&'a dyn Array);
         impl DataFn<Result<DynColumnRef, String>> for FromArrowDataFn<'_> {
             fn call<T: Data>(self, cfg: &T::Cfg) -> Result<DynColumnRef, String> {
                 let typ = cfg.as_type();
@@ -101,18 +101,18 @@ impl DynColumnRef {
         Ok(col)
     }
 
-    pub(crate) fn to_arrow(&self) -> (Encoding, Box<dyn Array>, bool) {
+    pub(crate) fn to_arrow(&self) -> (Arc<dyn Array>, bool) {
         struct ToArrowDataFn<'a>(&'a DynColumnRef);
-        impl DataFn<Result<(Encoding, Box<dyn Array>), String>> for ToArrowDataFn<'_> {
-            fn call<T: Data>(self, _cfg: &T::Cfg) -> Result<(Encoding, Box<dyn Array>), String> {
+        impl DataFn<Result<Arc<dyn Array>, String>> for ToArrowDataFn<'_> {
+            fn call<T: Data>(self, _cfg: &T::Cfg) -> Result<Arc<dyn Array>, String> {
                 Ok(self.0.downcast_ref::<T>()?.to_arrow())
             }
         }
-        let (encoding, array) = self
+        let array = self
             .0
             .data_fn(ToArrowDataFn(self))
             .expect("DynColumnRef DataType should be internally consistent");
-        (encoding, array, self.0.optional)
+        (array, self.0.optional)
     }
 }
 
@@ -197,7 +197,8 @@ impl DynColumnMut {
             .1
             .downcast::<T::Mut>()
             .map_err(|_| format!("expected {} col", std::any::type_name::<T::Col>()))?;
-        let col = T::Col::from(*col);
+
+        let col = (*col).finish();
         let col = DynColumnRef::new::<T>(col);
         #[cfg(debug_assertions)]
         {

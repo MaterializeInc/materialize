@@ -93,10 +93,10 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
         Self: 'a;
 
     /// The shared reference of columns of this type of data.
-    type Col: ColumnGet<Self> + From<Self::Mut>;
+    type Col: ColumnGet<Self>;
 
     /// The exclusive builder of columns of this type of data.
-    type Mut: ColumnPush<Self>;
+    type Mut: ColumnPush<Self> + ColumnFinish<Self>;
 
     /// The statistics type of columns of this type of data.
     type Stats: ColumnStats<Self> + StatsFrom<Self::Col>;
@@ -125,9 +125,16 @@ pub trait ColumnPush<T: Data>: ColumnMut<T::Cfg> {
     fn push<'a>(&mut self, val: T::Ref<'a>);
 }
 
+/// A common trait implemented by `Data::Mut` types. Provides the ability to
+/// "finish" a mutable array, returning the corresponding `Data::Col`.
+pub trait ColumnFinish<T: Data>: ColumnMut<T::Cfg> {
+    /// Finishes the mutable column returning the corresponding `Data::Col`.
+    fn finish(self) -> T::Col;
+}
+
 pub(crate) mod sealed {
-    use arrow2::array::Array;
-    use arrow2::io::parquet::write::Encoding;
+    use arrow::array::Array;
+    use std::sync::Arc;
 
     /// A common trait implemented by all `Data::Mut` types.
     pub trait ColumnMut<Cfg>: Sized + Send + Sync {
@@ -139,16 +146,6 @@ pub(crate) mod sealed {
         fn cfg(&self) -> &Cfg;
     }
 
-    impl<T: Default + Send + Sync> ColumnMut<()> for T {
-        fn new(_cfg: &()) -> Self {
-            T::default()
-        }
-
-        fn cfg(&self) -> &() {
-            &()
-        }
-    }
-
     /// A common trait implemented by all `Data::Col` types.
     pub trait ColumnRef<Cfg>: Sized + Send + Sync {
         /// Returns the [super::ColumnCfg] for this column.
@@ -157,12 +154,11 @@ pub(crate) mod sealed {
         /// Returns the number of elements in this column.
         fn len(&self) -> usize;
 
-        /// Returns this column as an arrow2 Array.
-        fn to_arrow(&self) -> (Encoding, Box<dyn Array>);
+        /// Returns this column as an [`arrow`] Array.
+        fn to_arrow(&self) -> Arc<dyn Array>;
 
-        /// Constructs the column from an arrow2 Array.
-        #[allow(clippy::borrowed_box)]
-        fn from_arrow(cfg: &Cfg, array: &Box<dyn Array>) -> Result<Self, String>;
+        /// Constructs the column from an [`arrow`] Array.
+        fn from_arrow(cfg: &Cfg, array: &dyn Array) -> Result<Self, String>;
     }
 }
 
@@ -187,7 +183,7 @@ pub struct DataType {
 /// The equality and sorting of the encoded column matches those of this rust
 /// type. Because of this, the variants are named after the rust type.
 ///
-/// NB: This intentionally exists as a subset of [arrow2::datatypes::DataType].
+/// NB: This intentionally exists as a subset of [arrow::datatypes::DataType].
 /// It also represents slightly different semantics. The arrow2 DataType always
 /// indicates an optional field, where as these all indicate non-optional fields
 /// (which may be made optional via [DataType]).
