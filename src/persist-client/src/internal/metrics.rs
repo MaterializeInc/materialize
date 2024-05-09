@@ -565,9 +565,6 @@ impl MetricsVecs {
 }
 
 #[derive(Debug)]
-pub struct CmdCasMismatchMetric(#[allow(dead_code)] pub(crate) IntCounter);
-
-#[derive(Debug)]
 pub struct CmdMetrics {
     pub(crate) name: String,
     pub(crate) started: IntCounter,
