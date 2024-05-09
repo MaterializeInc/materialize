@@ -3202,7 +3202,7 @@ impl Coordinator {
                     _ => unreachable!(),
                 };
 
-                ssh.public_keys = current_ssh.public_keys.clone();
+                ssh.public_keys.clone_from(&current_ssh.public_keys);
             }
             _ => {}
         };

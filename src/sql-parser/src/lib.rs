@@ -86,7 +86,7 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
                         // still compare that the resulting ASTs are identical, and it's valid for
                         // those to come from different original strings.
                         (Statement::Declare(parsed), Statement::Declare(stmt)) => {
-                            parsed.sql = stmt.sql.clone();
+                            parsed.sql.clone_from(&stmt.sql);
                         }
                         _ => {}
                     }
@@ -97,7 +97,7 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
                         );
                     }
                 }
-                if tc.args.get("roundtrip").is_some() {
+                if tc.args.contains_key("roundtrip") {
                     format!("{}\n", stmt)
                 } else {
                     // TODO(justin): it would be nice to have a middle-ground between this
@@ -136,7 +136,7 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
                     }
                 }
 
-                if tc.args.get("roundtrip").is_some() {
+                if tc.args.contains_key("roundtrip") {
                     format!("{}\n", s)
                 } else {
                     // TODO(justin): it would be nice to have a middle-ground between this

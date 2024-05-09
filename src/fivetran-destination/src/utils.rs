@@ -268,7 +268,7 @@ impl<'a> tokio::io::AsyncWrite for CopyIntoAsyncWrite<'a> {
             .inner
             .as_mut()
             .poll_ready(cx)
-            .map_err(|e| std::io::Error::other(e)))?;
+            .map_err(std::io::Error::other))?;
 
         let len = buf.len();
         let buf = bytes::Bytes::from(buf.to_vec());
@@ -285,7 +285,7 @@ impl<'a> tokio::io::AsyncWrite for CopyIntoAsyncWrite<'a> {
         self.inner
             .as_mut()
             .poll_flush(cx)
-            .map_err(|e| std::io::Error::other(e))
+            .map_err(std::io::Error::other)
     }
 
     fn poll_shutdown(
@@ -295,7 +295,7 @@ impl<'a> tokio::io::AsyncWrite for CopyIntoAsyncWrite<'a> {
         self.inner
             .as_mut()
             .poll_close(cx)
-            .map_err(|e| std::io::Error::other(e))
+            .map_err(std::io::Error::other)
     }
 }
 

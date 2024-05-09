@@ -1351,10 +1351,10 @@ mod tests {
                 // Validate that the diff applies to both the previous state (also checked in
                 // debug asserts) and our follower that's only synchronized via diffs.
                 old_leader
-                    .apply_diff(&metrics, diff.clone())
+                    .apply_diff(metrics, diff.clone())
                     .expect("diff applies to the old version of the leader state");
                 follower
-                    .apply_diff(&metrics, diff.clone())
+                    .apply_diff(metrics, diff.clone())
                     .expect("diff applies to the synced version of the follower state");
 
                 // TODO: once spine structure is roundtripped through diffs, assert that the follower

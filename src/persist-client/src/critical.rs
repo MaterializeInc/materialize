@@ -290,13 +290,13 @@ where
         maintenance.start_performing(&self.machine, &self.gc);
         match res {
             Ok(Since(since)) => {
-                self.since = since.clone();
-                self.opaque = new.0.clone();
+                self.since.clone_from(&since);
+                self.opaque.clone_from(new.0);
                 Ok(since)
             }
             Err((actual_opaque, since)) => {
                 self.since = since.0;
-                self.opaque = actual_opaque.clone();
+                self.opaque.clone_from(&actual_opaque);
                 Err(actual_opaque)
             }
         }

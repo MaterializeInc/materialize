@@ -1661,7 +1661,7 @@ where
                 continue; // frontier has not advanced
             }
 
-            collection.write_frontier = new_upper.clone();
+            collection.write_frontier.clone_from(new_upper);
 
             let old_since = &collection.implied_capability;
             let new_since = match &collection.read_policy {

@@ -940,7 +940,7 @@ where
                 };
 
                 // Update the `flow_control_frontier` if its advanced.
-                flow_control_frontier = new_flow_control_frontier.clone();
+                flow_control_frontier.clone_from(&new_flow_control_frontier);
 
                 // Retire parts that are processed downstream.
                 let retired_parts = inflight_parts

@@ -767,7 +767,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
             compute_state.subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
         } else {
-            todo_commands = new_commands.clone();
+            todo_commands.clone_from(&new_commands);
         }
 
         // Execute the commands to bring us to `new_commands`.

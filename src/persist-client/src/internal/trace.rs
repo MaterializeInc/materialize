@@ -299,7 +299,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                             break;
                         };
                         if next_batch.is_empty() {
-                            new_upper = next_batch.desc.upper().clone();
+                            new_upper.clone_from(next_batch.desc.upper());
                         } else {
                             legacy_batches.push(next_batch);
                             break;
@@ -314,7 +314,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                             new_upper.clone(),
                             batch.desc.since().clone(),
                         ))));
-                        new_upper = expected_desc.upper().clone();
+                        new_upper.clone_from(expected_desc.upper());
                     }
                     batch = Arc::new(HollowBatch::empty(Description::new(
                         batch.desc.lower().clone(),
@@ -1743,7 +1743,7 @@ pub(crate) mod tests {
                         batch.desc.upper().clone(),
                         batch.desc.since().clone(),
                     );
-                    lower = batch.desc.upper().clone();
+                    lower.clone_from(batch.desc.upper());
                     let _merge_req = trace.push_batch(batch);
                 }
                 trace.roundtrip_structure = roundtrip_structure;

@@ -1301,7 +1301,7 @@ impl CatalogState {
     pub(super) fn rename_cluster(&mut self, id: ClusterId, to_name: String) {
         let cluster = self.get_cluster_mut(id);
         let old_name = std::mem::take(&mut cluster.name);
-        cluster.name = to_name.clone();
+        cluster.name.clone_from(&to_name);
 
         assert!(self.clusters_by_name.remove(&old_name).is_some());
         assert!(self.clusters_by_name.insert(to_name, id).is_none());

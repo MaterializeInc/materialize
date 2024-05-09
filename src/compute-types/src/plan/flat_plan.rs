@@ -754,7 +754,7 @@ impl<T> FlatPlanNode<T> {
         match self {
             Constant { .. } | Get { .. } => (),
             LetRec { values, body, .. } => {
-                list = values.clone();
+                list.clone_from(values);
                 last = Some(*body);
             }
             Mfp { input, .. }
@@ -767,7 +767,7 @@ impl<T> FlatPlanNode<T> {
                 last = Some(*input);
             }
             Join { inputs, .. } | Union { inputs, .. } => {
-                list = inputs.clone();
+                list.clone_from(inputs);
             }
         }
 

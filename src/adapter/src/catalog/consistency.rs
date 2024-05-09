@@ -87,12 +87,12 @@ impl CatalogState {
     fn check_internal_fields(&self) -> Result<(), Vec<InternalFieldsInconsistency>> {
         let mut inconsistencies = Vec::new();
         for (name, id) in &self.database_by_name {
-            if self.database_by_id.get(id).is_none() {
+            if !self.database_by_id.contains_key(id) {
                 inconsistencies.push(InternalFieldsInconsistency::Database(name.clone(), *id));
             }
         }
         for (name, id) in &self.ambient_schemas_by_name {
-            if self.ambient_schemas_by_id.get(id).is_none() {
+            if !self.ambient_schemas_by_id.contains_key(id) {
                 inconsistencies.push(InternalFieldsInconsistency::AmbientSchema(
                     name.clone(),
                     *id,
@@ -100,12 +100,12 @@ impl CatalogState {
             }
         }
         for (name, id) in &self.clusters_by_name {
-            if self.clusters_by_id.get(id).is_none() {
+            if !self.clusters_by_id.contains_key(id) {
                 inconsistencies.push(InternalFieldsInconsistency::Cluster(name.clone(), *id));
             }
         }
         for (name, role_id) in &self.roles_by_name {
-            if self.roles_by_id.get(role_id).is_none() {
+            if self.roles_by_id.contains_key(role_id) {
                 inconsistencies.push(InternalFieldsInconsistency::Role(name.clone(), *role_id))
             }
         }
@@ -124,17 +124,17 @@ impl CatalogState {
     fn check_roles(&self) -> Result<(), Vec<RoleInconsistency>> {
         let mut inconsistencies = Vec::new();
         for (database_id, database) in &self.database_by_id {
-            if self.roles_by_id.get(&database.owner_id).is_none() {
+            if !self.roles_by_id.contains_key(&database.owner_id) {
                 inconsistencies.push(RoleInconsistency::Database(*database_id, database.owner_id));
             }
             for (schema_id, schema) in &database.schemas_by_id {
-                if self.roles_by_id.get(&schema.owner_id).is_none() {
+                if !self.roles_by_id.contains_key(&schema.owner_id) {
                     inconsistencies.push(RoleInconsistency::Schema(*schema_id, schema.owner_id));
                 }
             }
         }
         for (global_id, entry) in &self.entry_by_id {
-            if self.roles_by_id.get(entry.owner_id()).is_none() {
+            if !self.roles_by_id.contains_key(entry.owner_id()) {
                 inconsistencies.push(RoleInconsistency::Entry(
                     *global_id,
                     entry.owner_id().clone(),
@@ -142,11 +142,11 @@ impl CatalogState {
             }
         }
         for (cluster_id, cluster) in &self.clusters_by_id {
-            if self.roles_by_id.get(&cluster.owner_id).is_none() {
+            if !self.roles_by_id.contains_key(&cluster.owner_id) {
                 inconsistencies.push(RoleInconsistency::Cluster(*cluster_id, cluster.owner_id));
             }
             for replica in cluster.replicas() {
-                if self.roles_by_id.get(&replica.owner_id).is_none() {
+                if !self.roles_by_id.contains_key(&replica.owner_id) {
                     inconsistencies.push(RoleInconsistency::ClusterReplica(
                         *cluster_id,
                         replica.replica_id,
@@ -156,11 +156,11 @@ impl CatalogState {
             }
         }
         for (default_priv, privileges) in self.default_privileges.iter() {
-            if self.roles_by_id.get(&default_priv.role_id).is_none() {
+            if !self.roles_by_id.contains_key(&default_priv.role_id) {
                 inconsistencies.push(RoleInconsistency::DefaultPrivilege(default_priv.clone()));
             }
             for acl_item in privileges {
-                if self.roles_by_id.get(&acl_item.grantee).is_none() {
+                if !self.roles_by_id.contains_key(&acl_item.grantee) {
                     inconsistencies.push(RoleInconsistency::DefaultPrivilegeItem {
                         grantor: default_priv.role_id,
                         grantee: acl_item.grantee,
@@ -256,13 +256,13 @@ impl CatalogState {
                     }
                 }
                 CommentObjectId::Role(role_id) => {
-                    if self.roles_by_id.get(&role_id).is_none() {
+                    if !self.roles_by_id.contains_key(&role_id) {
                         comment_inconsistencies
                             .push(CommentInconsistency::Dangling(comment_object_id));
                     }
                 }
                 CommentObjectId::Database(database_id) => {
-                    if self.database_by_id.get(&database_id).is_none() {
+                    if !self.database_by_id.contains_key(&database_id) {
                         comment_inconsistencies
                             .push(CommentInconsistency::Dangling(comment_object_id));
                     }
@@ -283,7 +283,7 @@ impl CatalogState {
                             }
                         }
                         (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(schema_id)) => {
-                            if self.ambient_schemas_by_id.get(&schema_id).is_none() {
+                            if !self.ambient_schemas_by_id.contains_key(&schema_id) {
                                 comment_inconsistencies
                                     .push(CommentInconsistency::Dangling(comment_object_id));
                             }
@@ -295,7 +295,7 @@ impl CatalogState {
                     }
                 }
                 CommentObjectId::Cluster(cluster_id) => {
-                    if self.clusters_by_id.get(&cluster_id).is_none() {
+                    if !self.clusters_by_id.contains_key(&cluster_id) {
                         comment_inconsistencies
                             .push(CommentInconsistency::Dangling(comment_object_id));
                     }

@@ -1203,7 +1203,7 @@ fn fill_pdt_date(
                 return Ok(());
             }
             Err(_) => {
-                *actual = original_actual.clone();
+                actual.clone_from(&original_actual);
                 pdt.clear_date();
             }
         }
