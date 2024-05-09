@@ -91,4 +91,9 @@ def _perform_get_request(request_path: str, params: dict[str, Any]) -> Response:
     if response.status_code == STATUS_CODE_RATE_LIMIT_EXCEEDED:
         raise RateLimitExceeded([])
 
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Status code for request {request_path} was {response.status_code}"
+        )
+
     return response
