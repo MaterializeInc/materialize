@@ -184,9 +184,7 @@ class MaterializeContainer(MaterializeNonRemote):
                 self._port = self.composition.default_port("materialized")
 
     def __str__(self) -> str:
-        return (
-            f"MaterializeContainer ({self.image} specified as {self.specified_target})"
-        )
+        return f"MaterializeContainer ({self.image} specified as {self.specified_target()})"
 
 
 def endpoint_name_to_description(endpoint_name: str) -> str:
