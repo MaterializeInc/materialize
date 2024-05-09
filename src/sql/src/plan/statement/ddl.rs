@@ -106,7 +106,7 @@ use crate::catalog::{
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
     Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
-    RawDatabaseSpecifier, ResolvedClusterName, ResolvedColumnName, ResolvedDataType,
+    RawDatabaseSpecifier, ResolvedClusterName, ResolvedColumnReference, ResolvedDataType,
     ResolvedDatabaseSpecifier, ResolvedItemName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
@@ -2835,10 +2835,9 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                     })?)
                     .map_err(better_error)?;
                     let key = match doc_on.identifier {
-                        DocOnIdentifier::Column(ResolvedColumnName::Column {
+                        DocOnIdentifier::Column(ast::ColumnName {
                             relation: ResolvedItemName::Item { id, .. },
-                            name,
-                            index: _,
+                            column: ResolvedColumnReference::Column { name, index: _ },
                         }) => DocTarget::Field {
                             object_id: id,
                             column_name: name,

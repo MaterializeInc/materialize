@@ -16,8 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ColumnDef, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement, RawItemName,
-    ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName, UnresolvedSchemaName,
+    ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
+    RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
+    UnresolvedSchemaName,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
@@ -29,7 +30,7 @@ use crate::catalog::{
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
-    QualifiedItemName, RawDatabaseSpecifier, ResolvedColumnName, ResolvedDataType,
+    QualifiedItemName, RawDatabaseSpecifier, ResolvedColumnReference, ResolvedDataType,
     ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
     SystemObjectId,
 };
@@ -719,24 +720,16 @@ impl<'a> StatementContext<'a> {
 
     pub fn get_column_by_resolved_name(
         &self,
-        name: &ResolvedColumnName,
+        name: &ColumnName<Aug>,
     ) -> Result<(&dyn CatalogItem, usize), PlanError> {
-        match name {
-            ResolvedColumnName::Column {
-                relation: ResolvedItemName::Item { id, .. },
-                index,
-                ..
-            } => {
+        match (&name.relation, &name.column) {
+            (ResolvedItemName::Item { id, .. }, ResolvedColumnReference::Column { index, .. }) => {
                 let item = self.get_item(id);
                 Ok((item, *index))
             }
-            ResolvedColumnName::Column {
-                relation: ResolvedItemName::Cte { .. } | ResolvedItemName::Error,
-                ..
-            }
-            | ResolvedColumnName::Error => {
-                unreachable!("should have been caught in name resolution")
-            }
+            _ => unreachable!(
+                "get_column_by_resolved_name errors should have been caught in name resolution"
+            ),
         }
     }
 

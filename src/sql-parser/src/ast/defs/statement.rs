@@ -4655,11 +4655,26 @@ impl<T: AstInfo> AstDisplay for CommentStatement<T> {
 }
 impl_display_t!(CommentStatement);
 
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
+pub struct ColumnName<T: AstInfo> {
+    pub relation: T::ItemName,
+    pub column: T::ColumnReference,
+}
+
+impl<T: AstInfo> AstDisplay for ColumnName<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.relation);
+        f.write_str(".");
+        f.write_node(&self.column);
+    }
+}
+impl_display_t!(ColumnName);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CommentObjectType<T: AstInfo> {
     Table { name: T::ItemName },
     View { name: T::ItemName },
-    Column { name: T::ColumnName },
+    Column { name: ColumnName<T> },
     MaterializedView { name: T::ItemName },
     Source { name: T::ItemName },
     Sink { name: T::ItemName },

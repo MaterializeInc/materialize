@@ -32,7 +32,7 @@ COMMENT ON COLUMN building.load_bearing_column IS 'do not move this column, it i
 ----
 COMMENT ON COLUMN building.load_bearing_column IS 'do not move this column, it is load bearing'
 =>
-Comment(CommentStatement { object: Column { name: RawColumnName { relation: Name(UnresolvedItemName([Ident("building")])), column: Ident("load_bearing_column") } }, comment: Some("do not move this column, it is load bearing") })
+Comment(CommentStatement { object: Column { name: ColumnName { relation: Name(UnresolvedItemName([Ident("building")])), column: Ident("load_bearing_column") } }, comment: Some("do not move this column, it is load bearing") })
 
 parse-statement
 COMMENT ON TABLE my_table
@@ -60,7 +60,7 @@ COMMENT ON COLUMN cool_table.bad_column IS NULL
 ----
 COMMENT ON COLUMN cool_table.bad_column IS NULL
 =>
-Comment(CommentStatement { object: Column { name: RawColumnName { relation: Name(UnresolvedItemName([Ident("cool_table")])), column: Ident("bad_column") } }, comment: None })
+Comment(CommentStatement { object: Column { name: ColumnName { relation: Name(UnresolvedItemName([Ident("cool_table")])), column: Ident("bad_column") } }, comment: None })
 
 parse-statement
 COMMENT ON MATERIALIZED VIEW mz IS 'hello world'

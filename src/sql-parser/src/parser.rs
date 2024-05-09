@@ -5867,7 +5867,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_column_name(&mut self) -> Result<RawColumnName, ParserError> {
+    fn parse_column_name(&mut self) -> Result<ColumnName<Raw>, ParserError> {
         let start = self.peek_pos();
         let mut item_name = self.parse_raw_name()?;
         let column_name = match &mut item_name {
@@ -5886,7 +5886,7 @@ impl<'a> Parser<'a> {
             }
         };
 
-        Ok(RawColumnName {
+        Ok(ColumnName {
             relation: item_name,
             column: column_name,
         })

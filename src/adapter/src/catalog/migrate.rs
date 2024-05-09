@@ -345,13 +345,6 @@ fn _assign_new_user_global_ids(
     };
 
     impl<'a> VisitMut<'_, Raw> for IdUpdater<'a> {
-        fn visit_column_name_mut(
-            &mut self,
-            node: &'_ mut <Raw as mz_sql::ast::AstInfo>::ColumnName,
-        ) {
-            self.visit_item_name_mut(&mut node.relation);
-        }
-
         fn visit_item_name_mut(&mut self, node: &'_ mut <Raw as mz_sql::ast::AstInfo>::ItemName) {
             if let RawItemName::Id(id, _) = node {
                 match GlobalId::from_str(id.as_str()) {
