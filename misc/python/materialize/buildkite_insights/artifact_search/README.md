@@ -1,7 +1,7 @@
 # Buildkite Artifact Search
 
-This tool allows searching Buildkite artifacts of a build.
-Note that some files are omitted (e.g., compressed files).
+This tool allows searching Buildkite artifacts (log and text files, including zst-compressed ones) of a build.
+zst-compressed files are included by default.
 
 ## Usage
 ```
@@ -9,6 +9,7 @@ usage: buildkite-artifact-search [-h]
                                  [--max-results MAX_RESULTS]
                                  [--use-regex]
                                  [--fetch {auto,always,never}]
+                                 [--include-zst-files | --no-include-zst-files]
                                  {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,release-qualification,security,slt,test,www}
                                  buildnumber
                                  jobid

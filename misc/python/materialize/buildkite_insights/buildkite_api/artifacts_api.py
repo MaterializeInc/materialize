@@ -26,3 +26,10 @@ def download_artifact(
 ) -> str:
     request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds/{build_number}/jobs/{job_id}/artifacts/{artifact_id}/download"
     return generic_api.get(request_path, {}, as_json=False)
+
+
+def download_artifact_to_file(
+    pipeline_slug: str, build_number: int, job_id: str, artifact_id: str, file_path: str
+) -> str:
+    request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds/{build_number}/jobs/{job_id}/artifacts/{artifact_id}/download"
+    return generic_api.get_and_download_to_file(request_path, {}, file_path)

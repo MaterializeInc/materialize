@@ -10,7 +10,6 @@
 
 import json
 import os
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -31,17 +30,6 @@ class SimpleFilePath(FilePath):
 
     def get(self) -> str:
         return self.file_name
-
-
-def ensure_dir_exists(path_to_dir: str) -> None:
-    subprocess.run(
-        [
-            "mkdir",
-            "-p",
-            f"{path_to_dir}",
-        ],
-        check=True,
-    )
 
 
 def write_results_to_file(

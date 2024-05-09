@@ -29,7 +29,7 @@ from materialize.buildkite_insights.util.search_utility import (
     determine_position_in_line,
 )
 
-ACCEPTED_FILE_ENDINGS = {"log", "txt", "xml"}
+ACCEPTED_FILE_ENDINGS = {"log", "txt", "xml", "zst"}
 
 
 def main(
@@ -40,6 +40,7 @@ def main(
     fetch: FetchMode,
     max_results: int,
     use_regex: bool,
+    include_zst_files: bool,
 ) -> None:
     assert len(pattern) > 0, "pattern must not be empty"
 
@@ -62,7 +63,7 @@ def main(
         artifact_id = artifact["id"]
         artifact_file_name = artifact["filename"]
 
-        if not _can_search_artifact(artifact_file_name):
+        if not _can_search_artifact(artifact_file_name, include_zst_files):
             print(f"Skipping artifact {artifact_file_name} due to file ending!")
             ignored_file_names.add(artifact_file_name)
             continue
@@ -96,7 +97,10 @@ def main(
     )
 
 
-def _can_search_artifact(artifact_file_name: str) -> bool:
+def _can_search_artifact(artifact_file_name: str, include_zst_files: bool) -> bool:
+    if not include_zst_files and is_zst_file(artifact_file_name):
+        return False
+
     for file_ending in ACCEPTED_FILE_ENDINGS:
         if artifact_file_name.endswith(f".{file_ending}"):
             return True
@@ -126,6 +130,7 @@ def _search_artifact(
         build_number=build_number,
         job_id=job_id,
         artifact_id=artifact_id,
+        is_zst_compressed=is_zst_file(artifact_file_name),
     )
 
     search_offset = 0
@@ -162,6 +167,10 @@ def _search_artifact(
     return match_count, False
 
 
+def is_zst_file(file_name: str) -> bool:
+    return file_name.endswith(".zst")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="buildkite-artifact-search",
@@ -191,6 +200,9 @@ if __name__ == "__main__":
         action="store_true",
     )
     parser.add_argument(
+        "--include-zst-files", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
         "--fetch",
         type=lambda mode: FetchMode[mode.upper()],
         choices=FETCH_MODE_CHOICES,
@@ -208,4 +220,5 @@ if __name__ == "__main__":
         args.fetch,
         args.max_results,
         args.use_regex,
+        args.include_zst_files,
     )
