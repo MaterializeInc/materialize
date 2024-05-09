@@ -16,10 +16,10 @@ use mysql_common::{Row as MySqlRow, Value};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::adt::date::Date;
-use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::adt::numeric::{get_precision, get_scale, Numeric, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Row, ScalarType};
+use mz_repr::{Datum, Row, RowPacker, ScalarType};
 
 use crate::desc::MySqlColumnMeta;
 use crate::{MySqlColumnDesc, MySqlError, MySqlTableDesc};
@@ -30,9 +30,6 @@ pub fn pack_mysql_row(
     table_desc: &MySqlTableDesc,
 ) -> Result<Row, MySqlError> {
     let mut packer = row_container.packer();
-    let mut temp_bytes = vec![];
-    let mut temp_strs = vec![];
-    let mut temp_jsonbs = vec![];
     let row_values = row.unwrap();
 
     for values in table_desc.columns.iter().zip_longest(row_values) {
@@ -58,41 +55,34 @@ pub fn pack_mysql_row(
             // This column is ignored, so don't decode it.
             continue;
         }
-        let datum = match val_to_datum(
-            value,
-            col_desc,
-            &mut temp_strs,
-            &mut temp_bytes,
-            &mut temp_jsonbs,
-        ) {
+        match pack_val_as_datum(value, col_desc, &mut packer) {
             Err(err) => Err(MySqlError::ValueDecodeError {
                 column_name: col_desc.name.clone(),
                 qualified_table_name: format!("{}.{}", table_desc.schema_name, table_desc.name),
                 error: err.to_string(),
             })?,
-            Ok(datum) => datum,
+            Ok(()) => (),
         };
-        packer.push(datum);
     }
 
     Ok(row_container.clone())
 }
 
-fn val_to_datum<'a>(
+// TODO(guswynn|roshan): This function has various `.to_string()` and `format!` calls that should
+// use a shared allocation if possible.
+fn pack_val_as_datum(
     value: Value,
     col_desc: &MySqlColumnDesc,
-    temp_strs: &'a mut Vec<String>,
-    temp_bytes: &'a mut Vec<Vec<u8>>,
-    temp_jsonbs: &'a mut Vec<Jsonb>,
-) -> Result<Datum<'a>, anyhow::Error> {
+    packer: &mut RowPacker,
+) -> Result<(), anyhow::Error> {
     let column_type = match col_desc.column_type {
         Some(ref column_type) => column_type,
         None => anyhow::bail!("column type is not set for column: {}", col_desc.name),
     };
-    Ok(match value {
+    match value {
         Value::NULL => {
             if column_type.nullable {
-                Datum::Null
+                packer.push(Datum::Null);
             } else {
                 Err(anyhow::anyhow!(
                     "received a null value in a non-null column".to_string(),
@@ -100,26 +90,24 @@ fn val_to_datum<'a>(
             }
         }
         value => match &column_type.scalar_type {
-            ScalarType::Bool => Datum::from(from_value_opt::<bool>(value)?),
-            ScalarType::UInt16 => Datum::from(from_value_opt::<u16>(value)?),
-            ScalarType::Int16 => Datum::from(from_value_opt::<i16>(value)?),
-            ScalarType::UInt32 => Datum::from(from_value_opt::<u32>(value)?),
-            ScalarType::Int32 => Datum::from(from_value_opt::<i32>(value)?),
-            ScalarType::UInt64 => Datum::from(from_value_opt::<u64>(value)?),
-            ScalarType::Int64 => Datum::from(from_value_opt::<i64>(value)?),
-            ScalarType::Float32 => Datum::from(from_value_opt::<f32>(value)?),
-            ScalarType::Float64 => Datum::from(from_value_opt::<f64>(value)?),
+            ScalarType::Bool => packer.push(Datum::from(from_value_opt::<bool>(value)?)),
+            ScalarType::UInt16 => packer.push(Datum::from(from_value_opt::<u16>(value)?)),
+            ScalarType::Int16 => packer.push(Datum::from(from_value_opt::<i16>(value)?)),
+            ScalarType::UInt32 => packer.push(Datum::from(from_value_opt::<u32>(value)?)),
+            ScalarType::Int32 => packer.push(Datum::from(from_value_opt::<i32>(value)?)),
+            ScalarType::UInt64 => packer.push(Datum::from(from_value_opt::<u64>(value)?)),
+            ScalarType::Int64 => packer.push(Datum::from(from_value_opt::<i64>(value)?)),
+            ScalarType::Float32 => packer.push(Datum::from(from_value_opt::<f32>(value)?)),
+            ScalarType::Float64 => packer.push(Datum::from(from_value_opt::<f64>(value)?)),
             ScalarType::Char { length } => {
                 let val = from_value_opt::<String>(value)?;
                 check_char_length(length.map(|l| l.into_u32()), &val, col_desc)?;
-                temp_strs.push(val);
-                Datum::from(temp_strs.last().unwrap().as_str())
+                packer.push(Datum::String(&val));
             }
             ScalarType::VarChar { max_length } => {
                 let val = from_value_opt::<String>(value)?;
                 check_char_length(max_length.map(|l| l.into_u32()), &val, col_desc)?;
-                temp_strs.push(val);
-                Datum::from(temp_strs.last().unwrap().as_str())
+                packer.push(Datum::String(&val));
             }
             ScalarType::String => {
                 // Special case for string types, since this is the scalar type used for a column
@@ -130,23 +118,19 @@ fn val_to_datum<'a>(
                         match value {
                             Value::Bytes(data) => {
                                 let data = std::str::from_utf8(&data)?;
-                                temp_strs.push(data.to_string());
-                                Datum::from(temp_strs.last().unwrap().as_str())
+                                packer.push(Datum::String(data));
                             }
                             Value::Int(val) => {
                                 // Enum types are provided as 1-indexed integers in the replication
                                 // stream, so we need to find the string value from the enum meta
-                                let enum_val = e
-                                    .values
-                                    .get(usize::try_from(val)? - 1)
-                                    .ok_or(anyhow::anyhow!(
+                                let enum_val = e.values.get(usize::try_from(val)? - 1).ok_or(
+                                    anyhow::anyhow!(
                                         "received invalid enum value: {} for column {}",
                                         val,
                                         col_desc.name
-                                    ))?
-                                    .clone();
-                                temp_strs.push(enum_val);
-                                Datum::from(temp_strs.last().unwrap().as_str())
+                                    ),
+                                )?;
+                                packer.push(Datum::String(enum_val));
                             }
                             _ => Err(anyhow::anyhow!(
                                 "received unexpected value for enum type: {:?}",
@@ -160,32 +144,29 @@ fn val_to_datum<'a>(
                         // as an encoded string sans-whitespace.
                         if let Value::Bytes(data) = value {
                             let json = serde_json::from_slice::<serde_json::Value>(&data)?;
-                            temp_strs.push(json.to_string());
-                            Datum::from(temp_strs.last().unwrap().as_str())
+                            packer.push(Datum::String(&json.to_string()));
                         } else {
                             Err(anyhow::anyhow!(
                                 "received unexpected value for json type: {:?}",
                                 value
-                            ))?
+                            ))?;
                         }
                     }
                     Some(MySqlColumnMeta::Year) => {
                         let val = from_value_opt::<u16>(value)?;
-                        temp_strs.push(val.to_string());
-                        Datum::from(temp_strs.last().unwrap().as_str())
+                        packer.push(Datum::String(&val.to_string()));
                     }
                     Some(MySqlColumnMeta::Date) => {
                         // Some MySQL dates are invalid in chrono/NaiveDate (e.g. 0000-00-00), so
                         // we need to handle them directly as strings
                         if let Value::Date(y, m, d, 0, 0, 0, 0) = value {
-                            temp_strs.push(format!("{:04}-{:02}-{:02}", y, m, d));
+                            packer.push(Datum::String(&format!("{:04}-{:02}-{:02}", y, m, d)));
                         } else {
                             Err(anyhow::anyhow!(
                                 "received unexpected value for date type: {:?}",
                                 value
-                            ))?
+                            ))?;
                         }
-                        Datum::from(temp_strs.last().unwrap().as_str())
                     }
                     Some(MySqlColumnMeta::Timestamp(precision)) => {
                         // Some MySQL dates are invalid in chrono/NaiveDate (e.g. 0000-00-00), so
@@ -193,7 +174,7 @@ fn val_to_datum<'a>(
                         if let Value::Date(y, m, d, h, mm, s, ms) = value {
                             if *precision > 0 {
                                 let precision: usize = (*precision).try_into()?;
-                                temp_strs.push(format!(
+                                packer.push(Datum::String(&format!(
                                     "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:0precision$}",
                                     y,
                                     m,
@@ -203,30 +184,32 @@ fn val_to_datum<'a>(
                                     s,
                                     ms,
                                     precision = precision
-                                ));
+                                )));
                             } else {
-                                temp_strs.push(format!(
+                                packer.push(Datum::String(&format!(
                                     "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
                                     y, m, d, h, mm, s
-                                ));
+                                )));
                             }
                         } else {
                             Err(anyhow::anyhow!(
                                 "received unexpected value for timestamp type: {:?}",
                                 value
-                            ))?
+                            ))?;
                         }
-                        Datum::from(temp_strs.last().unwrap().as_str())
                     }
                     None => {
-                        temp_strs.push(from_value_opt::<String>(value)?);
-                        Datum::from(temp_strs.last().unwrap().as_str())
+                        packer.push(Datum::String(&from_value_opt::<String>(value)?));
                     }
                 }
             }
             ScalarType::Jsonb => {
                 if let Value::Bytes(data) = value {
-                    let j = mz_repr::adt::jsonb::Jsonb::from_slice(&data).map_err(|e| {
+                    let packer = JsonbPacker::new(packer);
+                    // TODO(guswynn): This still produces and extract allocation (in the
+                    // `DeserializeSeed` impl used internally), which should be improved,
+                    // for all users of the APIs in that module.
+                    packer.pack_slice(&data).map_err(|e| {
                         anyhow::anyhow!(
                             "Failed to decode JSON: {}",
                             // See if we can output the string that failed to be converted to JSON.
@@ -237,8 +220,6 @@ fn val_to_datum<'a>(
                             }
                         )
                     })?;
-                    temp_jsonbs.push(j);
-                    temp_jsonbs.last().unwrap().as_ref().into_datum()
                 } else {
                     Err(anyhow::anyhow!(
                         "received unexpected value for json type: {:?}",
@@ -248,12 +229,11 @@ fn val_to_datum<'a>(
             }
             ScalarType::Bytes => {
                 let data = from_value_opt::<Vec<u8>>(value)?;
-                temp_bytes.push(data);
-                Datum::from(temp_bytes.last().unwrap().as_slice())
+                packer.push(Datum::Bytes(&data));
             }
             ScalarType::Date => {
                 let date = Date::try_from(from_value_opt::<chrono::NaiveDate>(value)?)?;
-                Datum::from(date)
+                packer.push(Datum::from(date));
             }
             ScalarType::Timestamp { precision: _ } => {
                 // Timestamps are encoded as different mysql_common::Value types depending on
@@ -280,9 +260,13 @@ fn val_to_datum<'a>(
                         value
                     ))?,
                 };
-                Datum::try_from(CheckedTimestamp::try_from(chrono_timestamp)?)?
+                packer.push(Datum::try_from(CheckedTimestamp::try_from(
+                    chrono_timestamp,
+                )?)?);
             }
-            ScalarType::Time => Datum::from(from_value_opt::<chrono::NaiveTime>(value)?),
+            ScalarType::Time => {
+                packer.push(Datum::from(from_value_opt::<chrono::NaiveTime>(value)?));
+            }
             ScalarType::Numeric { max_scale } => {
                 // The wire-format of numeric types is a string when sent in a binary query
                 // response but is represented in a decimal binary format when sent in a binlog
@@ -308,7 +292,7 @@ fn val_to_datum<'a>(
                         ))?
                     }
                 }
-                Datum::from(val)
+                packer.push(Datum::from(val));
             }
             // TODO(roshan): IMPLEMENT OTHER TYPES
             data_type => Err(anyhow::anyhow!(
@@ -317,7 +301,8 @@ fn val_to_datum<'a>(
                 value
             ))?,
         },
-    })
+    }
+    Ok(())
 }
 
 fn check_char_length(
