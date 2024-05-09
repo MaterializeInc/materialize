@@ -109,7 +109,7 @@ where
                     let (update_stream, err_stream) = build_update_stream(
                         &bundles[source_relation],
                         self.as_of_frontier.clone(),
-                        Some(source_key),
+                        source_key,
                         source_relation,
                         initial_closure,
                     );
@@ -462,12 +462,21 @@ where
                 (ok, err.concat(&errs.as_collection(|k, _v| k.clone())))
             }
             None => {
-                panic!("Missing promised arrangement")
+                panic!(
+                    "Missing promised arrangement: {:?}, relation: {:?}",
+                    source_key, source_relation
+                )
             }
         }
     } else {
         // Build an update stream based on a `Collection` input.
-        unimplemented!();
+        let (ok, err) = build_update_stream_stream(
+            bundle.as_specific_collection(None).0,
+            as_of,
+            source_relation,
+            initial_closure,
+        );
+        (ok, err.concat(&bundle.as_specific_collection(None).1))
     }
 }
 
@@ -571,4 +580,44 @@ where
         ok_stream.as_collection(),
         err_stream.as_collection().map(DataflowError::from),
     )
+}
+
+/// Builds the beginning of the update stream of a delta path.
+///
+/// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
+/// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
+/// updates happening at the same time on different relations.
+fn build_update_stream_stream<G>(
+    stream: Collection<G, Row, Diff>,
+    as_of: Antichain<mz_repr::Timestamp>,
+    source_relation: usize,
+    initial_closure: JoinClosure,
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
+where
+    G: Scope,
+    G::Timestamp: crate::render::RenderTimestamp,
+{
+    // We should only be calling this with the 0th source relation, for the moment.
+    assert_eq!(source_relation, 0);
+
+    let mut inner_as_of = Antichain::new();
+    for event_time in as_of.elements().iter() {
+        inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
+    }
+
+    let mut datums = DatumVec::new();
+    type CB<C> = ConsolidatingContainerBuilder<C>;
+    let (oks, err) =
+        stream.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("UpdateStream", move |row| {
+            let temp_storage = RowArena::new();
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
+            let mut datums_local = datums.borrow_with(&row);
+
+            initial_closure
+                .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                .transpose()
+        });
+
+    (oks, err.map(DataflowError::from))
 }

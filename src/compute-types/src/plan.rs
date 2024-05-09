@@ -838,6 +838,98 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
             let config = TransformConfig { monotonic_ids };
             Self::refine_single_time_consolidation(&mut dataflow, &config)?;
+
+            // For delta join plans, not in WMR blocks, remove all but the first join path.
+            // In addition, remove any arrangement on the first input, as it no longer needs
+            // to support the other paths. In removing the arrangement, we'll need to unset
+            // the source key (to `None`, indicating a streamed collection), and also update
+            // the initial join closure, as the column layout will now be different.
+            for build_desc in dataflow.objects_to_build.iter_mut() {
+                // Worklist, populated by non-WMR children.
+                let mut todo = vec![&mut build_desc.plan];
+                while let Some(expr) = todo.pop() {
+                    match &mut expr.node {
+                        // TODO: also handle binary differential joins, as they too
+                        // have the potential to remove bespoke arrangements.
+                        PlanNode::Join {
+                            inputs,
+                            plan: JoinPlan::Delta(plan),
+                            ..
+                        } => {
+                            // Always truncate the paths that we will not hydrate.
+                            plan.path_plans.truncate(1);
+                            // We now have fewer obligations to arrange the first input.
+                            // Only `source_key` of the first plan, which we can helpfully
+                            // remove if the arrangement by that key is bespoke.
+                            if let Some(source_key) = &plan.path_plans[0].source_key {
+                                if let PlanNode::ArrangeBy { forms, .. } = &mut inputs[0].node {
+                                    // Discard arrangement forms other than the source key.
+                                    forms.arranged.retain(|af| &af.0 == source_key);
+                                    // We do not need to retain the remaining forms, but the
+                                    // presence of a form does signal (though not guarantee)
+                                    // that `Input` is not yet arranged by `source_key`, and
+                                    // we might improve things by making a collection of it.
+                                    // If there *is* a pre-existing form, ideally we already
+                                    // use it, and won't fix that here.
+                                    if let Some((key, map, thin)) = forms.arranged.pop() {
+                                        forms.raw = true;
+                                        plan.path_plans[0].source_key = None;
+                                        // TODO: Update `initial_closure` to reference columns
+                                        // of the raw collection, rather than arranged columns.
+                                        // The initial closure expects access to key columns,
+                                        // which are arbitrary expressions, and to "thinned"
+                                        // columns that are base columns.
+                                        // Step 1: Update ready equivalences.
+                                        for class in plan.path_plans[0]
+                                            .initial_closure
+                                            .ready_equivalences
+                                            .iter_mut()
+                                        {
+                                            for expr in class.iter_mut() {
+                                                let mut todo = vec![expr];
+                                                while let Some(expr) = todo.pop() {
+                                                    if let MirScalarExpr::Column(c) = expr {
+                                                        if let Some(e) = key.get(*c) {
+                                                            *expr = e.clone()
+                                                        } else {
+                                                            *c = thin[*c - key.len()];
+                                                        }
+                                                    } else {
+                                                        todo.extend(expr.children_mut());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // Step 2: Update before MFP.
+                                        let (m, f, p) = plan.path_plans[0]
+                                            .initial_closure
+                                            .before
+                                            .as_map_filter_project();
+                                        let mfp = MapFilterProject::new(map.len())
+                                            .map(key)
+                                            .project((0..map.len()).chain(thin))
+                                            .map(m)
+                                            .filter(f)
+                                            .project(p);
+                                        let safe_mfp =
+                                            mfp.into_plan().unwrap().into_nontemporal().unwrap();
+                                        plan.path_plans[0].initial_closure.before = safe_mfp;
+
+                                        forms.arranged.clear();
+                                    }
+                                }
+                            }
+                            todo.extend(inputs.iter_mut());
+                        }
+                        PlanNode::LetRec { body, .. } => {
+                            todo.push(body);
+                        }
+                        x => {
+                            todo.extend(x.children_mut());
+                        }
+                    }
+                }
+            }
         }
 
         soft_assert_eq_no_log!(dataflow.check_invariants(), Ok(()));
