@@ -108,7 +108,7 @@ where
                     let (update_stream, err_stream) = build_update_stream(
                         &bundles[source_relation],
                         self.as_of_frontier.clone(),
-                        Some(source_key),
+                        source_key,
                         source_relation,
                         initial_closure,
                     );
@@ -256,7 +256,7 @@ where
                 comparison,
                 closure,
             );
-            (ok, err.concat(&errs.as_collection(|k, _v| k.clone())))
+            (ok, err.concat(errs.as_collection(|k, _v| k.clone())))
         }
         Some(ArrangementFlavor::Trace(_, inner, errs)) => {
             let (ok, err) = build_halfjoin_trace::<_, RowRowEnter<_, _, _>, _>(
@@ -267,7 +267,7 @@ where
                 comparison,
                 closure,
             );
-            (ok, err.concat(&errs.as_collection(|k, _v| k.clone())))
+            (ok, err.concat(errs.as_collection(|k, _v| k.clone())))
         }
         None => {
             panic!("Missing promised arrangement")
@@ -448,7 +448,7 @@ where
                     source_relation,
                     initial_closure,
                 );
-                (ok, err.concat(&errs.as_collection(|k, _v| k.clone())))
+                (ok, err.concat(errs.as_collection(|k, _v| k.clone())))
             }
             Some(ArrangementFlavor::Trace(_, inner, errs)) => {
                 let (ok, err) = build_update_stream_trace::<_, RowRowEnter<_, _, _>>(
@@ -457,7 +457,7 @@ where
                     source_relation,
                     initial_closure,
                 );
-                (ok, err.concat(&errs.as_collection(|k, _v| k.clone())))
+                (ok, err.concat(errs.as_collection(|k, _v| k.clone())))
             }
             None => {
                 panic!(
@@ -468,7 +468,17 @@ where
         }
     } else {
         // Build an update stream based on a `Collection` input.
-        unimplemented!();
+        let (oks, errs) = bundle
+            .collection
+            .clone()
+            .expect("The unarranged collection doesn't exist.");
+        let (ok, err) = build_update_stream_stream(
+            oks,
+            as_of,
+            source_relation,
+            initial_closure,
+        );
+        (ok, err.concat(errs))
     }
 }
 
@@ -585,4 +595,47 @@ where
         ok_stream.as_collection(),
         err_stream.as_collection().map(DataflowError::from),
     )
+}
+
+/// Builds the beginning of the update stream of a delta path.
+///
+/// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
+/// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
+/// updates happening at the same time on different relations.
+fn build_update_stream_stream<G>(
+    stream: VecCollection<G, Row, Diff>,
+    as_of: Antichain<mz_repr::Timestamp>,
+    source_relation: usize,
+    initial_closure: JoinClosure,
+) -> (
+    VecCollection<G, Row, Diff>,
+    VecCollection<G, DataflowError, Diff>,
+)
+where
+    G: Scope,
+    G::Timestamp: RenderTimestamp,
+{
+    // We should only be calling this with the 0th source relation, for the moment.
+    assert_eq!(source_relation, 0);
+
+    let mut inner_as_of = Antichain::new();
+    for event_time in as_of.elements().iter() {
+        inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
+    }
+
+    let mut datums = DatumVec::new();
+    type CB<C> = ConsolidatingContainerBuilder<C>;
+    let (oks, err) =
+        stream.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("UpdateStream", move |row| {
+            let temp_storage = RowArena::new();
+            let mut row_builder = SharedRow::get();
+            let mut datums_local = datums.borrow_with(&row);
+
+            initial_closure
+                .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                .map(|row| row.cloned())
+                .transpose()
+        });
+
+    (oks, err.map(DataflowError::from))
 }
