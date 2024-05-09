@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use arrow::array::Array;
 use bytes::{BufMut, Bytes};
 use chrono::Timelike;
 use dec::Decimal;
@@ -405,7 +406,7 @@ impl DatumToPersist for NullableProtoDatumToPersist {
     const STATS_FN: StatsFn = StatsFn::Custom(
         |col: &DynColumnRef, validity: ValidityRef| -> Result<Box<dyn DynStats>, String> {
             let col = col.downcast_ref::<Option<Vec<u8>>>()?;
-            debug_assert!(validity.is_superset(col.validity()));
+            debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
             let (lower, upper, null_count) = proto_datum_min_max_nulls(col, ValidityRef::none());
             Ok(Box::new(OptionStats {
                 none: null_count,
@@ -524,7 +525,7 @@ impl DatumToPersist for Option<Jsonb> {
     const STATS_FN: StatsFn = StatsFn::Custom(
         |col: &DynColumnRef, validity: ValidityRef| -> Result<Box<dyn DynStats>, String> {
             let col = col.downcast_ref::<Option<Vec<u8>>>()?;
-            debug_assert!(validity.is_superset(col.validity()));
+            debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
             let (stats, null_count) = jsonb_stats_nulls(col, ValidityRef::none())?;
             Ok(Box::new(OptionStats {
                 some: BytesStats::Json(stats),

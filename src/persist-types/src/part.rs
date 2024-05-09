@@ -9,11 +9,12 @@
 
 //! A columnar representation of one blob's worth of data
 
-use arrow2::array::{Array, PrimitiveArray};
-use arrow2::buffer::Buffer;
-use arrow2::chunk::Chunk;
-use arrow2::datatypes::{DataType as ArrowLogicalType, Field};
-use arrow2::io::parquet::write::Encoding;
+use std::sync::Arc;
+
+use arrow::array::{Array, Int64Array, PrimitiveArray};
+use arrow::buffer::ScalarBuffer;
+use arrow::datatypes::{Field, Int64Type};
+use mz_ore::iter::IteratorExt;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::{PartEncoder, Schema};
@@ -28,8 +29,8 @@ pub struct Part {
     len: usize,
     key: DynStructCol,
     val: DynStructCol,
-    ts: Buffer<i64>,
-    diff: Buffer<i64>,
+    ts: ScalarBuffer<i64>,
+    diff: ScalarBuffer<i64>,
 }
 
 impl Part {
@@ -55,9 +56,8 @@ impl Part {
         Ok(stats.some)
     }
 
-    pub(crate) fn to_arrow(&self) -> (Vec<Field>, Vec<Vec<Encoding>>, Chunk<Box<dyn Array>>) {
-        let (mut fields, mut encodings, mut arrays) =
-            (Vec::new(), Vec::new(), Vec::<Box<dyn Array>>::new());
+    pub(crate) fn to_arrow(&self) -> (Vec<Field>, Vec<Arc<dyn Array>>) {
+        let (mut fields, mut arrays) = (Vec::new(), Vec::<Arc<dyn Array>>::new());
 
         {
             // arrow2 doesn't allow empty struct arrays. To make a future schema
@@ -65,10 +65,9 @@ impl Part {
             // model this as a missing column (rather than something like
             // NullArray). This also matches how we'd do the same for nested
             // structs.
-            if let Some((key_array, key_encodings)) = self.key.to_arrow_struct() {
+            if let Some(key_array) = self.key.to_arrow_struct() {
                 fields.push(Field::new("k", key_array.data_type().clone(), false));
-                encodings.push(key_encodings);
-                arrays.push(Box::new(key_array));
+                arrays.push(Arc::new(key_array));
             }
         }
 
@@ -78,98 +77,101 @@ impl Part {
             // model this as a missing column (rather than something like
             // NullArray). This also matches how we'd do the same for nested
             // structs.
-            if let Some((val_array, val_encodings)) = self.val.to_arrow_struct() {
+            if let Some(val_array) = self.val.to_arrow_struct() {
                 fields.push(Field::new("v", val_array.data_type().clone(), false));
-                encodings.push(val_encodings);
-                arrays.push(Box::new(val_array));
+                arrays.push(Arc::new(val_array));
             }
         }
 
         {
-            let ts = PrimitiveArray::new(ArrowLogicalType::Int64, self.ts.clone(), None);
+            let ts = Int64Array::new(self.ts.clone(), None);
             fields.push(Field::new("t", ts.data_type().clone(), false));
-            encodings.push(vec![Encoding::Plain]);
-            arrays.push(Box::new(ts));
+            arrays.push(Arc::new(ts));
         }
 
         {
-            let diff = PrimitiveArray::new(ArrowLogicalType::Int64, self.diff.clone(), None);
+            let diff = Int64Array::new(self.diff.clone(), None);
             fields.push(Field::new("d", diff.data_type().clone(), false));
-            encodings.push(vec![Encoding::Plain]);
-            arrays.push(Box::new(diff));
+            arrays.push(Arc::new(diff));
         }
 
-        (fields, encodings, Chunk::new(arrays))
+        (fields, arrays)
     }
 
     pub(crate) fn from_arrow<K, KS: Schema<K>, V, VS: Schema<V>>(
         key_schema: &KS,
         val_schema: &VS,
-        chunk: Chunk<Box<dyn Array>>,
+        arrays: &[Arc<dyn Array>],
     ) -> Result<Self, String> {
         let key_schema = key_schema.columns();
         let val_schema = val_schema.columns();
 
-        let len = chunk.len();
-        let mut chunk = chunk.arrays().iter();
+        if !arrays.iter().map(|a| a.len()).all_equal() {
+            return Err("arrays do not have equal lengths".to_string());
+        }
+        let len = arrays
+            .get(0)
+            .ok_or_else(|| "should have at least 3 arrays, found none")
+            .map(|a| a.len())?;
+        let mut arrays = arrays.into_iter();
         let key = if key_schema.cols.is_empty() {
             None
         } else {
-            Some(
-                chunk
-                    .next()
-                    .ok_or_else(|| "missing key column".to_owned())?,
-            )
+            let key = arrays
+                .next()
+                .ok_or_else(|| "missing key column".to_owned())?;
+            Some(key)
         };
         let val = if val_schema.cols.is_empty() {
             None
         } else {
-            Some(
-                chunk
-                    .next()
-                    .ok_or_else(|| "missing val column".to_owned())?,
-            )
+            let val = arrays
+                .next()
+                .ok_or_else(|| "missing val column".to_owned())?;
+            Some(val)
         };
-        let ts = chunk.next().ok_or_else(|| "missing ts column".to_owned())?;
-        let diff = chunk
+        let ts = arrays
+            .next()
+            .ok_or_else(|| "missing ts column".to_owned())?;
+        let diff = arrays
             .next()
             .ok_or_else(|| "missing diff column".to_owned())?;
-        if let Some(_) = chunk.next() {
+        if let Some(_) = arrays.next() {
             return Err("too many columns".to_owned());
         }
 
         let key = match key {
             None => DynStructCol::empty(key_schema),
-            Some(key) => DynStructCol::from_arrow(key_schema, key)?,
+            Some(key) => DynStructCol::from_arrow(key_schema, &*key)?,
         };
 
         let val = match val {
             None => DynStructCol::empty(val_schema),
-            Some(val) => DynStructCol::from_arrow(val_schema, val)?,
+            Some(val) => DynStructCol::from_arrow(val_schema, &*val)?,
         };
 
         let diff = diff
             .as_any()
-            .downcast_ref::<PrimitiveArray<i64>>()
+            .downcast_ref::<PrimitiveArray<Int64Type>>()
             .ok_or_else(|| {
                 format!(
-                    "expected diff to be PrimitiveArray<i64> got {:?}",
+                    "expected diff to be PrimitiveArray<Int64Type> got {:?}",
                     diff.data_type()
                 )
             })?;
-        assert!(diff.validity().is_none());
+        assert!(diff.logical_nulls().is_none());
         let diff = diff.values().clone();
 
         let ts = ts
             .as_any()
-            .downcast_ref::<PrimitiveArray<i64>>()
+            .downcast_ref::<PrimitiveArray<Int64Type>>()
             .ok_or_else(|| {
                 format!(
-                    "expected ts to be PrimitiveArray<i64> got {:?}",
+                    "expected ts to be PrimitiveArray<Int64Type> got {:?}",
                     ts.data_type()
                 )
             })?;
-        assert!(ts.validity().is_none());
+        assert!(ts.logical_nulls().is_none());
         let ts = ts.values().clone();
 
         let part = Part {
@@ -307,8 +309,8 @@ impl<K, KS: Schema<K>, V, VS: Schema<V>> PartBuilder<K, KS, V, VS> {
             len: key_len,
             key,
             val,
-            ts: Buffer::from(ts.0),
-            diff: Buffer::from(diff.0),
+            ts: ScalarBuffer::from(ts.0),
+            diff: ScalarBuffer::from(diff.0),
         }
     }
 }
