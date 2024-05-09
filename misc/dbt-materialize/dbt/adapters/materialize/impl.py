@@ -58,7 +58,9 @@ class MaterializeIndexConfig(dbtClassMixin):
             return cls.from_dict(raw_index)
         except ValidationError as exc:
             msg = dbt_common.exceptions.validator_error_message(exc)
-            dbt_common.exceptions.CompilationError(f"Could not parse index config: {msg}")
+            dbt_common.exceptions.CompilationError(
+                f"Could not parse index config: {msg}"
+            )
         except TypeError:
             dbt_common.exceptions.CompilationError(
                 "Invalid index config:\n"
