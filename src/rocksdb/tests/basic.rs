@@ -11,7 +11,7 @@ use mz_ore::metrics::{CounterVecExt, HistogramVecExt};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_rocksdb::{
     InstanceOptions, KeyUpdate, RocksDBConfig, RocksDBInstance, RocksDBInstanceMetrics,
-    RocksDBSharedMetrics, ValueIterator,
+    RocksDBSharedMetrics, StubMergeOperator, ValueIterator,
 };
 use mz_rocksdb_types::RocksDBTuningParameters;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts};
@@ -51,7 +51,7 @@ async fn basic() -> Result<(), anyhow::Error> {
 
     let mut instance = RocksDBInstance::<String, String>::new(
         t.path(),
-        InstanceOptions::new(
+        InstanceOptions::<bincode::DefaultOptions, String, StubMergeOperator<String>>::new(
             rocksdb::Env::new()?,
             2,
             None,
@@ -267,7 +267,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance1 = RocksDBInstance::<String, String>::new(
         t.path().join("1").as_path(),
-        InstanceOptions::new(
+        InstanceOptions::<bincode::DefaultOptions, String, StubMergeOperator<String>>::new(
             rocksdb::Env::new()?,
             2,
             None,
@@ -293,7 +293,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance2 = RocksDBInstance::<String, String>::new(
         t.path().join("2").as_path(),
-        InstanceOptions::new(
+        InstanceOptions::<bincode::DefaultOptions, String, StubMergeOperator<String>>::new(
             rocksdb::Env::new()?,
             2,
             None,
@@ -322,7 +322,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
     let instance3 = RocksDBInstance::<String, String>::new(
         t.path().join("3").as_path(),
-        InstanceOptions::new(
+        InstanceOptions::<bincode::DefaultOptions, String, StubMergeOperator<String>>::new(
             rocksdb::Env::new()?,
             2,
             None,

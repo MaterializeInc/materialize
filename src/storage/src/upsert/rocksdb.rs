@@ -59,7 +59,7 @@ where
                 },
             ))
             .await?;
-        p_stats.processed_puts += stats.processed_puts;
+        p_stats.processed_puts += stats.processed_updates;
         let size: i64 = stats.size_written.try_into().expect("less than i64 size");
         p_stats.size_diff += size;
 

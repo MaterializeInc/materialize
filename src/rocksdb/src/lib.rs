@@ -63,12 +63,6 @@ pub enum Error {
     CleanupTimeout(#[from] tokio::time::error::Elapsed),
 }
 
-/// An associative merge function for RocksDB. The first argument is the key,
-/// the second is the existing value, and the third is an iterator over the
-/// values from the operands to be merged. The function should return the
-/// new value to store, if any.
-pub type ValueMergeFn<O, V> = fn(&[u8], Option<V>, ValueIterator<O, V>) -> Option<V>;
-
 /// An iterator over operand values to merge for a key in RocksDB.
 pub struct ValueIterator<'a, O, V>
 where
@@ -94,13 +88,17 @@ where
     }
 }
 
+/// Helper type stub to satisfy generic bounds when initializing a `InstanceOptions` without a
+/// defined merge operator.
+pub type StubMergeOperator<V> = fn(
+    key: &[u8],
+    existing_value: Option<V>,
+    operands: ValueIterator<bincode::DefaultOptions, V>,
+) -> Option<V>;
+
 /// Fixed options to configure a [`RocksDBInstance`]. These are not tuning parameters,
 /// see the `config` modules for tuning. These are generally fixed within the binary.
-pub struct InstanceOptions<O, V>
-where
-    O: bincode::Options + Copy + Send + Sync + 'static,
-    V: DeserializeOwned + Serialize + Send + Sync + 'static,
-{
+pub struct InstanceOptions<O, V, F> {
     /// Whether or not to clear state at the instance
     /// path before starting.
     pub cleanup_on_new: bool,
@@ -120,21 +118,28 @@ where
     pub bincode: O,
 
     /// A merge operator to use for associative merges, if any. The first
-    /// string is the name of the operator to store in RocksDB for
-    /// compatibility checks.
-    pub merge_operator: Option<(String, ValueMergeFn<O, V>)>,
+    /// item is the name of the operator to store in RocksDB for
+    /// compatibility checks, and the second is the merge function.
+    pub merge_operator: Option<(String, F)>,
+
+    v: std::marker::PhantomData<V>,
 }
 
-impl<O, V> InstanceOptions<O, V>
+impl<O, V, F> InstanceOptions<O, V, F>
 where
     O: bincode::Options + Copy + Send + Sync + 'static,
     V: DeserializeOwned + Serialize + Send + Sync + 'static,
+    F: for<'a> Fn(&'a [u8], Option<V>, ValueIterator<'a, O, V>) -> Option<V>
+        + Copy
+        + Send
+        + Sync
+        + 'static,
 {
     /// A new `Options` object with reasonable defaults.
     pub fn new(
         env: rocksdb::Env,
         cleanup_tries: usize,
-        merge_operator: Option<(String, ValueMergeFn<O, V>)>,
+        merge_operator: Option<(String, F)>,
         bincode: O,
     ) -> Self {
         InstanceOptions {
@@ -144,6 +149,7 @@ where
             env,
             merge_operator,
             bincode,
+            v: std::marker::PhantomData,
         }
     }
 
@@ -240,7 +246,7 @@ pub struct GetResult<V> {
 #[derive(Default, Debug)]
 pub struct MultiUpdateResult {
     /// The number of keys we put, merged, or deleted.
-    pub processed_puts: u64,
+    pub processed_updates: u64,
     /// The total size of values we wrote to the database.
     /// Does not contain any information about deletes.
     pub size_written: u64,
@@ -322,9 +328,9 @@ where
     /// `metrics` is a set of metric types that this type will keep
     /// up to date. `enc_opts` is the `bincode` options used to
     /// serialize and deserialize the keys and values.
-    pub async fn new<M, O, IM>(
+    pub async fn new<M, O, IM, F>(
         instance_path: &Path,
-        options: InstanceOptions<O, V>,
+        options: InstanceOptions<O, V, F>,
         tuning_config: RocksDBConfig,
         shared_metrics: M,
         instance_metrics: IM,
@@ -333,6 +339,11 @@ where
         O: bincode::Options + Copy + Send + Sync + 'static,
         M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
         IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
+        F: for<'a> Fn(&'a [u8], Option<V>, ValueIterator<'a, O, V>) -> Option<V>
+            + Copy
+            + Send
+            + Sync
+            + 'static,
     {
         let dynamic_config = tuning_config.dynamic.clone();
         if options.cleanup_on_new && instance_path.exists() {
@@ -512,7 +523,7 @@ where
 
             for puts in puts.into_iter() {
                 let ret = self.multi_update_inner(puts).await?;
-                stats.processed_puts += ret.processed_puts;
+                stats.processed_updates += ret.processed_updates;
                 stats.size_written += ret.size_written;
             }
         }
@@ -531,7 +542,7 @@ where
         if multi_put_vec.is_empty() {
             self.multi_update_scratch = multi_put_vec;
             return Ok(MultiUpdateResult {
-                processed_puts: 0,
+                processed_updates: 0,
                 size_written: 0,
             });
         }
@@ -584,8 +595,8 @@ where
     }
 }
 
-fn rocksdb_core_loop<K, V, M, O, IM>(
-    options: InstanceOptions<O, V>,
+fn rocksdb_core_loop<K, V, M, O, IM, F>(
+    options: InstanceOptions<O, V, F>,
     tuning_config: RocksDBConfig,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
@@ -597,6 +608,11 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
+    F: for<'a> Fn(&'a [u8], Option<V>, ValueIterator<'a, O, V>) -> Option<V>
+        + Send
+        + Sync
+        + Copy
+        + 'static,
     IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
     let retry_max_duration = tuning_config.retry_max_duration;
@@ -742,7 +758,7 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                 let batch_size = batch.len();
 
                 let mut ret = MultiUpdateResult {
-                    processed_puts: 0,
+                    processed_updates: 0,
                     size_written: 0,
                 };
 
@@ -770,7 +786,7 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                 for ((key, value), encode_buf) in
                     batch.drain(..).zip(encoded_batch_buffers.iter_mut())
                 {
-                    ret.processed_puts += 1;
+                    ret.processed_updates += 1;
 
                     match &value {
                         update_type @ (KeyUpdate::Put(update) | KeyUpdate::Merge(update)) => {

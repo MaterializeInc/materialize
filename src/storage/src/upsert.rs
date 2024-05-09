@@ -309,7 +309,7 @@ where
                     rocksdb::RocksDB::new(
                         mz_rocksdb::RocksDBInstance::new(
                             &rocksdb_dir,
-                            mz_rocksdb::InstanceOptions::new(
+                            mz_rocksdb::InstanceOptions::<_, _, mz_rocksdb::StubMergeOperator<_>>::new(
                                 env,
                                 rocksdb_cleanup_tries,
                                 None,
