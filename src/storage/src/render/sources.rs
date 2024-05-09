@@ -97,7 +97,7 @@ where
         name: source_name,
         id,
         source_exports: description.source_exports.clone(),
-        timestamp_interval: description.desc.timestamp_interval,
+        timestamp_interval: description.timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
         now: storage_state.now.clone(),
@@ -197,7 +197,6 @@ where
         encoding,
         envelope,
         connection: _,
-        timestamp_interval: _,
     } = description.desc;
 
     let (decoded_stream, decode_health) = match encoding {

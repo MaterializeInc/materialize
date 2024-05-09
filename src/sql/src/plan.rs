@@ -96,9 +96,10 @@ pub use notice::PlanNotice;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
+// TODO(#26906): move this so it is solely in planning.
+pub use statement::ddl::source::PgConfigOptionExtracted;
 pub use statement::ddl::{
-    AlterSourceAddSubsourceOptionExtracted, PgConfigOptionExtracted, PlannedAlterRoleOption,
-    PlannedRoleVariable,
+    AlterSourceAddSubsourceOptionExtracted, PlannedAlterRoleOption, PlannedRoleVariable,
 };
 pub use statement::{
     describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementContext,
@@ -1284,6 +1285,7 @@ pub enum DataSourceDesc {
 pub struct Ingestion {
     pub desc: SourceDesc<ReferencedConnection>,
     pub progress_subsource: GlobalId,
+    pub timestamp_interval: Duration,
 }
 
 #[derive(Clone, Debug, Serialize)]

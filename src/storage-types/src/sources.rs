@@ -108,6 +108,7 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     pub instance_id: StorageInstanceId,
     /// The ID of this ingestion's remap/progress collection.
     pub remap_collection_id: GlobalId,
+    pub timestamp_interval: Duration,
 }
 
 impl IngestionDescription {
@@ -115,6 +116,7 @@ impl IngestionDescription {
         desc: SourceDesc,
         instance_id: StorageInstanceId,
         remap_collection_id: GlobalId,
+        timestamp_interval: Duration,
     ) -> Self {
         Self {
             desc,
@@ -122,6 +124,7 @@ impl IngestionDescription {
             source_exports: BTreeMap::new(),
             instance_id,
             remap_collection_id,
+            timestamp_interval,
         }
     }
 }
@@ -137,6 +140,7 @@ impl<S> IngestionDescription<S> {
             source_exports,
             instance_id: _,
             remap_collection_id,
+            timestamp_interval: _,
         } = &self;
 
         source_exports
@@ -161,6 +165,8 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
             source_exports,
             instance_id,
             remap_collection_id,
+            // timestamp_interval is just a setting so could be changed.
+            timestamp_interval: _,
         } = self;
 
         let compatibility_checks = [
@@ -232,6 +238,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
             source_exports,
             instance_id,
             remap_collection_id,
+            timestamp_interval,
         } = self;
 
         IngestionDescription {
@@ -240,6 +247,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
             source_exports,
             instance_id,
             remap_collection_id,
+            timestamp_interval,
         }
     }
 }
@@ -270,6 +278,7 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             desc: Some(self.desc.into_proto()),
             instance_id: Some(self.instance_id.into_proto()),
             remap_collection_id: Some(self.remap_collection_id.into_proto()),
+            timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
     }
 
@@ -288,6 +297,9 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             remap_collection_id: proto
                 .remap_collection_id
                 .into_rust_if_some("ProtoIngestionDescription::remap_collection_id")?,
+            timestamp_interval: proto
+                .timestamp_interval
+                .into_rust_if_some("ProtoIngestionDescription::timestamp_interval")?,
         })
     }
 }
@@ -687,7 +699,6 @@ pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
     pub encoding: Option<encoding::SourceDataEncoding<C>>,
     pub envelope: SourceEnvelope,
-    pub timestamp_interval: Duration,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
@@ -698,14 +709,12 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
             connection,
             encoding,
             envelope,
-            timestamp_interval,
         } = self;
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
             encoding: encoding.map(|e| e.into_inline_connection(r)),
             envelope,
-            timestamp_interval,
         }
     }
 }
@@ -716,7 +725,6 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             connection: Some(self.connection.into_proto()),
             encoding: self.encoding.into_proto(),
             envelope: Some(self.envelope.into_proto()),
-            timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
     }
 
@@ -729,9 +737,6 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             envelope: proto
                 .envelope
                 .into_rust_if_some("ProtoSourceDesc::envelope")?,
-            timestamp_interval: proto
-                .timestamp_interval
-                .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
         })
     }
 }
@@ -792,7 +797,6 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
             connection,
             encoding,
             envelope,
-            timestamp_interval,
         } = &self;
 
         let compatibility_checks = [
@@ -808,10 +812,6 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
                 "encoding",
             ),
             (envelope == &other.envelope, "envelope"),
-            (
-                timestamp_interval == &other.timestamp_interval,
-                "timestamp_interval",
-            ),
         ];
 
         for (compatible, field) in compatibility_checks {
