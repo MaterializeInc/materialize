@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import random
 from enum import Enum
 from pathlib import Path
 from typing import TypeVar
+
+import zstandard
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
@@ -51,3 +54,22 @@ class YesNoOnce(Enum):
     YES = 1
     NO = 2
     ONCE = 3
+
+
+def decompress_zst_to_directory(
+    zst_file_path: str, destination_dir_path: str
+) -> list[str]:
+    """
+    :return: file paths in destination dir
+    """
+    input_file = pathlib.Path(zst_file_path)
+    output_paths = []
+
+    with open(input_file, "rb") as compressed:
+        decompressor = zstandard.ZstdDecompressor()
+        output_path = pathlib.Path(destination_dir_path) / input_file.stem
+        output_paths.append(str(output_path))
+        with open(output_path, "wb") as destination:
+            decompressor.copy_stream(compressed, destination)
+
+    return output_paths
