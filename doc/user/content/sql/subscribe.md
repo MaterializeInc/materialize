@@ -528,55 +528,10 @@ Because `SUBSCRIBE` requests happen over the network, these connections might
 get disrupted for both expected and unexpected reasons. You can adjust the
 [history retention period](/transform-data/patterns/time-travel-queries/#history-retention-period) for
 the objects a subscription depends on, and then use [`AS OF`](#as-of) to pick
-up where you left off on connection drops — this ensures that no data is lost
+up where you left off on connection drops—this ensures that no data is lost
 in the subscription process, and avoids the need for re-snapshotting the data.
 
-To set up a durable subscription in your application:
-
-1. In Materialize, configure the history retention period for the object
-(s) queried in the `SUBSCRIBE`. Choose a duration you expect will allow you to
-recover in case of connection drops. One hour (`1h`) is a good place to start,
-though you should be mindful of the [resource utilization impact](/transform-data/patterns/time-travel-queries/#resource-utilization)
-of increasing an object's history retention period.
-
-1. In order to restart your application without losing or re-snapshotting data
-after a connection drop, you need to store the latest timestamp processed for
-the subscription (either in Materialize, or elsewhere in your application
-state). This will allow you to resume using the retained history upstream.
-
-1. The first time you start the subscription, run the following
-continuous query against Materialize in your application code:
-
-   ```sql
-   SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT true);
-   ```
-
-   If you do not need a full snapshot to bootstrap your application,  change
-   this to `SNAPSHOT false`.
-
-1. As results come in continuously, buffer the latest results in memory until you receive
-a [progress](#progress) message. At that point, the data up until the progress message
-is complete, so you can:
-
-   1. Process all the buffered data in your application.
-   1. Persist the `mz_timestamp` of the progress message.
-
-1. To resume the subscription in subsequent restarts,
-use the following continuous query against Materialize in your application code:
-
-   ```sql
-   SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT false) AS OF <last_progress_mz_timestamp>;
-   ```
-
-   In a similar way, as results come in continuously, buffer the latest results
-   in memory until you receive a [progress](#progress) message. At that point,
-   the data up until the progress message is complete, so you can:
-
-   1. Process all the buffered data in your application.
-   1. Persist the `mz_timestamp` of the progress message.
-
-   You can tweak the flush interval at which you durably record the latest
-   progress timestamp, if every progress message is too frequent.
+Read more about durable subscriptions in the page on [time travel queries](/transform-data/patterns/time-travel-queries/#durable-subscriptions).
 
 ## Privileges
 

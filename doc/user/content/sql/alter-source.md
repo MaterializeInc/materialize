@@ -24,6 +24,10 @@ menu:
 
 {{< diagram "alter-source-set-retain-history-clause.svg" >}}
 
+#### alter_source_reset_retain_history_clause
+
+{{< diagram "alter-source-reset-retain-history-clause.svg" >}}
+
 #### with_options
 
 {{< diagram "with-options.svg" >}}

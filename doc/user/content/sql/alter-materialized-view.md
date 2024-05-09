@@ -10,7 +10,8 @@ menu:
 
 ## Syntax
 
-{{< diagram "alter-materialized-view.svg" >}}
+{{< diagram "alter-materialized-view-set.svg" >}}
+{{< diagram "alter-materialized-view-reset.svg" >}}
 
 Field | Use
 ------|-----

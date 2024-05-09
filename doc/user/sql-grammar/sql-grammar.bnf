@@ -31,12 +31,18 @@ alter_rename ::=
   'ALTER' ('CONNECTION' | 'CLUSTER' | 'CLUSTER REPLICA' | 'INDEX' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_swap ::=
   'ALTER' ('CLUSTER' | 'SCHEMA') name 'SWAP' 'WITH' target_name
-alter_table ::=
+alter_table_set ::=
   'ALTER' 'TABLE' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
-alter_index ::=
+alter_table_reset ::=
+  'ALTER' 'TABLE' name 'RESET' '(' 'RETAIN HISTORY' ')'
+alter_index_set ::=
   'ALTER' 'INDEX' name 'SET' ('ENABLED' | ('(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'))
-alter_materialized_view ::=
+alter_index_reset ::=
+  'ALTER' 'INDEX' name 'RESET' '(' 'RETAIN HISTORY' ')'
+alter_materialized_view_set ::=
   'ALTER' 'MATERIALIZED VIEW' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
+alter_materialized_view_reset ::=
+  'ALTER' 'MATERIALIZED VIEW' name 'RESET' '(' 'RETAIN HISTORY' ')'
 alter_role ::=
     'ALTER' 'ROLE' role_name ( alter_role_attributes | alter_role_set )
 alter_role_attributes ::= 'WITH'? 'INHERIT'
@@ -48,6 +54,7 @@ alter_source ::=
     alter_source_add_clause
     | alter_source_drop_clause
     | alter_source_set_retain_history_clause
+    | alter_source_reset_retain_history_clause
   )
 alter_source_add_clause ::=
   'ADD' ('SUBSOURCE' | 'TABLE') table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* with_options
@@ -55,6 +62,8 @@ alter_source_drop_clause ::=
   'DROP' ('SUBSOURCE' | 'TABLE') subsrc_name ( ',' subsrc_name )* ('RESTRICT' | 'CASCADE')?
 alter_source_set_retain_history_clause ::=
   'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
+alter_source_reset_retain_history_clause ::=
+  'RESET' '(' 'RETAIN HISTORY' ')'
 alter_system_set_stmt ::=
   'ALTER' 'SYSTEM' 'SET' name ( 'TO' | '=' ) ( value | 'DEFAULT' )
 alter_system_reset_stmt ::=
@@ -241,7 +250,6 @@ create_source_webhook ::=
       check_expression
     ')'
   )?
-  with_options?
 webhook_body_format ::= 'TEXT' | 'JSON' | 'BYTES'
 webhook_check_option ::=
   ('BODY' | 'HEADERS' | 'SECRET' secret_name) ('AS' alias)? ('BYTES')?

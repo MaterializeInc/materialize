@@ -22,8 +22,8 @@ historical versions of its underlying data are available for querying.
 The common use cases for time traveling in Materialize are:
 
 * Lossless, **durable subscriptions** to your changing results. See the
-  [`SUBSCRIBE` documentation](/sql/subscribe/#durable-subscriptions)
-  for examples of how to create this type of subscription.
+  [durable subscriptions section below](#durable-subscriptions)
+  for details on how to create this type of subscription.
 
 * Accessing a past version of results at a specific point in time.
 
@@ -91,8 +91,7 @@ when it falls outside the retention period and when it is cleaned up.
 
 Given the additional memory costs associated with increasing the history
 retention period on indexes, if you don't need the performance benefits of an
-index - in particular for the use case of [durable subscriptions](/sql/subscribe#durable-subscriptions) -
-you should consider creating a materialized view for your subscription query
+index—in particular for the use case of durable subscriptions-you should consider creating a materialized view for your subscription query
 and configure the history retention period on that materialized view
 instead.
 
@@ -102,6 +101,81 @@ retention period, you should consider configuring history retention period on
 the index or materialized view directly powering the subscription, rather than
 all the way through the dependency chain from the source to the index or
 materialized view.
+
+## Durable subscriptions
+
+Because `SUBSCRIBE` requests happen over the network, these connections might
+get disrupted for both expected and unexpected reasons. You can adjust the
+[history retention period](#history-retention-period) for
+the objects a subscription depends on, and then use [`AS OF`](#as-of) to pick
+up where you left off on connection drops—this ensures that no data is lost
+in the subscription process, and avoids the need for re-snapshotting the data.
+
+### Implementing durable subscriptions in your application
+
+To set up a durable subscription in your application:
+
+1. In Materialize, configure the history retention period for the object
+(s) queried in the `SUBSCRIBE`. Choose a duration you expect will allow you to
+recover in case of connection drops. One hour (`1h`) is a good place to start,
+though you should be mindful of the [resource utilization impact](/transform-data/patterns/time-travel-queries/#resource-utilization)
+of increasing an object's history retention period.
+
+1. In order to restart your application without losing or re-snapshotting data
+after a connection drop, you need to store the latest timestamp processed for
+the subscription (either in Materialize, or elsewhere in your application
+state). This will allow you to resume using the retained history upstream.
+
+1. The first time you start the subscription, run the following
+continuous query against Materialize in your application code:
+
+   ```sql
+   SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT true);
+   ```
+
+   If you do not need a full snapshot to bootstrap your application,  change
+   this to `SNAPSHOT false`.
+
+1. As results come in continuously, buffer the latest results in memory until you receive
+a [progress](/sql/subscribe#progress) message. At that point, the data up until the progress message
+is complete, so you can:
+
+   1. Process all the buffered data in your application.
+   1. Persist the `mz_timestamp` of the progress message.
+
+1. To resume the subscription in subsequent restarts,
+use the following continuous query against Materialize in your application code:
+
+   ```sql
+   SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT false) AS OF <last_progress_mz_timestamp>;
+   ```
+
+   In a similar way, as results come in continuously, buffer the latest results
+   in memory until you receive a [progress](/sql/subscribe#progress) message. At that point,
+   the data up until the progress message is complete, so you can:
+
+   1. Process all the buffered data in your application.
+   1. Persist the `mz_timestamp` of the progress message.
+
+   You can tweak the flush interval at which you durably record the latest
+   progress timestamp, if every progress message is too frequent.
+
+<!--TODO(chaas): add section on DECLARE + FETCH as a way to get around continuous connection -->
+
+### Idempotency
+The guide above recommends you buffer data in memory until receiving a progress message, then persisting the data and progress message `mz_timestamp` at the same time. This is to ensure data is processed exactly once.
+
+In the case that your application crashes and you need to resume your subscription using the
+persisted progress message `mz_timestamp`:
+* If you were processing data in your application before persisting the subsequent progress message's `mz_timestamp`: you may end up processing duplicate data.
+* If you were persisting the progress message's `mz_timestamp` before processing all the
+buffered data from before that progress message: you may end up dropping some data.
+
+As a result, the way to guarantee exactly once data processing in the case of your application
+crashes is to write the progress message `mz_timestamp` and all buffered data together in a single transaction.
+
+<!--TODO(chaas): add top-level section on point-in-time queries, similar to Durable
+subscriptions section-->
 
 ## Examples
 
@@ -122,32 +196,42 @@ FROM highest_bid_per_auction
 WHERE end_time < mz_now();
 ```
 
+### Adjusting history retention configuration
 To adjust the history retention period for an object, use `ALTER`:
 
 ```sql
 ALTER MATERIALIZED VIEW winning_bids SET (RETAIN HISTORY FOR '2hr');
 ```
 
-<!-- TODO(maddyblue): replace this paragraph with a mention of the catalog
-     table/column once it's available -->
-To see what history retention period has been configured for an object, run the
-`SHOW CREATE ...` statement for the given object. See [`SHOW CREATE SOURCE`](/sql/show-create-source/)
-for an example.
+### Viewing history retention configuration
+To see what history retention period has been configured for an object,
+look up the object in the [`mz_internal.mz_history_retention_strategies`](/sql/system-catalog/mz_internal/#mz_history_retention_strategies) catalog table.
 
 ```sql
-SHOW CREATE MATERIALIZED VIEW winning_bids;
+SELECT
+    d.name AS database_name,
+    s.name AS schema_name,
+    mv.name,
+    hrs.strategy,
+    hrs.value
+FROM
+    mz_catalog.mz_materialized_views AS mv
+        LEFT JOIN mz_schemas AS s ON mv.schema_id = s.id
+        LEFT JOIN mz_databases AS d ON s.database_id = d.id
+        LEFT JOIN mz_internal.mz_history_retention_strategies AS hrs ON mv.id = hrs.id
+WHERE mv.name = 'winning_bids';
 ```
 ```nofmt
-              name               |                                                                                                                       create_sql
----------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- materialize.public.winning_bids | CREATE MATERIALIZED VIEW "materialize"."public"."winning_bids" IN CLUSTER "quickstart" WITH (RETAIN HISTORY = FOR '2hr') AS SELECT * FROM "materialize"."public"."highest_bid_per_auction" WHERE "end_time" < "mz_catalog"."mz_now"()
+
+ database_name | schema_name |     name     | strategy |  value
+---------------+-------------+--------------+----------+---------
+ materialize   | public      | winning_bids | FOR      | 3600000
 ```
 
 ### Disabling history retention
 
-To disable history retention, set the `RETAIN HISTORY` option to its original
-default value (1 second):
+To disable history retention, reset the `RETAIN HISTORY` option:
 
 ```sql
-ALTER MATERIALIZED VIEW winning_bids SET (RETAIN HISTORY FOR '1s');
+ALTER MATERIALIZED VIEW winning_bids RESET (RETAIN HISTORY);
 ```

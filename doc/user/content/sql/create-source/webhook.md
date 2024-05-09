@@ -22,10 +22,6 @@ Webhook sources expose a [public URL](#webhook-url) that allows your application
 
 {{< diagram "webhook-check-option.svg" >}}
 
-### `with_options`
-
-{{< diagram "with-options-retain-history.svg" >}}
-
 Field                            | Use
 ---------------------------------|--------------------------
   _src_name_                     | The name for the source
@@ -33,7 +29,6 @@ Field                            | Use
  **INCLUDE HEADER**              | Map a header value from a request into a column.
  **INCLUDE HEADERS**             | Include a column named `'headers'` of type `map[text => text]` containing the headers of the request.
  **CHECK**                       | Specify a boolean expression that is used to validate each request received by the source.
- **RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ### `CHECK WITH` options
 

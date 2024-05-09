@@ -10,7 +10,8 @@ menu:
 
 ## Syntax
 
-{{< diagram "alter-table.svg" >}}
+{{< diagram "alter-table-set.svg" >}}
+{{< diagram "alter-table-reset.svg" >}}
 
 Field | Use
 ------|-----
