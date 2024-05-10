@@ -92,7 +92,7 @@ pub trait SourceRender {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SourceMessage {
     /// The message key
     pub key: Row,

@@ -247,6 +247,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let (feedback_handle, feedback) = mz_scope.feedback(Default::default());
 
+            let (outstanding_rx, oustanding_tx) = tokio::sync::watch::channel(0);
+
             let connection = description.desc.connection.clone();
             let (mut outputs, source_health, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(

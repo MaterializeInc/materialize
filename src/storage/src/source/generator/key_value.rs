@@ -16,6 +16,7 @@ use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::load_generator::KeyValueLoadGenerator;
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::operator::StreamExt as _;
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
@@ -134,7 +135,9 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 for sp in local_partitions.iter_mut() {
                     updates_buffer.clear();
                     emitted += sp.produce_batch(&mut updates_buffer, &mut value_buffer);
-                    data_output.give_container(&cap, &mut updates_buffer).await;
+                    for update in updates_buffer.drain(..) {
+                        data_output.give(&cap, update).await;
+                    }
 
                     stats_output
                         .give(
@@ -182,7 +185,9 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 for up in local_partitions.iter_mut() {
                     updates_buffer.clear();
                     upper_offset = up.produce_batch(&mut updates_buffer, &mut value_buffer);
-                    data_output.give_container(&cap, &mut updates_buffer).await;
+                    for update in updates_buffer.drain(..) {
+                        data_output.give(&cap, update).await;
+                    }
                 }
                 cap.downgrade(&MzOffset::from(upper_offset));
                 progress_cap.downgrade(&MzOffset::from(upper_offset));
@@ -202,7 +207,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let stats_stream = stats_stream.concat(&steady_state_stats_stream);
 
     (
-        stream.as_collection(),
+        stream.distribute().as_collection(),
         Some(progress_stream),
         status,
         stats_stream,

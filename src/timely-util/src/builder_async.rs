@@ -39,6 +39,7 @@ use timely::{Container, Data, PartialOrder};
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<G: Scope> {
     builder: OperatorBuilderRc<G>,
+    name: String,
     /// The activator for this operator
     activator: Activator,
     /// The waker set up to activate this timely operator when woken
@@ -397,7 +398,7 @@ impl<T: Timestamp, CB: ContainerBuilder> OutputIndex
 impl<G: Scope> OperatorBuilder<G> {
     /// Allocates a new generic async operator builder from its containing scope.
     pub fn new(name: String, mut scope: G) -> Self {
-        let builder = OperatorBuilderRc::new(name, scope.clone());
+        let builder = OperatorBuilderRc::new(name.clone(), scope.clone());
         let info = builder.operator_info();
         let activator = scope.activator_for(&info.address);
         let sync_activator = scope.sync_activator_for(&info.address);
@@ -410,6 +411,7 @@ impl<G: Scope> OperatorBuilder<G> {
 
         OperatorBuilder {
             builder,
+            name,
             activator,
             operator_waker: Arc::new(operator_waker),
             input_frontiers: Default::default(),
@@ -535,9 +537,11 @@ impl<G: Scope> OperatorBuilder<G> {
         let mut input_queues = self.input_queues;
         let mut output_flushes = self.output_flushes;
         let mut shutdown_handle = self.shutdown_handle;
+        let mut name = self.name;
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
             move |new_frontiers| {
+                // println!("SCHEDULING OPERATOR: {}", name);
                 operator_waker.active.store(true, Ordering::SeqCst);
                 for (i, queue) in input_queues.iter_mut().enumerate() {
                     // First, discover if there are any frontier notifications

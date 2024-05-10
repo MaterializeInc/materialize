@@ -25,3 +25,6 @@ mod upsert;
 pub(crate) mod healthcheck;
 
 pub use server::{serve, Config, Server};
+use once_cell::sync::Lazy;
+
+static MEGA_LOCK: Lazy<(tokio::sync::watch::Sender<u64>, tokio::sync::watch::Receiver<u64>)> = Lazy::new(|| tokio::sync::watch::channel(0));

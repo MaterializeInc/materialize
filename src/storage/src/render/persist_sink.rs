@@ -710,7 +710,7 @@ where
                                         in-flight-batches: {:?}, \
                                         desired_frontier: {:?}, \
                                         batch_descriptions_frontier: {:?}",
-                                    data,
+                                    data.len(),
                                     in_flight_batches,
                                     desired_frontier,
                                     batch_descriptions_frontier,
@@ -725,6 +725,7 @@ where
                                     });
 
                                     let is_value = row.is_ok();
+                                    futures::executor::block_on(
                                     builder
                                         .add(
                                             minimum_batch_updates,
@@ -733,7 +734,7 @@ where
                                             (),
                                             ts,
                                             diff
-                                        ).await;
+                                        ));
 
                                     source_statistics.inc_updates_staged_by(1);
 
@@ -858,9 +859,8 @@ where
                             );
                         }
 
-                        let batch = batch_builder
-                            .finish(batch_lower.clone(), batch_upper.clone())
-                            .await;
+                        let batch = futures::executor::block_on(batch_builder
+                            .finish(batch_lower.clone(), batch_upper.clone()));
 
                         // The next "safe" lower for batches is the meet (max) of all the emitted
                         // batches. These uppers all are not beyond the `desired_frontier`, which
@@ -1116,7 +1116,7 @@ where
                                         });
                                         for (data, val, time, diff) in contents {
                                             persist_client.metrics().sink.forwarded_updates.inc();
-                                            builder.add(&data, &val, &time, &diff).await.expect("invalid usage");
+                                            futures::executor::block_on(builder.add(&data, &val, &time, &diff)).expect("invalid usage");
                                         }
                                         batches.batch_metrics += &batch.metrics;
                                     }
@@ -1195,7 +1195,7 @@ where
                 let batch_metrics = batch_set.batch_metrics;
 
                 if let Some(builder) = batch_set.incomplete {
-                    let batch = builder.finish(batch_upper.clone()).await.expect("invalid usage");
+                    let batch = futures::executor::block_on(builder.finish(batch_upper.clone())).expect("invalid usage");
                     batches.push(batch);
                     persist_client.metrics().sink.forwarded_batches.inc();
                 }
@@ -1213,13 +1213,12 @@ where
                     futures::future::pending().await
                 }
 
-                let result = write
+                let result = futures::executor::block_on(write
                     .compare_and_append_batch(
                         &mut to_append[..],
                         batch_lower.clone(),
                         batch_upper.clone(),
-                    )
-                    .await
+                    ))
                     .expect("Invalid usage");
 
                 source_statistics

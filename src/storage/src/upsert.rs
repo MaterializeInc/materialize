@@ -424,9 +424,8 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // is an `IndexMap`.
     multi_get_scratch.clear();
     multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
-    match state
-        .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
-        .await
+    match futures::executor::block_on(state
+        .multi_get(multi_get_scratch.drain(..), commands_state.values_mut()))
     {
         Ok(_) => {}
         Err(e) => {
@@ -506,7 +505,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         }
     }
 
-    match state
+    match futures::executor::block_on(state
         .multi_put(commands_state.drain(..).map(|(k, cv)| {
             (
                 k,
@@ -518,8 +517,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
                     }),
                 },
             )
-        }))
-        .await
+        })))
     {
         Ok(_) => {}
         Err(e) => {
@@ -892,6 +890,9 @@ where
                     &mut state,
                 )
                 .await;
+                output_handle
+                    .give_container(&output_cap, &mut output_updates)
+                    .await;
             }
         }
     });

@@ -635,6 +635,7 @@ where
         let work_to_do = tokio::sync::Notify::new();
         loop {
             tokio::select! {
+                biased;
                 Some(event) = remap_input.next() => match event {
                     AsyncEvent::Data(_cap, mut data) => remap_updates_stash.append(&mut data),
                     // If the remap frontier advanced it's time to carve out a batch that includes
@@ -685,7 +686,8 @@ where
                         work_to_do.notify_one();
                     }
                     Event::Messages(time, batch) => {
-                        untimestamped_batches.push((time, batch))
+                        untimestamped_batches.push((time, batch));
+                        work_to_do.notify_one();
                     }
                 },
                 _ = work_to_do.notified(), if timestamper.initialized() => {

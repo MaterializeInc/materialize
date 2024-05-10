@@ -18,6 +18,7 @@ use mz_storage_types::sources::load_generator::{
 };
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -185,6 +186,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
     let (mut data_output, stream) = builder.new_output();
+    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (mut stats_output, stats_stream) = builder.new_output();
 
     let button = builder.build(move |caps| async move {
@@ -197,7 +199,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
             std::future::pending().await
         }
 
-        let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
+        let [mut cap, mut upper_cap, stats_cap]: [_; 3] = caps.try_into().unwrap();
 
         if !config.responsible_for(()) {
             // Emit 0, to mark this worker as having started up correctly.
@@ -236,9 +238,14 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
             None
         };
 
+        // let mega_lock = crate::MEGA_LOCK.1.clone();
+        let mut count = 1u64;
         while let Some((output, event)) = rows.next() {
             match event {
                 Event::Message(offset, (value, diff)) => {
+                    if upper_cap.time() <= &offset {
+                        upper_cap.downgrade(&(offset + 1));
+                    }
                     let message = (
                         output,
                         Ok(SourceMessage {
@@ -252,6 +259,12 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                     // generate a significant amount of data that will overwhelm the dataflow.
                     // Since those are not required downstream we eagerly ignore them here.
                     if resume_offset <= offset {
+                        if count % 2048 == 0 {
+                            // println!("\n\nYIELDING NOW\n\n");
+                            tokio::task::yield_now().await;
+                            // mega_lock.wait_for(|count| *count == 0);
+                        }
+                        count += 1;
                         data_output.give(&cap, (message, offset, diff)).await;
                     }
                 }
@@ -314,7 +327,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     .to_stream(scope);
     (
         stream.as_collection(),
-        None,
+        Some(upper_stream),
         status,
         stats_stream,
         vec![button.press_on_drop()],
