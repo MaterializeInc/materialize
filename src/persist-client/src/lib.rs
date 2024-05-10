@@ -836,7 +836,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
-                false,
+                true,
             )
             .await
             .expect("codec mismatch");
@@ -846,7 +846,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
-                false,
+                true,
             )
             .await
             .expect("codec mismatch");
@@ -972,7 +972,7 @@ mod tests {
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
-                        false,
+                        true,
                     )
                     .await
                     .unwrap_err(),

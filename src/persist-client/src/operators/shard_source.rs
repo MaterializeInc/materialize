@@ -310,7 +310,7 @@ where
                         key_schema,
                         val_schema,
                         diagnostics,
-                        false,
+                        true,
                     )
                     .await
             }
@@ -738,7 +738,7 @@ mod tests {
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
                 Diagnostics::for_tests(),
-                false,
+                true,
             )
             .await
             .expect("invalid usage");
