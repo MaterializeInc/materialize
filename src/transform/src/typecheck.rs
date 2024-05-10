@@ -1187,7 +1187,7 @@ macro_rules! type_error {
     ($severity:expr, $($arg:tt)+) => {{
         if $severity {
           ::tracing::warn!($($arg)+);
-          ::tracing::error!("type error in MIR optimization (details in warning; see 'Type error omnibus' issue database-issues#5663 <https://github.com/MaterializeInc/database-issues/issues/5663>)");
+          //::tracing::error!("type error in MIR optimization (details in warning; see 'Type error omnibus' issue database-issues#5663 <https://github.com/MaterializeInc/database-issues/issues/5663>)");
         } else {
           ::tracing::debug!($($arg)+);
         }
