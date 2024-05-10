@@ -1643,7 +1643,7 @@ impl HirScalarExpr {
                 } else {
                     expr.lower_uncorrelated()?
                 }
-            },
+            }
             CallBinary { func, expr1, expr2 } => SS::CallBinary {
                 func,
                 expr1: Box::new(expr1.lower_uncorrelated()?),
