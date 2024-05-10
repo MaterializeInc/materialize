@@ -11,6 +11,7 @@
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
+use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -30,7 +31,8 @@ use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use timely::dataflow::channels::pact::Exchange;
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
@@ -178,7 +180,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     as_of: Option<Antichain<G::Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<G::Timestamp>,
-    completed_fetches_stream: Stream<G, ()>,
+    completed_fetches_stream: Stream<G, Infallible>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
@@ -214,12 +216,7 @@ where
         format!("shard_source_descs_return({})", name),
         scope.clone(),
     );
-    let mut completed_fetches = builder.new_disconnected_input(
-        &completed_fetches_stream,
-        // We must ensure all completed fetches are fed into
-        // the worker responsible for managing part leases
-        Exchange::new(move |_| u64::cast_from(chosen_worker)),
-    );
+    let mut completed_fetches = builder.new_disconnected_input(&completed_fetches_stream, Pipeline);
     // This operator doesn't need to use a token because it naturally exits when its input
     // frontier reaches the empty antichain.
     builder.build(move |_caps| async move {
@@ -461,7 +458,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     val_schema: Arc<V::Schema>,
 ) -> (
     Stream<G, FetchedBlob<K, V, T, D>>,
-    Stream<G, ()>,
+    Stream<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -475,7 +472,8 @@ where
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
     let (mut fetched_output, fetched_stream) = builder.new_output();
-    let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
+    let (completed_fetches_output, completed_fetches_stream) =
+        builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
     let mut descs_input = builder.new_input_for_many(
         descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
@@ -500,7 +498,7 @@ where
         };
 
         while let Some(event) = descs_input.next().await {
-            if let Event::Data([fetched_cap, completed_fetches_cap], data) = event {
+            if let Event::Data([fetched_cap, _completed_fetches_cap], data) = event {
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 for (_idx, part) in data {
@@ -516,9 +514,6 @@ where
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
                         fetched_output.give(&fetched_cap, fetched).await;
-                        completed_fetches_output
-                            .give(&completed_fetches_cap, ())
-                            .await;
                     }
                 }
             }
