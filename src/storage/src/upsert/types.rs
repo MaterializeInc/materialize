@@ -349,6 +349,37 @@ impl<O: Default> StateValue<O> {
         }
     }
 
+    /// Merge an existing StateValue into this one, using the same method described in `merge_update`.
+    /// See the docstring above for more information on correctness and robustness.
+    pub fn merge_update_state(&mut self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Snapshotting(Snapshotting {
+                    value_xor,
+                    len_sum,
+                    checksum_sum,
+                    diff_sum,
+                }),
+                Self::Snapshotting(other_snapshotting),
+            ) => {
+                *diff_sum += other_snapshotting.diff_sum;
+                *len_sum += other_snapshotting.len_sum;
+                *checksum_sum += other_snapshotting.checksum_sum;
+                if other_snapshotting.value_xor.len() > value_xor.len() {
+                    value_xor.resize(other_snapshotting.value_xor.len(), 0);
+                }
+                for (acc, val) in value_xor
+                    .iter_mut()
+                    .zip(other_snapshotting.value_xor.iter())
+                {
+                    *acc ^= val;
+                }
+                diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0)
+            }
+            _ => panic!("`merge_update_state` called with non-snapshotting state"),
+        }
+    }
+
     /// After consolidation of a snapshot, we assume that all values in the `UpsertStateBackend` implementation
     /// are `Self::Snapshotting`, with a `diff_sum` of 1 (or 0, if they have been deleted).
     /// Afterwards, if we need to retract one of these values, we need to assert that its in this correct state,
@@ -460,6 +491,19 @@ impl std::ops::AddAssign for SnapshotStats {
         self.inserts += rhs.inserts;
         self.deletes += rhs.deletes;
     }
+}
+
+/// Statistics for a single call to `multi_merge`.
+#[derive(Clone, Default, Debug)]
+pub struct MergeStats {
+    /// The number of updates written as merge operands to the backend, for the backend
+    /// to process async in the `snapshot_merge_function`.
+    /// Should be equal to number of inserts + deletes
+    pub written_merge_operands: u64,
+    /// The total size of values provided to `multi_merge`. The backend will write these
+    /// down and then later merge them in the `snapshot_merge_function`. Since we don't
+    /// know the size of the future merged value, we can't provide a `size_diff` here.
+    pub size_written: u64,
 }
 
 /// Statistics for a single call to `multi_put`.
@@ -627,29 +671,60 @@ where
         G: IntoIterator<Item = UpsertKey>,
         R: IntoIterator<Item = &'r mut UpsertValueAndSize<O>>;
 
-    /// Merge values for all `merges` keys. The values for each key are merged into the existing
-    /// key value using the `snapshot_merge_function` when the backend decides to run the merge
-    /// operation. This allows avoiding the read-modify-write method of updating many values to
+    /// For each key in `merges` writes a 'merge operand' to the backend. The backend stores these
+    /// merge operands and periodically calls the `snapshot_merge_function` to merge them into
+    /// any existing value for each key. The backend will merge the merge operands in the order
+    /// they are provided, and the merge function will always be run for a given key when a `get`
+    /// operation is performed on that key, or when the backend decides to run the merge based
+    /// on its own internal logic.
+    /// This allows avoiding the read-modify-write method of updating many values to
     /// improve performance.
     ///
-    /// TODO: Figure out stats for this
-    async fn multi_merge<P>(&mut self, merges: P) -> Result<PutStats, anyhow::Error>
+    /// `MergeStats` **must** be populated correctly, according to these semantics:
+    /// - `written_merge_operands` must record the number of merge operands written to the backend.
+    /// - `size_written` must record the total size of values written to the backend.
+    /// Note that the size of the post-merge values are not known, so this is the size of the values
+    /// written to the backend as merge operands.
+    async fn multi_merge<P>(&mut self, merges: P) -> Result<MergeStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, StateValue<O>)>;
 }
 
-/// A function that merges a set of updates for a key into the existing value for the key.
+/// A function that merges a set of updates for a key into the existing value for the key, expected
+/// to only be used during the snapshotting-phase of an upsert operator. This is called by the
+/// backend implementation when it has accumulated a set of updates for a key, and needs to merge
+/// them into the existing value for the key.
+///
 /// The function should return the new value for the key, or None if the key should be deleted.
 /// The function is called with the following arguments:
 /// - The key for which the merge is being performed.
-/// - An iterator over the current value and merge-operations queued for the key.
+/// - An iterator over any current value and merge operands queued for the key.
 pub(crate) fn snapshot_merge_function<O>(
     _key: UpsertKey,
     updates: impl Iterator<Item = StateValue<O>>,
-) -> Option<StateValue<O>> {
-    // TODO: Implement
+) -> Option<StateValue<O>>
+where
+    O: Default,
+{
+    let mut current = Default::default();
+    let mut should_delete = false;
+    assert!(
+        matches!(current, StateValue::Snapshotting(_)),
+        "merge_function called with non-snapshotting default"
+    );
+    for update in updates {
+        assert!(
+            matches!(update, StateValue::Snapshotting(_)),
+            "merge_function called with non-snapshot update"
+        );
+        should_delete = current.merge_update_state(&update);
+    }
 
-    updates.into_iter().last()
+    if should_delete {
+        None
+    } else {
+        Some(current)
+    }
 }
 
 /// An `UpsertStateBackend` wrapper that supports
@@ -733,24 +808,24 @@ where
     ///
     /// Also note that we use `self.inner.multi_*`, not `self.multi_*`. This is to avoid
     /// erroneously changing metric and stats values.
-    pub async fn consolidate_snapshot_chunk<M>(
+    pub async fn consolidate_snapshot_chunk<U>(
         &mut self,
-        updates: M,
+        updates: U,
         completed: bool,
     ) -> Result<(), anyhow::Error>
     where
-        M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
+        U: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
     {
         fail::fail_point!("fail_consolidate_snapshot_chunk", |_| {
-            Err(anyhow::anyhow!("Error merging snapshot values"))
+            Err(anyhow::anyhow!("Error consolidating snapshot values"))
         });
 
         if completed && self.snapshot_completed {
             panic!("attempted completion of already completed upsert snapshot")
         }
+
         let now = Instant::now();
         let batch_size = updates.len();
-        let mut updates = updates.into_iter().peekable();
 
         self.consolidate_scratch.clear();
         self.consolidate_upsert_scratch.clear();
@@ -767,6 +842,143 @@ where
                 self.multi_get_scratch.shrink_to(reduced_capacity);
             }
         }
+
+        // Depending on if the backend supports multi_merge, call the appropriate method.
+        // This can change during the lifetime of the `UpsertState` instance (e.g.
+        // the Autospill backend will switch from in-memory to rocksdb after a certain
+        // number of updates have been processed and begin supporting multi_merge).
+        let stats = if self.inner.supports_merge() {
+            self.consolidate_snapshot_merge_inner(updates).await?
+        } else {
+            self.consolidate_snapshot_read_write_inner(updates).await?
+        };
+
+        // NOTE: These metrics use the term `merge` to refer to the consolidation of snapshot values.
+        // This is because they were introduced before we the `multi_merge` operation was added, and
+        // to differentiate the two separate `merge` notions we renamed `merge_snapshot_chunk` to
+        // `consolidate_snapshot_chunk`.
+        self.metrics
+            .merge_snapshot_latency
+            .observe(now.elapsed().as_secs_f64());
+        self.worker_metrics
+            .merge_snapshot_updates
+            .inc_by(stats.updates);
+        self.worker_metrics
+            .merge_snapshot_inserts
+            .inc_by(stats.inserts);
+        self.worker_metrics
+            .merge_snapshot_deletes
+            .inc_by(stats.deletes);
+
+        self.snapshot_stats += stats;
+        // Updating the metrics
+        self.worker_metrics.rehydration_total.set(
+            self.snapshot_stats.values_diff.try_into().unwrap_or_else(
+                |e: std::num::TryFromIntError| {
+                    tracing::warn!(
+                        "rehydration_total metric overflowed or is negative \
+                        and is innacurate: {}. Defaulting to 0",
+                        e.display_with_causes(),
+                    );
+
+                    0
+                },
+            ),
+        );
+        self.worker_metrics
+            .rehydration_updates
+            .set(self.snapshot_stats.updates);
+        // These `set_` functions also ensure that these values are non-negative.
+        self.stats.set_bytes_indexed(self.snapshot_stats.size_diff);
+        self.stats
+            .set_records_indexed(self.snapshot_stats.values_diff);
+
+        if completed {
+            if self.shrink_upsert_unused_buffers_by_ratio > 0 {
+                // After rehydration is done, these scratch buffers should now be empty
+                // shrinking them entirely
+                self.consolidate_scratch.shrink_to_fit();
+                self.consolidate_upsert_scratch.shrink_to_fit();
+                self.multi_get_scratch.shrink_to_fit();
+            }
+
+            self.worker_metrics
+                .rehydration_latency
+                .set(self.snapshot_start.elapsed().as_secs_f64());
+
+            self.snapshot_completed = true;
+        }
+        Ok(())
+    }
+
+    /// Consolidate the updates into the state during snapshotting. This method requires the
+    /// backend has support for the `multi_merge` operation, and will panic if
+    /// `self.inner.supports_merge()` was not checked before calling this method.
+    /// `multi_merge` will write the updates as 'merge operands' to the backend, and then the
+    /// backend will consolidate those updates with any existing state using the
+    /// `snapshot_merge_function`.
+    ///
+    /// This method can have significant performance benefits over the
+    /// read-then-write method of `consolidate_snapshot_read_write_inner`.
+    async fn consolidate_snapshot_merge_inner<U>(
+        &mut self,
+        updates: U,
+    ) -> Result<SnapshotStats, anyhow::Error>
+    where
+        U: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
+    {
+        let mut updates = updates.into_iter().peekable();
+
+        let mut stats = SnapshotStats::default();
+
+        if updates.peek().is_some() {
+            let m_stats = self
+                .inner
+                .multi_merge(updates.map(|(k, v, diff)| {
+                    // Transform into a `StateValue<O>` that can be used by the `snapshot_merge_function`
+                    // to merge with any existing value for the key.
+                    let mut val: StateValue<O> = Default::default();
+                    val.merge_update(v, diff, self.bincode_opts, &mut self.bincode_buffer);
+
+                    stats.updates += 1;
+                    if diff > 0 {
+                        stats.inserts += 1;
+                    } else if diff < 0 {
+                        stats.deletes += 1;
+                    }
+
+                    // To keep track of the overall `values_diff` we can use the sum of diffs which
+                    // should be equal to the number of non-tombstoned values in the backend.
+                    // This is a bit misleading as this represents the eventual state after the
+                    // `snapshot_merge_function` has been called to merge all the updates,
+                    // and not the state after this `multi_merge` call.
+                    stats.values_diff += diff;
+
+                    (k, val)
+                }))
+                .await?;
+
+            // This is the total size of the merge values written to the backend, so is an accurate
+            // view of the size stored by the backend after this `multi_merge` operation, but not
+            // representative of the ultimate size of the backend after these merge operands have
+            // been mergedd by the `snapshot_merge_function`.
+            let size: i64 = m_stats.size_written.try_into().expect("less than i64 size");
+            stats.size_diff = size;
+        }
+
+        Ok(stats)
+    }
+
+    /// Consolidates the updates into the state during snapshotting. This method reads the existing
+    /// values for each key, consolidates the updates, and writes the new values back to the state.
+    async fn consolidate_snapshot_read_write_inner<U>(
+        &mut self,
+        updates: U,
+    ) -> Result<SnapshotStats, anyhow::Error>
+    where
+        U: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
+    {
+        let mut updates = updates.into_iter().peekable();
 
         let mut stats = SnapshotStats::default();
 
@@ -824,62 +1036,7 @@ where
             stats.size_diff = p_stats.size_diff;
         }
 
-        // NOTE: These metrics use the term `merge` to refer to the consolidation of snapshot values.
-        // This is because they were introduced before we the `multi_merge` operation was added, and
-        // to differentiate the two separate `merge` notions we renamed `merge_snapshot_chunk` to
-        // `consolidate_snapshot_chunk`.
-        self.metrics
-            .merge_snapshot_latency
-            .observe(now.elapsed().as_secs_f64());
-        self.worker_metrics
-            .merge_snapshot_updates
-            .inc_by(stats.updates);
-        self.worker_metrics
-            .merge_snapshot_inserts
-            .inc_by(stats.inserts);
-        self.worker_metrics
-            .merge_snapshot_deletes
-            .inc_by(stats.deletes);
-
-        self.snapshot_stats += stats;
-        // Updating the metrics
-        self.worker_metrics.rehydration_total.set(
-            self.snapshot_stats.values_diff.try_into().unwrap_or_else(
-                |e: std::num::TryFromIntError| {
-                    tracing::warn!(
-                        "rehydration_total metric overflowed or is negative \
-                        and is innacurate: {}. Defaulting to 0",
-                        e.display_with_causes(),
-                    );
-
-                    0
-                },
-            ),
-        );
-        self.worker_metrics
-            .rehydration_updates
-            .set(self.snapshot_stats.updates);
-        // These `set_` functions also ensure that these values are non-negative.
-        self.stats.set_bytes_indexed(self.snapshot_stats.size_diff);
-        self.stats
-            .set_records_indexed(self.snapshot_stats.values_diff);
-
-        if completed {
-            if self.shrink_upsert_unused_buffers_by_ratio > 0 {
-                // After rehydration is done, these scratch buffers should now be empty
-                // Shrinking them entirely
-                self.consolidate_scratch.shrink_to_fit();
-                self.consolidate_upsert_scratch.shrink_to_fit();
-                self.multi_get_scratch.shrink_to_fit();
-            }
-
-            self.worker_metrics
-                .rehydration_latency
-                .set(self.snapshot_start.elapsed().as_secs_f64());
-
-            self.snapshot_completed = true;
-        }
-        Ok(())
+        Ok(stats)
     }
 
     /// Insert or delete for all `puts` keys, prioritizing the last value for

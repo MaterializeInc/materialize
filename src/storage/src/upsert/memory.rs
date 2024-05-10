@@ -20,7 +20,8 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use super::types::{
-    GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize, ValueMetadata,
+    GetStats, MergeStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize,
+    ValueMetadata,
 };
 use super::UpsertKey;
 
@@ -86,7 +87,7 @@ where
         Ok(stats)
     }
 
-    async fn multi_merge<M>(&mut self, _merges: M) -> Result<PutStats, anyhow::Error>
+    async fn multi_merge<M>(&mut self, _merges: M) -> Result<MergeStats, anyhow::Error>
     where
         M: IntoIterator<Item = (UpsertKey, StateValue<O>)>,
     {

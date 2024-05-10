@@ -268,6 +268,7 @@ where
         tracing::info!(
             ?tuning,
             ?storage_configuration.parameters.upsert_auto_spill_config,
+            ?rocksdb_use_native_merge_operator,
             "timely-{} rendering {} with rocksdb-backed upsert state",
             source_config.worker_id,
             source_config.id
