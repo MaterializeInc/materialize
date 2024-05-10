@@ -3700,10 +3700,10 @@ FROM t
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
+                        [
+                          0,
+                          1
+                        ],
                         [
                           1
                         ]
@@ -7055,10 +7055,10 @@ MATERIALIZED VIEW collated_global_mv
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
+                        [
+                          0,
+                          1
+                        ],
                         [
                           1
                         ]
@@ -8397,10 +8397,10 @@ SELECT * FROM collated_global
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
+                        [
+                          0,
+                          1
+                        ],
                         [
                           1
                         ]
