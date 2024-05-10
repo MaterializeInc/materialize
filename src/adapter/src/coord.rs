@@ -1499,13 +1499,13 @@ impl Coordinator {
                 // beneficial.
                 !entry.id().is_user()
                     || entry
-                        .used_by()
+                        .uses()
                         .iter()
-                        .all(|dependent_id| *dependent_id > entry.id),
-                "user item dependencies should respect `GlobalId`'s PartialOrd \
-                but {:?} depends on {:?}",
+                        .all(|dependency_id| *dependency_id < entry.id),
+                "entries should only use to items with lesser `GlobalId`s, but \
+                but {:?} uses {:?}",
                 entry.id,
-                entry.used_by()
+                entry.uses()
             );
 
             debug!(
