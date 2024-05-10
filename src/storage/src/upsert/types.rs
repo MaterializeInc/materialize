@@ -16,7 +16,7 @@
 //! into a differential collection, by indexing the data based on the key.
 //!
 //! _This module does not implement this transformation, instead exposing APIs designed
-//! for use within an UPSERT operator. There is one exception to this: `merge_snapshot_chunk`
+//! for use within an UPSERT operator. There is one exception to this: `consolidate_snapshot_chunk`
 //! implements an efficient upsert-like transformation to re-index a collection using the
 //! _output collection_ of an upsert transformation. More on this below.
 //!
@@ -44,13 +44,13 @@
 //!
 //! `multi_put` is implemented directly with `UpsertStateBackend::multi_put`.
 //!
-//! ### `merge_snapshot_chunk`
+//! ### `consolidate_snapshot_chunk`
 //!
-//! `merge_snapshot_chunk` re-indexes an UPSERT collection based on its _output collection_ (as
-//! opposed to its _input `Stream`_. Please see the docs on `merge_snapshot_chunk` and `StateValue`
+//! `consolidate_snapshot_chunk` re-indexes an UPSERT collection based on its _output collection_ (as
+//! opposed to its _input `Stream`_. Please see the docs on `consolidate_snapshot_chunk` and `StateValue`
 //! for more information.
 //!
-//! `merge_snapshot_chunk` is implemented with both `UpsertStateBackend::multi_put` and
+//! `consolidate_snapshot_chunk` is implemented with both `UpsertStateBackend::multi_put` and
 //! `UpsertStateBackend::multi_get`
 //!
 //! ## Order Keys
@@ -64,7 +64,7 @@
 //! There is currently no support for cleaning these tombstones up, as they are considered rare and
 //! small enough.
 //!
-//! Because `merge_snapshot_chunk` handles data that consolidates correctly, it does not handle
+//! Because `consolidate_snapshot_chunk` handles data that consolidates correctly, it does not handle
 //! order keys.
 //!
 //!
@@ -341,7 +341,7 @@ impl<O: Default> StateValue<O> {
             }
 
             // Returns whether or not the value can be deleted. This allows us to delete values in
-            // `UpsertState::merge_snapshot_chunk` (even if they come back later) during snapshotting,
+            // `UpsertState::consolidate_snapshot_chunk` (even if they come back later) during snapshotting,
             // to minimize space usage.
             return diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0);
         } else {
@@ -435,15 +435,15 @@ impl<O> Default for StateValue<O> {
     }
 }
 
-/// Statistics for a single call to `merge_snapshot_chunk`.
+/// Statistics for a single call to `consolidate_snapshot_chunk`.
 #[derive(Clone, Default, Debug)]
-pub struct MergeStats {
+pub struct SnapshotStats {
     /// The number of updates processed.
     pub updates: u64,
     /// The aggregated number of values inserted or deleted into `state`.
     pub values_diff: i64,
     /// The total aggregated size of values inserted, deleted, or updated in `state`.
-    /// If the current call to `merge_snapshot_chunk` deletes a lot of values,
+    /// If the current call to `consolidate_snapshot_chunk` deletes a lot of values,
     /// or updates values to smaller ones, this can be negative!
     pub size_diff: i64,
     /// The number of inserts i.e. +1 diff
@@ -452,7 +452,7 @@ pub struct MergeStats {
     pub deletes: u64,
 }
 
-impl std::ops::AddAssign for MergeStats {
+impl std::ops::AddAssign for SnapshotStats {
     fn add_assign(&mut self, rhs: Self) {
         self.updates += rhs.updates;
         self.values_diff += rhs.values_diff;
@@ -657,9 +657,9 @@ pub(crate) fn snapshot_merge_function<O>(
 pub struct UpsertState<'metrics, S, O> {
     inner: S,
 
-    // The status, start time, and stats about calls to `merge_snapshot_chunk`.
+    // The status, start time, and stats about calls to `consolidate_snapshot_chunk`.
     snapshot_start: Instant,
-    snapshot_stats: MergeStats,
+    snapshot_stats: SnapshotStats,
     snapshot_completed: bool,
 
     // Metrics shared across all workers running the `upsert` operator.
@@ -670,22 +670,22 @@ pub struct UpsertState<'metrics, S, O> {
     stats: SourceStatistics,
 
     // Bincode options and buffer used
-    // in `merge_snapshot_chunk`.
+    // in `consolidate_snapshot_chunk`.
     bincode_opts: BincodeOpts,
     bincode_buffer: Vec<u8>,
 
-    // We need to iterate over `merges` in `merge_snapshot_chunk`
+    // We need to iterate over `updates` in `consolidate_snapshot_chunk`
     // twice, so we have a scratch vector for this.
-    merge_scratch: Vec<(UpsertKey, UpsertValue, mz_repr::Diff)>,
-    // "mini-upsert" map used in `merge_snapshot_chunk`
-    merge_upsert_scratch: indexmap::IndexMap<UpsertKey, UpsertValueAndSize<O>>,
+    consolidate_scratch: Vec<(UpsertKey, UpsertValue, mz_repr::Diff)>,
+    // "mini-upsert" map used in `consolidate_snapshot_chunk`
+    consolidate_upsert_scratch: indexmap::IndexMap<UpsertKey, UpsertValueAndSize<O>>,
     // a scratch vector for calling `multi_get`
     multi_get_scratch: Vec<UpsertKey>,
     shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
 impl<'metrics, S, O> UpsertState<'metrics, S, O> {
-    pub(crate) async fn new(
+    pub(crate) fn new(
         inner: S,
         metrics: Arc<UpsertSharedMetrics>,
         worker_metrics: &'metrics UpsertMetrics,
@@ -695,15 +695,15 @@ impl<'metrics, S, O> UpsertState<'metrics, S, O> {
         Self {
             inner,
             snapshot_start: Instant::now(),
-            snapshot_stats: MergeStats::default(),
+            snapshot_stats: SnapshotStats::default(),
             snapshot_completed: false,
             metrics,
             worker_metrics,
             stats,
             bincode_opts: upsert_bincode_opts(),
             bincode_buffer: Vec::new(),
-            merge_scratch: Vec::new(),
-            merge_upsert_scratch: indexmap::IndexMap::new(),
+            consolidate_scratch: Vec::new(),
+            consolidate_upsert_scratch: indexmap::IndexMap::new(),
             multi_get_scratch: Vec::new(),
             shrink_upsert_unused_buffers_by_ratio,
         }
@@ -715,39 +715,33 @@ where
     S: UpsertStateBackend<O>,
     O: Default + Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
 {
-    /// Merge and consolidate the following differential updates into the state, during snapshotting.
+    /// Consolidate the following differential updates into the state, during snapshotting.
     /// Updates provided to this method can be assumed to consolidate into a single value
     /// per-key, after all chunks have been processed.
     ///
-    /// Therefore, after an entire snapshot has been `merged`, all values must be in the correct state
-    /// (as determined by `StateValue::ensure_decoded`), and `merge_snapshot_chunk` must NOT
+    /// Therefore, after an entire snapshot has been `consolidated`, all values must be in the correct state
+    /// (as determined by `StateValue::ensure_decoded`), and `consolidate_snapshot_chunk` must NOT
     /// be called again.
     ///
     /// The `completed` boolean communicates whether or not this is the final chunk of updates
-    /// to be merged, to assert correct usage.
-    // Note that this does not allow `UpsertStateBackend` backends to optimize this functionality,
-    // (for example, using RocksDB's native merge functionality), which would be more
-    // performant. This is because:
-    // - We don't have proof we need that performance.
-    // - This implementation is simpler (things like the RocksDB merge API are quite difficult to use
-    // properly
-    //
-    // Additionally:
-    // - Keeping track of stats is way easier this way
-    // - The implementation is uses the exact same "mini-upsert" technique used in the upsert
-    // operator.
-    //
-    // Also note that we use `self.inner.multi_*`, not `self.multi_*`. This is to avoid
-    // erroneously changing metric and stats values.
-    pub async fn merge_snapshot_chunk<M>(
+    /// to be consolidated, to assert correct usage.
+    ///
+    /// If the backend supports it, this method will use `multi_merge` to consolidate the updates
+    /// to avoid having to read the existing value for each key first.
+    /// On some backends (like RocksDB), this can be significantly faster than the read-then-write
+    /// consolidation strategy.
+    ///
+    /// Also note that we use `self.inner.multi_*`, not `self.multi_*`. This is to avoid
+    /// erroneously changing metric and stats values.
+    pub async fn consolidate_snapshot_chunk<M>(
         &mut self,
-        merges: M,
+        updates: M,
         completed: bool,
     ) -> Result<(), anyhow::Error>
     where
         M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
     {
-        fail::fail_point!("fail_merge_snapshot_chunk", |_| {
+        fail::fail_point!("fail_consolidate_snapshot_chunk", |_| {
             Err(anyhow::anyhow!("Error merging snapshot values"))
         });
 
@@ -755,51 +749,51 @@ where
             panic!("attempted completion of already completed upsert snapshot")
         }
         let now = Instant::now();
-        let batch_size = merges.len();
-        let mut merges = merges.into_iter().peekable();
+        let batch_size = updates.len();
+        let mut updates = updates.into_iter().peekable();
 
-        self.merge_scratch.clear();
-        self.merge_upsert_scratch.clear();
+        self.consolidate_scratch.clear();
+        self.consolidate_upsert_scratch.clear();
         self.multi_get_scratch.clear();
 
         // Shrinking the scratch vectors if the capacity is significantly more than batch size
         if self.shrink_upsert_unused_buffers_by_ratio > 0 {
             let reduced_capacity =
-                self.merge_scratch.capacity() / self.shrink_upsert_unused_buffers_by_ratio;
+                self.consolidate_scratch.capacity() / self.shrink_upsert_unused_buffers_by_ratio;
             if reduced_capacity > batch_size {
                 // These vectors have already been cleared above and should be empty here
-                self.merge_scratch.shrink_to(reduced_capacity);
-                self.merge_upsert_scratch.shrink_to(reduced_capacity);
+                self.consolidate_scratch.shrink_to(reduced_capacity);
+                self.consolidate_upsert_scratch.shrink_to(reduced_capacity);
                 self.multi_get_scratch.shrink_to(reduced_capacity);
             }
         }
 
-        let mut stats = MergeStats::default();
+        let mut stats = SnapshotStats::default();
 
-        if merges.peek().is_some() {
-            self.merge_scratch.extend(merges);
-            self.merge_upsert_scratch.extend(
-                self.merge_scratch
+        if updates.peek().is_some() {
+            self.consolidate_scratch.extend(updates);
+            self.consolidate_upsert_scratch.extend(
+                self.consolidate_scratch
                     .iter()
                     .map(|(k, _, _)| (*k, UpsertValueAndSize::default())),
             );
             self.multi_get_scratch
-                .extend(self.merge_upsert_scratch.iter().map(|(k, _)| *k));
+                .extend(self.consolidate_upsert_scratch.iter().map(|(k, _)| *k));
             self.inner
                 .multi_get(
                     self.multi_get_scratch.drain(..),
-                    self.merge_upsert_scratch.iter_mut().map(|(_, v)| v),
+                    self.consolidate_upsert_scratch.iter_mut().map(|(_, v)| v),
                 )
                 .await?;
 
-            for (key, value, diff) in self.merge_scratch.drain(..) {
+            for (key, value, diff) in self.consolidate_scratch.drain(..) {
                 stats.updates += 1;
                 if diff > 0 {
                     stats.inserts += 1;
                 } else if diff < 0 {
                     stats.deletes += 1;
                 }
-                let entry = self.merge_upsert_scratch.get_mut(&key).unwrap();
+                let entry = self.consolidate_upsert_scratch.get_mut(&key).unwrap();
                 let val = entry.value.get_or_insert_with(Default::default);
 
                 if val.merge_update(value, diff, self.bincode_opts, &mut self.bincode_buffer) {
@@ -812,7 +806,7 @@ where
             // consolidated value. Easy!!
             let p_stats = self
                 .inner
-                .multi_put(self.merge_upsert_scratch.drain(..).map(|(k, v)| {
+                .multi_put(self.consolidate_upsert_scratch.drain(..).map(|(k, v)| {
                     (
                         k,
                         PutValue {
@@ -830,6 +824,10 @@ where
             stats.size_diff = p_stats.size_diff;
         }
 
+        // NOTE: These metrics use the term `merge` to refer to the consolidation of snapshot values.
+        // This is because they were introduced before we the `multi_merge` operation was added, and
+        // to differentiate the two separate `merge` notions we renamed `merge_snapshot_chunk` to
+        // `consolidate_snapshot_chunk`.
         self.metrics
             .merge_snapshot_latency
             .observe(now.elapsed().as_secs_f64());
@@ -870,8 +868,8 @@ where
             if self.shrink_upsert_unused_buffers_by_ratio > 0 {
                 // After rehydration is done, these scratch buffers should now be empty
                 // Shrinking them entirely
-                self.merge_scratch.shrink_to_fit();
-                self.merge_upsert_scratch.shrink_to_fit();
+                self.consolidate_scratch.shrink_to_fit();
+                self.consolidate_upsert_scratch.shrink_to_fit();
                 self.multi_get_scratch.shrink_to_fit();
             }
 

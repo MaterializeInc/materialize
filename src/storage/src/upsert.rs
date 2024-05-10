@@ -537,7 +537,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // implementations, and reduces the number of reads and write we need to do.
     //
     // This "mini-upsert" technique is actually useful in `UpsertState`'s
-    // `merge_snapshot_chunk` implementation, minimizing gets and puts on
+    // `consolidate_snapshot_chunk` implementation, minimizing gets and puts on
     // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
     while let Some((ts, key, from_time, value)) = commands.next() {
         let mut command_state = if let Entry::Occupied(command_state) = commands_state.entry(key) {
@@ -681,7 +681,7 @@ where
         let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
 
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
-        // (as required for `merge_snapshot_chunk`), with slightly more efficient serialization
+        // (as required for `consolidate_snapshot_chunk`), with slightly more efficient serialization
         // than a default `Partitioned`.
         let mut state = UpsertState::<_, Option<FromTime>>::new(
             state().await,
@@ -689,8 +689,7 @@ where
             &upsert_metrics,
             source_config.source_statistics,
             upsert_config.shrink_upsert_unused_buffers_by_ratio,
-        )
-        .await;
+        );
         let mut events = vec![];
         let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
 
@@ -782,7 +781,7 @@ where
             }
 
             match state
-                .merge_snapshot_chunk(
+                .consolidate_snapshot_chunk(
                     events.drain(..),
                     PartialOrder::less_equal(&resume_upper, &snapshot_upper),
                 )
