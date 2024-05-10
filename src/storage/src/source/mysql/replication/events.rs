@@ -275,7 +275,7 @@ pub(super) async fn handle_rows_event(
             let data = (*output_index, event);
 
             // Rewind this update if it was already present in the snapshot
-            if let Some(([_rewind_data_cap, _upper_cap], rewind_req)) = ctx.rewinds.get(&table) {
+            if let Some((_rewind_data_cap, rewind_req)) = ctx.rewinds.get(&table) {
                 if !rewind_req.snapshot_upper.less_equal(new_gtid) {
                     rewind_count += 1;
                     event_buffer.push((data.clone(), GtidPartition::minimum(), -diff));
@@ -299,7 +299,7 @@ pub(super) async fn handle_rows_event(
     // Instead, we buffer rewind events into a reusable buffer, and emit all at once here at the end.
 
     if !event_buffer.is_empty() {
-        let ([rewind_data_cap, _], _) = ctx.rewinds.get(&table).unwrap();
+        let (rewind_data_cap, _) = ctx.rewinds.get(&table).unwrap();
         for d in event_buffer.drain(..) {
             ctx.data_output.give(rewind_data_cap, d).await;
         }

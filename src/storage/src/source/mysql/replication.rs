@@ -117,14 +117,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
     let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all subsources
     let (mut definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut rewind_input = builder.new_input_for_many(
+    let mut rewind_input = builder.new_input_for(
         rewind_stream,
         Exchange::new(move |_| repl_reader_id),
-        [&data_output, &upper_output],
+        &data_output,
     );
 
     let output_indexes = table_info
