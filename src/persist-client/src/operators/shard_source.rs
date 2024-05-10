@@ -11,6 +11,7 @@
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -172,6 +173,38 @@ pub enum SnapshotMode {
     Exclude,
 }
 
+#[derive(Debug)]
+struct LeaseManager<T> {
+    leases: BTreeMap<T, Vec<Lease>>,
+}
+
+impl<T: Timestamp + Codec64> LeaseManager<T> {
+    fn new() -> Self {
+        Self {
+            leases: BTreeMap::new(),
+        }
+    }
+
+    /// Track a lease associated with a particular time.
+    fn push_at(&mut self, time: T, lease: Lease) {
+        self.leases.entry(time).or_default().push(lease);
+    }
+
+    /// Discard any leases for data that aren't past the given frontier.
+    fn advance_to(&mut self, frontier: AntichainRef<T>)
+    where
+        // If we allowed partial orders, we'd need to reconsider every key on each advance.
+        T: TotalOrder,
+    {
+        while let Some(first) = self.leases.first_entry() {
+            if frontier.less_equal(first.key()) {
+                break; // This timestamp is still live!
+            }
+            drop(first.remove());
+        }
+    }
+}
+
 pub(crate) fn shard_source_descs<K, V, D, F, G>(
     scope: &G,
     name: &str,
@@ -211,7 +244,7 @@ where
     let return_listen_handle = Rc::clone(&listen_handle);
 
     // Create a oneshot channel to give the part returner a SubscriptionLeaseReturner
-    let (tx, rx) = tokio::sync::oneshot::channel::<Rc<RefCell<Vec<(G::Timestamp, Lease)>>>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Rc<RefCell<LeaseManager<G::Timestamp>>>>();
     let mut builder = AsyncOperatorBuilder::new(
         format!("shard_source_descs_return({})", name),
         scope.clone(),
@@ -229,11 +262,7 @@ where
             let Event::Progress(frontier) = event else {
                 continue;
             };
-            // If the frontier is not <= a particular time, that indicates that upstream is
-            // finished with that time.
-            leases
-                .borrow_mut()
-                .retain(|(time, _lease)| frontier.less_equal(time));
+            leases.borrow_mut().advance_to(frontier.borrow());
         }
         // Make it explicit that the subscriber is kept alive until we have finished returning parts
         drop(return_listen_handle);
@@ -325,7 +354,7 @@ where
         // We're about to start producing parts to be fetched whose leases will be returned by the
         // `shard_source_descs_return` operator above. In order for that operator to successfully
         // return the leases we send it the lease returner associated with our shared subscriber.
-        let leases = Rc::new(RefCell::new(vec![]));
+        let leases = Rc::new(RefCell::new(LeaseManager::new()));
         tx.send(Rc::clone(&leases))
             .expect("lease returner exited before desc producer");
 
@@ -437,7 +466,9 @@ where
                 // seemed to work okay so far. Continue to revisit as necessary.
                 let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
                 let (part, lease) = part_desc.into_exchangeable_part();
-                leases.borrow_mut().push((current_ts.clone(), lease));
+                if let Some(lease) = lease {
+                    leases.borrow_mut().push_at(current_ts.clone(), lease);
+                }
                 descs_output.give(&session_cap, (worker_idx, part)).await;
             }
 
@@ -539,6 +570,24 @@ mod tests {
 
     use crate::operators::shard_source::shard_source;
     use crate::{Diagnostics, ShardId};
+
+    #[mz_ore::test]
+    fn test_lease_manager() {
+        let lease = Lease::default();
+        let mut manager = LeaseManager::new();
+        for t in 0u64..10 {
+            manager.push_at(t, lease.clone());
+        }
+        assert_eq!(lease.count(), 11);
+        manager.advance_to(AntichainRef::new(&[5]));
+        assert_eq!(lease.count(), 6);
+        manager.advance_to(AntichainRef::new(&[3]));
+        assert_eq!(lease.count(), 6);
+        manager.advance_to(AntichainRef::new(&[9]));
+        assert_eq!(lease.count(), 2);
+        manager.advance_to(AntichainRef::new(&[10]));
+        assert_eq!(lease.count(), 1);
+    }
 
     /// Verifies that a `shard_source` will downgrade it's output frontier to
     /// the `since` of the shard when no explicit `as_of` is given. Even if

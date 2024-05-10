@@ -366,10 +366,9 @@ where
 pub(crate) struct Lease(Arc<()>);
 
 impl Lease {
-    /// Returns the number of live copies of this lease... aside from this one.
-    pub fn copies(&self) -> usize {
-        // NB: the strong count is always > 0 for a live arc.
-        Arc::strong_count(&self.0) - 1
+    /// Returns the number of live copies of this lease, including this one.
+    pub fn count(&self) -> usize {
+        Arc::strong_count(&self.0)
     }
 }
 
@@ -383,7 +382,7 @@ impl Lease {
 /// You can exchange `LeasedBatchPart`:
 /// - If `leased_seqno.is_none()`
 /// - By converting it to [`SerdeLeasedBatchPart`] through
-///   [`Self::into_exchangeable_part`]. [`SerdeLeasedBatchPart`] is exchangeable,
+///   `Self::into_exchangeable_part`. [`SerdeLeasedBatchPart`] is exchangeable,
 ///   including over the network.
 ///
 /// n.b. `Self::into_exchangeable_part` is known to be equivalent to
@@ -412,7 +411,7 @@ pub struct LeasedBatchPart<T> {
     pub(crate) leased_seqno: SeqNo,
     /// The lease that prevents this part from being GCed. Code should ensure that this lease
     /// lives as long as the part is needed.
-    pub(crate) lease: Lease,
+    pub(crate) lease: Option<Lease>,
     pub(crate) filter_pushdown_audit: bool,
 }
 
@@ -429,10 +428,10 @@ where
     /// that can't travel across process boundaries. The caller is responsible for
     /// ensuring that the lease is held for as long as the batch part may be in use:
     /// dropping it too early may cause a fetch to fail.
-    pub fn into_exchangeable_part(mut self) -> (SerdeLeasedBatchPart, Lease) {
+    pub(crate) fn into_exchangeable_part(mut self) -> (SerdeLeasedBatchPart, Option<Lease>) {
         let (proto, _metrics) = self.into_proto();
         // If `x` has a lease, we've effectively transferred it to `r`.
-        let lease = std::mem::take(&mut self.lease);
+        let lease = self.lease.take();
         let part = SerdeLeasedBatchPart {
             encoded_size_bytes: self.part.encoded_size_bytes(),
             proto: LazyProto::from(&proto),
@@ -1041,7 +1040,7 @@ impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for 
             part: proto.part.into_rust_if_some("ProtoLeasedBatchPart::part")?,
             reader_id: lease.reader_id.into_rust()?,
             leased_seqno: lease.seqno.into_rust_if_some("ProtoLease::seqno")?,
-            lease: Lease::default(),
+            lease: None,
             filter_pushdown_audit: proto.filter_pushdown_audit,
         })
     }

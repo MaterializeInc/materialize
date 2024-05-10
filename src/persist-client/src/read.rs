@@ -585,7 +585,7 @@ where
 
     fn outstanding_seqno(&mut self) -> Option<SeqNo> {
         while let Some(first) = self.leased_seqnos.first_entry() {
-            if first.get().copies() == 0 {
+            if first.get().count() <= 1 {
                 first.remove();
             } else {
                 return Some(*first.key());
@@ -734,7 +734,7 @@ where
             desc,
             part,
             leased_seqno: self.machine.seqno(),
-            lease: self.lease_seqno(),
+            lease: Some(self.lease_seqno()),
             filter_pushdown_audit: false,
         }
     }
@@ -1425,8 +1425,9 @@ mod tests {
             for event in subscribe.next(None).await {
                 if let ListenEvent::Updates(parts) = event {
                     for part in parts {
-                        let (_, lease) = part.into_exchangeable_part();
-                        subsequent_parts.push(lease);
+                        if let (_, Some(lease)) = part.into_exchangeable_part() {
+                            subsequent_parts.push(lease);
+                        }
                     }
                 }
             }
