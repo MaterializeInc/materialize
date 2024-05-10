@@ -97,7 +97,7 @@ pub struct AvailableCollections {
     /// The set of arrangements of the collection, along with a
     /// column permutation mapping
     #[proptest(strategy = "prop::collection::vec(any_arranged_thin(), 0..3)")]
-    pub arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
+    pub arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
     /// The types of the columns in the raw form of the collection, if known. We
     /// only capture types when necessary to support arrangement specialization,
     /// so this only done for specific LIR operators during lowering.
@@ -107,10 +107,10 @@ pub struct AvailableCollections {
 /// A strategy that produces arrangements that are thinner than the default. That is
 /// the number of direct children is limited to a maximum of 3.
 pub(crate) fn any_arranged_thin(
-) -> impl Strategy<Value = (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> {
+) -> impl Strategy<Value = (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> {
     (
         prop::collection::vec(MirScalarExpr::arbitrary(), 0..3),
-        BTreeMap::<usize, usize>::arbitrary(),
+        Vec::<usize>::arbitrary(),
         Vec::<usize>::arbitrary(),
     )
 }
@@ -161,7 +161,7 @@ impl AvailableCollections {
     /// specified ways, with optionally given types describing
     /// the rows that would be in the raw form of the collection.
     pub fn new_arranged(
-        arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
+        arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
         types: Option<Vec<ColumnType>>,
     ) -> Self {
         assert!(
@@ -176,9 +176,7 @@ impl AvailableCollections {
     }
 
     /// Get some arrangement, if one exists.
-    pub fn arbitrary_arrangement(
-        &self,
-    ) -> Option<&(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> {
+    pub fn arbitrary_arrangement(&self) -> Option<&(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> {
         assert!(
             self.raw || !self.arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
