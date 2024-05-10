@@ -23,12 +23,7 @@ message ProtoThresholdPlan {
 }
 
 message ProtoArrangement {
-  message ProtoArrangementPermutation {
-    uint64 key = 1;
-    uint64 val = 2;
-  }
-
   repeated mz_expr.scalar.ProtoMirScalarExpr all_columns = 1;
-  repeated ProtoArrangementPermutation permutation = 2;
+  repeated uint64 permutation = 2;
   repeated uint64 thinning = 3;
-}
+};

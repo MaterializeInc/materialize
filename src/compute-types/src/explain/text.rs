@@ -20,7 +20,6 @@
 //!    pairs on the same line or as lowercase `$key` fields on indented lines.
 //! 5. A single non-recursive parameter can be written just as `$val`.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Deref;
 
@@ -798,9 +797,9 @@ struct Arrangement<'a> {
     thinning: &'a Vec<usize>,
 }
 
-impl<'a> From<&'a (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> for Arrangement<'a> {
+impl<'a> From<&'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<'a> {
     fn from(
-        (key, permutation, thinning): &'a (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>),
+        (key, permutation, thinning): &'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>),
     ) -> Self {
         Arrangement {
             key,
@@ -834,12 +833,12 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Arrangement<'a> {
 }
 
 /// Helper struct for rendering a permutation.
-struct Permutation<'a>(&'a BTreeMap<usize, usize>);
+struct Permutation<'a>(&'a Vec<usize>);
 
 impl<'a> fmt::Display for Permutation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut pairs = vec![];
-        for (x, y) in self.0.iter().filter(|(x, y)| x != y) {
+        for (x, y) in self.0.iter().enumerate().filter(|(x, y)| x != *y) {
             pairs.push(format!("#{}: #{}", x, y));
         }
 

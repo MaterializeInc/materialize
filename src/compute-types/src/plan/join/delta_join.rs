@@ -261,7 +261,7 @@ impl DeltaJoinPlan {
             let (initial_permutation, initial_thinning) =
                 permutation_for_arrangement(source_key, input_mapper.input_arity(source_relation));
             let initial_closure = join_build_state.extract_closure(
-                initial_permutation,
+                initial_permutation.into_iter().enumerate().collect(),
                 source_key.len() + initial_thinning.len(),
             );
 
