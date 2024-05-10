@@ -1,0 +1,57 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Additive BUILD file for the librdkafka-sys Rust crate."""
+
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
+load("@bazel_skylib//rules:select_file.bzl", "select_file")
+
+filegroup(
+    name = "all_srcs",
+    srcs = glob(["librdkafka/**"]),
+)
+
+cmake(
+    name = "librdkafka",
+    lib_source = ":all_srcs",
+    build_args = ["-j8"],
+    generate_args = [
+        "-DRDKAFKA_BUILD_STATIC=1",
+        "-DRDKAFKA_BUILD_TESTS=0",
+        "-DRDKAFKA_BUILD_EXAMPLES=0",
+        "-DCMAKE_INSTALL_LIBDIR=lib",
+    ],
+    out_static_libs = ["librdkafka.a"],
+)
+
+select_file(
+    name = "librdkafka_a",
+    srcs = ":librdkafka",
+    subpath = "librdkafka.a",
+)
+copy_file(
+    name = "librdkafka_copy",
+    src = ":librdkafka_a",
+    out = "librdkafka.a",
+    allow_symlink = False,
+)
+copy_to_directory(
+    name = "rdkafka_lib",
+    srcs = [":librdkafka_copy"],
+    visibility = ["//visibility:public"],
+)
