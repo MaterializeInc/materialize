@@ -98,6 +98,7 @@ pub enum Token {
     Colon,
     DoubleColon,
     Semicolon,
+    Arrow,
 }
 
 impl fmt::Display for Token {
@@ -121,6 +122,7 @@ impl fmt::Display for Token {
             Token::Colon => f.write_str("colon"),
             Token::DoubleColon => f.write_str("double colon"),
             Token::Semicolon => f.write_str("semicolon"),
+            Token::Arrow => f.write_str("arrow"),
         }
     }
 }
@@ -397,6 +399,13 @@ fn lex_number(buf: &mut LexBuf) -> Result<Token, LexerError> {
 
 fn lex_op(buf: &mut LexBuf) -> Token {
     buf.prev();
+
+    // Materialize special case: `=>` is lexed as an arrow token, rather than
+    // an operator.
+    if buf.consume_str("=>") {
+        return Token::Arrow;
+    }
+
     let mut s = String::new();
 
     // In PostgreSQL, operators might be composed of any of the characters in
