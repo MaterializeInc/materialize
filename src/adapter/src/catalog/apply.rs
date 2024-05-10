@@ -69,7 +69,7 @@ impl CatalogState {
         &mut self,
         updates: Vec<StateUpdate>,
     ) -> Result<(), Error> {
-        // TODO(#26764): we can refactor this to assume that items are
+        // TODO(v100): we can refactor this to assume that items are
         // topologically sorted by their `GlobalId`.
         let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
