@@ -289,8 +289,10 @@ mod enabled {
                     "Allocated for allocator metadata",
                     ByteSize(u64::cast_from(stats.metadata)).to_string_as(true),
                 ),
-                // Don't print `stats.resident` since it is a bit hard to interpret;
-                // see `man jemalloc` for details.
+                (
+                    "Maximum number of bytes in physically resident data pages mapped by the allocator",
+                    ByteSize(u64::cast_from(stats.resident)).to_string_as(true),
+                ),
                 (
                     "Bytes unused, but retained by allocator",
                     ByteSize(u64::cast_from(stats.retained)).to_string_as(true),
