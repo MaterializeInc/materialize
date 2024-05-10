@@ -9,8 +9,6 @@
 
 //! Planning of linear joins.
 
-use std::collections::BTreeMap;
-
 use mz_expr::{
     join_permutations, permutation_for_arrangement, JoinInputCharacteristics, MapFilterProject,
     MirScalarExpr,
@@ -160,7 +158,7 @@ impl LinearJoinPlan {
     pub fn create_from(
         source_relation: usize,
         // When specified, a key and its corresponding permutation and thinning.
-        source_arrangement: Option<&(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
+        source_arrangement: Option<&(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
         equivalences: &[Vec<MirScalarExpr>],
         join_order: &[(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)],
         input_mapper: mz_expr::JoinInputMapper,
