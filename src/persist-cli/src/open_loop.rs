@@ -509,12 +509,13 @@ mod raw_persist_benchmark {
 
         let mut readers = vec![];
         for _ in 0..num_readers {
-            let (_writer, reader) = persist
-                .open::<Vec<u8>, Vec<u8>, u64, i64>(
+            let reader = persist
+                .open_leased_reader::<Vec<u8>, Vec<u8>, u64, i64>(
                     id,
                     Arc::new(VecU8Schema),
                     Arc::new(VecU8Schema),
                     Diagnostics::from_purpose("open loop"),
+                    true,
                 )
                 .await?;
 

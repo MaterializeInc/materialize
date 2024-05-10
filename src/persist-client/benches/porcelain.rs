@@ -124,6 +124,7 @@ async fn bench_write_to_listen_one_iter(
             Arc::new(VecU8Schema),
             Arc::new(VecU8Schema),
             Diagnostics::from_purpose("bench"),
+            true,
         )
         .await?;
 

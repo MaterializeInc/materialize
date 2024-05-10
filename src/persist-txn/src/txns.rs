@@ -154,6 +154,7 @@ where
                     shard_name: "txns".to_owned(),
                     handle_purpose: "commit txns".to_owned(),
                 },
+                USE_CRITICAL_SINCE_TXN.get(client.dyncfgs()),
             )
             .await
             .expect("txns schema shouldn't change");

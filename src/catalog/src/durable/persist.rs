@@ -756,6 +756,7 @@ impl UnopenedPersistCatalogState {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state handles".to_string(),
                 },
+                USE_CRITICAL_SINCE_CATALOG.get(persist_client.dyncfgs()),
             )
             .await
             .expect("invalid usage");
