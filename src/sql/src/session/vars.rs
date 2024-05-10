@@ -1232,6 +1232,9 @@ impl SystemVars {
                 ConfigVal::OptUsize(default) => {
                     VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
                 }
+                ConfigVal::F64(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                }
                 ConfigVal::String(default) => {
                     VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
                 }
@@ -1865,6 +1868,7 @@ impl SystemVars {
                 ConfigVal::OptUsize(_) => {
                     ConfigVal::from(*self.expect_config_value::<Option<usize>>(name))
                 }
+                ConfigVal::F64(_) => ConfigVal::from(*self.expect_config_value::<f64>(name)),
                 ConfigVal::String(_) => {
                     ConfigVal::from(self.expect_config_value::<String>(name).clone())
                 }

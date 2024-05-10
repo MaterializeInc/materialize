@@ -368,7 +368,7 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
 ///
 /// Parameters can be set (`Some`) or unset (`None`).
 /// Unset parameters should be interpreted to mean "use the previous value".
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct ComputeParameters {
     /// The maximum allowed size in bytes for results of peeks and subscribes.
     ///
