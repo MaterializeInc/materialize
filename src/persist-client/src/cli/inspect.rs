@@ -28,7 +28,7 @@ use mz_persist::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::Blob;
 use mz_persist_types::codec_impls::TodoSchema;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::RustType;
 use prost::Message;
 use serde::Serialize;
@@ -1008,5 +1008,30 @@ impl Semigroup for D {
 
     fn is_zero(&self) -> bool {
         false
+    }
+}
+
+pub(crate) static FAKE_OPAQUE_CODEC: Mutex<String> = Mutex::new(String::new());
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct O([u8; 8]);
+
+impl Codec64 for O {
+    fn codec_name() -> String {
+        FAKE_OPAQUE_CODEC.lock().expect("lockable").clone()
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        self.0
+    }
+
+    fn decode(buf: [u8; 8]) -> Self {
+        Self(buf)
+    }
+}
+
+impl Opaque for O {
+    fn initial() -> Self {
+        Self([0; 8])
     }
 }
