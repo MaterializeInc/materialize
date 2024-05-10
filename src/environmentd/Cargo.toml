@@ -168,6 +168,7 @@ default = ["tokio-console", "jemalloc"]
 # access to the file system.
 dev-web = []
 jemalloc = ["mz-alloc/jemalloc"]
+force-jemalloc-macos = ["mz-alloc/force-jemalloc-macos"]
 test = [
     "postgres",
     "regex",

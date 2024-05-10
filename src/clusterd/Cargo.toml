@@ -44,6 +44,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [features]
 default = ["tokio-console", "jemalloc"]
 jemalloc = ["mz-alloc/jemalloc"]
+force-jemalloc-macos = ["mz-alloc/force-jemalloc-macos"]
 tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]

@@ -12,21 +12,7 @@ workspace = true
 [dependencies]
 mz-ore = { path = "../ore", default-features = false }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-# Disable jemalloc on macOS, as it is not well supported [0][1][2]. The issues
-# present as runaway latency on load test workloads that are comfortably handled
-# by the macOS system allocator. Consider re-evaluating if jemalloc's macOS
-# support improves.
-#
-# [0]: https://github.com/jemalloc/jemalloc/issues/26
-# [1]: https://github.com/jemalloc/jemalloc/issues/843
-# [2]: https://github.com/jemalloc/jemalloc/issues/1467
-#
-# Furthermore, as of August 2022, some engineers are using profiling tools, e.g.
-# `heaptrack`, that only work with the system allocator.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
 mz-prof = { path = "../prof", default-features = false }
-mz-prof-http = { path = "../prof-http", default-features = false }
 # According to jemalloc developers, `background_threads` should always be
 # enabled, except in "esoteric" situations that don't apply to Materialize
 # (namely, if the application relies on new threads not being created for
@@ -35,10 +21,32 @@ mz-prof-http = { path = "../prof-http", default-features = false }
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
 tikv-jemallocator = { version = "0.5.0", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
 
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+mz-prof-http = { path = "../prof-http", default-features = false }
+
 [features]
 default = ["workspace-hack"]
 # Whether to enable the use of jemalloc on platforms that support it.
 jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc", "mz-prof-http/jemalloc"]
+# By default disable jemalloc on macOS, as it is not well supported [0][1]. The issues
+# present as runaway latency on load test workloads that are comfortably handled
+# by the macOS system allocator. Consider re-evaluating if jemalloc's macOS
+# support improves.
+#
+# [0]: https://github.com/jemalloc/jemalloc/issues/26
+# [1]: https://github.com/jemalloc/jemalloc/issues/843
+#
+# Furthermore, as of August 2022, some engineers are using profiling tools, e.g.
+# `heaptrack`, that only work with the system allocator.
+#
+# Note that profiling as provided by `mz-prof-http` is not enabled for macos, as it
+# appears to not work at all.
+#
+# Unfortunately, there doesn't appear to be a way to tell cargo to only include the
+# tikv-jemallocator dependency if `force-jemalloc-macos` is enabled AND the platform
+# is macos (Cargo doesn't support all(feature, platform) in the `target.cfg()` fields. This
+# means mac users have to build one more dep :(.
+force-jemalloc-macos = []
 
 [package.metadata.cargo-udeps.ignore]
 # The only reason we depend on mz-prof-http

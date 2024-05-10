@@ -9,7 +9,11 @@
 
 use mz_ore::metrics::MetricsRegistry;
 
-#[cfg(all(not(target_os = "macos"), feature = "jemalloc", not(miri)))]
+#[cfg(all(
+    any(feature = "force-jemalloc-macos", not(target_os = "macos")),
+    feature = "jemalloc",
+    not(miri)
+))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -17,7 +21,11 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 ///
 /// What metrics are registered varies by platform. Not all platforms use
 /// allocators that support metrics.
-#[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))]
+#[cfg(any(
+    all(not(feature = "force-jemalloc-macos"), target_os = "macos"),
+    not(feature = "jemalloc"),
+    miri
+))]
 #[allow(clippy::unused_async)]
 pub async fn register_metrics_into(_: &MetricsRegistry) {
     // No-op on platforms that don't use jemalloc.
@@ -27,7 +35,11 @@ pub async fn register_metrics_into(_: &MetricsRegistry) {
 ///
 /// What metrics are registered varies by platform. Not all platforms use
 /// allocators that support metrics.
-#[cfg(all(not(target_os = "macos"), feature = "jemalloc", not(miri)))]
+#[cfg(all(
+    any(feature = "force-jemalloc-macos", not(target_os = "macos")),
+    feature = "jemalloc",
+    not(miri)
+))]
 pub async fn register_metrics_into(registry: &MetricsRegistry) {
     mz_prof::jemalloc::JemallocMetrics::register_into(registry).await;
 }

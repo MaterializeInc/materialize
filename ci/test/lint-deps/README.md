@@ -28,6 +28,5 @@ However, note the specifics for `jemalloc` below.
 
 ### Specifics for `jemalloc`
 
-We enable `jemalloc` by default on all non-mac platforms, unless `--no-default-features` is enabled.
-In this case, `jemalloc` should be disabled on all platforms.
-To quickly determine the validity of changes, check that only the file `x86_64-unknown-linux-gnu-default` mentions the `tikv-jemallocator` dependency, and all others don't.
+We enable `jemalloc` by default on all non-mac platforms, unless `--no-default-features` is enabled. However,
+because of cargo limitations, its built on macos as well.
