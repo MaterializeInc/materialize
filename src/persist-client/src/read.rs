@@ -12,7 +12,7 @@
 use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate_updates;
@@ -35,9 +35,7 @@ use tracing::{debug_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::cfg::RetryParameters;
-use crate::fetch::{
-    fetch_leased_part, FetchBatchFilter, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
-};
+use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
@@ -200,19 +198,6 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
-    pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
-        self.listen
-            .handle
-            .lease_returner
-            .leased_part_from_exchangeable(x)
-    }
-
-    /// Returns the given [`LeasedBatchPart`], releasing its lease.
-    pub fn return_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
-        self.listen.handle.process_returned_leased_part(leased_part)
-    }
-
     /// Politely expires this subscribe, releasing its lease.
     ///
     /// There is a best-effort impl in Drop for [`ReadHandle`] to expire the
@@ -222,11 +207,7 @@ where
     /// [Handle] being available in the TLC at the time of drop (which is a bit
     /// subtle). Also, explicit expiry allows for control over when it happens.
     pub async fn expire(mut self) {
-        if let Some(parts) = self.snapshot.take() {
-            for part in parts {
-                self.return_leased_part(part)
-            }
-        }
+        let _ = self.snapshot.take(); // Drop all leased parts.
         self.listen.expire().await;
     }
 }
@@ -483,7 +464,6 @@ where
             self.handle.schemas.clone(),
         )
         .await;
-        self.handle.process_returned_leased_part(part);
         fetched_part
     }
 
@@ -497,45 +477,6 @@ where
     /// explicit expiry allows for control over when it happens.
     pub async fn expire(self) {
         self.handle.expire().await
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct SubscriptionLeaseReturner {
-    leased_seqnos: Arc<Mutex<BTreeMap<SeqNo, usize>>>,
-    reader_id: LeasedReaderId,
-    metrics: Arc<Metrics>,
-}
-
-impl SubscriptionLeaseReturner {
-    /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
-    pub(crate) fn leased_part_from_exchangeable<T: Timestamp + Codec64>(
-        &self,
-        x: SerdeLeasedBatchPart,
-    ) -> LeasedBatchPart<T> {
-        x.decode(Arc::clone(&self.metrics))
-    }
-
-    pub(crate) fn return_leased_part<T: Timestamp + Codec64>(
-        &mut self,
-        mut leased_part: LeasedBatchPart<T>,
-    ) {
-        if let Some(lease) = leased_part.return_lease(&self.reader_id) {
-            // Tracks that a `SeqNo` lease has been returned and can be dropped. Once
-            // a `SeqNo` has no more outstanding leases, it can be removed, and
-            // `Self::downgrade_since` no longer needs to prevent it from being
-            // garbage collected.
-            let mut leased_seqnos = self.leased_seqnos.lock().expect("lock poisoned");
-            let remaining_leases = leased_seqnos
-                .get_mut(&lease)
-                .expect("leased SeqNo returned, but lease not issued from this ReadHandle");
-
-            *remaining_leases -= 1;
-
-            if remaining_leases == &0 {
-                leased_seqnos.remove(&lease);
-            }
-        }
     }
 }
 
@@ -578,7 +519,7 @@ where
 
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
-    lease_returner: SubscriptionLeaseReturner,
+    pub(crate) leased_seqnos: BTreeMap<SeqNo, Lease>,
     pub(crate) unexpired_state: Option<UnexpiredReadHandleState>,
 }
 
@@ -618,11 +559,7 @@ where
             schemas,
             since,
             last_heartbeat,
-            lease_returner: SubscriptionLeaseReturner {
-                leased_seqnos: Arc::new(Mutex::new(BTreeMap::new())),
-                reader_id: reader_id.clone(),
-                metrics,
-            },
+            leased_seqnos: BTreeMap::new(),
             unexpired_state: Some(UnexpiredReadHandleState {
                 _heartbeat_tasks: machine
                     .start_reader_heartbeat_tasks(reader_id, gc)
@@ -646,6 +583,17 @@ where
         &self.since
     }
 
+    fn outstanding_seqno(&mut self) -> Option<SeqNo> {
+        while let Some(first) = self.leased_seqnos.first_entry() {
+            if first.get().copies() == 0 {
+                first.remove();
+            } else {
+                return Some(*first.key());
+            }
+        }
+        None
+    }
+
     /// Forwards the since frontier of this handle, giving up the ability to
     /// read at times not greater or equal to `new_since`.
     ///
@@ -659,14 +607,7 @@ where
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
         // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
-        let outstanding_seqno = self
-            .lease_returner
-            .leased_seqnos
-            .lock()
-            .expect("lock poisoned")
-            .keys()
-            .next()
-            .cloned();
+        let outstanding_seqno = self.outstanding_seqno();
 
         let heartbeat_ts = (self.cfg.now)();
         let (_seqno, current_reader_since, maintenance) = self
@@ -687,13 +628,7 @@ where
                     self.reader_id,
                     outstanding_seqno,
                     _seqno,
-                    self.lease_returner
-                        .leased_seqnos
-                        .lock()
-                        .expect("lock")
-                        .iter()
-                        .take(10)
-                        .collect::<Vec<_>>(),
+                    self.leased_seqnos.keys().take(10).collect::<Vec<_>>(),
                     // The Debug impl of backtrace is less aesthetic, but will put the trace
                     // on a single line and play more nicely with our Honeycomb quota
                     Backtrace::capture(),
@@ -798,7 +733,8 @@ where
             filter,
             desc,
             part,
-            leased_seqno: Some(self.lease_seqno()),
+            leased_seqno: self.machine.seqno(),
+            lease: self.lease_seqno(),
             filter_pushdown_audit: false,
         }
     }
@@ -817,35 +753,10 @@ where
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
     /// "leased out" to a `LeasedBatchPart`, and cannot be garbage
     /// collected until its lease has been returned.
-    fn lease_seqno(&mut self) -> SeqNo {
+    fn lease_seqno(&mut self) -> Lease {
         let seqno = self.machine.seqno();
-
-        *self
-            .lease_returner
-            .leased_seqnos
-            .lock()
-            .expect("lock poisoned")
-            .entry(seqno)
-            .or_insert(0) += 1;
-
-        seqno
-    }
-
-    /// Returns a [`SubscriptionLeaseReturner`] tied to this [`ReadHandle`],
-    /// allowing a caller to return leases without needing to mutably borrowing
-    /// this `ReadHandle` directly.
-    pub(crate) fn lease_returner(&self) -> &SubscriptionLeaseReturner {
-        &self.lease_returner
-    }
-
-    /// Processes that a part issued from `self` has been consumed, and `self`
-    /// can now process any internal bookkeeping.
-    ///
-    /// # Panics
-    /// - If `self` does not have record of issuing the [`LeasedBatchPart`], e.g.
-    ///   it originated from from another `ReadHandle`.
-    pub fn process_returned_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
-        self.lease_returner.return_leased_part(leased_part)
+        let lease = self.leased_seqnos.entry(seqno).or_default();
+        lease.clone()
     }
 
     /// Returns an independent [ReadHandle] with a new [LeasedReaderId] but the
@@ -1101,7 +1012,6 @@ where
                     &self.blob,
                     |m| &m.snapshot,
                     &self.machine.applier.shard_metrics,
-                    &self.lease_returner,
                     leased_parts.into_iter(),
                 );
             }
@@ -1167,7 +1077,6 @@ where
         let shard_metrics = Arc::clone(&self.machine.applier.shard_metrics);
         let reader_id = self.reader_id.clone();
         let schemas = self.schemas.clone();
-        let mut lease_returner = self.lease_returner.clone();
         let stream = async_stream::stream! {
             for part in snap {
                 let mut fetched_part = fetch_leased_part(
@@ -1180,7 +1089,6 @@ where
                     schemas.clone(),
                 )
                 .await;
-                lease_returner.return_leased_part(part);
 
                 while let Some(next) = fetched_part.next() {
                     yield next;
@@ -1501,24 +1409,24 @@ mod tests {
         // Ensure monotonicity of seqnos we're processing, otherwise the
         // invariant we're testing (returning the last part of a seqno will
         // downgrade its since) will not hold.
-        let mut this_seqno = None;
+        let mut this_seqno = SeqNo::minimum();
 
         // Repeat the same process as above, more or less, while fetching + returning parts
         for (mut i, part) in parts.into_iter().enumerate() {
-            let part_seqno = part.leased_seqno.unwrap();
-            let last_seqno = this_seqno.replace(part_seqno);
-            assert!(last_seqno.is_none() || this_seqno >= last_seqno);
+            let part_seqno = part.leased_seqno;
+            let last_seqno = this_seqno;
+            this_seqno = part_seqno;
+            assert!(this_seqno >= last_seqno);
 
             let _ = fetcher.fetch_leased_part(&part).await;
-
-            // Emulating drop
-            subscribe.return_leased_part(part);
+            drop(part);
 
             // Simulates an exchange
             for event in subscribe.next(None).await {
                 if let ListenEvent::Updates(parts) = event {
                     for part in parts {
-                        subsequent_parts.push(part.into_exchangeable_part());
+                        let (_, lease) = part.into_exchangeable_part();
+                        subsequent_parts.push(lease);
                     }
                 }
             }
@@ -1541,15 +1449,7 @@ mod tests {
 
             // We should expect the SeqNo to be downgraded if this part's SeqNo
             // is no longer leased to any other parts, either.
-            let expect_downgrade = subscribe
-                .listen
-                .handle
-                .lease_returner
-                .leased_seqnos
-                .lock()
-                .expect("lock poisoned")
-                .get(&part_seqno)
-                .is_none();
+            let expect_downgrade = subscribe.listen.handle.outstanding_seqno() > Some(part_seqno);
 
             let new_seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
             if expect_downgrade {
@@ -1564,10 +1464,7 @@ mod tests {
         assert!(seqno_since > original_seqno_since);
 
         // Return any outstanding parts, to prevent a panic!
-        for part in subsequent_parts {
-            subscribe.return_leased_part(subscribe.leased_part_from_exchangeable(part));
-        }
-
+        drop(subsequent_parts);
         drop(subscribe);
     }
 

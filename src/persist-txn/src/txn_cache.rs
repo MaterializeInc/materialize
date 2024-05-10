@@ -932,7 +932,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                 part.stats()
             );
             if !should_fetch_part {
-                txns_subscribe.return_leased_part(part);
+                drop(part);
                 continue;
             }
             let part_updates = txns_subscribe.fetch_batch_part(part).await;

@@ -42,10 +42,9 @@ use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::RetryParameters;
-use crate::fetch::{FetchedBlob, SerdeLeasedBatchPart};
+use crate::fetch::{FetchedBlob, Lease, SerdeLeasedBatchPart};
 use crate::internal::state::BatchPart;
 use crate::project::ProjectionPushdown;
-use crate::read::SubscriptionLeaseReturner;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
 
@@ -179,7 +178,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     as_of: Option<Antichain<G::Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<G::Timestamp>,
-    completed_fetches_stream: Stream<G, SerdeLeasedBatchPart>,
+    completed_fetches_stream: Stream<G, ()>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
@@ -210,7 +209,7 @@ where
     let return_listen_handle = Rc::clone(&listen_handle);
 
     // Create a oneshot channel to give the part returner a SubscriptionLeaseReturner
-    let (tx, rx) = tokio::sync::oneshot::channel::<SubscriptionLeaseReturner>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Rc<RefCell<Vec<(G::Timestamp, Lease)>>>>();
     let mut builder = AsyncOperatorBuilder::new(
         format!("shard_source_descs_return({})", name),
         scope.clone(),
@@ -224,20 +223,20 @@ where
     // This operator doesn't need to use a token because it naturally exits when its input
     // frontier reaches the empty antichain.
     builder.build(move |_caps| async move {
-        let Ok(mut lease_returner) = rx.await else {
+        let Ok(leases) = rx.await else {
             // Either we're not the chosen worker or the dataflow was shutdown before the
             // subscriber was even created.
             return;
         };
         while let Some(event) = completed_fetches.next().await {
-            let Event::Data(_cap, data) = event else {
+            let Event::Progress(frontier) = event else {
                 continue;
             };
-            for part in data {
-                lease_returner.return_leased_part(
-                    lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part),
-                );
-            }
+            // If the frontier is not <= a particular time, that indicates that upstream is
+            // finished with that time.
+            leases
+                .borrow_mut()
+                .retain(|(time, _lease)| frontier.less_equal(time));
         }
         // Make it explicit that the subscriber is kept alive until we have finished returning parts
         drop(return_listen_handle);
@@ -329,9 +328,9 @@ where
         // We're about to start producing parts to be fetched whose leases will be returned by the
         // `shard_source_descs_return` operator above. In order for that operator to successfully
         // return the leases we send it the lease returner associated with our shared subscriber.
-        tx.send(read.lease_returner().clone())
+        let leases = Rc::new(RefCell::new(vec![]));
+        tx.send(Rc::clone(&leases))
             .expect("lease returner exited before desc producer");
-        let mut lease_returner = read.lease_returner().clone();
 
         // Store the listen handle in the shared slot so that it stays alive until both operators
         // exit
@@ -428,7 +427,6 @@ where
                                 "skipping part because of stats filter {:?}",
                                 part_desc.part.stats()
                             );
-                            lease_returner.return_leased_part(part_desc);
                             continue;
                         }
                     }
@@ -441,12 +439,9 @@ where
                 // There's certainly some other things we could be doing instead here, but this has
                 // seemed to work okay so far. Continue to revisit as necessary.
                 let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                descs_output
-                    .give(
-                        &session_cap,
-                        (worker_idx, part_desc.into_exchangeable_part()),
-                    )
-                    .await;
+                let (part, lease) = part_desc.into_exchangeable_part();
+                leases.borrow_mut().push((current_ts.clone(), lease));
+                descs_output.give(&session_cap, (worker_idx, part)).await;
             }
 
             current_frontier.join_assign(&progress);
@@ -466,7 +461,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     val_schema: Arc<V::Schema>,
 ) -> (
     Stream<G, FetchedBlob<K, V, T, D>>,
-    Stream<G, SerdeLeasedBatchPart>,
+    Stream<G, ()>,
     PressOnDropButton,
 )
 where
@@ -522,7 +517,7 @@ where
                         // the shared timely output buffer.
                         fetched_output.give(&fetched_cap, fetched).await;
                         completed_fetches_output
-                            .give(&completed_fetches_cap, leased_part.into_exchangeable_part())
+                            .give(&completed_fetches_cap, ())
                             .await;
                     }
                 }
