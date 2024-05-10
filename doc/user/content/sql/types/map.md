@@ -75,6 +75,17 @@ SELECT MAP['a' => ['b' => 'c']];
  {a=>{b=>c}}
 ```
 
+`MAP` expressions evalute expressions for both keys and values:
+
+```sql
+SELECT MAP['a' || 'b' => 1 + 2];
+```
+```nofmt
+     map
+-------------
+ {ab=>3}
+```
+
 Alternatively, you can construct a map from the results of a subquery. The
 subquery must return two columns: a key column of type `text` and a value column
 of any type, in that order. Note that, in this form of the `MAP` expression,

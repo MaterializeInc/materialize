@@ -150,6 +150,36 @@ SELECT MAP['a' => 1]::text
 {a=>1}
 
 query T
+SELECT MAP['a' => 1 + 1]::text
+----
+{a=>2}
+
+query T
+SELECT MAP['a' => 2 * 1 + 1]::text
+----
+{a=>3}
+
+query T
+SELECT MAP['a' => 2 * 1 + 2 / 2]::text
+----
+{a=>3}
+
+query T
+SELECT MAP['a' => 2 * (1 + 1) / 2]::text
+----
+{a=>2}
+
+query T
+SELECT MAP['a' || 'b' => 1]::text
+----
+{ab=>1}
+
+query T
+SELECT MAP['a' || 'b' => 1 + 1]::text
+----
+{ab=>2}
+
+query T
 SELECT MAP['a' => 1, 'a' => 2]::text
 ----
 {a=>2}
