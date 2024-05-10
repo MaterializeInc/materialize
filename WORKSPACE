@@ -140,7 +140,7 @@ TOOLCHAINS_LLVM_INTEGRITY = "sha256-6RxDYfmQEaVIFOGvvlxDbg0ymHEUajzVjCOitK+1Bzc=
 
 # Version of clang/llvm we use.
 #
-# At the moment this is newest version that is pre-compiled for all of the platforms we support.
+# At the moment this is the newest version that is pre-compiled for all of the platforms we support.
 LLVM_VERSION = "16.0.0"
 
 maybe(

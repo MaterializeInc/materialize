@@ -62,6 +62,7 @@ configure_make(
         "@platforms//os:macos": {"AR": "$(execpath @llvm_toolchain_llvm//:ar)"},
         "//conditions:default": {},
     }),
+    # TODO(parkmycar): Dynamically configure the number of jobs make uses.
     args = ["-j8"],
     lib_source = ":all_srcs",
     lib_name = "jemalloc",
