@@ -37,6 +37,7 @@ use mz_ore::metrics::UIntGauge;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::Diagnostics;
 use mz_persist_txn::txn_cache::TxnsCache;
@@ -940,7 +941,7 @@ impl PersistPeek {
                 Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
                 Diagnostics::from_purpose("persist::peek"),
-                false,
+                USE_CRITICAL_SINCE_SNAPSHOT.get(client.dyncfgs()),
             )
             .await
             .map_err(|e| e.to_string())?;

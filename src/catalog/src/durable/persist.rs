@@ -30,6 +30,7 @@ use mz_ore::{
     soft_assert_eq_no_log, soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log,
     soft_assert_or_log, soft_panic_or_log,
 };
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
@@ -487,7 +488,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "openable durable catalog state temporary reader".to_string(),
                 },
-                false,
+                USE_CRITICAL_SINCE_CATALOG.get(self.persist_client.dyncfgs()),
             )
             .await
             .expect("invalid usage")

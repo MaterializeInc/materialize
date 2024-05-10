@@ -19,6 +19,7 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};

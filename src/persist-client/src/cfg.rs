@@ -325,7 +325,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
         .add(&crate::cfg::CRDB_TCP_USER_TIMEOUT)
-        .add(&crate::cfg::TXN_USE_CRITICAL_SINCE)
+        .add(&crate::cfg::USE_CRITICAL_SINCE_TXN)
+        .add(&crate::cfg::USE_CRITICAL_SINCE_CATALOG)
+        .add(&crate::cfg::USE_CRITICAL_SINCE_SOURCE)
+        .add(&crate::cfg::USE_CRITICAL_SINCE_SNAPSHOT)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_CLAMP)
@@ -414,6 +417,27 @@ pub const USE_CRITICAL_SINCE_TXN: Config<bool> = Config::new(
     "persist_use_critical_since_txn",
     true,
     "Use the critical since (instead of the overall since) when initializing a subscribe.",
+);
+
+/// Migrate the catalog to use the critical since when opening a new read handle.
+pub const USE_CRITICAL_SINCE_CATALOG: Config<bool> = Config::new(
+    "persist_use_critical_since_catalog",
+    false,
+    "Use the critical since (instead of the overall since) for the Persist-backed catalog.",
+);
+
+/// Migrate the persist source to use the critical since when opening a new read handle.
+pub const USE_CRITICAL_SINCE_SOURCE: Config<bool> = Config::new(
+    "persist_use_critical_since_source",
+    false,
+    "Use the critical since (instead of the overall since) in the Persist source.",
+);
+
+/// Migrate snapshots to use the critical since when opening a new read handle.
+pub const USE_CRITICAL_SINCE_SNAPSHOT: Config<bool> = Config::new(
+    "persist_use_critical_since_snapshot",
+    false,
+    "Use the critical since (instead of the overall since) when taking snapshots in the controller or in fast-path peeks.",
 );
 
 impl PostgresClientKnobs for PersistConfig {
