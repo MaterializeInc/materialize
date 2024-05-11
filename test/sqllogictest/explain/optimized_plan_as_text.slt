@@ -1472,3 +1472,21 @@ Used Indexes:
 Target cluster: quickstart
 
 EOF
+
+# EXPLAIN should work even if there are no replicas.
+statement ok
+CREATE CLUSTER no_replicas (SIZE '1', REPLICATION FACTOR 0);
+
+statement ok
+SET CLUSTER = no_replicas;
+
+query T multiline
+EXPLAIN
+SELECT * FROM t4;
+----
+Explained Query:
+  ReadStorage materialize.public.t4
+
+Target cluster: no_replicas
+
+EOF

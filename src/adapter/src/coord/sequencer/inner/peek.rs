@@ -308,7 +308,7 @@ impl Coordinator {
             .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
             .override_from(&explain_ctx);
 
-        if cluster.replicas().next().is_none() {
+        if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
             return Err(AdapterError::NoClusterReplicasAvailable(
                 cluster.name.clone(),
             ));
