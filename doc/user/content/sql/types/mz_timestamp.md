@@ -45,4 +45,7 @@ From | To | Required context
 
 ### Valid operations
 
-There are no supported operations or functions on `mz_timestamp` types.
+Operation | Computes
+----------|------------
+[`mz_timestamp`](../mz_timestamp) `+` [`mz_timestamp`](../mz_timestamp) | [`mz_timestamp`](../mz_timestamp)
+[`mz_timestamp`](../mz_timestamp) `-` [`mz_timestamp`](../mz_timestamp) | [`mz_timestamp`](../mz_timestamp)

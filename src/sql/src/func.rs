@@ -4429,6 +4429,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             } => Time, 1849;
             params!(Numeric, Numeric) => AddNumeric => Numeric, 1758;
             params!(RangeAny, RangeAny) => RangeUnion => RangeAny, 3898;
+            params!(MzTimestamp, MzTimestamp) => AddMzTimestamp => MzTimestamp, oid::FUNC_ADD_MZ_TIMESTAMP;
         },
         "-" => Scalar {
             params!(Int16) => UnaryFunc::NegInt16(func::NegInt16) => Int16, 559;
@@ -4458,6 +4459,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Int64) => JsonbDeleteInt64 => Jsonb, 3286;
             params!(Jsonb, String) => JsonbDeleteString => Jsonb, 3285;
             params!(RangeAny, RangeAny) => RangeDifference => RangeAny, 3899;
+            params!(MzTimestamp, MzTimestamp) => SubMzTimestamp => MzTimestamp, oid::FUNC_SUB_MZ_TIMESTAMP;
             // TODO(jamii) there should be corresponding overloads for
             // Array(Int64) and Array(String)
         },

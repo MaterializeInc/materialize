@@ -878,6 +878,26 @@ fn age_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErro
     Ok(Datum::from(age))
 }
 
+fn add_mz_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_mz_timestamp();
+    let b = b.unwrap_mz_timestamp();
+    if let Some(ts) = a.checked_add(b) {
+        Ok(Datum::from(ts))
+    } else {
+        Err(EvalError::MzTimestampOverflow)
+    }
+}
+
+fn sub_mz_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_mz_timestamp();
+    let b = b.unwrap_mz_timestamp();
+    if let Some(ts) = a.checked_sub(b) {
+        Ok(Datum::from(ts))
+    } else {
+        Err(EvalError::MzTimestampOverflow)
+    }
+}
+
 fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
 }
@@ -2170,6 +2190,7 @@ pub enum BinaryFunc {
     AddDateTime,
     AddTimeInterval,
     AddNumeric,
+    AddMzTimestamp,
     AgeTimestamp,
     AgeTimestampTz,
     BitAndInt16,
@@ -2220,6 +2241,7 @@ pub enum BinaryFunc {
     SubTime,
     SubTimeInterval,
     SubNumeric,
+    SubMzTimestamp,
     MulInt16,
     MulInt32,
     MulInt64,
@@ -2376,6 +2398,7 @@ impl BinaryFunc {
             BinaryFunc::AddTimeInterval => Ok(add_time_interval(a, b)),
             BinaryFunc::AddNumeric => add_numeric(a, b),
             BinaryFunc::AddInterval => add_interval(a, b),
+            BinaryFunc::AddMzTimestamp => add_mz_timestamp(a, b),
             BinaryFunc::AgeTimestamp => age_timestamp(a, b),
             BinaryFunc::AgeTimestampTz => age_timestamptz(a, b),
             BinaryFunc::BitAndInt16 => Ok(bit_and_int16(a, b)),
@@ -2428,6 +2451,7 @@ impl BinaryFunc {
             BinaryFunc::SubTime => Ok(sub_time(a, b)),
             BinaryFunc::SubTimeInterval => Ok(sub_time_interval(a, b)),
             BinaryFunc::SubNumeric => sub_numeric(a, b),
+            BinaryFunc::SubMzTimestamp => sub_mz_timestamp(a, b),
             BinaryFunc::MulInt16 => mul_int16(a, b),
             BinaryFunc::MulInt32 => mul_int32(a, b),
             BinaryFunc::MulInt64 => mul_int64(a, b),
@@ -2673,6 +2697,8 @@ impl BinaryFunc {
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
+            AddMzTimestamp | SubMzTimestamp => ScalarType::MzTimestamp.nullable(in_nullable),
+
             AgeTimestamp | AgeTimestampTz => ScalarType::Interval.nullable(in_nullable),
 
             AddTimestampInterval
@@ -2832,6 +2858,7 @@ impl BinaryFunc {
             | AddDateTime
             | AddTimeInterval
             | AddNumeric
+            | AddMzTimestamp
             | AgeTimestamp
             | AgeTimestampTz
             | BitAndInt16
@@ -2882,6 +2909,7 @@ impl BinaryFunc {
             | SubTime
             | SubTimeInterval
             | SubNumeric
+            | SubMzTimestamp
             | MulInt16
             | MulInt32
             | MulInt64
@@ -3024,6 +3052,7 @@ impl BinaryFunc {
             | AddDateInterval
             | AddTimeInterval
             | AddInterval
+            | AddMzTimestamp
             | BitAndInt16
             | BitAndInt32
             | BitAndInt64
@@ -3070,6 +3099,7 @@ impl BinaryFunc {
             | SubTimestampTz
             | SubTimestampInterval
             | SubTimestampTzInterval
+            | SubMzTimestamp
             | SubDate
             | SubDateInterval
             | SubTime
@@ -3296,6 +3326,7 @@ impl BinaryFunc {
             | BinaryFunc::AddDateInterval
             | BinaryFunc::AddDateTime
             | BinaryFunc::AddTimeInterval
+            | BinaryFunc::AddMzTimestamp
             | BinaryFunc::AddNumeric => (true, true),
             BinaryFunc::BitAndInt16
             | BinaryFunc::BitAndInt32
@@ -3345,6 +3376,7 @@ impl BinaryFunc {
             | BinaryFunc::SubDateInterval
             | BinaryFunc::SubTime
             | BinaryFunc::SubTimeInterval
+            | BinaryFunc::SubMzTimestamp
             | BinaryFunc::SubNumeric => (true, true),
             BinaryFunc::MulInt16
             | BinaryFunc::MulInt32
@@ -3484,6 +3516,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddDateTime => f.write_str("+"),
             BinaryFunc::AddDateInterval => f.write_str("+"),
             BinaryFunc::AddTimeInterval => f.write_str("+"),
+            BinaryFunc::AddMzTimestamp => f.write_str("+"),
             BinaryFunc::AgeTimestamp => f.write_str("age"),
             BinaryFunc::AgeTimestampTz => f.write_str("age"),
             BinaryFunc::BitAndInt16 => f.write_str("&"),
@@ -3534,6 +3567,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::SubDateInterval => f.write_str("-"),
             BinaryFunc::SubTime => f.write_str("-"),
             BinaryFunc::SubTimeInterval => f.write_str("-"),
+            BinaryFunc::SubMzTimestamp => f.write_str("-"),
             BinaryFunc::MulInt16 => f.write_str("*"),
             BinaryFunc::MulInt32 => f.write_str("*"),
             BinaryFunc::MulInt64 => f.write_str("*"),
@@ -3905,6 +3939,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::AddDateTime => AddDateTime(()),
             BinaryFunc::AddTimeInterval => AddTimeInterval(()),
             BinaryFunc::AddNumeric => AddNumeric(()),
+            BinaryFunc::AddMzTimestamp => AddMzTimestamp(()),
             BinaryFunc::AgeTimestamp => AgeTimestamp(()),
             BinaryFunc::AgeTimestampTz => AgeTimestampTz(()),
             BinaryFunc::BitAndInt16 => BitAndInt16(()),
@@ -3955,6 +3990,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::SubTime => SubTime(()),
             BinaryFunc::SubTimeInterval => SubTimeInterval(()),
             BinaryFunc::SubNumeric => SubNumeric(()),
+            BinaryFunc::SubMzTimestamp => SubMzTimestamp(()),
             BinaryFunc::MulInt16 => MulInt16(()),
             BinaryFunc::MulInt32 => MulInt32(()),
             BinaryFunc::MulInt64 => MulInt64(()),
@@ -4104,6 +4140,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 AddDateTime(()) => Ok(BinaryFunc::AddDateTime),
                 AddTimeInterval(()) => Ok(BinaryFunc::AddTimeInterval),
                 AddNumeric(()) => Ok(BinaryFunc::AddNumeric),
+                AddMzTimestamp(()) => Ok(BinaryFunc::AddMzTimestamp),
                 AgeTimestamp(()) => Ok(BinaryFunc::AgeTimestamp),
                 AgeTimestampTz(()) => Ok(BinaryFunc::AgeTimestampTz),
                 BitAndInt16(()) => Ok(BinaryFunc::BitAndInt16),
@@ -4154,6 +4191,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 SubTime(()) => Ok(BinaryFunc::SubTime),
                 SubTimeInterval(()) => Ok(BinaryFunc::SubTimeInterval),
                 SubNumeric(()) => Ok(BinaryFunc::SubNumeric),
+                SubMzTimestamp(()) => Ok(BinaryFunc::SubMzTimestamp),
                 MulInt16(()) => Ok(BinaryFunc::MulInt16),
                 MulInt32(()) => Ok(BinaryFunc::MulInt32),
                 MulInt64(()) => Ok(BinaryFunc::MulInt64),
