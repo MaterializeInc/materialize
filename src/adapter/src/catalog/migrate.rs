@@ -158,7 +158,7 @@ pub(crate) async fn migrate(
     // Each migration should be a function that takes `tx` and `conn_cat` as
     // input and stages arbitrary transformations to the catalog on `tx`.
     mysql_subsources_remove_unnecessary_db_name(tx, &conn_cat)?;
-    fix_dependency_order_0_99_1(tx, &conn_cat, now)?;
+    fix_dependency_order_0_99_2(tx, &conn_cat, now)?;
 
     info!(
         "migration from catalog version {:?} complete",
@@ -654,7 +654,7 @@ fn mysql_subsources_remove_unnecessary_db_name(
 /// its own.
 ///
 /// This PR goes back and fixes any IDs with that broken relationship.
-fn fix_dependency_order_0_99_1(
+fn fix_dependency_order_0_99_2(
     tx: &mut Transaction<'_>,
     conn_catalog: &ConnCatalog,
     now: NowFn,
@@ -664,7 +664,12 @@ fn fix_dependency_order_0_99_1(
     // elsewhere.
     let mut needs_new_id = vec![];
 
-    for item in conn_catalog.get_items() {
+    for item in conn_catalog
+        .get_items()
+        .into_iter()
+        // Only consider user items
+        .filter(|item| item.id().is_user())
+    {
         for dependent_id in item.used_by() {
             // If an item has a dependent with an ID less than its own, that
             // dependent needs an ID that will be pushed forward ahead of this
