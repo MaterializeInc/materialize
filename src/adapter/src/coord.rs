@@ -654,6 +654,15 @@ impl ExplainContext {
         };
         optimizer_trace.map(|optimizer_trace| optimizer_trace.as_guard())
     }
+
+    fn needs_cluster(&self) -> bool {
+        match self {
+            ExplainContext::None => true,
+            ExplainContext::Plan(..) => false,
+            ExplainContext::PlanInsightsNotice(..) => true,
+            ExplainContext::Pushdown => false,
+        }
+    }
 }
 
 #[derive(Debug)]

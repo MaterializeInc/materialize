@@ -95,6 +95,22 @@ EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM jsonb_fields where timestamp > 1000 AN
 ----
 materialize.public.jsonb_fields  2011  0  2  0
 
+# EXPLAIN FILTER PUSHDOWN should work even if there are no replicas.
+statement ok
+CREATE CLUSTER no_replicas (SIZE '1', REPLICATION FACTOR 0);
+
+statement ok
+SET CLUSTER = no_replicas;
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM jsonb_fields where timestamp > 1000 AND payload->>'field' = 'not-value';
+----
+materialize.public.jsonb_fields  2011  0  2  0
+
+# ----------------------------------------
+# Cleanup
+# ----------------------------------------
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = false
 ----
