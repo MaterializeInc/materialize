@@ -31,8 +31,8 @@ use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema,
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleAttributes, RoleMembership, RoleVars,
+    CatalogItem as SqlCatalogItem, CatalogRole, CatalogSchema, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, RoleAttributes, RoleMembership, RoleVars,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, ObjectId, QualifiedItemName, QualifiedSchemaName,
@@ -43,8 +43,7 @@ use mz_sql::session::vars::{OwnedVarInput, Var, VarInput, PERSIST_TXN_TABLES};
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::controller::StorageController;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::time::Duration;
+use std::collections::{BTreeMap, BTreeSet};
 use tracing::{info, trace};
 
 use crate::catalog::{
@@ -430,7 +429,6 @@ impl Catalog {
                         new_entry.item().clone(),
                     )?;
                     tx.update_item(id, new_entry.into())?;
-                    Self::check_index_retain_histories(state, &id)?;
                 }
                 Op::AlterRole {
                     id,
@@ -940,7 +938,6 @@ impl Catalog {
                             details,
                         )?;
                     }
-                    let typ = item.typ();
                     state.insert_item(
                         id,
                         oid,
@@ -950,9 +947,6 @@ impl Catalog {
                         PrivilegeMap::from_mz_acl_items(privileges),
                     );
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
-                    if matches!(typ, CatalogItemType::Index) {
-                        Self::check_index_retain_histories(state, &id)?;
-                    }
                 }
                 Op::Comment {
                     object_id,
@@ -2267,137 +2261,6 @@ impl Catalog {
             tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
         }
         Ok(())
-    }
-
-    /// Verify retain history requirements of `id` (an index on a view must have a retain history >=
-    /// the retain history of any view index that uses it). If `id` is not an Index on a View,
-    /// returns Ok.
-    ///
-    /// The intention of this function is to prevent unexpected downstream memory growth. When the
-    /// retain history is increased on an index that is on a view, any indexes that are used by that
-    /// index have their compaction window implicitly increased. This could greatly and unexpectedly
-    /// increase memory use of those downstream indexes. To prevent this surprise to users, require
-    /// that users first increase all downstream indexes so that they are aware of and opting in to
-    /// the increased memory usage. If a persist object (table, materialized view, source) is used
-    /// by the index, we do not need to check further because the increased retain history of the
-    /// index will only result in a longer persist compaction window resulting in more disk use, but
-    /// not more memory use. Because disk is cheap and can't run out, it is ok for this increase to
-    /// not be explicit by the user.
-    fn check_index_retain_histories(
-        catalog: &CatalogState,
-        id: &GlobalId,
-    ) -> Result<(), AdapterError> {
-        let entry = catalog.get_entry(id);
-        let Some(index) = entry.index() else {
-            return Ok(());
-        };
-        let on = catalog.get_entry(&index.on);
-        if !on.is_view() {
-            // Non-views don't have this cascade requirement.
-            return Ok(());
-        }
-        let index_rh = index.custom_logical_compaction_window.unwrap_or_default();
-        for uses_index_id in Self::get_view_index_uses(catalog, id) {
-            // `id` uses these indexes, id must have the lower retain history.
-            let uses_index = catalog.get_entry(&uses_index_id);
-            let uses_rh = uses_index
-                .index()
-                .expect("must be an index")
-                .custom_logical_compaction_window
-                .unwrap_or_default();
-            if uses_rh < index_rh {
-                return Err(AdapterError::RequiredRetainHistory {
-                    required: Duration::from_millis(index_rh.comparable_timestamp().into()),
-                    found: Duration::from_millis(uses_rh.comparable_timestamp().into()),
-                    name: catalog
-                        .resolve_full_name(uses_index.name(), None)
-                        .to_string(),
-                });
-            }
-        }
-        for used_index_id in Self::get_view_index_used_by(catalog, id) {
-            // `id` is used by these indexes, id must have the higher retain history.
-            let used_by_index = catalog.get_entry(&used_index_id);
-            let used_rh = used_by_index
-                .index()
-                .expect("must be an index")
-                .custom_logical_compaction_window
-                .unwrap_or_default();
-            if index_rh < used_rh {
-                return Err(AdapterError::RequiredRetainHistory {
-                    required: Duration::from_millis(used_rh.comparable_timestamp().into()),
-                    found: Duration::from_millis(index_rh.comparable_timestamp().into()),
-                    name: catalog
-                        .resolve_full_name(used_by_index.name(), None)
-                        .to_string(),
-                });
-            }
-        }
-
-        Ok(())
-    }
-
-    /// For the Index at `id` that is on a View, return the index ids it directly depends on.
-    ///
-    /// # Panics
-    /// Panics if `id` is not an Index on a View.
-    fn get_view_index_uses(catalog: &CatalogState, id: &GlobalId) -> BTreeSet<GlobalId> {
-        let entry = catalog.get_entry(id);
-        let index = entry.index().expect("must be an index");
-        let mut index_ids = BTreeSet::new();
-        let mut views_to_check = VecDeque::from([index.on]);
-        while let Some(view_id) = views_to_check.pop_front() {
-            let view = catalog.get_entry(&view_id);
-            assert!(view.is_view());
-            // Views can use other views, need to check those too.
-            for uses_id in view.uses() {
-                match catalog.get_entry(&uses_id).item().typ() {
-                    CatalogItemType::View => {
-                        views_to_check.push_back(uses_id);
-                    }
-                    _ => {}
-                }
-            }
-            // Indexes are used by views: add those to the result set.
-            for used_by_id in view.used_by() {
-                match catalog.get_entry(used_by_id).item().typ() {
-                    CatalogItemType::Index => {
-                        index_ids.insert(*used_by_id);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        index_ids.remove(id);
-        index_ids
-    }
-
-    /// For the Index at `id` that is on a View, return the index ids that use it.
-    ///
-    /// # Panics
-    /// Panics if `id` is not an Index on a View.
-    fn get_view_index_used_by(catalog: &CatalogState, id: &GlobalId) -> BTreeSet<GlobalId> {
-        let entry = catalog.get_entry(id);
-        let index = entry.index().expect("must be an index");
-        let mut index_ids = BTreeSet::new();
-        let mut views_to_check = VecDeque::from([index.on]);
-        while let Some(view_id) = views_to_check.pop_front() {
-            let view = catalog.get_entry(&view_id);
-            assert!(view.is_view());
-            for used_by_id in view.used_by() {
-                match catalog.get_entry(used_by_id).item().typ() {
-                    CatalogItemType::View => {
-                        views_to_check.push_back(*used_by_id);
-                    }
-                    CatalogItemType::Index => {
-                        index_ids.insert(*used_by_id);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        index_ids.remove(id);
-        index_ids
     }
 
     fn create_schema(

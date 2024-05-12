@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp::Ordering;
 use std::num::TryFromIntError;
 use std::time::Duration;
 
@@ -36,7 +35,7 @@ pub const SINCE_GRANULARITY: mz_repr::Timestamp = mz_repr::Timestamp::new(1000);
 
 // A common type (that is usable by the sql crate and also can implement various methods on types in
 // storage) to express compaction windows.
-#[derive(Clone, Default, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum CompactionWindow {
     /// Unspecified by the user, use a system-provided default.
     #[default]
@@ -45,19 +44,6 @@ pub enum CompactionWindow {
     DisableCompaction,
     /// Create a compaction window for a specified duration.
     Duration(Timestamp),
-}
-
-impl Ord for CompactionWindow {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.comparable_timestamp()
-            .cmp(&other.comparable_timestamp())
-    }
-}
-
-impl PartialOrd for CompactionWindow {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 impl CompactionWindow {
