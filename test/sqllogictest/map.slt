@@ -756,8 +756,24 @@ NULL
 
 # map_build
 
+query T
+SELECT map_build(LIST[ROW('a', 1), ROW('b', 2)])::TEXT;
+----
+{a=>1,b=>2}
+
+query error LIST could not convert type record\(f1: text,f2: integer\) to text
+SELECT map_build(LIST[ROW('a', 1), ROW('b')])::TEXT;
+
+query error function map_build\(record\(f1: integer,f2: integer\) list\) does not exist
+SELECT map_build(LIST[ROW(1, 1), ROW(2, 2)])::TEXT;
+
 statement ok
 CREATE TYPE r AS (f1 TEXT, f2 INT);
+
+query T
+SELECT map_build(LIST[ROW('a', 1), ROW('b', 2)::r])::TEXT;
+----
+{a=>1,b=>2}
 
 query T
 SELECT map_build(LIST[ROW('a', 1), ROW('b', 2)]::r list)::TEXT;

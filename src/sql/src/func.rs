@@ -28,8 +28,9 @@ use crate::catalog::{CatalogType, TypeCategory, TypeReference};
 use crate::names::{self, ResolvedItemName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
-    AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
-    ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc, ValueWindowFunc, VariadicFunc,
+    AggregateFunc, BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder,
+    HirRelationExpr, HirScalarExpr, ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc,
+    ValueWindowFunc, VariadicFunc,
 };
 use crate::plan::query::{self, ExprContext, QueryContext};
 use crate::plan::scope::Scope;
@@ -578,14 +579,14 @@ pub enum ParamList {
 
 impl ParamList {
     /// Determines whether `typs` are compatible with `self`.
-    fn matches_argtypes(&self, ecx: &ExprContext, typs: &[Option<ScalarType>]) -> bool {
+    fn matches_argtypes(&self, ecx: &ExprContext, typs: &[CoercibleScalarType]) -> bool {
         if !self.validate_arg_len(typs.len()) {
             return false;
         }
 
         for (i, typ) in typs.iter().enumerate() {
             let param = &self[i];
-            if let Some(typ) = typ {
+            if let CoercibleScalarType::Coerced(typ) = typ {
                 // Ensures either `typ` can at least be implicitly cast to a
                 // type `param` accepts. Implicit in this check is that unknown
                 // type arguments can be cast to any type.
@@ -984,7 +985,16 @@ where
 {
     let name = spec.to_string();
     let ecx = &ecx.with_name(&name);
-    let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
+    let mut types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
+
+    // PostgreSQL force coerces all record types before function selection. We
+    // may want to do something smarter in the future (e.g., a function that
+    // accepts multiple `RecordAny` parameters should perhaps coerce to the
+    // result of calling `guess_best_common_type` on all those parameters), but
+    // for now we just directly match PostgreSQL's behavior.
+    for ty in &mut types {
+        ty.force_coerced_if_record();
+    }
 
     // 4.a. Discard candidate functions for which the input types do not
     // match and cannot be converted (using an implicit conversion) to
@@ -999,8 +1009,9 @@ where
         let arg_types: Vec<_> = types
             .into_iter()
             .map(|ty| match ty {
-                Some(ty) => ecx.humanize_scalar_type(&ty),
-                None => "unknown".to_string(),
+                CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty),
+                CoercibleScalarType::Record(_) => "record".to_string(),
+                CoercibleScalarType::Uncoerced => "unknown".to_string(),
             })
             .collect();
 
@@ -1049,14 +1060,14 @@ where
 /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
 fn find_match<'a, R: std::fmt::Debug>(
     ecx: &ExprContext,
-    types: &[Option<ScalarType>],
+    types: &[CoercibleScalarType],
     impls: Vec<&'a FuncImpl<R>>,
 ) -> Result<&'a FuncImpl<R>, usize> {
-    let all_types_known = types.iter().all(|t| t.is_some());
+    let all_types_known = types.iter().all(|t| t.is_coerced());
 
     // Check for exact match.
     if all_types_known {
-        let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).collect();
+        let known_types: Vec<_> = types.iter().filter_map(|t| t.as_coerced()).collect();
         let matching_impls: Vec<&FuncImpl<_>> = impls
             .iter()
             .filter(|i| i.params.exact_match(&known_types))
@@ -1090,7 +1101,7 @@ fn find_match<'a, R: std::fmt::Debug>(
             let param_type = &fimpl.params[i];
 
             match arg_type {
-                Some(arg_type) => {
+                CoercibleScalarType::Coerced(arg_type) => {
                     if param_type == arg_type {
                         exact_matches += 1;
                     }
@@ -1101,7 +1112,7 @@ fn find_match<'a, R: std::fmt::Debug>(
                         near_matches += 1;
                     }
                 }
-                None => {
+                CoercibleScalarType::Record(_) | CoercibleScalarType::Uncoerced => {
                     if param_type.prefers_self() {
                         preferred_types += 1;
                     }
@@ -1171,7 +1182,7 @@ fn find_match<'a, R: std::fmt::Debug>(
             // 4.e. If any input arguments are unknown, check the type
             // categories accepted at those argument positions by the remaining
             // candidates.
-            None => {
+            CoercibleScalarType::Uncoerced | CoercibleScalarType::Record(_) => {
                 for c in candidates.iter() {
                     let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
                     // 4.e. cont: Select the string category if any candidate
@@ -1221,7 +1232,7 @@ fn find_match<'a, R: std::fmt::Debug>(
                     candidates.retain(|c| c.fimpl.params[i].accepts_type(ecx, &preferred_type));
                 }
             }
-            Some(typ) => {
+            CoercibleScalarType::Coerced(typ) => {
                 found_known = true;
                 // Track if all known types are of the same type; use this info
                 // in 4.f.
@@ -1245,8 +1256,10 @@ fn find_match<'a, R: std::fmt::Debug>(
         let common_typed: Vec<_> = types
             .iter()
             .map(|t| match t {
-                Some(t) => Some(t.clone()),
-                None => Some(common_type.clone()),
+                CoercibleScalarType::Coerced(t) => CoercibleScalarType::Coerced(t.clone()),
+                CoercibleScalarType::Uncoerced | CoercibleScalarType::Record(_) => {
+                    CoercibleScalarType::Coerced(common_type.clone())
+                }
             })
             .collect();
 
@@ -1343,7 +1356,7 @@ pub(crate) struct PolymorphicSolution {
     /// Constrains this solution to a particular form of polymorphic
     /// compatibility.
     compat: Option<PolymorphicCompatClass>,
-    seen: Vec<Option<ScalarType>>,
+    seen: Vec<CoercibleScalarType>,
     /// An internal representation of the discovered polymorphic type.
     key: Option<ScalarType>,
 }
@@ -1357,7 +1370,7 @@ impl PolymorphicSolution {
     /// [`PolymorphicSolution::target_for_param_type`].
     fn new(
         ecx: &ExprContext,
-        args: &[Option<ScalarType>],
+        args: &[CoercibleScalarType],
         params: &ParamList,
     ) -> Option<PolymorphicSolution> {
         let mut r = PolymorphicSolution {
@@ -1379,17 +1392,17 @@ impl PolymorphicSolution {
 
     /// Determines the desired type of polymorphic compatibility, as well as the
     /// values to determine a polymorphic solution.
-    fn track_seen(&mut self, param: &ParamType, seen: Option<ScalarType>) {
+    fn track_seen(&mut self, param: &ParamType, seen: CoercibleScalarType) {
         use ParamType::*;
 
         self.seen.push(match param {
             // These represent the keys of their respective compatibility classes.
             AnyElement | AnyCompatible | ListAnyCompatible |  MapAnyCompatible | NonVecAny | RecordAny => seen,
-            MapAny => seen.map(|array| array.unwrap_map_value_type().clone()),
-            ListAny => seen.map(|array| array.unwrap_list_element_type().clone()),
-            ArrayAny | ArrayAnyCompatible => seen.map(|array| array.unwrap_array_element_type().clone()),
-            RangeAny | RangeAnyCompatible => seen.map(|range| range.unwrap_range_element_type().clone()),
-            ListElementAnyCompatible => seen.map(|el| ScalarType::List {
+            MapAny => seen.map_coerced(|array| array.unwrap_map_value_type().clone()),
+            ListAny => seen.map_coerced(|array| array.unwrap_list_element_type().clone()),
+            ArrayAny | ArrayAnyCompatible => seen.map_coerced(|array| array.unwrap_array_element_type().clone()),
+            RangeAny | RangeAnyCompatible => seen.map_coerced(|range| range.unwrap_range_element_type().clone()),
+            ListElementAnyCompatible => seen.map_coerced(|el| ScalarType::List {
                 custom_id: None,
                 element_type: Box::new(el),
             }),
@@ -1422,7 +1435,7 @@ impl PolymorphicSolution {
     /// `target_for_param_type` to be useful, this must have already been
     /// called.
     fn determine_key(&mut self, ecx: &ExprContext) -> bool {
-        self.key = if !self.seen.iter().any(|v| v.is_some()) {
+        self.key = if !self.seen.iter().any(|v| v.is_coerced()) {
             match &self.compat {
                 // No encountered param was polymorphic
                 None => None,
@@ -1454,7 +1467,7 @@ impl PolymorphicSolution {
                     let mut s = self
                         .seen
                         .iter()
-                        .filter_map(|f| f.clone())
+                        .filter_map(|f| f.as_coerced().cloned())
                         .collect::<Vec<_>>();
                     let (candiate, remaining) =
                         s.split_first().expect("have at least one non-None element");
@@ -1472,7 +1485,7 @@ impl PolymorphicSolution {
 
             // Ensure the best common type is compatible.
             for t in self.seen.iter() {
-                if let Some(t) = t {
+                if let CoercibleScalarType::Coerced(t) = t {
                     if !compat.compatible(ecx, t, &r) {
                         return false;
                     }
@@ -1541,7 +1554,12 @@ fn coerce_args_to_types(
 ) -> Result<Vec<HirScalarExpr>, PlanError> {
     use ParamType::*;
 
-    let scalar_types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
+    let mut scalar_types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
+
+    // See comment in `select_impl`.
+    for ty in &mut scalar_types {
+        ty.force_coerced_if_record();
+    }
 
     let polymorphic_solution = PolymorphicSolution::new(ecx, &scalar_types, params)
         .expect("polymorphic solution previously determined to be valid");
@@ -2482,8 +2500,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Any) => Operation::new(|ecx, exprs, params, _order_by| {
                 // pg_typeof reports the type *before* coercion.
                 let name = match ecx.scalar_type(&exprs[0]) {
-                    None => "unknown".to_string(),
-                    Some(ty) => ecx.humanize_scalar_type(&ty),
+                    CoercibleScalarType::Uncoerced => "unknown".to_string(),
+                    CoercibleScalarType::Record(_) => "record".to_string(),
+                    CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty),
                 };
 
                 // For consistency with other functions, verify that
