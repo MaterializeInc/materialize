@@ -102,6 +102,10 @@ HASH_ALGORITHM_PARAM = EnumConstantOperationParam(
     ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"], add_quotes=True
 )
 
+MAP_FIELD_NAME_PARAM = EnumConstantOperationParam(
+    ["", "n", "a", "A", "b"], add_quotes=True, add_invalid_value=True
+)
+
 
 def all_data_types_enum_constant_operation_param(
     must_be_pg_compatible: bool,
