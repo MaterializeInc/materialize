@@ -158,16 +158,16 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (mut definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
 
     let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
-    let mut rewind_input = builder.new_input_for_many(
+    let mut rewind_input = builder.new_input_for(
         rewind_stream,
         Exchange::new(move |_| slot_reader),
-        [&data_output, &upper_output],
+        &data_output,
     );
 
     metrics.tables.set(u64::cast_from(table_info.len()));
@@ -231,7 +231,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next().await {
-                if let AsyncEvent::Data(caps, data) = event {
+                if let AsyncEvent::Data(cap, data) = event {
                     for req in data {
                         if resume_lsn > req.snapshot_lsn + 1 {
                             let err = DefiniteError::SlotCompactedPastResumePoint(
@@ -254,7 +254,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 .await;
                             return Ok(());
                         }
-                        rewinds.insert(req.oid, (caps.clone(), req));
+                        rewinds.insert(req.oid, (cap.clone(), req));
                     }
                 }
             }
@@ -350,8 +350,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 }
 
                                 let data = (oid, event);
-                                if let Some((rewind_caps, req)) = rewinds.get(&oid) {
-                                    let [data_cap, _upper_cap] = rewind_caps;
+                                if let Some((data_cap, req)) = rewinds.get(&oid) {
                                     if commit_lsn <= req.snapshot_lsn {
                                         let update = (data.clone(), MzOffset::from(0), -diff);
                                         data_output.give(data_cap, update).await;

@@ -44,7 +44,7 @@ pub(super) struct ReplContext<'a> {
     pub(super) data_cap_set: &'a mut CapabilitySet<GtidPartition>,
     pub(super) upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
     // Owned values:
-    pub(super) rewinds: BTreeMap<MySqlTableName, ([Capability<GtidPartition>; 2], RewindRequest)>,
+    pub(super) rewinds: BTreeMap<MySqlTableName, (Capability<GtidPartition>, RewindRequest)>,
     pub(super) errored_tables: BTreeSet<MySqlTableName>,
 }
 
@@ -66,7 +66,7 @@ impl<'a> ReplContext<'a> {
         >,
         data_cap_set: &'a mut CapabilitySet<GtidPartition>,
         upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
-        rewinds: BTreeMap<MySqlTableName, ([Capability<GtidPartition>; 2], RewindRequest)>,
+        rewinds: BTreeMap<MySqlTableName, (Capability<GtidPartition>, RewindRequest)>,
     ) -> Self {
         Self {
             config,
