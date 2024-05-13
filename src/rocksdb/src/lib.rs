@@ -27,6 +27,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metrics::{DeleteOnDropCounter, DeleteOnDropHistogram};
 use mz_ore::retry::{Retry, RetryResult};
 use prometheus::core::AtomicU64;
+use rocksdb::merge_operator::MergeOperandsIter;
 use rocksdb::{Env, Error as RocksDBError, ErrorKind, Options as RocksDBOptions, WriteOptions, DB};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -62,9 +63,41 @@ pub enum Error {
     CleanupTimeout(#[from] tokio::time::error::Elapsed),
 }
 
+/// An iterator over operand values to merge for a key in RocksDB.
+/// By convention the first value will be the existing value
+/// if it was present.
+pub struct ValueIterator<'a, O, V>
+where
+    O: bincode::Options + Copy + Send + Sync + 'static,
+    V: DeserializeOwned + Serialize + Send + Sync + 'static,
+{
+    iter: std::iter::Chain<std::option::IntoIter<&'a [u8]>, MergeOperandsIter<'a>>,
+    bincode: &'a O,
+    v: std::marker::PhantomData<V>,
+}
+
+impl<O, V> Iterator for ValueIterator<'_, O, V>
+where
+    O: bincode::Options + Copy + Send + Sync + 'static,
+    V: DeserializeOwned + Serialize + Send + Sync + 'static,
+{
+    type Item = V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter
+            .next()
+            .map(|v| self.bincode.deserialize(v).unwrap())
+    }
+}
+
+/// Helper type stub to satisfy generic bounds when initializing a `InstanceOptions` without a
+/// defined merge operator.
+pub type StubMergeOperator<V> =
+    fn(key: &[u8], operands: ValueIterator<bincode::DefaultOptions, V>) -> Option<V>;
+
 /// Fixed options to configure a [`RocksDBInstance`]. These are not tuning parameters,
 /// see the `config` modules for tuning. These are generally fixed within the binary.
-pub struct InstanceOptions {
+pub struct InstanceOptions<O, V, F> {
     /// Whether or not to clear state at the instance
     /// path before starting.
     pub cleanup_on_new: bool,
@@ -79,16 +112,39 @@ pub struct InstanceOptions {
 
     /// A possibly shared RocksDB `Env`.
     pub env: Env,
+
+    /// The bincode options to use for serializing and deserializing values.
+    pub bincode: O,
+
+    /// A merge operator to use for associative merges, if any. The first
+    /// item is the name of the operator to store in RocksDB for
+    /// compatibility checks, and the second is the merge function.
+    pub merge_operator: Option<(String, F)>,
+
+    v: std::marker::PhantomData<V>,
 }
 
-impl InstanceOptions {
+impl<O, V, F> InstanceOptions<O, V, F>
+where
+    O: bincode::Options + Copy + Send + Sync + 'static,
+    V: DeserializeOwned + Serialize + Send + Sync + 'static,
+    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V> + Copy + Send + Sync + 'static,
+{
     /// A new `Options` object with reasonable defaults.
-    pub fn defaults_with_env(env: rocksdb::Env, cleanup_tries: usize) -> Self {
+    pub fn new(
+        env: rocksdb::Env,
+        cleanup_tries: usize,
+        merge_operator: Option<(String, F)>,
+        bincode: O,
+    ) -> Self {
         InstanceOptions {
             cleanup_on_new: true,
             cleanup_tries,
             use_wal: false,
             env,
+            merge_operator,
+            bincode,
+            v: std::marker::PhantomData,
         }
     }
 
@@ -102,6 +158,23 @@ impl InstanceOptions {
 
         // Set the env first so tuning applies to the shared `Env`.
         options.set_env(&self.env);
+
+        if let Some((fn_name, merge_fn)) = &self.merge_operator {
+            let bincode = self.bincode.clone();
+            let merge_fn = merge_fn.clone();
+            // We use an associative merge operator which is used for both full/partial merges
+            // since the value type is always the same for puts and merges.
+            // See `https://github.com/facebook/rocksdb/wiki/Merge-Operator#associativity-vs-non-associativity`
+            // for more info.
+            options.set_merge_operator_associative(fn_name, move |key, existing, operands| {
+                let operands = ValueIterator {
+                    iter: existing.into_iter().chain(operands.iter()).into_iter(),
+                    bincode: &bincode,
+                    v: std::marker::PhantomData::<V>,
+                };
+                merge_fn(key, operands).map(|result| bincode.serialize(&result).unwrap())
+            });
+        }
 
         let write_buffer_handle = config::apply_to_options(tuning_config, &mut options);
         // Returns the rocksdb options and an optional `WriteBufferManagerHandle`
@@ -163,14 +236,26 @@ pub struct GetResult<V> {
     pub size: u64,
 }
 
-/// The result type for `multi_put`.
+/// The result type for `multi_update`.
 #[derive(Default, Debug)]
-pub struct MultiPutResult {
-    /// The number of keys we put or deleted.
-    pub processed_puts: u64,
-    /// The total size of values we put into the database.
+pub struct MultiUpdateResult {
+    /// The number of keys we put, merged, or deleted.
+    pub processed_updates: u64,
+    /// The total size of values we wrote to the database.
     /// Does not contain any information about deletes.
     pub size_written: u64,
+}
+
+/// The type of update to perform on a key.
+#[derive(Debug)]
+pub enum KeyUpdate<V> {
+    /// Put a value into the database under the given key.
+    Put(V),
+    /// Merge the database value with the given value.
+    /// Will error if the merge operator is not set.
+    Merge(V),
+    /// Delete the value from the database.
+    Delete,
 }
 
 #[derive(Debug)]
@@ -191,12 +276,16 @@ enum Command<K, V> {
             >,
         >,
     },
-    MultiPut {
-        batch: Vec<(K, Option<V>)>,
+    MultiUpdate {
+        batch: Vec<(K, KeyUpdate<V>)>,
         // Scratch vector to return results in.
-        response_sender: oneshot::Sender<Result<(MultiPutResult, Vec<(K, Option<V>)>), Error>>,
+        response_sender:
+            oneshot::Sender<Result<(MultiUpdateResult, Vec<(K, KeyUpdate<V>)>), Error>>,
     },
     Shutdown {
+        done_sender: oneshot::Sender<()>,
+    },
+    ManualCompaction {
         done_sender: oneshot::Sender<()>,
     },
 }
@@ -214,8 +303,8 @@ pub struct RocksDBInstance<K, V> {
     multi_get_results_scratch: Vec<Option<GetResult<V>>>,
 
     // Scratch vector to send updates to the RocksDB thread
-    // during `MultiPut`.
-    multi_put_scratch: Vec<(K, Option<V>)>,
+    // during `MultiUpdate`.
+    multi_update_scratch: Vec<(K, KeyUpdate<V>)>,
 
     // Configuration that can change dynamically.
     dynamic_config: config::RocksDBDynamicConfig,
@@ -233,18 +322,22 @@ where
     /// `metrics` is a set of metric types that this type will keep
     /// up to date. `enc_opts` is the `bincode` options used to
     /// serialize and deserialize the keys and values.
-    pub async fn new<M, O, IM>(
+    pub async fn new<M, O, IM, F>(
         instance_path: &Path,
-        options: InstanceOptions,
+        options: InstanceOptions<O, V, F>,
         tuning_config: RocksDBConfig,
         shared_metrics: M,
         instance_metrics: IM,
-        enc_opts: O,
     ) -> Result<Self, Error>
     where
         O: bincode::Options + Copy + Send + Sync + 'static,
         M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
         IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
+        F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V>
+            + Copy
+            + Send
+            + Sync
+            + 'static,
     {
         let dynamic_config = tuning_config.dynamic.clone();
         if options.cleanup_on_new && instance_path.exists() {
@@ -305,7 +398,6 @@ where
                 shared_metrics,
                 instance_metrics,
                 creation_error_tx,
-                enc_opts,
             )
         });
 
@@ -317,7 +409,7 @@ where
             tx,
             multi_get_scratch: Vec::new(),
             multi_get_results_scratch: Vec::new(),
-            multi_put_scratch: Vec::new(),
+            multi_update_scratch: Vec::new(),
             dynamic_config,
         })
     }
@@ -412,20 +504,20 @@ where
     /// For each key in puts, store the given value, or delete it if
     /// the value is `None`. If the same `key` appears multiple times,
     /// the last value for the key wins.
-    pub async fn multi_put<P>(&mut self, puts: P) -> Result<MultiPutResult, Error>
+    pub async fn multi_update<P>(&mut self, puts: P) -> Result<MultiUpdateResult, Error>
     where
-        P: IntoIterator<Item = (K, Option<V>)>,
+        P: IntoIterator<Item = (K, KeyUpdate<V>)>,
     {
         let batch_size = self.dynamic_config.batch_size();
-        let mut stats = MultiPutResult::default();
+        let mut stats = MultiUpdateResult::default();
 
         let mut puts = puts.into_iter().peekable();
         if puts.peek().is_some() {
             let puts = puts.chunks(batch_size);
 
             for puts in puts.into_iter() {
-                let ret = self.multi_put_inner(puts).await?;
-                stats.processed_puts += ret.processed_puts;
+                let ret = self.multi_update_inner(puts).await?;
+                stats.processed_updates += ret.processed_updates;
                 stats.size_written += ret.size_written;
             }
         }
@@ -433,25 +525,25 @@ where
         Ok(stats)
     }
 
-    async fn multi_put_inner<P>(&mut self, puts: P) -> Result<MultiPutResult, Error>
+    async fn multi_update_inner<P>(&mut self, updates: P) -> Result<MultiUpdateResult, Error>
     where
-        P: IntoIterator<Item = (K, Option<V>)>,
+        P: IntoIterator<Item = (K, KeyUpdate<V>)>,
     {
-        let mut multi_put_vec = std::mem::take(&mut self.multi_put_scratch);
+        let mut multi_put_vec = std::mem::take(&mut self.multi_update_scratch);
         multi_put_vec.clear();
 
-        multi_put_vec.extend(puts);
+        multi_put_vec.extend(updates);
         if multi_put_vec.is_empty() {
-            self.multi_put_scratch = multi_put_vec;
-            return Ok(MultiPutResult {
-                processed_puts: 0,
+            self.multi_update_scratch = multi_put_vec;
+            return Ok(MultiUpdateResult {
+                processed_updates: 0,
                 size_written: 0,
             });
         }
 
         let (tx, rx) = oneshot::channel();
         self.tx
-            .send(Command::MultiPut {
+            .send(Command::MultiUpdate {
                 batch: multi_put_vec,
                 response_sender: tx,
             })
@@ -461,7 +553,7 @@ where
         // We also unwrap all rocksdb errors here.
         match rx.await.map_err(|_| Error::RocksDBThreadGoneAway)? {
             Ok((ret, scratch)) => {
-                self.multi_put_scratch = scratch;
+                self.multi_update_scratch = scratch;
                 Ok(ret)
             }
             Err(e) => {
@@ -469,6 +561,17 @@ where
                 Err(e)
             }
         }
+    }
+
+    /// Trigger manual compaction of the RocksDB instance.
+    pub async fn manual_compaction(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Command::ManualCompaction { done_sender: tx })
+            .await
+            .map_err(|_| Error::RocksDBThreadGoneAway)?;
+
+        rx.await.map_err(|_| Error::RocksDBThreadGoneAway)
     }
 
     /// Gracefully shut down RocksDB. Can error if the instance
@@ -486,20 +589,20 @@ where
     }
 }
 
-fn rocksdb_core_loop<K, V, M, O, IM>(
-    options: InstanceOptions,
+fn rocksdb_core_loop<K, V, M, O, IM, F>(
+    options: InstanceOptions<O, V, F>,
     tuning_config: RocksDBConfig,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     shared_metrics: M,
     instance_metrics: IM,
     creation_error_tx: oneshot::Sender<Error>,
-    enc_opts: O,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
+    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V> + Send + Sync + Copy + 'static,
     IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
     let retry_max_duration = tuning_config.retry_max_duration;
@@ -538,7 +641,7 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
     };
 
     let mut encoded_batch_buffers: Vec<Option<Vec<u8>>> = Vec::new();
-    let mut encoded_batch: Vec<(K, Option<Vec<u8>>)> = Vec::new();
+    let mut encoded_batch: Vec<(K, KeyUpdate<Vec<u8>>)> = Vec::new();
 
     let wo = options.as_rocksdb_write_options();
 
@@ -550,6 +653,11 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                 drop(write_buffer_handle);
                 let _ = done_sender.send(());
                 return;
+            }
+            Command::ManualCompaction { done_sender } => {
+                // Compact the full key-range.
+                db.compact_range::<&[u8], &[u8]>(None, None);
+                let _ = done_sender.send(());
             }
             Command::MultiGet {
                 mut batch,
@@ -594,7 +702,7 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                         for previous_value in gets {
                             let get_result = match previous_value {
                                 Some(previous_value) => {
-                                    match enc_opts.deserialize(&previous_value) {
+                                    match options.bincode.deserialize(&previous_value) {
                                         Ok(value) => {
                                             let size = u64::cast_from(previous_value.len());
                                             processed_gets_size += size;
@@ -633,14 +741,14 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                     Err(e) => response_sender.send(Err(e)),
                 };
             }
-            Command::MultiPut {
+            Command::MultiUpdate {
                 mut batch,
                 response_sender,
             } => {
                 let batch_size = batch.len();
 
-                let mut ret = MultiPutResult {
-                    processed_puts: 0,
+                let mut ret = MultiUpdateResult {
+                    processed_updates: 0,
                     size_written: 0,
                 };
 
@@ -668,15 +776,16 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                 for ((key, value), encode_buf) in
                     batch.drain(..).zip(encoded_batch_buffers.iter_mut())
                 {
-                    ret.processed_puts += 1;
+                    ret.processed_updates += 1;
 
-                    match value {
-                        Some(update) => {
+                    match &value {
+                        update_type @ (KeyUpdate::Put(update) | KeyUpdate::Merge(update)) => {
                             let mut encode_buf =
                                 encode_buf.take().expect("encode_buf should not be empty");
                             encode_buf.clear();
-                            match enc_opts
-                                .serialize_into::<&mut Vec<u8>, _>(&mut encode_buf, &update)
+                            match options
+                                .bincode
+                                .serialize_into::<&mut Vec<u8>, _>(&mut encode_buf, update)
                             {
                                 Ok(()) => ret.size_written += u64::cast_from(encode_buf.len()),
                                 Err(e) => {
@@ -684,12 +793,16 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                                     return;
                                 }
                             };
-                            encoded_batch.push((key, Some(encode_buf)));
+                            if matches!(update_type, KeyUpdate::Put(_)) {
+                                encoded_batch.push((key, KeyUpdate::Put(encode_buf)));
+                            } else {
+                                encoded_batch.push((key, KeyUpdate::Merge(encode_buf)));
+                            }
                         }
-                        None => encoded_batch.push((key, None)),
+                        KeyUpdate::Delete => encoded_batch.push((key, KeyUpdate::Delete)),
                     }
                 }
-                // Perform the multi_put and record metrics, if there wasn't an error.
+                // Perform the multi_update and record metrics, if there wasn't an error.
                 let now = Instant::now();
                 let retry_result = Retry::default()
                     .max_duration(retry_max_duration)
@@ -698,8 +811,9 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
 
                         for (key, value) in encoded_batch.iter() {
                             match value {
-                                Some(update) => writes.put(key, update),
-                                None => writes.delete(key),
+                                KeyUpdate::Put(update) => writes.put(key, update),
+                                KeyUpdate::Merge(update) => writes.merge(key, update),
+                                KeyUpdate::Delete => writes.delete(key),
                             }
                         }
 
@@ -724,7 +838,9 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
 
                 // put back the values in the buffer so we don't lose allocation
                 for (i, (_, encoded_buffer)) in encoded_batch.drain(..).enumerate() {
-                    if let Some(encoded_buffer) = encoded_buffer {
+                    if let KeyUpdate::Put(encoded_buffer) | KeyUpdate::Merge(encoded_buffer) =
+                        encoded_buffer
+                    {
                         encoded_batch_buffers[i] = Some(encoded_buffer);
                     }
                 }
