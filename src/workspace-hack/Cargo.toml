@@ -264,14 +264,12 @@ bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
 ring = { version = "0.17.7", features = ["std"] }
-tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
 ring = { version = "0.17.7", features = ["std"] }
-tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-apple-darwin.dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }

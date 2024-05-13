@@ -16,6 +16,7 @@ clap = { version = "3.2.24", features = ["derive", "env"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 mz-alloc = { path = "../alloc" }
+mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-compute = { path = "../compute" }
@@ -42,7 +43,7 @@ tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [features]
-default = ["tokio-console", "jemalloc"]
+default = ["tokio-console", "mz-alloc-default"]
 jemalloc = ["mz-alloc/jemalloc"]
 tokio-console = ["mz-ore/tokio-console"]
 
