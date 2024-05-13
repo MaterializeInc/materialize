@@ -55,9 +55,8 @@ INSERT INTO table_a VALUES (9, 'nine');
 
 # Current table_a is not new table_a. Note that this only works right now
 # because we are bad at detecting dropped tables.
-> SELECT * FROM table_a;
-1 one
-2 two
+! SELECT * FROM table_a;
+contains:table was dropped
 
 # We are not aware that the new table_a is different
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
