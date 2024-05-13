@@ -1781,7 +1781,7 @@ async fn test_timeline_read_holds() {
             .unwrap();
     }
 
-    test_util::wait_for_view_population(&mz_client, view_name, source_rows).await;
+    test_util::wait_for_pg_table_population(&mz_client, view_name, source_rows).await;
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mz_join_client = server.connect().await.unwrap();
@@ -1828,33 +1828,42 @@ async fn test_session_linearizability(isolation_level: &str) {
         .await;
     let mz_client = server.connect().await.unwrap();
 
-    let view_name = "v_lin";
-    let source_name = "source_lin";
-    let (pg_client, cleanup_fn) =
-        test_util::create_postgres_source_with_table(&mz_client, view_name, "(a INT)", source_name)
-            .await;
+    let pg_table_name = "v_lin";
+    let pg_source_name = "source_lin";
+    let (pg_client, cleanup_fn) = test_util::create_postgres_source_with_table(
+        &mz_client,
+        pg_table_name,
+        "(a INT)",
+        pg_source_name,
+    )
+    .await;
     // Insert value into postgres table.
     let _ = pg_client
-        .execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[])
+        .execute(&format!("INSERT INTO {pg_table_name} VALUES (42);"), &[])
         .await
         .unwrap();
 
-    test_util::wait_for_view_population(&mz_client, view_name, 1).await;
+    test_util::wait_for_pg_table_population(&mz_client, pg_table_name, 1).await;
 
-    // The user table's write frontier will be close to zero because we use a deterministic
-    // now function in this test. It may be slightly higher than zero because bootstrapping
-    // and background tasks push the global timestamp forward.
-    // The materialized view's write frontier will be close to the system time because it uses
-    // the system clock to close timestamps.
-    // Therefore queries that only involve the view will normally happen at a higher timestamp
-    // than queries that involve the user table. However, we prevent this when in strict
+    // The user table's write frontier will be close to zero because we use a
+    // deterministic now function in this test. It may be slightly higher than
+    // zero because bootstrapping and background tasks push the global timestamp
+    // forward.
+    //
+    // The source's write frontier will be close to the system time because it
+    // uses the system clock to close timestamps.
+    //
+    // Therefore queries that only involve the Postgres table (from the source)
+    // will normally happen at a higher timestamp than queries that involve the
+    // Materialze user table. However, we prevent this when in strict
     // serializable mode.
 
     mz_client
         .batch_execute("SET transaction_isolation = serializable")
         .await
         .unwrap();
-    let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
+
+    let source_ts = test_util::get_explain_timestamp(pg_table_name, &mz_client).await;
 
     // Create user table in Materialize.
     mz_client
@@ -1865,33 +1874,36 @@ async fn test_session_linearizability(isolation_level: &str) {
         .batch_execute("CREATE TABLE t (a INT);")
         .await
         .unwrap();
-    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
+    let join_ts =
+        test_util::get_explain_timestamp(&format!("{pg_table_name}, t"), &mz_client).await;
 
     // In serializable transaction isolation, read timestamps can go backwards.
-    assert!(join_ts < view_ts);
+    assert!(join_ts < source_ts, "{join_ts} < {source_ts}");
 
     mz_client
         .batch_execute(&format!("SET transaction_isolation = '{isolation_level}'"))
         .await
         .unwrap();
 
-    let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
-    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
+    let source_ts = test_util::get_explain_timestamp(pg_table_name, &mz_client).await;
+    let join_ts =
+        test_util::get_explain_timestamp(&format!("{pg_table_name}, t"), &mz_client).await;
 
     // Since the query on the join was done after the query on the view, it should have a higher or
     // equal timestamp in strict serializable mode.
-    assert!(join_ts >= view_ts);
+    assert!(join_ts >= source_ts);
 
     mz_client
         .batch_execute("SET transaction_isolation = serializable")
         .await
         .unwrap();
 
-    let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
-    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
+    let source_ts = test_util::get_explain_timestamp(pg_table_name, &mz_client).await;
+    let join_ts =
+        test_util::get_explain_timestamp(&format!("{pg_table_name}, t"), &mz_client).await;
 
     // If we go back to serializable, then timestamps can revert again.
-    assert!(join_ts < view_ts);
+    assert!(join_ts < source_ts);
 
     cleanup_fn(&mz_client, &pg_client).await;
 }
