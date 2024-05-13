@@ -15,6 +15,12 @@ who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.5.2"
 
+[[audits.arrayvec]]
+who = "Ben Kirwin <bkirwi@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.7.4"
+notes = "We need collections with a known-small maximum size in contexts like Persist's spine, and arrayvec is a popular and actively-maintained implementation."
+
 [[audits.arrow]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
