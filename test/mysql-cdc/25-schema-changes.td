@@ -45,6 +45,7 @@ INSERT INTO add_columns VALUES (2, 'ab');
 
 > SELECT * FROM add_columns;
 1
+2
 
 #
 # Now remove that added column
@@ -55,6 +56,7 @@ ALTER TABLE add_columns DROP COLUMN f2;
 
 > SELECT * FROM add_columns;
 1
+2
 
 > DROP SOURCE mz_source CASCADE;
 

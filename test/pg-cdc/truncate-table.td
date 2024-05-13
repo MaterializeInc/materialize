@@ -48,5 +48,5 @@ TRUNCATE TABLE t1;
 #
 # See the Postgres docs for more information:
 # https://www.postgresql.org/docs/10/logical-replication-restrictions.html
-> SELECT * FROM t1;
-1
+! SELECT * FROM t1;
+contains:table was truncated

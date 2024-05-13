@@ -389,11 +389,10 @@ contains:altered
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 TRUNCATE truncate_table;
+INSERT INTO truncate_table VALUES (1, 1);
 
-# This should error but we use PG 10 in these tests, which doesn't
-# put truncate messages in the replication stream. #18518
-> SELECT * FROM truncate_table;
-1 1
+! SELECT * FROM truncate_table;
+contains:table was truncated
 
 #
 # Drop table
