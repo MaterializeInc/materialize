@@ -28,5 +28,6 @@ class DataTypeCategory(Enum):
     ENUM = 200
 
     ARRAY = 300
+    MAP = 301
 
     OTHER_UNSUPPORTED = 400
