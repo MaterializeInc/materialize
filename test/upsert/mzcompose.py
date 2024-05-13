@@ -188,6 +188,37 @@ def workflow_rehydration(c: Composition) -> None:
             ),
         ),
         (
+            "with DISK and RocksDB Merge Operator",
+            Materialized(
+                options=[
+                    "--orchestrator-process-scratch-directory=/scratch",
+                ],
+                additional_system_parameter_defaults={
+                    "enable_unorchestrated_cluster_replicas": "true",
+                    "disk_cluster_replicas_default": "true",
+                    "enable_disk_cluster_replicas": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": "1",
+                    "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "false",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
+                    # Enabling shrinking buffers
+                    "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
+                    "storage_shrink_upsert_unused_buffers_by_ratio": "4",
+                    # Enable the RocksDB merge operator
+                    "storage_rocksdb_use_merge_operator": "true",
+                },
+                environment_extra=materialized_environment_extra,
+            ),
+            Clusterd(
+                name="clusterd1",
+                options=[
+                    "--scratch-directory=/scratch",
+                    "--announce-memory-limit=1048376000",  # 1GiB
+                ],
+            ),
+        ),
+        (
             "without DISK",
             Materialized(
                 options=[
