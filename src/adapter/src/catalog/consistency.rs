@@ -105,7 +105,7 @@ impl CatalogState {
             }
         }
         for (name, role_id) in &self.roles_by_name {
-            if self.roles_by_id.contains_key(role_id) {
+            if !self.roles_by_id.contains_key(role_id) {
                 inconsistencies.push(InternalFieldsInconsistency::Role(name.clone(), *role_id))
             }
         }
