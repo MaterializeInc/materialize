@@ -331,8 +331,8 @@ Trace {
                                         },
                                     ),
                                     details: Some(
-                                        CreateClusterReplicaV1(
-                                            CreateClusterReplicaV1 {
+                                        CreateClusterReplicaV2(
+                                            CreateClusterReplicaV2 {
                                                 cluster_id: "u1",
                                                 cluster_name: "quickstart",
                                                 replica_id: Some(
@@ -345,6 +345,8 @@ Trace {
                                                 disk: false,
                                                 billed_as: None,
                                                 internal: false,
+                                                scheduling_decision_reasons: [],
+                                                has_scheduling_decision_reasons: false,
                                             },
                                         ),
                                     ),

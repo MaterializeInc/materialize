@@ -10,7 +10,7 @@
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{
-    CreateClusterReplicaV1, EventDetails, EventType, EventV1, IdNameV1, StorageUsageV1,
+    CreateClusterReplicaV2, EventDetails, EventType, EventV1, IdNameV1, StorageUsageV1,
     VersionedEvent, VersionedStorageUsage,
 };
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
@@ -181,7 +181,7 @@ async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
             id: 100,
             event_type: EventType::Create,
             object_type: mz_audit_log::ObjectType::ClusterReplica,
-            details: EventDetails::CreateClusterReplicaV1(CreateClusterReplicaV1 {
+            details: EventDetails::CreateClusterReplicaV2(CreateClusterReplicaV2 {
                 cluster_id: "1".to_string(),
                 cluster_name: "foo".to_string(),
                 replica_id: Some("1".to_string()),
@@ -190,6 +190,13 @@ async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
                 disk: false,
                 billed_as: None,
                 internal: false,
+                scheduling_decision_reasons: Some(vec![
+                    mz_audit_log::SchedulingDecisionReason::RefreshTurnOn(
+                        mz_audit_log::RefreshTurnOn {
+                            mvs_needing_refresh: vec!["u42".to_string(), "u90".to_string()],
+                        },
+                    ),
+                ]),
             }),
             user: Some("joe".to_string()),
             occurred_at: 100,

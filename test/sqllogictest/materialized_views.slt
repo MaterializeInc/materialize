@@ -1581,3 +1581,27 @@ mv_no_creation_refresh  true  true
 mvi1  true  true
 mvi2  true  true
 mvi3  true  NULL
+
+query TTTT
+SELECT DISTINCT
+  event_type,
+  object_type,
+  (details->'cluster_name')::text,
+  regexp_replace((details->'scheduling_decision_reasons')::text, '"u.*"', 'uXXX')
+FROM mz_audit_events
+WHERE
+  event_type IN ('create', 'drop') AND
+  object_type = 'cluster-replica' AND
+  ((details->'cluster_name')::text LIKE '"c_schedule_%"' OR (details->'cluster_name')::text = '"other"');
+----
+drop  cluster-replica  "other"  null
+create  cluster-replica  "other"  null
+drop  cluster-replica  "c_schedule_4"  null
+create  cluster-replica  "c_schedule_1"  null
+create  cluster-replica  "c_schedule_2"  null
+create  cluster-replica  "c_schedule_5"  null
+drop  cluster-replica  "c_schedule_1"  ["RefreshTurnOff"]
+drop  cluster-replica  "c_schedule_3"  ["RefreshTurnOff"]
+create  cluster-replica  "c_schedule_1"  [{"RefreshTurnOn":{"mvs_needing_refresh":[uXXX]}}]
+create  cluster-replica  "c_schedule_3"  [{"RefreshTurnOn":{"mvs_needing_refresh":[uXXX]}}]
+create  cluster-replica  "c_schedule_4"  [{"RefreshTurnOn":{"mvs_needing_refresh":[uXXX]}}]

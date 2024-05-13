@@ -695,7 +695,7 @@ db error: ERROR: cannot modify managed cluster t1
 query TTTT
 SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","replica_id":"u4","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","replica_id":"u4","replica_name":"free","scheduling_decision_reasons":null}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.r123 SIZE '2', BILLED AS 'free'
@@ -756,7 +756,7 @@ COMPLETE 0
 query TTTT
 SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","replica_id":"u8","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","replica_id":"u8","replica_name":"free","scheduling_decision_reasons":null}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.internal_r2 SIZE '2', INTERNAL

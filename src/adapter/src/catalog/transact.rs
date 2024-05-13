@@ -51,6 +51,7 @@ use crate::catalog::{
     object_type_to_audit_object_type, system_object_type_to_audit_object_type, BuiltinTableUpdate,
     Catalog, CatalogState, UpdatePrivilegeVariant,
 };
+use crate::coord::cluster_scheduling::SchedulingDecisionReason;
 use crate::coord::ConnMeta;
 use crate::util::ResultExt;
 use crate::AdapterError;
@@ -94,6 +95,7 @@ pub enum Op {
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
+        scheduling_decision_reasons: Option<Vec<SchedulingDecisionReason>>,
     },
     CreateItem {
         id: GlobalId,
@@ -106,7 +108,8 @@ pub enum Op {
         sub_component: Option<usize>,
         comment: Option<String>,
     },
-    DropObjects(Vec<ObjectId>),
+    /// SchedulingDecisionReason is forwarded to mz_audit_events.details (only for replica drops).
+    DropObjects(Vec<(ObjectId, Option<Vec<SchedulingDecisionReason>>)>),
     GrantRole {
         role_id: RoleId,
         member_id: RoleId,
@@ -258,8 +261,9 @@ impl Catalog {
         let drop_ids: BTreeSet<GlobalId> = ops
             .iter()
             .filter_map(|op| match op {
-                Op::DropObjects(ids) => {
-                    let item_ids = ids.iter().filter_map(|id| match id {
+                Op::DropObjects(ids_and_reasons) => {
+                    let ids = ids_and_reasons.iter().map(|(id, _reason)| id);
+                    let item_ids = ids.filter_map(|id| match id {
                         ObjectId::Item(id) => Some(*id),
                         _ => None,
                     });
@@ -745,6 +749,7 @@ impl Catalog {
                     name,
                     config,
                     owner_id,
+                    scheduling_decision_reasons,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
@@ -767,8 +772,8 @@ impl Catalog {
                         ..
                     }) = &config.location
                     {
-                        let details = EventDetails::CreateClusterReplicaV1(
-                            mz_audit_log::CreateClusterReplicaV1 {
+                        let details = EventDetails::CreateClusterReplicaV2(
+                            mz_audit_log::CreateClusterReplicaV2 {
                                 cluster_id: cluster_id.to_string(),
                                 cluster_name: cluster.name.clone(),
                                 replica_id: Some(id.to_string()),
@@ -777,6 +782,14 @@ impl Catalog {
                                 disk: *disk,
                                 billed_as: billed_as.clone(),
                                 internal: *internal,
+                                scheduling_decision_reasons: scheduling_decision_reasons.map(
+                                    |scheduling_decision_reasons| {
+                                        scheduling_decision_reasons
+                                            .iter()
+                                            .map(|reason| reason.to_audit_log())
+                                            .collect()
+                                    },
+                                ),
                             },
                         );
                         state.add_to_audit_log(
@@ -973,9 +986,9 @@ impl Catalog {
                         ));
                     }
                 }
-                Op::DropObjects(ids) => {
+                Op::DropObjects(ids_and_reasons) => {
                     // Generate all of the objects that need to get dropped.
-                    let delta = ObjectsToDrop::generate(ids, state, session)?;
+                    let delta = ObjectsToDrop::generate(ids_and_reasons, state, session)?;
 
                     // Drop any associated comments.
                     let deleted = tx.drop_comments(&delta.comments)?;
@@ -1144,7 +1157,7 @@ impl Catalog {
                     let replicas = delta.replicas.keys().copied().collect();
                     tx.remove_cluster_replicas(&replicas)?;
 
-                    for (replica_id, cluster_id) in delta.replicas {
+                    for (replica_id, (cluster_id, reason)) in delta.replicas {
                         let cluster = state.get_cluster(cluster_id);
                         let replica = cluster.replica(replica_id).expect("Must exist");
 
@@ -1164,12 +1177,20 @@ impl Catalog {
                             -1,
                         ));
 
-                        let details = EventDetails::DropClusterReplicaV1(
-                            mz_audit_log::DropClusterReplicaV1 {
+                        let details = EventDetails::DropClusterReplicaV2(
+                            mz_audit_log::DropClusterReplicaV2 {
                                 cluster_id: cluster_id.to_string(),
                                 cluster_name: cluster.name.clone(),
                                 replica_id: Some(replica_id.to_string()),
                                 replica_name: replica.name.clone(),
+                                scheduling_decision_reasons: reason.map(
+                                    |scheduling_decision_reasons| {
+                                        scheduling_decision_reasons
+                                            .iter()
+                                            .map(|reason| reason.to_audit_log())
+                                            .collect()
+                                    },
+                                ),
                             },
                         );
                         state.add_to_audit_log(
@@ -2380,21 +2401,21 @@ pub(crate) struct ObjectsToDrop {
     pub databases: BTreeSet<DatabaseId>,
     pub schemas: BTreeMap<SchemaSpecifier, ResolvedDatabaseSpecifier>,
     pub clusters: BTreeSet<ClusterId>,
-    pub replicas: BTreeMap<ReplicaId, ClusterId>,
+    pub replicas: BTreeMap<ReplicaId, (ClusterId, Option<Vec<SchedulingDecisionReason>>)>,
     pub roles: BTreeSet<RoleId>,
     pub items: Vec<GlobalId>,
 }
 
 impl ObjectsToDrop {
     pub fn generate(
-        objects: impl IntoIterator<Item = ObjectId>,
+        objects_and_reasons: impl IntoIterator<Item = (ObjectId, Option<Vec<SchedulingDecisionReason>>)>,
         state: &CatalogState,
         session: Option<&ConnMeta>,
     ) -> Result<Self, AdapterError> {
         let mut delta = ObjectsToDrop::default();
 
-        for object in objects {
-            delta.add_item(object, state, session)?;
+        for (object_id, reason) in objects_and_reasons {
+            delta.add_item(object_id, reason, state, session)?;
         }
 
         Ok(delta)
@@ -2403,6 +2424,7 @@ impl ObjectsToDrop {
     fn add_item(
         &mut self,
         object_id: ObjectId,
+        reason: Option<Vec<SchedulingDecisionReason>>,
         state: &CatalogState,
         session: Option<&ConnMeta>,
     ) -> Result<(), AdapterError> {
@@ -2465,7 +2487,8 @@ impl ObjectsToDrop {
                 let cluster = state.get_cluster(cluster_id);
                 let replica = cluster.replica(replica_id).expect("Must exist");
 
-                self.replicas.insert(replica.replica_id, cluster.id);
+                self.replicas
+                    .insert(replica.replica_id, (cluster.id, reason));
             }
             ObjectId::Item(item_id) => {
                 let entry = state.get_entry(&item_id);

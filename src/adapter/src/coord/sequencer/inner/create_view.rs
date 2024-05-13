@@ -376,7 +376,12 @@ impl Coordinator {
         }: CreateViewFinish,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
         let ops = vec![
-            catalog::Op::DropObjects(drop_ids.iter().map(|id| ObjectId::Item(*id)).collect()),
+            catalog::Op::DropObjects(
+                drop_ids
+                    .iter()
+                    .map(|id| (ObjectId::Item(*id), None))
+                    .collect(),
+            ),
             catalog::Op::CreateItem {
                 id,
                 name: name.clone(),

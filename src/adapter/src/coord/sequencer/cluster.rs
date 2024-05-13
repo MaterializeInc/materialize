@@ -33,6 +33,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
 use crate::catalog::Op;
+use crate::coord::cluster_scheduling::SchedulingDecisionReason;
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
@@ -153,6 +154,7 @@ impl Coordinator {
                 },
                 disk,
                 *session.current_role_id(),
+                None,
             )?;
         }
 
@@ -174,6 +176,7 @@ impl Coordinator {
         azs: Option<&[String]>,
         disk: bool,
         owner_id: RoleId,
+        scheduling_decision_reasons: Option<Vec<SchedulingDecisionReason>>,
     ) -> Result<(), AdapterError> {
         let location = mz_catalog::durable::ReplicaLocation::Managed {
             availability_zone: None,
@@ -209,6 +212,7 @@ impl Coordinator {
             name,
             config,
             owner_id,
+            scheduling_decision_reasons,
         });
         Ok(())
     }
@@ -340,6 +344,7 @@ impl Coordinator {
                 name: replica_name.clone(),
                 config,
                 owner_id: *session.current_role_id(),
+                scheduling_decision_reasons: None,
             });
         }
 
@@ -495,6 +500,7 @@ impl Coordinator {
             name: name.clone(),
             config,
             owner_id,
+            scheduling_decision_reasons: None,
         };
 
         self.catalog_transact(Some(session), vec![op]).await?;
@@ -659,6 +665,7 @@ impl Coordinator {
                     cluster_id,
                     config,
                     new_config,
+                    None,
                 )
                 .await?;
             }
@@ -684,12 +691,16 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster))
     }
 
+    /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should
+    /// contain information on why is a cluster being turned On/Off. It will be forwarded to the
+    /// `details` field of the audit log event that records creating or dropping replicas.
     pub async fn sequence_alter_cluster_managed_to_managed(
         &mut self,
         session: Option<&Session>,
         cluster_id: ClusterId,
         config: &ClusterVariantManaged,
         new_config: ClusterVariantManaged,
+        scheduling_decision_reasons: Option<Vec<SchedulingDecisionReason>>,
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let name = cluster.name().to_string();
@@ -759,7 +770,12 @@ impl Coordinator {
             let replica_ids = (0..*replication_factor)
                 .map(managed_cluster_replica_name)
                 .filter_map(|name| cluster.replica_id(&name))
-                .map(|replica_id| ObjectId::ClusterReplica((cluster.id(), replica_id)))
+                .map(|replica_id| {
+                    (
+                        ObjectId::ClusterReplica((cluster.id(), replica_id)),
+                        scheduling_decision_reasons.clone(),
+                    )
+                })
                 .collect();
             ops.push(catalog::Op::DropObjects(replica_ids));
 
@@ -775,6 +791,7 @@ impl Coordinator {
                     Some(new_availability_zones.as_ref()),
                     *new_disk,
                     owner_id,
+                    scheduling_decision_reasons.clone(),
                 )?;
                 create_cluster_replicas.push((cluster_id, id))
             }
@@ -783,7 +800,12 @@ impl Coordinator {
             let replica_ids = (*new_replication_factor..*replication_factor)
                 .map(managed_cluster_replica_name)
                 .filter_map(|name| cluster.replica_id(&name))
-                .map(|replica_id| ObjectId::ClusterReplica((cluster.id(), replica_id)))
+                .map(|replica_id| {
+                    (
+                        ObjectId::ClusterReplica((cluster.id(), replica_id)),
+                        scheduling_decision_reasons.clone(),
+                    )
+                })
                 .collect();
             ops.push(catalog::Op::DropObjects(replica_ids));
         } else if new_replication_factor > replication_factor {
@@ -804,6 +826,7 @@ impl Coordinator {
                     Some(new_availability_zones.as_ref()),
                     *new_disk,
                     owner_id,
+                    scheduling_decision_reasons.clone(),
                 )?;
                 create_cluster_replicas.push((cluster_id, id))
             }

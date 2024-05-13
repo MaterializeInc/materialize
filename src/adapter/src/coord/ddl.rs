@@ -212,7 +212,8 @@ impl Coordinator {
 
         for op in &ops {
             match op {
-                catalog::Op::DropObjects(object_ids) => {
+                catalog::Op::DropObjects(object_ids_and_reasons) => {
+                    let object_ids = object_ids_and_reasons.iter().map(|(id, _reason)| id);
                     for object_id in object_ids {
                         match &object_id {
                             ObjectId::Item(id) => {
@@ -934,7 +935,7 @@ impl Coordinator {
         if all_items.is_empty() {
             return;
         }
-        let op = crate::catalog::Op::DropObjects(all_items);
+        let op = Op::DropObjects(all_items.into_iter().map(|id| (id, None)).collect());
 
         self.catalog_transact_conn(Some(conn_id), vec![op])
             .await
@@ -1202,7 +1203,7 @@ impl Coordinator {
                     }
                 }
                 Op::DropObjects(object_ids) => {
-                    for id in object_ids {
+                    for (id, _reason) in object_ids {
                         match id {
                             ObjectId::Cluster(_) => {
                                 new_clusters -= 1;

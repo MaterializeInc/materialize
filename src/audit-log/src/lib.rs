@@ -150,8 +150,10 @@ serde_plain::derive_display_from_serialize!(ObjectType);
 pub enum EventDetails {
     #[serde(rename = "CreateComputeReplicaV1")] // historical name
     CreateClusterReplicaV1(CreateClusterReplicaV1),
+    CreateClusterReplicaV2(CreateClusterReplicaV2),
     #[serde(rename = "DropComputeReplicaV1")] // historical name
     DropClusterReplicaV1(DropClusterReplicaV1),
+    DropClusterReplicaV2(DropClusterReplicaV2),
     CreateSourceSinkV1(CreateSourceSinkV1),
     CreateSourceSinkV2(CreateSourceSinkV2),
     CreateSourceSinkV3(CreateSourceSinkV3),
@@ -231,6 +233,17 @@ pub struct DropClusterReplicaV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct DropClusterReplicaV2 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    // Events that predate v0.32.0 will not have this field set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replica_id: Option<String>,
+    pub replica_name: String,
+    pub scheduling_decision_reasons: Option<Vec<SchedulingDecisionReason>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct CreateClusterReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
@@ -242,6 +255,35 @@ pub struct CreateClusterReplicaV1 {
     pub disk: bool,
     pub billed_as: Option<String>,
     pub internal: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateClusterReplicaV2 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    // Events that predate v0.32.0 will not have this field set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replica_id: Option<String>,
+    pub replica_name: String,
+    pub logical_size: String,
+    pub disk: bool,
+    pub billed_as: Option<String>,
+    pub internal: bool,
+    pub scheduling_decision_reasons: Option<Vec<SchedulingDecisionReason>>,
+}
+
+/// A policy's reason for making a certain scheduling decision for a certain cluster.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub enum SchedulingDecisionReason {
+    /// The reason for the refresh policy for turning on a cluster.
+    RefreshTurnOn(RefreshTurnOn),
+    RefreshTurnOff,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct RefreshTurnOn {
+    /// Materialized views that need refresh on this cluster.
+    pub mvs_needing_refresh: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -396,7 +438,13 @@ impl EventDetails {
             EventDetails::CreateClusterReplicaV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
+            EventDetails::CreateClusterReplicaV2(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
             EventDetails::DropClusterReplicaV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::DropClusterReplicaV2(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::IdFullNameV1(v) => serde_json::to_value(v).expect("must serialize"),

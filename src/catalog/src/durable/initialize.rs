@@ -552,7 +552,7 @@ pub(crate) async fn initialize(
     audit_events.push((
         mz_audit_log::EventType::Create,
         mz_audit_log::ObjectType::ClusterReplica,
-        mz_audit_log::EventDetails::CreateClusterReplicaV1(mz_audit_log::CreateClusterReplicaV1 {
+        mz_audit_log::EventDetails::CreateClusterReplicaV2(mz_audit_log::CreateClusterReplicaV2 {
             cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
             cluster_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
             replica_name: DEFAULT_USER_REPLICA_NAME.to_string(),
@@ -561,6 +561,7 @@ pub(crate) async fn initialize(
             disk: is_cluster_size_v2(&options.default_cluster_replica_size),
             billed_as: None,
             internal: false,
+            scheduling_decision_reasons: None,
         }),
     ));
 

@@ -600,7 +600,12 @@ impl Coordinator {
         }
 
         let ops = vec![
-            catalog::Op::DropObjects(drop_ids.into_iter().map(ObjectId::Item).collect()),
+            catalog::Op::DropObjects(
+                drop_ids
+                    .into_iter()
+                    .map(|id| (ObjectId::Item(id), None))
+                    .collect(),
+            ),
             catalog::Op::CreateItem {
                 id: sink_id,
                 name: name.clone(),
