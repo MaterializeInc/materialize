@@ -1863,7 +1863,16 @@ async fn test_session_linearizability(isolation_level: &str) {
         .await
         .unwrap();
 
-    let source_ts = test_util::get_explain_timestamp(pg_table_name, &mz_client).await;
+    // Wait until the Coordinator has learned about at least one upper
+    // advancement in the source, which results in picking a higher timestamp
+    // for queries.
+    let mut source_ts;
+    loop {
+        source_ts = test_util::get_explain_timestamp(pg_table_name, &mz_client).await;
+        if source_ts > 0 {
+            break;
+        }
+    }
 
     // Create user table in Materialize.
     mz_client
