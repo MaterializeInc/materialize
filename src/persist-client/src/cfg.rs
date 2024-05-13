@@ -410,8 +410,8 @@ pub const CRDB_TCP_USER_TIMEOUT: Config<Duration> = Config::new(
 );
 
 /// Migrate the txns code to use the critical since when opening a new read handle.
-pub const TXN_USE_CRITICAL_SINCE: Config<bool> = Config::new(
-    "persist_txn_use_critical_since",
+pub const USE_CRITICAL_SINCE_TXN: Config<bool> = Config::new(
+    "persist_use_critical_since_txn",
     true,
     "Use the critical since (instead of the overall since) when initializing a subscribe.",
 );
