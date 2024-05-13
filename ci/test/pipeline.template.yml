@@ -375,6 +375,7 @@ steps:
               composition: pg-cdc
         agents:
           queue: linux-aarch64-small
+        # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-resumption
         label: Postgres CDC resumption tests %N
