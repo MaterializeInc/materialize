@@ -17,6 +17,8 @@ from materialize.output_consistency.expression.expression_characteristics import
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
 
+_INDEX_OF_NULL_VALUE = 0
+
 
 class EnumConstantOperationParam(OperationParam):
     def __init__(
@@ -47,7 +49,7 @@ class EnumConstantOperationParam(OperationParam):
         if add_null_value:
             # NULL value must be at the beginning
             self.values.insert(
-                0,
+                _INDEX_OF_NULL_VALUE,
                 "NULL",
             )
 
@@ -75,7 +77,9 @@ class EnumConstantOperationParam(OperationParam):
         return EnumConstant(value, quote_value, characteristics)
 
     def get_valid_values(self) -> list[str]:
-        if self.invalid_value is None:
-            return self.values
-
-        return [value for value in self.values if value != self.invalid_value]
+        return [
+            value
+            for index, value in enumerate(self.values)
+            if value != self.invalid_value
+            and (index != _INDEX_OF_NULL_VALUE or not self.add_null_value)
+        ]
