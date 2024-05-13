@@ -9,4 +9,4 @@ _col&lowbar;name_ | Override default column name with the provided [identifier](
 {{ partial (printf "create-source/connector/%s/syntax" $connector ) . -}}
 {{ range $envelopes }}{{ partial (printf "create-source/envelope/%s/syntax" .) . }}{{ end -}}
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
-**WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For more information, see [`WITH` options](#with-options).
+**WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For all available options, see [`with_options`](#with_options).

@@ -122,12 +122,17 @@ with several additional columns that describe the nature of the update:
 
 ### `AS OF`
 
-The `AS OF` clause allows specifying a timestamp at which the `SUBSCRIBE` should begin returning results, in order to inspect the historical state of a relation. If `AS OF` is specified, no rows whose timestamp is less than the specified timestamp will be returned. If the timestamp specified is earlier than the earliest historical state retained by the source relations, an error will be signaled.
+When a [history rentention period](/transform-data/patterns/time-travel-queries/#history-retention-period)
+is configured for the object(s) powering the subscription, the `AS OF` clause
+allows specifying a timestamp at which the `SUBSCRIBE` command should begin
+returning results. If `AS OF` is specified, no rows whose timestamp is earlier
+than the specified timestamp will be returned. If the timestamp specified is
+earlier than the earliest historical state retained by the underlying objects,
+an error is thrown.
 
-If `AS OF` is unspecified, the system automatically chooses an `AS OF`
-timestamp.
-
-Currently, all user-defined sources and tables have a retention window of one second, so `AS OF` is of limited usefulness except when subscribing to queries over certain internal relations.
+To configure the history retention period for objects used in a subscription,
+see [Time travel queries](/transform-data/patterns/time-travel-queries)). If
+`AS OF` is unspecified, the system automatically chooses an `AS OF` timestamp.
 
 ### `UP TO`
 
@@ -516,6 +521,17 @@ When you're done, you can drop the `counter` load generator source:
 ```sql
 DROP SOURCE counter;
 ```
+
+### Durable subscriptions
+
+Because `SUBSCRIBE` requests happen over the network, these connections might
+get disrupted for both expected and unexpected reasons. You can adjust the
+[history retention period](/transform-data/patterns/time-travel-queries/#history-retention-period) for
+the objects a subscription depends on, and then use [`AS OF`](#as-of) to pick
+up where you left off on connection drops—this ensures that no data is lost
+in the subscription process, and avoids the need for re-snapshotting the data.
+
+To learn more about durable subscriptions, see [Time travel queries](/transform-data/patterns/time-travel-queries/#durable-subscriptions).
 
 ## Privileges
 

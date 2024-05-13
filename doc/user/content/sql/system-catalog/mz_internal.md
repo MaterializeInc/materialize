@@ -342,6 +342,7 @@ At this time, we do not make any guarantees about the freshness of these numbers
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
 
 ### `mz_history_retention_strategies`
+{{< warn-if-unreleased v0.99 >}}
 
 The `mz_history_retention_strategies` table describes the history retention strategies of objects that have compaction windows (tables, sources, indexes, materialized views).
 
