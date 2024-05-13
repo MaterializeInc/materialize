@@ -131,6 +131,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.2.1"
 
+[[audits.cmake]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "0.1.50"
+
 [[audits.core_affinity]]
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "safe-to-deploy"
@@ -383,6 +388,16 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.2.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 
+[[audits.proc-macro2]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.82"
+
+[[audits.protobuf-src]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "2.0.0+26.1"
+
 [[audits.quanta]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -452,6 +467,16 @@ version = "1.0.17"
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.6.5"
+
+[[audits.spin]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.5.2 -> 0.9.8"
+
+[[audits.spin]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.5.2 -> 0.9.8"
 
 [[audits.spin]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

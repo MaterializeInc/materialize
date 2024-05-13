@@ -22,4 +22,4 @@ lint:
 build:
   excludes:
     # external code
-    - testdrive/ci/protobuf-install
+    - testdrive/ci/protobuf-bin
