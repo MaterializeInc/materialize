@@ -1,0 +1,37 @@
+[package]
+name = "mz-alloc-default"
+description = "Activates the best default global memory allocator for the platform."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-alloc = { path = "../alloc", default-features = false }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+# We use jemalloc by default on non-macOS platforms, as benchmarks indicated it
+# outperforms the system allocator, while also providing heap profiles.
+#
+# However, on macOS, we default to the system allocator, as jemalloc is not well
+# supported on macOS [0][1][2]. The issues present as runaway latency on load
+# test workloads that are comfortably handled by the macOS system allocator.
+# Consider re-evaluating if jemalloc's macOS support improves.
+#
+# [0]: https://github.com/jemalloc/jemalloc/issues/26
+# [1]: https://github.com/jemalloc/jemalloc/issues/843
+# [2]: https://github.com/jemalloc/jemalloc/issues/1467
+#
+# Furthermore, as of August 2022, some engineers are using profiling tools, e.g.
+# `heaptrack`, that only work with the system allocator on macOS.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+mz-alloc = { path = "../alloc", features = ["jemalloc"] }
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack", "mz-alloc"]

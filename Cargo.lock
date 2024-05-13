@@ -4030,6 +4030,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-alloc-default"
+version = "0.0.0"
+dependencies = [
+ "mz-alloc",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-arrow-util"
 version = "0.1.0"
 dependencies = [
@@ -4409,6 +4417,7 @@ dependencies = [
  "fail",
  "futures",
  "mz-alloc",
+ "mz-alloc-default",
  "mz-build-info",
  "mz-cloud-resources",
  "mz-cluster",
@@ -4672,6 +4681,7 @@ dependencies = [
  "mz-adapter",
  "mz-adapter-types",
  "mz-alloc",
+ "mz-alloc-default",
  "mz-aws-secrets-controller",
  "mz-build-info",
  "mz-catalog",
@@ -10625,7 +10635,6 @@ dependencies = [
  "syn 1.0.107",
  "syn 2.0.39",
  "textwrap",
- "tikv-jemalloc-sys",
  "time",
  "time-macros",
  "tokio",
