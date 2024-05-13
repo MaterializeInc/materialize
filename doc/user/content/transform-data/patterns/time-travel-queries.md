@@ -91,9 +91,9 @@ when it falls outside the retention period and when it is cleaned up.
 
 Given the additional memory costs associated with increasing the history
 retention period on indexes, if you don't need the performance benefits of an
-index—in particular for the use case of durable subscriptions-you should consider creating a materialized view for your subscription query
-and configure the history retention period on that materialized view
-instead.
+index—in particular for the use case of durable subscriptions-you should
+consider creating a materialized view for your subscription query and configure
+the history retention period on that materialized view instead.
 
 Similarly, because of the increased storage costs and processing time for the
 additional historical data on whichever object has an increased history
@@ -197,6 +197,7 @@ WHERE end_time < mz_now();
 ```
 
 ### Adjusting history retention configuration
+
 To adjust the history retention period for an object, use `ALTER`:
 
 ```sql
@@ -204,6 +205,7 @@ ALTER MATERIALIZED VIEW winning_bids SET (RETAIN HISTORY FOR '2hr');
 ```
 
 ### Viewing history retention configuration
+
 To see what history retention period has been configured for an object,
 look up the object in the [`mz_internal.mz_history_retention_strategies`](/sql/system-catalog/mz_internal/#mz_history_retention_strategies) catalog table.
 

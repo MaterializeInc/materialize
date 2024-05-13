@@ -531,7 +531,7 @@ the objects a subscription depends on, and then use [`AS OF`](#as-of) to pick
 up where you left off on connection drops—this ensures that no data is lost
 in the subscription process, and avoids the need for re-snapshotting the data.
 
-Read more about durable subscriptions in the page on [time travel queries](/transform-data/patterns/time-travel-queries/#durable-subscriptions).
+To learn more about durable subscriptions, see [Time travel queries](/transform-data/patterns/time-travel-queries/#durable-subscriptions).
 
 ## Privileges
 
