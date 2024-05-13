@@ -18,6 +18,7 @@ import pg8000
 import requests
 from pg8000 import Connection, Cursor
 from pg8000.exceptions import InterfaceError
+from pytest import fail
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -138,9 +139,14 @@ def http_sql_query(host: str, query: str, token: str) -> list[list[str]]:
     assert r.status_code == 200, f"{r}\n{r.text}"
     results = r.json()["results"]
     assert len(results) == 1, results
-    assert (
-        "rows" in results[0].keys()
-    ), f"'rows' does not exist in results[0] (available keys are: {results[0].keys()})"
+    if "rows" not in results[0].keys():
+        error = None
+        notices = None
+        if "error" in results[0].keys():
+            error = results[0]["error"]
+        if "notices" in results[0].keys():
+            notices = results[0]["notices"]
+        fail(f"'rows' does not exist in results[0] (error={error}, notices={notices})")
     return results[0]["rows"]
 
 
