@@ -3,8 +3,8 @@ title: "Source Creation Lifecycle"
 description: "Understanding the Differenct Statges of Source Creation"
 menu:
   main:
-    name: "Creating Large Sources"
-    identifier: ingest-overview
+    name: "Source Creation Lifecycle"
+    identifier: source-creation-lifecycle
     parent: ingest-data
     weight: 39
 ---
@@ -36,7 +36,7 @@ Once the initial snapshot has completed, the data has been durably stored in the
 
 ## Rehydration
 
-When the source has completed the initial snapshot and every time the source cluster is restarted, it reads the data from the storage backend. This process is called rehydration. Depending on the type and the size of the source, this can be a very lightweight process that takes seconds, but for large UPSERT sources it can also be hours. During rehydration, queries are likely to block until the process has been completed. So it's best to monitor the source status and wait until rehydration has completed.
+When the source has completed the initial snapshot and every time the source cluster is restarted, it reads the data from the storage backend. This process is called rehydration. Depending on the type and the size of the source, this can be a very lightweight process that takes seconds, but for large `UPSERT` sources it can also be hours. During rehydration, queries are likely to block until the process has been completed. So it's best to monitor the source status and wait until rehydration has completed.
 
 ```sql
 SELECT
