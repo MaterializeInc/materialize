@@ -20,6 +20,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -30,7 +31,7 @@ use mz_cluster_client::ReplicaId;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-use mz_persist_types::{Codec64, ShardId};
+use mz_persist_types::{Codec64, Opaque, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -150,14 +151,6 @@ impl<T> CollectionDescription<T> {
             since: None,
             status_collection_id: None,
         }
-    }
-
-    /// Returns true if `self` is a table, false otherwise.
-    pub fn is_table(&self) -> bool {
-        matches!(
-            self.data_source,
-            DataSource::Other(DataSourceOther::TableWrites)
-        )
     }
 }
 
@@ -597,30 +590,6 @@ pub trait StorageController: Debug {
         res
     }
 
-    /// Ingests write frontier updates for collections that this controller
-    /// maintains and potentially generates updates to read capabilities, which
-    /// are passed on to [`StorageController::update_read_capabilities`].
-    ///
-    /// These updates come from the entity that is responsible for writing to
-    /// the collection, and in turn advancing its `upper` (aka
-    /// `write_frontier`). The most common such "writers" are:
-    ///
-    /// * `clusterd` instances, for source ingestions
-    ///
-    /// * introspection collections (which this controller writes to)
-    ///
-    /// * Tables (which are written to by this controller)
-    ///
-    /// * Materialized Views, which are running inside COMPUTE, and for which
-    /// COMPUTE sends updates to this storage controller
-    ///
-    /// The so-called "implied capability" is a read capability for a collection
-    /// that is updated based on the write frontier and the collections
-    /// [`ReadPolicy`]. Advancing the write frontier might change this implied
-    /// capability, which in turn might change the overall `since` (a
-    /// combination of all read capabilities) of a collection.
-    fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<Self::Timestamp>)]);
-
     /// Applies `updates` and sends any appropriate compaction command.
     fn update_read_capabilities(
         &mut self,
@@ -739,23 +708,53 @@ pub trait StorageController: Debug {
     ) -> Result<(), StorageError<Self::Timestamp>>;
 }
 
+/// A wrapper struct that presents the adapter token to a format that is understandable by persist
+/// and also allows us to differentiate between a token being present versus being set for the
+/// first time.
+// TODO(aljoscha): Make this crate-public again once the remap operator doesn't
+// hold a critical handle anymore.
+#[derive(PartialEq, Clone, Debug)]
+pub struct PersistEpoch(pub Option<NonZeroI64>);
+
+impl Opaque for PersistEpoch {
+    fn initial() -> Self {
+        PersistEpoch(None)
+    }
+}
+
+impl Codec64 for PersistEpoch {
+    fn codec_name() -> String {
+        "PersistEpoch".to_owned()
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        self.0.map(NonZeroI64::get).unwrap_or(0).to_le_bytes()
+    }
+
+    fn decode(buf: [u8; 8]) -> Self {
+        Self(NonZeroI64::new(i64::from_le_bytes(buf)))
+    }
+}
+
+impl From<NonZeroI64> for PersistEpoch {
+    fn from(epoch: NonZeroI64) -> Self {
+        Self(Some(epoch))
+    }
+}
+
 /// State maintained about individual exports.
-#[derive(Debug, Clone)]
-pub struct ExportState<T> {
+#[derive(Debug)]
+pub struct ExportState<T: TimelyTimestamp> {
     /// Description with which the export was created
     pub description: ExportDescription<T>,
 
-    /// The capability (hold on the since) that this export needs from its
-    /// dependencies (inputs). When the upper of the export changes, we
-    /// downgrade this, which in turn downgrades holds we have on our
-    /// dependencies' sinces.
-    pub read_capability: Antichain<T>,
+    /// The read hold that this export has on its dependencies (inputs). When
+    /// the upper of the export changes, we downgrade this, which in turn
+    /// downgrades holds we have on our dependencies' sinces.
+    pub read_hold: ReadHold<T>,
 
     /// The policy to use to downgrade `self.read_capability`.
     pub read_policy: ReadPolicy<T>,
-
-    /// Storage identifiers on which this collection depends.
-    pub storage_dependencies: Vec<GlobalId>,
 
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
@@ -764,15 +763,13 @@ pub struct ExportState<T> {
 impl<T: Timestamp> ExportState<T> {
     pub fn new(
         description: ExportDescription<T>,
-        read_capability: Antichain<T>,
+        read_hold: ReadHold<T>,
         read_policy: ReadPolicy<T>,
-        storage_dependencies: Vec<GlobalId>,
     ) -> Self {
         Self {
             description,
-            read_capability,
+            read_hold,
             read_policy,
-            storage_dependencies,
             write_frontier: Antichain::from_elem(Timestamp::minimum()),
         }
     }
@@ -784,7 +781,7 @@ impl<T: Timestamp> ExportState<T> {
 
     /// Returns whether the export was dropped.
     pub fn is_dropped(&self) -> bool {
-        self.read_capability.is_empty()
+        self.read_hold.since().is_empty()
     }
 }
 /// A channel that allows you to append a set of updates to a pre-defined [`GlobalId`].

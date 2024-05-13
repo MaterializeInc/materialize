@@ -3284,7 +3284,7 @@ impl Coordinator {
                 .storage
                 .alter_ingestion_connections(source_connections)
                 .await
-                .unwrap_or_terminate("cannot fail to alter source desc");
+                .unwrap_or_terminate("cannot fail to alter ingestion connection");
         }
 
         if !sink_connections.is_empty() {
