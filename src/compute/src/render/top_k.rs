@@ -356,23 +356,19 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
-        let pairer = Pairer::new(1);
         let input = collection.map(move |(hash_key, row)| {
             let mut hash_key_iter = hash_key.iter();
             let hash = hash_key_iter.next().unwrap().unwrap_uint64() % modulus;
-            let hash_key = pairer.merge(std::iter::once(Datum::from(hash)), hash_key_iter);
+            let hash_key = SharedRow::pack(std::iter::once(hash.into()).chain(hash_key_iter));
             (hash_key, row)
         });
-        let (oks, errs) = if validating {
-            let stage = build_topk_negated_stage::<S, _, _, RowValSpine<Result<Row, Row>, _, _>>(
-                &input,
-                |v| v.into_owned(),
-                order_key,
-                offset,
-                limit,
-                arity,
-            )
-            .as_collection(|k, v| (SharedRow::pack(k), v.clone()));
+        let (input, oks, errs) = if validating {
+            let from = |v: &Result<Row, Row>| v.into_owned();
+            let (input, stage) =
+                build_topk_negated_stage::<S, _, _, RowValSpine<Result<Row, Row>, _, _>>(
+                    &input, from, order_key, offset, limit, arity,
+                );
+            let stage = stage.as_collection(|k, v| (SharedRow::pack(k), v.clone()));
 
             let error_logger = self.error_logger();
             let (oks, errs) =
@@ -387,31 +383,25 @@ where
                     }
                     Ok(t) => Ok((hk, t)),
                 });
-            (oks, Some(errs))
+            (input, oks, Some(errs))
         } else {
-            (
-                build_topk_negated_stage::<S, _, _, RowRowSpine<_, _>>(
-                    &input,
-                    |v| v.into_owned(),
-                    order_key,
-                    offset,
-                    limit,
-                    arity,
-                )
-                .as_collection(|k, v| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let key = row_builder.pack_using(k);
-                    let val = row_builder.pack_using(v);
-                    (key, val)
-                }),
-                None,
-            )
+            let from = |v: DatumSeq| SharedRow::pack(v);
+            let (input, stage) = build_topk_negated_stage::<S, _, _, RowRowSpine<_, _>>(
+                &input, from, order_key, offset, limit, arity,
+            );
+            let stage = stage.as_collection(|k, v| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+                let key = row_builder.pack_using(k);
+                let val = row_builder.pack_using(v);
+                (key, val)
+            });
+
+            (input, stage, None)
         };
         (
             oks.negate()
-                .concat(&input)
-                .consolidate_named::<KeyBatcher<_, _, _>>("Consolidated TopK"),
+                .concat(&input.as_collection(|k, v| (k.into_owned(), v.into_owned()))),
             errs,
         )
     }
@@ -490,7 +480,10 @@ fn build_topk_negated_stage<G, V, F, Tr>(
     offset: usize,
     limit: Option<mz_expr::MirScalarExpr>,
     arity: usize,
-) -> Arranged<G, TraceAgent<Tr>>
+) -> (
+    Arranged<G, TraceAgent<RowRowSpine<G::Timestamp, Diff>>>,
+    Arranged<G, TraceAgent<Tr>>,
+)
 where
     G: Scope,
     G::Timestamp: Lattice + Columnation,
@@ -509,116 +502,117 @@ where
     // such that `input.concat(&negated_output.negate())` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_internal.mz_expected_group_size_advice.
-    input
-        .mz_arrange::<RowRowSpine<_, _>>("Arranged TopK input")
-        .mz_reduce_abelian::<_, _, _, Tr>("Reduced TopK input", from, {
-            move |mut hash_key, source, target: &mut Vec<(V, Diff)>| {
-                // Unpack the limit, either into an integer literal or an expression to evaluate.
-                let limit: Option<i64> = limit.as_ref().map(|l| {
-                    if let Some(l) = l.as_literal_int64() {
-                        l
+    let arranged = input.mz_arrange::<RowRowSpine<_, _>>("Arranged TopK input");
+
+    let reduced = arranged.mz_reduce_abelian::<_, _, _, Tr>("Reduced TopK input", from, {
+        move |mut hash_key, source, target: &mut Vec<(V, Diff)>| {
+            // Unpack the limit, either into an integer literal or an expression to evaluate.
+            let limit: Option<i64> = limit.as_ref().map(|l| {
+                if let Some(l) = l.as_literal_int64() {
+                    l
+                } else {
+                    // Unpack `key` after skipping the hash and determine the limit.
+                    // If the limit errors, use a zero limit; errors are surfaced elsewhere.
+                    let temp_storage = mz_repr::RowArena::new();
+                    let _hash = hash_key.next();
+                    let mut key_datums = datum_vec.borrow();
+                    key_datums.extend(hash_key);
+                    let datum_limit = l
+                        .eval(&key_datums, &temp_storage)
+                        .unwrap_or(Datum::Int64(0));
+                    if datum_limit == Datum::Null {
+                        i64::MAX
                     } else {
-                        // Unpack `key` after skipping the hash and determine the limit.
-                        // If the limit errors, use a zero limit; errors are surfaced elsewhere.
-                        let temp_storage = mz_repr::RowArena::new();
-                        let _hash = hash_key.next();
-                        let mut key_datums = datum_vec.borrow();
-                        key_datums.extend(hash_key);
-                        let datum_limit = l
-                            .eval(&key_datums, &temp_storage)
-                            .unwrap_or(Datum::Int64(0));
-                        if datum_limit == Datum::Null {
-                            i64::MAX
-                        } else {
-                            datum_limit.unwrap_int64()
-                        }
-                    }
-                });
-
-                if let Some(err) = V::into_error() {
-                    for (datums, diff) in source.iter() {
-                        if diff.is_positive() {
-                            continue;
-                        }
-                        target.push((err(SharedRow::pack(*datums)), -1));
-                        return;
+                        datum_limit.unwrap_int64()
                     }
                 }
+            });
 
-                // Determine if we must actually shrink the result set.
-                let must_shrink = offset > 0
-                    || limit
-                        .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
-                        .unwrap_or(false);
-                if !must_shrink {
-                    return;
-                }
-
-                // The `row_builder` below will be used to construct output values in the following.
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-
-                // First go ahead and emit all records. Note that we ensure target
-                // has the capacity to hold at least these records, and avoid any
-                // dependencies on the user-provided (potentially unbounded) limit.
-                target.reserve(source.len());
+            if let Some(err) = V::into_error() {
                 for (datums, diff) in source.iter() {
-                    target.push((V::ok(row_builder.pack_using(*datums)), diff.clone()));
-                }
-                // local copies that may count down to zero.
-                let mut offset = offset;
-                let mut limit = limit;
-
-                // The order in which we should produce rows.
-                let mut indexes = (0..source.len()).collect::<Vec<_>>();
-                // We decode the datums once, into a common buffer for efficiency.
-                // Each row should contain `arity` columns; we should check that.
-                let mut buffer = Vec::with_capacity(arity * source.len());
-                for (index, (datums, _)) in source.iter().enumerate() {
-                    buffer.extend(*datums);
-                    assert_eq!(buffer.len(), arity * (index + 1));
-                }
-                let width = buffer.len() / source.len();
-
-                //todo: use arrangements or otherwise make the sort more performant?
-                indexes.sort_by(|left, right| {
-                    let left = &buffer[left * width..][..width];
-                    let right = &buffer[right * width..][..width];
-                    // Note: source was originally ordered by the u8 array representation
-                    // of rows, but left.cmp(right) uses Datum::cmp.
-                    mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
-                });
-
-                // We now need to lay out the data in order of `buffer`, but respecting
-                // the `offset` and `limit` constraints.
-                for index in indexes.into_iter() {
-                    let (datums, mut diff) = source[index];
-                    if !diff.is_positive() {
+                    if diff.is_positive() {
                         continue;
                     }
-                    // If we are still skipping early records ...
-                    if offset > 0 {
-                        let to_skip = std::cmp::min(offset, usize::try_from(diff).unwrap());
-                        offset -= to_skip;
-                        diff -= Diff::try_from(to_skip).unwrap();
-                    }
-                    // We should produce at most `limit` records.
-                    // TODO(benesch): avoid dangerous `as` conversion.
-                    #[allow(clippy::as_conversions)]
-                    if let Some(limit) = &mut limit {
-                        diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
-                        *limit -= diff;
-                    }
-                    // Output the indicated number of rows.
-                    if diff > 0 {
-                        // Emit retractions for the elements actually part of
-                        // the set of TopK elements.
-                        row_builder.packer().extend(datums);
-                        target.push((V::ok(row_builder.clone()), -diff));
-                    }
+                    target.push((err(SharedRow::pack(*datums)), -1));
+                    return;
                 }
             }
-        })
+
+            // Determine if we must actually shrink the result set.
+            let must_shrink = offset > 0
+                || limit
+                    .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
+                    .unwrap_or(false);
+            if !must_shrink {
+                return;
+            }
+
+            // The `row_builder` below will be used to construct output values in the following.
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
+
+            // First go ahead and emit all records. Note that we ensure target
+            // has the capacity to hold at least these records, and avoid any
+            // dependencies on the user-provided (potentially unbounded) limit.
+            target.reserve(source.len());
+            for (datums, diff) in source.iter() {
+                target.push((V::ok(row_builder.pack_using(*datums)), diff.clone()));
+            }
+            // local copies that may count down to zero.
+            let mut offset = offset;
+            let mut limit = limit;
+
+            // The order in which we should produce rows.
+            let mut indexes = (0..source.len()).collect::<Vec<_>>();
+            // We decode the datums once, into a common buffer for efficiency.
+            // Each row should contain `arity` columns; we should check that.
+            let mut buffer = Vec::with_capacity(arity * source.len());
+            for (index, (datums, _)) in source.iter().enumerate() {
+                buffer.extend(*datums);
+                assert_eq!(buffer.len(), arity * (index + 1));
+            }
+            let width = buffer.len() / source.len();
+
+            //todo: use arrangements or otherwise make the sort more performant?
+            indexes.sort_by(|left, right| {
+                let left = &buffer[left * width..][..width];
+                let right = &buffer[right * width..][..width];
+                // Note: source was originally ordered by the u8 array representation
+                // of rows, but left.cmp(right) uses Datum::cmp.
+                mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
+            });
+
+            // We now need to lay out the data in order of `buffer`, but respecting
+            // the `offset` and `limit` constraints.
+            for index in indexes.into_iter() {
+                let (datums, mut diff) = source[index];
+                if !diff.is_positive() {
+                    continue;
+                }
+                // If we are still skipping early records ...
+                if offset > 0 {
+                    let to_skip = std::cmp::min(offset, usize::try_from(diff).unwrap());
+                    offset -= to_skip;
+                    diff -= Diff::try_from(to_skip).unwrap();
+                }
+                // We should produce at most `limit` records.
+                // TODO(benesch): avoid dangerous `as` conversion.
+                #[allow(clippy::as_conversions)]
+                if let Some(limit) = &mut limit {
+                    diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
+                    *limit -= diff;
+                }
+                // Output the indicated number of rows.
+                if diff > 0 {
+                    // Emit retractions for the elements actually part of
+                    // the set of TopK elements.
+                    row_builder.packer().extend(datums);
+                    target.push((V::ok(row_builder.clone()), -diff));
+                }
+            }
+        }
+    });
+    (arranged, reduced)
 }
 
 fn render_intra_ts_thinning<S>(
