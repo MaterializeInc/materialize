@@ -9,7 +9,7 @@ menu:
     weight: 39
 ---
 
-Sources are used to ingest data into Materialize. When a new sources is created, it needs to transition through different stages until they become ready to be queried. For large datasets it can take some time until the initial data load has been completed and the source can be queried.
+Sources are used to ingest data into Materialize. When a new sources is created, it needs to transition through different stages until it becomes ready to be queried. For large datasets it can take some time until the initial data load has been completed and the source can be queried.
 
 To avoid bad surprises during source creation, like blocking queries, it's essential to follow a few steps and monitor that one step completed before going to the next. There are three main stages a source needs to go through before it becomes healthy: initial data load, rehydration, and catching up with new data. Unless all three steps have completed successfully, queries reading from a source may just hang and appear to do nothing. These steps usually complete within a few minutes. But for very large sources that contain hundreds of GB of data, it can take up to an hour or even several hours to complete.
 
@@ -36,7 +36,7 @@ Once the initial snapshot has completed, the data has been durably stored in the
 
 ## Rehydration
 
-When the source has completed the initial snapshot and every time the source cluster is restarted, it reads the data from the storage backend. This process is called rehydration. Depending on the type and the size of the source, this can be a very lightweight process that takes seconds, but for large `UPSERT` sources it can also be hours. During rehydration, queries are likely to block until the process has been completed. So it's best to monitor the source status and wait until rehydration has completed.
+When the source has completed the initial snapshot and every time the source cluster is restarted, it reads the data from the storage backend. This process is called rehydration. Depending on the type and the size of the source, this can be a very lightweight process that takes seconds, but for large `UPSERT` sources it can also be hours. During rehydration, queries usually block until the process has been completed. So it's best to monitor the source status and wait until rehydration has completed.
 
 ```sql
 SELECT
@@ -46,7 +46,7 @@ FROM mz_sources AS s
 INNER JOIN mz_internal.mz_hydration_statuses AS h ON (s.id = h.object_id);
 ```
 
-Because the initial data load is more resource intensive than rehydration and consuming data from the external system, you might have needed to size up the source cluster during that process. Now is a good time to restart the cluster to see if you can scale back down to understand the resource requirements during rehydration and steady state operations. Because the initial snapshot happens only once, knowing the resource requirements during steady state is much more important to correctly size the source cluster for normal operation. Restarting is achieved by removing all compute resources from the underlying cluster and subsequently adding it back.
+Because the initial data load is more resource intensive than rehydration and consuming data from the external system, you might have needed to size up the source cluster during the intial snapshot. Now is a good time to restart the cluster to see if you can scale back down to understand the resource requirements during rehydration and steady state operations. Because the initial snapshot happens only once, knowing the resource requirements during steady state is much more important to correctly size the source cluster for normal operation. Restarting is achieved by removing all compute resources from the underlying cluster and subsequently adding it back.
 
 ```sql
 ALTER CLUSTER sources SET (REPLICATION FACTOR 0);
