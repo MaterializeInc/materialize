@@ -16,10 +16,6 @@ menu:
 
 {{< diagram "alter-source-add-clause.svg" >}}
 
-#### alter_source_drop_clause
-
-{{< diagram "alter-source-drop-clause.svg" >}}
-
 #### with_options
 
 {{< diagram "with-options.svg" >}}
@@ -28,7 +24,6 @@ Field   | Use
 --------|-----
 _name_  | The identifier of the source you want to alter.
 **ADD SUBSOURCE** ... | PostgreSQL sources only: Add the identified tables from the upstream database (`table_name`) to the named source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options).
-**DROP SUBSOURCE** ... | PostgreSQL sources only: Drop the identified subsources from the source. Specifying **CASCADE** also drops all objects that depend on the subsource. **RESTRICT** (default) will not drop the subsource if it has any dependencies.
 
 ### **ADD SUBSOURCE** `with_options`
 
@@ -46,7 +41,7 @@ completing the snapshot, the table will be kept up-to-date, just as all other
 tables in the publication.
 
 Note that using a combination of dropping and adding subsources lets you change
-the schema the PostgreSQL sources ingest.
+the schema of the PostgreSQL tables that are ingested.
 
 ### Dropping PostgreSQL subsources/tables
 
@@ -70,8 +65,10 @@ ALTER SOURCE pg_src ADD SUBSOURCE tbl_a, tbl_b AS b WITH (TEXT COLUMNS [tbl_a.co
 
 ### Dropping subsources
 
+To drop a subsource, use the [`DROP SOURCE`](/sql/drop-source/) command:
+
 ```sql
-ALTER SOURCE pg_src DROP SUBSOURCE tbl_a, b CASCADE;
+DROP SOURCE tbl_a, b CASCADE;
 ```
 
 ## Privileges
@@ -83,4 +80,5 @@ The privileges required to execute this statement are:
 ## See also
 
 - [`CREATE SOURCE`](/sql/create-source/)
+- [`DROP SOURCE`](/sql/drop-source/)
 - [`SHOW SOURCES`](/sql/show-sources)
