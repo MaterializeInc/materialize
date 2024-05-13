@@ -69,13 +69,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         )
                     )
 
-                    conn1, cursor_table = create_connection_and_cursor(
+                    conn1, cursor_on_table = create_connection_and_cursor(
                         host,
                         USERNAME,
                         APP_PASSWORD,
                         "DECLARE subscribe_table CURSOR FOR SUBSCRIBE (SELECT * FROM qa_canary_environment.public_table.table)",
                     )
-                    conn2, cursor_mv = create_connection_and_cursor(
+                    conn2, cursor_on_mv = create_connection_and_cursor(
                         host,
                         USERNAME,
                         APP_PASSWORD,
@@ -83,23 +83,26 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
 
                     i = 0
-
                     while time.time() - start_time < args.runtime:
-                        current_time = time.time()
-                        update_data(c, i)
-                        validate_data(
+                        print(f"Running iteration {i}")
+                        c.override_current_testcase_name(
+                            f"iteration {i} of workflow_default"
+                        )
+                        perform_test(
+                            c,
                             host,
                             USERNAME,
                             PASSWORD,
-                            cursor_table,
-                            cursor_mv,
-                            current_time,
+                            cursor_on_table,
+                            cursor_on_mv,
                             i,
                         )
                         i += 1
 
-                    close_connection_and_cursor(conn1, cursor_table, "subscribe_table")
-                    close_connection_and_cursor(conn2, cursor_mv, "subscribe_mv")
+                    close_connection_and_cursor(
+                        conn1, cursor_on_table, "subscribe_table"
+                    )
+                    close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
 
                 except InterfaceError as e:
                     if "network error" in str(e):
@@ -167,6 +170,31 @@ def close_connection_and_cursor(
     connection.close()
 
 
+def perform_test(
+    c: Composition,
+    host: str,
+    user_name: str,
+    password: str,
+    cursor_on_table: Cursor,
+    cursor_on_mv: Cursor,
+    i: int,
+) -> None:
+    current_time = time.time()
+    update_data(c, i)
+
+    validate_cursor_on_table(cursor_on_table, current_time, i)
+    validate_cursor_on_mv(cursor_on_mv, current_time, i)
+
+    # Token can run out, so refresh it occasionally
+    token = fetch_token(user_name, password)
+
+    validate_data(
+        host,
+        token,
+        i,
+    )
+
+
 def update_data(c: Composition, i: int) -> None:
     c.testdrive(
         dedent(
@@ -201,17 +229,13 @@ def update_data(c: Composition, i: int) -> None:
     )
 
 
-def validate_data(
-    host: str,
-    user_name: str,
-    password: str,
-    cursor_table: Cursor,
-    cursor_mv: Cursor,
+def validate_cursor_on_table(
+    cursor_on_table: Cursor,
     current_time: float,
     i: int,
 ) -> None:
-    cursor_table.execute("FETCH ALL subscribe_table WITH (timeout='5s')")
-    results = cursor_table.fetchall()
+    cursor_on_table.execute("FETCH ALL subscribe_table WITH (timeout='5s')")
+    results = cursor_on_table.fetchall()
     assert len(results) == 100, f"Unexpected results: {results}"
     for result in results:
         assert int(result[0]) >= current_time, f"Unexpected results: {results}"
@@ -220,8 +244,14 @@ def validate_data(
             i * 100 <= int(result[2]) < (i + 1) * 100
         ), f"Unexpected results: {results}"
 
-    cursor_mv.execute("FETCH ALL subscribe_mv WITH (timeout='5s')")
-    results = cursor_mv.fetchall()
+
+def validate_cursor_on_mv(
+    cursor_on_mv: Cursor,
+    current_time: float,
+    i: int,
+) -> None:
+    cursor_on_mv.execute("FETCH ALL subscribe_mv WITH (timeout='5s')")
+    results = cursor_on_mv.fetchall()
     # First the removal, then the addition if it happens at the same timestamp
     r = sorted(list(results))  # type: ignore
     if i == 0:
@@ -235,11 +265,15 @@ def validate_data(
     assert int(r[-1][1]) == 1, f"Unexpected results: {r}"
     assert int(r[-1][2]) == (i + 1) * 100 - 1, f"Unexpected results: {r}"
 
-    # Token can run out, so refresh it occasionally
-    token = fetch_token(user_name, password)
 
+def validate_data(
+    host: str,
+    token: str,
+    i: int,
+) -> None:
     result = http_sql_query(host, "SELECT 1", token)
     assert result == [["1"]]
+
     result = http_sql_query(
         host,
         "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0",
