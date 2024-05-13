@@ -22,6 +22,11 @@ _name_ | The configuration parameter's name.
 
 {{% configuration-parameters %}}
 
+## Privileges
+
+[_Superuser_ privileges](/manage/access-control/#account-management) are required to execute
+this statement.
+
 ## Examples
 
 ### Reset enable RBAC
