@@ -138,7 +138,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.77.0"
+rust-version = "1.78.0"
 
 [profile.dev]
 split-debuginfo = "unpacked"

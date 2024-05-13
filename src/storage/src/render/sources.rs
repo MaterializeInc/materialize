@@ -59,7 +59,7 @@ pub(crate) type OutputIndex = usize;
 ///
 /// This function is intended to implement the recipe described here:
 /// <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-storage.md#source-ingestion>
-pub fn render_source<'g, G: Scope<Timestamp = ()>, C>(
+pub fn render_source<'g, G, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     dataflow_debug_name: &String,
     id: GlobalId,

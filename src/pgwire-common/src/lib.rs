@@ -19,7 +19,7 @@ mod message;
 mod severity;
 
 pub use codec::{
-    decode_startup, input_err, parse_frame_len, CodecError, Cursor, DecodeState,
+    decode_startup, input_err, parse_frame_len, CodecError, Cursor, DecodeState, Pgbuf,
     ACCEPT_SSL_ENCRYPTION, MAX_REQUEST_SIZE, REJECT_ENCRYPTION,
 };
 pub use conn::Conn;

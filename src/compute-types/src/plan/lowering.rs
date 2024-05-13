@@ -61,10 +61,7 @@ impl Context {
     pub fn lower<T: Timestamp>(
         mut self,
         desc: DataflowDescription<OptimizedMirRelationExpr>,
-    ) -> Result<DataflowDescription<Plan<T>>, String>
-    where
-        T: Timestamp,
-    {
+    ) -> Result<DataflowDescription<Plan<T>>, String> {
         // Sources might provide arranged forms of their data, in the future.
         // Indexes provide arranged forms of their data.
         for IndexImport {

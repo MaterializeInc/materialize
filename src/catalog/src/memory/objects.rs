@@ -242,7 +242,7 @@ impl Cluster {
     pub fn rename_replica(&mut self, replica_id: ReplicaId, to_name: String) {
         let replica = self.replica_mut(replica_id).expect("Must exist");
         let old_name = std::mem::take(&mut replica.name);
-        replica.name = to_name.clone();
+        replica.name.clone_from(&to_name);
 
         assert!(self.replica_id_by_name_.remove(&old_name).is_some());
         assert!(self

@@ -47,6 +47,8 @@ We recommend that you do _not_ install Rust via your system's package manager.
 We closely track the most recent version of Rust. The version of Rust in your
 package manager is likely too old to build Materialize.
 
+For details on how we upgrade Rust see [here](/doc/developer/upgrade-rust.md).
+
 ### CockroachDB
 
 Running Materialize locally requires a running CockroachDB server.

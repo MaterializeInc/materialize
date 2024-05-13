@@ -588,7 +588,7 @@ impl Coordinator {
             }) => {
                 use AlterOptionParameter::*;
                 match &options.size {
-                    Set(s) => *size = s.clone(),
+                    Set(s) => size.clone_from(s),
                     Reset => coord_bail!("SIZE has no default value"),
                     Unchanged => {}
                 }
@@ -598,7 +598,7 @@ impl Coordinator {
                     Unchanged => {}
                 }
                 match &options.availability_zones {
-                    Set(az) => *availability_zones = az.clone(),
+                    Set(az) => availability_zones.clone_from(az),
                     Reset => *availability_zones = Default::default(),
                     Unchanged => {}
                 }

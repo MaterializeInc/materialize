@@ -1592,10 +1592,10 @@ impl Catalog {
                     }
 
                     let mut to_full_name = current_full_name.clone();
-                    to_full_name.item = to_name.clone();
+                    to_full_name.item.clone_from(&to_name);
 
                     let mut to_qualified_name = entry.name().clone();
-                    to_qualified_name.item = to_name.clone();
+                    to_qualified_name.item.clone_from(&to_name);
 
                     let details = EventDetails::RenameItemV1(mz_audit_log::RenameItemV1 {
                         id: id.to_string(),
@@ -1617,7 +1617,7 @@ impl Catalog {
 
                     // Rename item itself.
                     let mut new_entry = entry.clone();
-                    new_entry.name.item = to_name.clone();
+                    new_entry.name.item.clone_from(&to_name);
                     new_entry.item = entry
                         .item()
                         .rename_item_refs(
@@ -1792,7 +1792,7 @@ impl Catalog {
                     // Update the schema itself.
                     let schema = state.get_schema_mut(&database_spec, &schema_spec, conn_id);
                     let old_name = schema.name().schema.clone();
-                    schema.name.schema = new_name.clone();
+                    schema.name.schema.clone_from(&new_name);
                     let new_schema = schema.clone().into_durable_schema(database_spec.id());
                     tx.update_schema(schema_id, new_schema)?;
 

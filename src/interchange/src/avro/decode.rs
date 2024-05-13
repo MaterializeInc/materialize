@@ -161,6 +161,8 @@ impl<'a> AvroDecode for AvroStringDecoder<'a> {
     }
 }
 
+// TODO(parkmycar): Should we just delete this?
+#[allow(dead_code)]
 pub(super) struct OptionalRecordDecoder<'a, 'row> {
     pub packer: &'a mut RowPacker<'row>,
     pub buf: &'a mut Vec<u8>,

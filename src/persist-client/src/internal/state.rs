@@ -892,7 +892,9 @@ where
             &writer_state.most_recent_write_upper,
             batch.desc.upper()
         );
-        writer_state.most_recent_write_upper = batch.desc.upper().clone();
+        writer_state
+            .most_recent_write_upper
+            .clone_from(batch.desc.upper());
 
         // Heartbeat the writer state to keep our idempotency token alive.
         writer_state.last_heartbeat_timestamp_ms = std::cmp::max(
@@ -1006,7 +1008,7 @@ where
         }
 
         if PartialOrder::less_equal(&reader_state.since, new_since) {
-            reader_state.since = new_since.clone();
+            reader_state.since.clone_from(new_since);
             reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
             self.update_since();
             Continue(Ok(Since(new_since.clone())))

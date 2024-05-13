@@ -542,7 +542,7 @@ where
 
                 // After successfully emitting a new description, we can update the upper for the
                 // operator.
-                current_upper = desired_frontier.to_owned();
+                current_upper.clone_from(&desired_frontier);
             }
         }
     });
@@ -878,8 +878,8 @@ where
 
                     output.give_container(&cap, &mut batch_tokens).await;
 
-                    processed_desired_frontier = desired_frontier.clone();
-                    processed_descriptions_frontier = batch_descriptions_frontier.clone();
+                    processed_desired_frontier.clone_from(&desired_frontier);
+                    processed_descriptions_frontier.clone_from(&batch_descriptions_frontier);
                 }
             } else {
                 trace!(

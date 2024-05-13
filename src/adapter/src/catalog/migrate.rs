@@ -541,7 +541,7 @@ fn ast_rewrite_create_source_pg_database_details(
                     match &conn {
                         mz_storage_types::connections::Connection::Postgres(pg) => {
                             // Store the connection's database in the details.
-                            details.database = pg.database.clone();
+                            details.database.clone_from(&pg.database);
                         }
                         _ => unreachable!("PG sources must use PG connections"),
                     };

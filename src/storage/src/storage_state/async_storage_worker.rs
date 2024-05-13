@@ -303,7 +303,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                             )
                                             .await
                                             .unwrap();
-                                        as_of = read_handle.since().clone();
+                                        as_of.clone_from(read_handle.since());
                                         mz_ore::task::spawn(
                                             move || "deferred_expire",
                                             async move {

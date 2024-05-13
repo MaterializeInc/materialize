@@ -446,7 +446,7 @@ mod tests {
         let b = Row::pack_slice(&[Datum::MzTimestamp(crate::Timestamp::new(10))]);
 
         let col = RowCollection::from([&a, &b]);
-        let mut rows = vec![a, b];
+        let mut rows = [a, b];
 
         let sorted_view = col.sorted_view(|a, b| a.cmp(b));
         rows.sort_by(|a, b| a.cmp(b));

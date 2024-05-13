@@ -1847,7 +1847,7 @@ where
         for (id, new_upper) in updates.iter() {
             if let Some(collection) = self.collections.get_mut(id) {
                 if PartialOrder::less_than(&collection.write_frontier, new_upper) {
-                    collection.write_frontier = new_upper.clone();
+                    collection.write_frontier.clone_from(new_upper);
                 }
 
                 let mut new_read_capability = collection
@@ -1866,7 +1866,7 @@ where
                 }
             } else if let Ok(export) = self.export_mut(*id) {
                 if PartialOrder::less_than(&export.write_frontier, new_upper) {
-                    export.write_frontier = new_upper.clone();
+                    export.write_frontier.clone_from(new_upper);
                 }
 
                 // Ignore read policy for sinks whose write frontiers are closed, which identifies
@@ -1978,7 +1978,7 @@ where
                     });
 
                 changes.extend(update.drain());
-                *frontier = export.read_capability.clone();
+                frontier.clone_from(&export.read_capability);
             } else {
                 // This is confusing and we should probably error.
                 panic!("Unknown collection identifier {}", key);
@@ -2200,9 +2200,9 @@ where
             let client = cluster_id.and_then(|cluster_id| self.clients.get_mut(&cluster_id));
 
             if cluster_id.is_some() && read_frontier.is_empty() {
-                if self.collections.get(&id).is_some() {
+                if self.collections.contains_key(&id) {
                     pending_source_drops.push(id);
-                } else if self.exports.get(&id).is_some() {
+                } else if self.exports.contains_key(&id) {
                     pending_sink_drops.push(id);
                 } else {
                     panic!("Reference to absent collection {id}");
@@ -2282,7 +2282,7 @@ where
             // Sources can have subsources, which don't have associated clusters, which
             // is why this operates differently than sinks.
             if read_frontier.is_empty() {
-                if self.collections.get(&id).is_some() {
+                if self.collections.contains_key(&id) {
                     source_statistics_to_drop.push(id);
                 }
             }

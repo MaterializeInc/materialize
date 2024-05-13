@@ -14,8 +14,6 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
-use std::str;
-
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
@@ -25,7 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
-    input_err, parse_frame_len, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage,
+    input_err, parse_frame_len, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, Pgbuf,
     MAX_REQUEST_SIZE,
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
@@ -386,39 +384,6 @@ impl Encoder<BackendMessage> for Codec {
         dst[base..base + 4].copy_from_slice(&len.to_be_bytes());
 
         Ok(())
-    }
-}
-
-trait Pgbuf: BufMut {
-    fn put_string(&mut self, s: &str);
-    fn put_length_i16(&mut self, len: usize) -> Result<(), io::Error>;
-    fn put_format_i8(&mut self, format: mz_pgwire_common::Format);
-    fn put_format_i16(&mut self, format: mz_pgwire_common::Format);
-}
-
-impl<B: BufMut> Pgbuf for B {
-    fn put_string(&mut self, s: &str) {
-        self.put(s.as_bytes());
-        self.put_u8(b'\0');
-    }
-
-    fn put_length_i16(&mut self, len: usize) -> Result<(), io::Error> {
-        let len = i16::try_from(len)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "length does not fit in an i16"))?;
-        self.put_i16(len);
-        Ok(())
-    }
-
-    fn put_format_i8(&mut self, format: mz_pgwire_common::Format) {
-        self.put_i8(match format {
-            mz_pgwire_common::Format::Text => 0,
-            mz_pgwire_common::Format::Binary => 1,
-        })
-    }
-
-    fn put_format_i16(&mut self, format: mz_pgwire_common::Format) {
-        self.put_i8(0);
-        self.put_format_i8(format);
     }
 }
 

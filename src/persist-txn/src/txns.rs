@@ -551,7 +551,7 @@ where
 
             let mut unapplied_by_data = BTreeMap::<_, Vec<_>>::new();
             for (data_id, unapplied, unapplied_ts) in self.txns_cache.unapplied() {
-                if ts < &unapplied_ts {
+                if ts < unapplied_ts {
                     break;
                 }
                 unapplied_by_data

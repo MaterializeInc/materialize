@@ -113,11 +113,6 @@ pub async fn handle_sql(
     }
 }
 
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
 pub async fn handle_sql_ws(
     State(state): State<WsState>,
     existing_user: Option<Extension<AuthedUser>>,
