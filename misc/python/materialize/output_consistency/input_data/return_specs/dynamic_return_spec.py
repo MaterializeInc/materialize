@@ -9,6 +9,9 @@
 
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.input_data.return_specs.input_arg_type_hints import (
+    InputArgTypeHints,
+)
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
@@ -17,12 +20,17 @@ class DynamicReturnTypeSpec(ReturnTypeSpec):
         super().__init__(DataTypeCategory.DYNAMIC, [param_index_to_take_type])
 
     def resolve_type_category(
-        self, input_arg_type_hints: list[DataTypeCategory]
+        self, input_arg_type_hints: InputArgTypeHints
     ) -> DataTypeCategory:
         if input_arg_type_hints is None:
             raise RuntimeError(
                 f"Return type category {DataTypeCategory.DYNAMIC} requires arg hints"
             )
 
-        assert len(input_arg_type_hints) == 1, "Missing input type hint"
-        return input_arg_type_hints[0]
+        assert (
+            self.indices_of_required_input_type_hints is not None
+        ), "No input type hints requested"
+        assert not input_arg_type_hints.is_empty(), "Empty input type hint"
+        return input_arg_type_hints.type_category_of_requested_args[
+            self.indices_of_required_input_type_hints[0]
+        ]

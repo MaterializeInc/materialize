@@ -23,6 +23,9 @@ from materialize.output_consistency.expression.expression import (
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.input_data.return_specs.input_arg_type_hints import (
+    InputArgTypeHints,
+)
 from materialize.output_consistency.operation.operation import (
     EXPRESSION_PLACEHOLDER,
     DbOperationOrFunction,
@@ -84,7 +87,7 @@ class ExpressionWithArgs(Expression):
         return self.return_type_spec
 
     def resolve_return_type_category(self) -> DataTypeCategory:
-        input_type_hints = []
+        input_type_hints = InputArgTypeHints()
 
         if self.return_type_spec.indices_of_required_input_type_hints is not None:
             # provide input types that are required as hints to determine the output type
@@ -92,9 +95,9 @@ class ExpressionWithArgs(Expression):
                 assert (
                     0 <= arg_index <= len(self.args)
                 ), f"Invalid requested index: {arg_index} as hint for {self.operation}"
-                input_type_hints.append(
-                    self.args[arg_index].resolve_return_type_category()
-                )
+                input_type_hints.type_category_of_requested_args[arg_index] = self.args[
+                    arg_index
+                ].resolve_return_type_category()
 
         return self.return_type_spec.resolve_type_category(input_type_hints)
 

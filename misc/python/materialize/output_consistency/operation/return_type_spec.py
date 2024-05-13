@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.input_data.return_specs.input_arg_type_hints import (
+    InputArgTypeHints,
+)
 
 
 class ReturnTypeSpec:
@@ -26,6 +29,6 @@ class ReturnTypeSpec:
         ), f"{DataTypeCategory.ANY} is not allowed as return type category"
 
     def resolve_type_category(
-        self, input_arg_type_hints: list[DataTypeCategory]
+        self, input_arg_type_hints: InputArgTypeHints
     ) -> DataTypeCategory:
         return self.type_category
