@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::{Capability, InputCapability, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
@@ -206,7 +206,7 @@ pub(crate) fn upsert<G: Scope, FromTime>(
 )
 where
     G::Timestamp: TotalOrder,
-    FromTime: timely::ExchangeData + Ord,
+    FromTime: Timestamp,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
@@ -267,9 +267,11 @@ where
 
         let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
 
+        let thin_input = upsert_thinning(input);
+
         if allow_auto_spill {
             upsert_inner(
-                input,
+                &thin_input,
                 upsert_envelope.key_indices,
                 resume_upper,
                 previous,
@@ -296,7 +298,7 @@ where
             )
         } else {
             upsert_inner(
-                input,
+                &thin_input,
                 upsert_envelope.key_indices,
                 resume_upper,
                 previous,
@@ -347,6 +349,68 @@ where
             snapshot_buffering_max,
         )
     }
+}
+
+/// Renders an operator that discards updates that are known to not affect the outcome of upsert in
+/// a streaming fashion. For each distinct (key, time) in the input it emits the value with the
+/// highest from_time. Its purpose is to thin out data as much as possible before exchanging them
+/// across workers.
+fn upsert_thinning<G, K, V, FromTime>(
+    input: &Collection<G, (K, V, FromTime), Diff>,
+) -> Collection<G, (K, V, FromTime), Diff>
+where
+    G: Scope,
+    G::Timestamp: TotalOrder,
+    K: timely::Data + Eq + Ord,
+    V: timely::Data,
+    FromTime: Timestamp,
+{
+    input
+        .inner
+        .unary(Pipeline, "UpsertThinning", |_, _| {
+            // A capability suitable to emit all updates in `updates`, if any.
+            let mut capability: Option<InputCapability<G::Timestamp>> = None;
+            // A batch of received updates
+            let mut updates = Vec::new();
+            let mut tmp = Vec::new();
+            move |input, output| {
+                while let Some((cap, data)) = input.next() {
+                    assert!(
+                        data.iter().all(|(_, _, diff)| *diff > 0),
+                        "invalid upsert input"
+                    );
+                    data.swap(&mut tmp);
+                    updates.append(&mut tmp);
+                    match capability.as_mut() {
+                        Some(capability) => {
+                            if cap.time() <= capability.time() {
+                                *capability = cap;
+                            }
+                        }
+                        None => capability = Some(cap),
+                    }
+                }
+                if let Some(capability) = capability.take() {
+                    // Sort by (key, time, Reverse(from_time)) so that deduping by (key, time) gives
+                    // the latest change for that key.
+                    updates.sort_unstable_by(|a, b| {
+                        let ((key1, _, from_time1), time1, _) = a;
+                        let ((key2, _, from_time2), time2, _) = b;
+                        Ord::cmp(
+                            &(key1, time1, Reverse(from_time1)),
+                            &(key2, time2, Reverse(from_time2)),
+                        )
+                    });
+                    let mut session = output.session(&capability);
+                    session.give_iterator(updates.drain(..).dedup_by(|a, b| {
+                        let ((key1, _, _), time1, _) = a;
+                        let ((key2, _, _), time2, _) = b;
+                        (key1, time1) == (key2, time2)
+                    }))
+                }
+            }
+        })
+        .as_collection()
 }
 
 /// Helper method for `upsert_inner` used to stage `data` updates
