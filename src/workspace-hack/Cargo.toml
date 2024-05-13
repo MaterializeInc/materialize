@@ -124,6 +124,7 @@ tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.20.1" }
+twox-hash = { version = "1.6.3" }
 uncased = { version = "0.9.7" }
 unicode-bidi = { version = "0.3.15" }
 unicode-normalization = { version = "0.1.23" }
@@ -247,6 +248,7 @@ tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.20.1" }
+twox-hash = { version = "1.6.3" }
 uncased = { version = "0.9.7" }
 unicode-bidi = { version = "0.3.15" }
 unicode-normalization = { version = "0.1.23" }

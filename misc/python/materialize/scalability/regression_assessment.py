@@ -13,6 +13,7 @@ from materialize.docker import (
     is_image_tag_of_version,
 )
 from materialize.mz_version import MzVersion
+from materialize.mzcompose.test_result import TestFailureDetails
 from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.endpoint import Endpoint
 from materialize.version_ancestor_overrides import (
@@ -113,3 +114,30 @@ class RegressionAssessment:
         return is_image_tag_of_version(target) and MzVersion.is_valid_version_string(
             target
         )
+
+    def to_failure_details(self) -> list[TestFailureDetails]:
+        failure_details = []
+
+        assert self.baseline_endpoint is not None
+        baseline_version = self.baseline_endpoint.try_load_version()
+        for (
+            endpoint_with_regression,
+            justification,
+        ) in self.endpoints_with_regressions_and_justifications.items():
+            if justification is not None:
+                continue
+
+            regressions = self.comparison_outcome.get_regressions_by_endpoint(
+                endpoint_with_regression
+            )
+
+            for regression in regressions:
+                failure_details.append(
+                    TestFailureDetails(
+                        test_case_name_override=f"Workload '{regression.workload_name}'",
+                        message=f"New regression against {baseline_version}",
+                        details=str(regression),
+                    )
+                )
+
+        return failure_details

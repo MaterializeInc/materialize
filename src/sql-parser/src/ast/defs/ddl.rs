@@ -24,7 +24,9 @@
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
-use crate::ast::{AstInfo, Expr, Ident, OrderByExpr, UnresolvedItemName, WithOptionValue};
+use crate::ast::{
+    AstInfo, ColumnName, Expr, Ident, OrderByExpr, UnresolvedItemName, WithOptionValue,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MaterializedViewOptionName {
@@ -218,7 +220,7 @@ pub enum DocOnSchema {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DocOnIdentifier<T: AstInfo> {
-    Column(T::ColumnName),
+    Column(ColumnName<T>),
     Type(T::ItemName),
 }
 

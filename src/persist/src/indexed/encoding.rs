@@ -84,7 +84,7 @@ pub struct TraceBatchMeta {
 ///
 /// TODO: disallow empty trace batch parts in the future so there is one unique
 /// way to represent an empty trace batch.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BlobTraceBatchPart<T> {
     /// Which updates are included in this batch.
     ///
@@ -220,16 +220,16 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
     }
 
     /// Encodes an BlobTraceBatchPart into the Parquet format.
-    pub fn encode<B>(&self, buf: &mut B)
+    pub fn encode<B>(&self, buf: &mut B, metrics: &ColumnarMetrics)
     where
-        B: BufMut,
+        B: BufMut + Send,
     {
-        encode_trace_parquet(&mut buf.writer(), self).expect("batch was invalid");
+        encode_trace_parquet(&mut buf.writer(), self, metrics).expect("batch was invalid");
     }
 
     /// Decodes a BlobTraceBatchPart from the Parquet format.
     pub fn decode(buf: &SegmentedBytes, metrics: &ColumnarMetrics) -> Result<Self, Error> {
-        decode_trace_parquet(&mut buf.clone().reader(), metrics)
+        decode_trace_parquet(buf.clone(), metrics)
     }
 
     /// Scans the part and returns a lower bound on the contained keys.
@@ -527,7 +527,8 @@ mod tests {
         batch: &BlobTraceBatchPart<T>,
     ) -> u64 {
         let mut val = Vec::new();
-        batch.encode(&mut val);
+        let metrics = ColumnarMetrics::disconnected();
+        batch.encode(&mut val, &metrics);
         let val = Bytes::from(val);
         let val_len = u64::cast_from(val.len());
         blob.set(key, val).await.expect("failed to set trace batch");
@@ -619,6 +620,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // too slow
     fn encoded_batch_sizes() {
         fn sizes(data: DataGenerator) -> usize {
+            let metrics = ColumnarMetrics::disconnected();
             let trace = BlobTraceBatchPart {
                 desc: Description::new(
                     Antichain::from_elem(0u64),
@@ -629,7 +631,7 @@ mod tests {
                 updates: data.batches().collect(),
             };
             let mut trace_buf = Vec::new();
-            trace.encode(&mut trace_buf);
+            trace.encode(&mut trace_buf, &metrics);
             trace_buf.len()
         }
 

@@ -12,7 +12,7 @@ use std::convert::TryFrom;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use std::{cmp, iter, mem};
+use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
@@ -33,7 +33,9 @@ use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
-use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use mz_repr::{
+    Datum, GlobalId, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
+};
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{CopyDirection, CopyStatement, FetchDirection, Ident, Raw, Statement};
@@ -1800,7 +1802,7 @@ where
             match batch {
                 FetchResult::Rows(None) => break,
                 FetchResult::Rows(Some(mut batch_rows)) => {
-                    if let Err(err) = verify_datum_desc(&row_desc, &batch_rows) {
+                    if let Err(err) = verify_datum_desc(&row_desc, &mut batch_rows) {
                         let msg = err.to_string();
                         return self
                             .error(err.into_response(Severity::Error))
@@ -1811,27 +1813,34 @@ where
                     // If wait_once is true: the first time this fn is called it blocks (same as
                     // deadline == None). The second time this fn is called it should behave the
                     // same a 0s timeout.
-                    if wait_once && !batch_rows.is_empty() {
+                    if wait_once && batch_rows.peek().is_some() {
                         deadline = Some(tokio::time::Instant::now());
                         wait_once = false;
                     }
 
-                    // Drain panics if it's > len, so cap it.
-                    let drain_rows = cmp::min(want_rows, batch_rows.len());
-                    self.send_all(batch_rows.drain(..drain_rows).map(|row| {
-                        BackendMessage::DataRow(mz_pgrepr::values_from_row(&row, row_desc.typ()))
-                    }))
-                    .await?;
-                    total_sent_rows += drain_rows;
-                    want_rows -= drain_rows;
+                    // Send a portion of the rows.
+                    let mut sent_rows = 0;
+                    let messages = (&mut batch_rows)
+                        .map(|row| {
+                            let values = mz_pgrepr::values_from_row(row, row_desc.typ());
+                            BackendMessage::DataRow(values)
+                        })
+                        .inspect(|_| sent_rows += 1)
+                        .take(want_rows);
+                    self.send_all(messages).await?;
+
+                    total_sent_rows += sent_rows;
+                    want_rows -= sent_rows;
+
                     // If we have sent the number of requested rows, put the remainder of the batch
                     // (if any) back and stop sending.
                     if want_rows == 0 {
-                        if !batch_rows.is_empty() {
+                        if batch_rows.peek().is_some() {
                             rows.current = Some(batch_rows);
                         }
                         break;
                     }
+
                     self.conn.flush().await?;
                 }
                 FetchResult::Notice(notice) => {
@@ -1908,7 +1917,7 @@ where
             }
         };
 
-        let encode_fn = |row: &Row, typ: &RelationType, out: &mut Vec<u8>| {
+        let encode_fn = |row: &RowRef, typ: &RelationType, out: &mut Vec<u8>| {
             mz_pgcopy::encode_copy_format(&row_format, row, typ, out)
         };
 
@@ -1956,10 +1965,10 @@ where
                             ))
                             .await.map(|state| (state, SendRowsEndedReason::Canceled));
                     }
-                    Some(PeekResponseUnary::Rows(rows)) => {
-                        count += rows.len();
-                        for row in rows {
-                            encode_fn(&row, typ, &mut out)?;
+                    Some(PeekResponseUnary::Rows(mut rows)) => {
+                        count += rows.count();
+                        while let Some(row) = rows.next() {
+                            encode_fn(row, typ, &mut out)?;
                             self.send(BackendMessage::CopyData(mem::take(&mut out)))
                                 .await?;
                         }
@@ -2299,7 +2308,7 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 
 #[derive(Debug)]
 enum FetchResult {
-    Rows(Option<Vec<Row>>),
+    Rows(Option<Box<dyn RowIterator + Send + Sync>>),
     Canceled,
     Error(String),
     Notice(AdapterNotice),

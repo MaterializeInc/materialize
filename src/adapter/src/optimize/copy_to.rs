@@ -298,7 +298,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 df_desc.until = Antichain::from_elem(until);
                 // Also updating the sink up_to
                 for (_, sink) in &mut df_desc.sink_exports {
-                    sink.up_to = df_desc.until.clone();
+                    sink.up_to.clone_from(&df_desc.until);
                 }
             } else {
                 warn!(as_of = %as_of, "as_of + 1 overflow");

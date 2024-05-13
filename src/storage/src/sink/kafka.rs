@@ -729,7 +729,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                         info!("{name}: committing transaction for {}", progress.pretty());
                         producer.commit_transaction(progress.clone()).await?;
                         transaction_begun = false;
-                        *write_frontier.borrow_mut() = progress.clone();
+                        write_frontier.borrow_mut().clone_from(&progress);
                         match progress.into_option() {
                             Some(new_upper) => upper = new_upper,
                             None => break,

@@ -181,6 +181,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
 | `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes.                                                                                                                             |
 
+<!-- TODO(chaas): remove after v0.99 release -->
 ### `mz_cluster_replica_sizes`
 
 The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
@@ -191,7 +192,6 @@ The values in this table may change at any time. You should not rely on them for
 any kind of capacity planning.
 {{< /warning >}}
 
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_sizes -->
 | Field                  | Type        | Meaning                                                                                                                                                      |
 |------------------------|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `size`                 | [`text`]    | The human-readable replica size.                                                                                                                             |
@@ -342,6 +342,7 @@ At this time, we do not make any guarantees about the freshness of these numbers
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
 
 ### `mz_history_retention_strategies`
+{{< warn-if-unreleased v0.99 >}}
 
 The `mz_history_retention_strategies` table describes the history retention strategies of objects that have compaction windows (tables, sources, indexes, materialized views).
 
@@ -406,9 +407,20 @@ The `mz_materialized_view_refresh_strategies` table shows each `REFRESH` option 
 |------------------------|------------|-----------------------------------------------------------------------------------------------|
 | `materialized_view_id` | [`text`]   | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views)  |
 | `type`                 | [`text`]   | `at`, `every`, or `on-commit` (the default)                                                   |
-| `interval`             | [`interval`] | The refresh interval of a `REFRESH EVERY` option, or null if the `type` is not `every`.            |
-| `aligned_to`           | [`timestamp with time zone`] | The `ALIGNED TO` option of a `REFRESH EVERY` option, or null if the `type` is not `every`.|
-| `at`                   | [`timestamp with time zone`] | The time of a `REFRESH AT`, or null if the `type` is not `at`.              |
+| `interval`             | [`interval`] | The refresh interval of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.   |
+| `aligned_to`           | [`timestamp with time zone`] | The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`. |
+| `at`                   | [`timestamp with time zone`] | The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`.            |
+
+### `mz_materialized_view_refreshes`
+
+The `mz_materialized_view_refreshes` table shows for each materialized view that has a `REFRESH` option other than `ON COMMIT` the time of the last successfully completed refresh and the time of the next scheduled refresh.
+
+<!-- RELATION_SPEC mz_internal.mz_materialized_view_refreshes -->
+| Field                    | Type                         | Meaning                                                                                                                      |
+|--------------------------|------------------------------|------------------------------------------------------------------------------------------------------------------------------|
+| `materialized_view_id`   | [`text`]                     | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views) |
+| `last_completed_refresh` | [`mz_timestamp`]             | The time of the last successfully completed refresh, or `NULL` if the materialized view hasn't completed any refreshes yet.  |
+| `next_refresh`           | [`mz_timestamp`]             | The time of the next scheduled refresh, or `NULL` if the materialized view won't have any more refreshes.                      |
 
 ### `mz_object_dependencies`
 
@@ -517,25 +529,27 @@ system.
 
 ### `mz_postgres_source_tables`
 
-The `mz_postgres_source_tables` table contains a row for each PostgreSQL table ingested by a subsource.
+The `mz_postgres_source_tables` table contains the mapping between each
+subsource and the corresponding upstream PostgreSQL table being ingested.
 
 <!-- RELATION_SPEC mz_internal.mz_postgres_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
-| `schema_name`  | [`text`]         | The ingested upstream table's schema name. |
-| `table_name`  | [`text`]         | The ingested upstream table's name. |
+| `schema_name`       | [`text`]         | The schema of the upstream table being ingested. |
+| `table_name`        | [`text`]         | The name of the upstream table being ingested.   |
 
 ### `mz_mysql_source_tables`
 
-The `mz_mysql_source_tables` table contains a row for each MySQL table ingested by a subsource.
+The `mz_mysql_source_tables` table contains the mapping between each
+subsource and the corresponding upstream MySQL table being ingested.
 
 <!-- RELATION_SPEC mz_internal.mz_mysql_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
-| `schema_name`  | [`text`]         | The ingested upstream table's schema name. This is also sometimes referred to as the upstream table's database name.|
-| `table_name`  | [`text`]         | The ingested upstream table's name. |
+| `schema_name`       | [`text`]         | The schema ([or, database](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema)) of the upstream table being ingested. |
+| `table_name`        | [`text`]         | The name of the upstream table being ingested. |
 
 <!--
 ### `mz_prepared_statement_history`

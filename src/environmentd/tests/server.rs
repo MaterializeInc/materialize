@@ -844,7 +844,7 @@ fn test_http_sql() {
                 .get("rows")
                 .map(|rows| rows.get(0).map(|row| row.parse::<usize>().unwrap()))
                 .flatten();
-            let fixtimestamp = tc.args.get("fixtimestamp").is_some();
+            let fixtimestamp = tc.args.contains_key("fixtimestamp");
             ws.send(msg).unwrap();
             let mut responses = String::new();
             loop {

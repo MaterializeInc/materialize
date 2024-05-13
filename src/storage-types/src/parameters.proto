@@ -18,7 +18,7 @@ import "service/src/params.proto";
 package mz_storage_types.parameters;
 
 message ProtoStorageParameters {
-    reserved 1, 2, 3, 25, 12, 26;
+    reserved 1, 2, 3, 25, 12, 26, 31;
     uint64 keep_n_source_status_history_entries = 4;
     mz_rocksdb_types.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
     bool finalize_shards = 6;
@@ -41,7 +41,6 @@ message ProtoStorageParameters {
     bool enable_dependency_read_hold_asserts = 27;
     mz_proto.ProtoDuration user_storage_managed_collections_batch_duration = 28;
     ProtoMySqlSourceTimeouts mysql_source_timeouts = 29;
-    mz_proto.ProtoDuration pg_source_wal_sender_timeout = 31;
 
     mz_dyncfg.ConfigUpdates dyncfg_updates = 30;
 }

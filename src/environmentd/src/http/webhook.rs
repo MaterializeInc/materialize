@@ -483,7 +483,7 @@ mod tests {
             ("baz".to_string(), "3".to_string()),
         ]);
         let mut filters = WebhookHeaderFilters::default();
-        filters.block = block.clone();
+        filters.block.clone_from(&block);
 
         let mut h = filter_headers(&headers, &filters);
         assert_eq!(h.next().unwrap().0, "bar");
@@ -491,7 +491,7 @@ mod tests {
         assert!(h.next().is_none());
 
         let mut filters = WebhookHeaderFilters::default();
-        filters.allow = allow.clone();
+        filters.allow.clone_from(&allow);
 
         let mut h = filter_headers(&headers, &filters);
         assert_eq!(h.next().unwrap().0, "bar");

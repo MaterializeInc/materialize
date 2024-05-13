@@ -1,0 +1,216 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
+load("@bazel_skylib//rules:select_file.bzl", "select_file")
+
+"""Additive BUILD file for the librocksdb-sys Rust crate."""
+
+# Copied from https://github.com/tensorflow/tensorflow/blob/bdd8bf316e4ab7d699127d192d30eb614a158462/third_party/snappy.BUILD
+
+cc_library(
+    name = "snappy",
+    srcs = [
+        "snappy/snappy.cc",
+        "snappy/snappy.h",
+        "snappy/snappy-internal.h",
+        "snappy/snappy-sinksource.cc",
+        "snappy/snappy-sinksource.h",
+        "snappy/snappy-stubs-internal.cc",
+        "snappy/snappy-stubs-internal.h",
+        ":config_h",
+        ":snappy_stubs_public_h",
+    ],
+    hdrs = [
+        "snappy/snappy.h"
+    ],
+    includes = ["snappy/."],
+    copts = [
+        "-DHAVE_CONFIG_H",
+        "-fno-exceptions",
+        "-Wno-sign-compare",
+        "-Wno-shift-negative-value",
+        "-Wno-implicit-function-declaration",
+    ],
+    defines = ["HAVE_SYS_UIO_H"],
+)
+
+genrule(
+    name = "config_h",
+    outs = ["snappy/config.h"],
+    cmd = "\n".join([
+        "cat <<'EOF' >$@",
+        "#define HAVE_STDDEF_H 1",
+        "#define HAVE_STDINT_H 1",
+        "",
+        "#ifdef __has_builtin",
+        "#  if !defined(HAVE_BUILTIN_EXPECT) && __has_builtin(__builtin_expect)",
+        "#    define HAVE_BUILTIN_EXPECT 1",
+        "#  endif",
+        "#  if !defined(HAVE_BUILTIN_CTZ) && __has_builtin(__builtin_ctzll)",
+        "#    define HAVE_BUILTIN_CTZ 1",
+        "#  endif",
+        "#elif defined(__GNUC__) && (__GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ >= 4)",
+        "#  ifndef HAVE_BUILTIN_EXPECT",
+        "#    define HAVE_BUILTIN_EXPECT 1",
+        "#  endif",
+        "#  ifndef HAVE_BUILTIN_CTZ",
+        "#    define HAVE_BUILTIN_CTZ 1",
+        "#  endif",
+        "#endif",
+        "",
+        "#ifdef __has_include",
+        "#  if !defined(HAVE_BYTESWAP_H) && __has_include(<byteswap.h>)",
+        "#    define HAVE_BYTESWAP_H 1",
+        "#  endif",
+        "#  if !defined(HAVE_UNISTD_H) && __has_include(<unistd.h>)",
+        "#    define HAVE_UNISTD_H 1",
+        "#  endif",
+        "#  if !defined(HAVE_SYS_ENDIAN_H) && __has_include(<sys/endian.h>)",
+        "#    define HAVE_SYS_ENDIAN_H 1",
+        "#  endif",
+        "#  if !defined(HAVE_SYS_MMAN_H) && __has_include(<sys/mman.h>)",
+        "#    define HAVE_SYS_MMAN_H 1",
+        "#  endif",
+        "#  if !defined(HAVE_SYS_UIO_H) && __has_include(<sys/uio.h>)",
+        "#    define HAVE_SYS_UIO_H 1",
+        "#  endif",
+        "#endif",
+        "",
+        "#ifndef SNAPPY_IS_BIG_ENDIAN",
+        "#  ifdef __s390x__",
+        "#    define SNAPPY_IS_BIG_ENDIAN 1",
+        "#  elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__",
+        "#    define SNAPPY_IS_BIG_ENDIAN 1",
+        "#  endif",
+        "#endif",
+        "EOF",
+    ]),
+)
+
+genrule(
+    name = "snappy_stubs_public_h",
+    srcs = ["snappy/snappy-stubs-public.h.in"],
+    outs = ["snappy/snappy-stubs-public.h"],
+    cmd = ("sed " +
+           "-e 's/$${\\(.*\\)_01}/\\1/g' " +
+           "-e 's/$${SNAPPY_MAJOR}/1/g' " +
+           "-e 's/$${SNAPPY_MINOR}/1/g' " +
+           "-e 's/$${SNAPPY_PATCHLEVEL}/4/g' " +
+           "$< >$@"),
+)
+
+filegroup(
+    name = "rocksdb_srcs",
+    srcs = glob(["**"]),
+    visibility = ["//visibility:public"],
+)
+
+cmake(
+    name = "rocksdb",
+    working_directory = "rocksdb/",
+    build_args = ["-j8"],
+    generate_args = [
+        "-DWITH_SNAPPY=1",
+        "-DWITH_LZ4=1",
+        "-DWITH_ZSTD=1",
+        "-DWITH_ZLIB=1",
+        "-DWITH_BZIP2=1",
+        "-DWITH_GFLAGS=OFF",
+        "-DWITH_ALL_TESTS=OFF",
+        "-DWITH_TESTS=OFF",
+        "-DWITH_TOOLS=OFF",
+        "-DUSE_RTTI=1",
+        "-DROCKSDB_BUILD_SHARED=OFF",
+    ] + select({
+         "@platforms//os:macos": ["-DCMAKE_CXX_FLAGS=-Wno-error=uninitialized"],
+         "//conditions:default": ["-DCMAKE_CXX_FLAGS=-Wno-error=maybe-uninitialized"],
+    }),
+    lib_source = ":rocksdb_srcs",
+    targets = ["rocksdb"],
+    out_static_libs = ["librocksdb.a"],
+    deps = [
+        ":snappy",
+        "@jemalloc//:jemalloc",
+        "@lz4//:lz4",
+        "@zstd//:zstd",
+        "@zlib//:zlib",
+        "@bzip2//:bzip2",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "out_dir",
+    srcs = [":rocksdb"],
+    visibility = ["//visibility:public"],
+)
+
+select_file(
+    name = "librocksdb",
+    srcs = ":out_dir",
+    subpath = "librocksdb.a",
+)
+copy_file(
+    name = "librocksdb_copy",
+    src = ":librocksdb",
+    out = "librocksdb.a",
+    allow_symlink = False,
+)
+
+copy_to_directory(
+    name = "rocksdb_lib",
+    srcs = [":librocksdb_copy"],
+    visibility = ["//visibility:public"],
+)
+
+# Select the include folder so we can specify `ROCKSDB_INCLUDE_DIR`
+select_file(
+    name = "rocksdb_include",
+    srcs = ":out_dir",
+    subpath = "include",
+    visibility = ["//visibility:public"],
+)
+
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Copyright 2015 The TensorFlow Authors. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.

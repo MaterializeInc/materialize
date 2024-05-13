@@ -15,7 +15,7 @@ from pytest import fail
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
-TD_TIMEOUT_SHORT = 60
+TD_TIMEOUT_SHORT = 80
 TD_TIMEOUT_FULL_RECOVERY = 660
 
 

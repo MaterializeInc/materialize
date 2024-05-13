@@ -287,8 +287,8 @@ impl RedundantJoin {
                                 for (local_col, global_col) in
                                     old_input_mapper.global_columns(input).enumerate()
                                 {
-                                    projection[global_col] =
-                                        prov.dereferenced_projection[local_col].clone();
+                                    projection[global_col]
+                                        .clone_from(&prov.dereferenced_projection[local_col]);
                                 }
                                 prov.dereferenced_projection = projection;
                                 results.push(prov);

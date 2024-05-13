@@ -608,7 +608,7 @@ id: {}, key: {:?}",
                     IndexUsageType::FullScan => {
                         full_scan_changes.insert(get_id, picked_idx);
                         *idx_id = picked_idx;
-                        *key = picked_idx_key.clone();
+                        key.clone_from(&picked_idx_key);
                     }
                     _ => {}
                 }

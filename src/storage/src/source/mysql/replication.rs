@@ -117,14 +117,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
     let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all subsources
     let (mut definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut rewind_input = builder.new_input_for_many(
+    let mut rewind_input = builder.new_input_for(
         rewind_stream,
         Exchange::new(move |_| repl_reader_id),
-        [&data_output, &upper_output],
+        &data_output,
     );
 
     let output_indexes = table_info
@@ -307,6 +307,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
             let mut active_tx: Option<(Uuid, NonZeroU64)> = None;
 
+            let mut row_event_buffer = Vec::new();
+
             while let Some(event) = repl_context.stream.next().await {
                 use mysql_async::binlog::events::*;
                 let event = event?;
@@ -376,7 +378,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         let cur_gtid =
                             GtidPartition::new_singleton(source_id, GtidState::Active(tx_id));
 
-                        events::handle_rows_event(data, &mut repl_context, &cur_gtid).await?;
+                        events::handle_rows_event(
+                            data,
+                            &mut repl_context,
+                            &cur_gtid,
+                            &mut row_event_buffer,
+                        )
+                        .await?;
 
                         // Advance the frontier up to the point right before this GTID, since we
                         // might still see other events that are part of this same GTID, such as

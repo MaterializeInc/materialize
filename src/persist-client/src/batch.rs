@@ -92,10 +92,10 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     fn drop(&mut self) {
-        if self.batch.parts.len() > 0 {
+        if self.batch.part_count() > 0 {
             warn!(
                 "un-consumed Batch, with {} parts and dangling blob keys: {:?}",
-                self.batch.parts.len(),
+                self.batch.part_count(),
                 self.batch
                     .parts
                     .iter()
@@ -633,12 +633,7 @@ where
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch {
-                desc,
-                parts,
-                len: self.num_updates,
-                runs: self.runs,
-            },
+            HollowBatch::new(desc, parts, self.num_updates, self.runs),
         );
 
         Ok(batch)
@@ -1023,6 +1018,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let partial_key = PartialBatchKey::new(&cfg.writer_key, &PartId::new());
         let key = partial_key.complete(&shard_metrics.shard_id);
         let goodbytes = updates.updates.iter().map(|x| x.goodbytes()).sum::<usize>();
+        let metrics_ = Arc::clone(&metrics);
 
         let (stats, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
@@ -1049,7 +1045,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
                 let encode_start = Instant::now();
                 let mut buf = Vec::new();
-                updates.encode(&mut buf);
+                updates.encode(&mut buf, &metrics_.columnar);
 
                 // Drop batch as soon as we can to reclaim its memory.
                 drop(updates);
@@ -1311,7 +1307,7 @@ mod tests {
             .finish(&schemas, Antichain::from_elem(4))
             .await
             .expect("invalid usage");
-        assert_eq!(batch.batch.parts.len(), 3);
+        assert_eq!(batch.batch.part_count(), 3);
         write
             .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(4))
             .await
@@ -1347,7 +1343,7 @@ mod tests {
             )
             .await;
 
-        assert_eq!(batch.batch.parts.len(), 3);
+        assert_eq!(batch.batch.part_count(), 3);
         for part in &batch.batch.parts {
             let part = match part {
                 BatchPart::Hollow(x) => x,
@@ -1390,7 +1386,7 @@ mod tests {
             .await
             .expect("invalid usage");
 
-        assert_eq!(batch.batch.parts.len(), 2);
+        assert_eq!(batch.batch.part_count(), 2);
         for part in &batch.batch.parts {
             let part = match part {
                 BatchPart::Hollow(x) => x,

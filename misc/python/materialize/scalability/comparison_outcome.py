@@ -98,3 +98,10 @@ class ComparisonOutcome:
         self.significant_improvement_df = concat_df_totals_extended(
             [self.significant_improvement_df, significant_improvements_data]
         )
+
+    def get_regressions_by_endpoint(self, endpoint: Endpoint) -> list[Regression]:
+        return [
+            regression
+            for regression in self.regressions
+            if regression.endpoint == endpoint
+        ]

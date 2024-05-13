@@ -685,16 +685,7 @@ where
             )
             .await
             .expect("txns schema shouldn't change");
-        let as_of = txns_read.since().clone();
-        let txns_id = txns_read.shard_id();
-        let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
-        let txns_subscribe = txns_read
-            .subscribe(as_of)
-            .await
-            .expect("handle holds a capability");
-
-        let state = TxnsCacheState::new(txns_id, since_ts, only_data_id);
-
+        let (state, txns_subscribe) = TxnsCacheState::init::<C>(only_data_id, txns_read).await;
         let subscribe_task = TxnsSubscribeTask {
             txns_subscribe,
             buf: Vec::new(),

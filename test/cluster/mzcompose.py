@@ -3419,6 +3419,8 @@ def workflow_test_refresh_mv_restart(
      - with / without indexes on MVs.
 
     After each of 1., 2., and 3., check that the input table's read frontier keeps advancing.
+
+    Also do some sanity checks on introspection objects related to REFRESH MVs.
     """
 
     def check_frontier_is_not_stuck():
@@ -3433,6 +3435,34 @@ def workflow_test_refresh_mv_restart(
         time.sleep(2)
         table_frontier2 = c.sql_query(query_t1_frontier)[0][0]
         assert table_frontier1 < table_frontier2
+
+    def check_introspection():
+        c.testdrive(
+            input=dedent(
+                """
+                # Wait for introspection objects to be populated.
+                > SELECT count(*) > 0 FROM mz_catalog.mz_materialized_views;
+                true
+                > SELECT count(*) > 0 FROM mz_internal.mz_materialized_view_refresh_strategies;
+                true
+                > SELECT count(*) > 0 FROM mz_internal.mz_materialized_view_refreshes;
+                true
+
+                # Check that no MV is missing from any of the introspection objects.
+                # Note that only REFRESH MVs show up in `mz_materialized_view_refreshes`, which is ok, because we are
+                # creating only REFRESH MVs in these tests.
+                > SELECT *
+                  FROM
+                    mz_catalog.mz_materialized_views mv
+                    FULL OUTER JOIN mz_internal.mz_materialized_view_refreshes mvr ON (mv.id = mvr.materialized_view_id)
+                    FULL OUTER JOIN mz_internal.mz_materialized_view_refresh_strategies mvrs ON (mv.id = mvrs.materialized_view_id)
+                  WHERE
+                    mv.id IS NULL OR
+                    mvr.materialized_view_id IS NULL OR
+                    mvrs.materialized_view_id IS NULL;
+                """
+            )
+        )
 
     with c.override(
         Materialized(
@@ -3625,10 +3655,13 @@ def workflow_test_refresh_mv_restart(
 
         # 1. (quick restart)
         c.testdrive(input=before_restart)
+        check_introspection()
         c.kill("materialized")
         c.up("materialized")
+        check_introspection()
         c.testdrive(input=after_restart)
         check_frontier_is_not_stuck()
+        check_introspection()
 
         # Reset the testing context.
         c.down(destroy_volumes=True)
@@ -3637,11 +3670,14 @@ def workflow_test_refresh_mv_restart(
 
         # 2. (slow restart)
         c.testdrive(input=before_restart)
+        check_introspection()
         c.kill("materialized")
         time.sleep(20)  # Sleep through the refresh interval of the above MVs
         c.up("materialized")
+        check_introspection()
         c.testdrive(input=after_restart)
         check_frontier_is_not_stuck()
+        check_introspection()
 
         # Reset the testing context.
         c.down(destroy_volumes=True)
@@ -3698,8 +3734,10 @@ def workflow_test_refresh_mv_restart(
             )
         )
 
+        check_introspection()
         c.kill("materialized")
         c.up("materialized")
+        check_introspection()
         c.testdrive(
             input=dedent(
                 """
@@ -3790,6 +3828,20 @@ def workflow_test_refresh_mv_restart(
             )
         )
         check_frontier_is_not_stuck()
+        check_introspection()
+
+        # Drop some MVs and check that this is reflected in the introspection objects.
+        c.testdrive(
+            input=dedent(
+                """
+                > DROP MATERIALIZED VIEW mv_3h;
+                > DROP MATERIALIZED VIEW mv_3d;
+                > SELECT * FROM mz_catalog.mz_materialized_views
+                  WHERE name = 'mv_3h' OR name = 'mv_3d';
+                """
+            )
+        )
+        check_introspection()
 
 
 def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -> None:

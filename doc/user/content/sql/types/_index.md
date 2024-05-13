@@ -42,6 +42,7 @@ Type | Aliases | Use | Size (bytes) | Catalog name | Syntax
 [`timestamp`](timestamp) | | Date and time | 8 | Named | `TIMESTAMP '2007-02-01 15:04:05'`
 [`timestamp with time zone`](timestamp) | `timestamp with time zone` | Date and time with timezone | 8 | Named | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
 [Arrays](array) (`[]`) | | Multidimensional array | Variable | Named | `ARRAY[...]`
+[`uuid`](uuid) | | UUID | 16 | Named | `UUID 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'`
 
 #### Catalog name
 

@@ -1578,10 +1578,6 @@ criteria = "safe-to-deploy"
 version = "0.20.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.twox-hash]]
-version = "1.6.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.typed-arena]]
 version = "2.0.2"
 criteria = "safe-to-deploy"

@@ -490,29 +490,23 @@ impl std::fmt::Display for ResolvedItemName {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ResolvedColumnName {
-    Column {
-        relation: ResolvedItemName,
-        name: ColumnName,
-        index: usize,
-    },
+pub enum ResolvedColumnReference {
+    Column { name: ColumnName, index: usize },
     Error,
 }
 
-impl AstDisplay for ResolvedColumnName {
+impl AstDisplay for ResolvedColumnReference {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ResolvedColumnName::Column { relation, name, .. } => {
-                f.write_node(relation);
-                f.write_str(".");
+            ResolvedColumnReference::Column { name, .. } => {
                 f.write_node(&Ident::new_unchecked(name.as_str()));
             }
-            ResolvedColumnName::Error => {}
+            ResolvedColumnReference::Error => {}
         }
     }
 }
 
-impl std::fmt::Display for ResolvedColumnName {
+impl std::fmt::Display for ResolvedColumnReference {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(self.to_ast_string().as_str())
     }
@@ -803,7 +797,7 @@ impl AstDisplay for ResolvedObjectName {
 impl AstInfo for Aug {
     type NestedStatement = Statement<Raw>;
     type ItemName = ResolvedItemName;
-    type ColumnName = ResolvedColumnName;
+    type ColumnReference = ResolvedColumnReference;
     type SchemaName = ResolvedSchemaName;
     type DatabaseName = ResolvedDatabaseName;
     type ClusterName = ResolvedClusterName;
@@ -1595,10 +1589,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         )
     }
 
-    fn fold_column_name(
-        &mut self,
-        column_name: <Raw as AstInfo>::ColumnName,
-    ) -> <Aug as AstInfo>::ColumnName {
+    fn fold_column_name(&mut self, column_name: ast::ColumnName<Raw>) -> ast::ColumnName<Aug> {
         let item_name = self.resolve_item_name(
             column_name.relation,
             ItemResolutionConfig {
@@ -1607,6 +1598,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 relations: true,
             },
         );
+
         match &item_name {
             ResolvedItemName::Item { id, full_name, .. } => {
                 let item = self.catalog.get_item(id);
@@ -1617,11 +1609,14 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         if self.status.is_ok() {
                             self.status = Err(e.into());
                         }
-                        return ResolvedColumnName::Error;
+                        return ast::ColumnName {
+                            relation: ResolvedItemName::Error,
+                            column: ResolvedColumnReference::Error,
+                        };
                     }
                 };
 
-                let name = normalize::column_name(column_name.column);
+                let name = normalize::column_name(column_name.column.clone());
                 let Some((index, _typ)) = desc.get_by_name(&name) else {
                     if self.status.is_ok() {
                         let similar = desc.iter_similar_names(&name).cloned().collect();
@@ -1631,17 +1626,30 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             similar,
                         })
                     }
-                    return ResolvedColumnName::Error;
+                    return ast::ColumnName {
+                        relation: ResolvedItemName::Error,
+                        column: ResolvedColumnReference::Error,
+                    };
                 };
 
-                ResolvedColumnName::Column {
+                ast::ColumnName {
                     relation: item_name,
-                    name,
-                    index,
+                    column: ResolvedColumnReference::Column { name, index },
                 }
             }
-            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => ResolvedColumnName::Error,
+            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => ast::ColumnName {
+                relation: ResolvedItemName::Error,
+                column: ResolvedColumnReference::Error,
+            },
         }
+    }
+
+    fn fold_column_reference(
+        &mut self,
+        _node: <Raw as AstInfo>::ColumnReference,
+    ) -> <Aug as AstInfo>::ColumnReference {
+        // Do not call this function directly; instead resolve through `fold_column_name`
+        ResolvedColumnReference::Error
     }
 
     fn fold_data_type(
@@ -2043,138 +2051,6 @@ where
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ResolvedIds(pub BTreeSet<GlobalId>);
 
-#[derive(Debug)]
-/// An AST visitor that transforms an AST that contains temporary GlobalId references to one where
-/// every temporary GlobalId has been replaced by its final allocated id, as dictated by the
-/// provided `allocation`
-///
-/// This is useful when trying to create multiple objects in a single DDL transaction and the
-/// objects that are about to be don't have allocated GlobalIds yet. What we can do in that case is
-/// for the planner to assign temporary `GlobalId::Transient` identifiers to all the objects that
-/// it wants to create and use those for any interelationships.
-///
-/// Then, when the coordinator receives the list of plans to be executed it can batch allocate
-/// the final `GlobalIds` and use this TransientResolver to walk through all the ASTs and make them
-/// refer to the final GlobalIds of the objects.
-pub struct TransientResolver<'a> {
-    /// A map from transient `GlobalId`s to their final non-transient `GlobalId`s.
-    allocation: &'a BTreeMap<GlobalId, GlobalId>,
-    status: Result<(), PlanError>,
-}
-
-impl<'a> TransientResolver<'a> {
-    fn new(allocation: &'a BTreeMap<GlobalId, GlobalId>) -> Self {
-        TransientResolver {
-            allocation,
-            status: Ok(()),
-        }
-    }
-}
-
-impl Fold<Aug, Aug> for TransientResolver<'_> {
-    fn fold_item_name(&mut self, item_name: ResolvedItemName) -> ResolvedItemName {
-        match item_name {
-            ResolvedItemName::Item {
-                id: transient_id @ GlobalId::Transient(_),
-                qualifiers,
-                full_name,
-                print_id,
-            } => {
-                let id = match self.allocation.get(&transient_id) {
-                    Some(id) => *id,
-                    None => {
-                        let obj = ResolvedItemName::Item {
-                            id: transient_id,
-                            qualifiers: qualifiers.clone(),
-                            full_name: full_name.clone(),
-                            print_id,
-                        };
-                        self.status = Err(PlanError::InvalidObject(Box::new(obj)));
-                        transient_id
-                    }
-                };
-                ResolvedItemName::Item {
-                    id,
-                    qualifiers,
-                    full_name,
-                    print_id,
-                }
-            }
-            other => other,
-        }
-    }
-    fn fold_column_name(&mut self, column_name: ResolvedColumnName) -> ResolvedColumnName {
-        match column_name {
-            ResolvedColumnName::Column {
-                relation,
-                name,
-                index,
-            } => {
-                let final_relation = self.fold_item_name(relation);
-
-                ResolvedColumnName::Column {
-                    relation: final_relation,
-                    name,
-                    index,
-                }
-            }
-            other => other,
-        }
-    }
-    fn fold_cluster_name(
-        &mut self,
-        node: <Aug as AstInfo>::ClusterName,
-    ) -> <Aug as AstInfo>::ClusterName {
-        node
-    }
-    fn fold_cte_id(&mut self, node: <Aug as AstInfo>::CteId) -> <Aug as AstInfo>::CteId {
-        node
-    }
-    fn fold_data_type(&mut self, node: <Aug as AstInfo>::DataType) -> <Aug as AstInfo>::DataType {
-        node
-    }
-    fn fold_database_name(
-        &mut self,
-        node: <Aug as AstInfo>::DatabaseName,
-    ) -> <Aug as AstInfo>::DatabaseName {
-        node
-    }
-    fn fold_nested_statement(
-        &mut self,
-        node: <Aug as AstInfo>::NestedStatement,
-    ) -> <Aug as AstInfo>::NestedStatement {
-        node
-    }
-    fn fold_schema_name(
-        &mut self,
-        node: <Aug as AstInfo>::SchemaName,
-    ) -> <Aug as AstInfo>::SchemaName {
-        node
-    }
-    fn fold_role_name(&mut self, node: <Aug as AstInfo>::RoleName) -> <Aug as AstInfo>::RoleName {
-        node
-    }
-    fn fold_object_name(
-        &mut self,
-        node: <Aug as AstInfo>::ObjectName,
-    ) -> <Aug as AstInfo>::ObjectName {
-        node
-    }
-}
-
-pub fn resolve_transient_ids<N>(
-    allocation: &BTreeMap<GlobalId, GlobalId>,
-    node: N,
-) -> Result<N::Folded, PlanError>
-where
-    N: FoldNode<Aug, Aug>,
-{
-    let mut resolver = TransientResolver::new(allocation);
-    let result = node.fold(&mut resolver);
-    resolver.status?;
-    Ok(result)
-}
-
 #[derive(Debug, Default)]
 pub struct DependencyVisitor {
     ids: BTreeSet<GlobalId>,
@@ -2239,12 +2115,6 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             if catalog_full_name == *full_name {
                 *print_id = false;
             }
-        }
-    }
-
-    fn visit_column_name_mut(&mut self, name: &mut ResolvedColumnName) {
-        if let ResolvedColumnName::Column { relation, .. } = name {
-            self.visit_item_name_mut(relation);
         }
     }
 

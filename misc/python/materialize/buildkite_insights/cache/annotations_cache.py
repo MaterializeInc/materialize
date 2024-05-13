@@ -12,9 +12,7 @@ from typing import Any
 from materialize.buildkite_insights.buildkite_api import annotations_api
 from materialize.buildkite_insights.cache import generic_cache
 from materialize.buildkite_insights.cache.cache_constants import FetchMode
-from materialize.buildkite_insights.util.data_io import (
-    get_file_path,
-)
+from materialize.buildkite_insights.cache.generic_cache import CacheFilePath
 
 
 def get_or_query_annotations(
@@ -24,8 +22,10 @@ def get_or_query_annotations(
     add_to_cache_if_not_present: bool,
     quiet_mode: bool = True,
 ) -> list[Any]:
-    cache_file_path = get_file_path(
-        file_prefix="annotations", pipeline_slug=pipeline_slug, params_hash=build_number
+    cache_file_path = CacheFilePath(
+        cache_item_type="annotations",
+        pipeline_slug=pipeline_slug,
+        params_hash=build_number,
     )
 
     fetch_action = lambda: annotations_api.get_annotations(

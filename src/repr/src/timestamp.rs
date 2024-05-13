@@ -17,6 +17,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::adt::numeric::Numeric;
+use crate::refresh_schedule::RefreshSchedule;
 use crate::strconv::parse_timestamptz;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
@@ -79,6 +80,15 @@ pub trait TimestampManipulation:
 
     /// Return the maximum value for this timestamp.
     fn maximum() -> Self;
+
+    /// Rounds up the timestamp to the time of the next refresh according to the given schedule.
+    /// Returns None if there is no next refresh.
+    fn round_up(&self, schedule: &RefreshSchedule) -> Option<Self>;
+
+    /// Rounds down `timestamp - 1` to the time of the previous refresh according to the given
+    /// schedule.
+    /// Returns None if there is no previous refresh.
+    fn round_down_minus_1(&self, schedule: &RefreshSchedule) -> Option<Self>;
 }
 
 impl TimestampManipulation for Timestamp {
@@ -104,6 +114,14 @@ impl TimestampManipulation for Timestamp {
 
     fn maximum() -> Self {
         Self::MAX
+    }
+
+    fn round_up(&self, schedule: &RefreshSchedule) -> Option<Self> {
+        schedule.round_up_timestamp(*self)
+    }
+
+    fn round_down_minus_1(&self, schedule: &RefreshSchedule) -> Option<Self> {
+        schedule.round_down_timestamp_m1(*self)
     }
 }
 

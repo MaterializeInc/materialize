@@ -902,9 +902,21 @@ class FlipFlagsAction(Action):
         self.flags_with_values: dict[str, list[str]] = dict()
         self.flags_with_values["persist_roundtrip_spine"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values[
+            "persist_optimize_ignored_data_fetch"
+        ] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values[
+            "persist_optimize_ignored_data_decode"
+        ] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_write_diffs_sum"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values[
             "enable_variadic_left_join_lowering"
         ] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_use_arrow_rs_library"] = [
+            "off",
+            "read",
+            "read_and_write",
+        ]
 
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))

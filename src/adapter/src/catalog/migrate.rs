@@ -83,7 +83,7 @@ where
 pub(crate) async fn migrate(
     state: &CatalogState,
     tx: &mut Transaction<'_>,
-    _now: NowFn,
+    now: NowFn,
     _boot_ts: Timestamp,
     _connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
@@ -158,6 +158,7 @@ pub(crate) async fn migrate(
     // Each migration should be a function that takes `tx` and `conn_cat` as
     // input and stages arbitrary transformations to the catalog on `tx`.
     mysql_subsources_remove_unnecessary_db_name(tx, &conn_cat)?;
+    fix_dependency_order_0_99_2(tx, &conn_cat, now)?;
 
     info!(
         "migration from catalog version {:?} complete",
@@ -178,7 +179,7 @@ pub(crate) async fn migrate(
 ///   `GlobalId`s they wish to reassign to `needs_new_id`.
 /// - Assumes all items in `needs_new_id` are present in `conn_catalog` and that
 ///   their types do not change.
-fn _assign_new_user_global_ids(
+fn assign_new_user_global_ids(
     tx: &mut Transaction<'_>,
     conn_catalog: &ConnCatalog,
     now: NowFn,
@@ -260,7 +261,7 @@ fn _assign_new_user_global_ids(
 
         let object_type = entry.item_type().into();
 
-        _add_to_audit_log(
+        add_to_audit_log(
             tx,
             mz_audit_log::EventType::Create,
             object_type,
@@ -271,7 +272,7 @@ fn _assign_new_user_global_ids(
             occurred_at,
         )?;
 
-        _add_to_audit_log(
+        add_to_audit_log(
             tx,
             mz_audit_log::EventType::Drop,
             object_type,
@@ -416,7 +417,7 @@ fn _assign_new_user_global_ids(
 // Please include the adapter team on any code reviews that add or edit
 // migrations.
 
-fn _add_to_audit_log(
+fn add_to_audit_log(
     tx: &mut Transaction,
     event_type: mz_audit_log::EventType,
     object_type: mz_audit_log::ObjectType,
@@ -540,7 +541,7 @@ fn ast_rewrite_create_source_pg_database_details(
                     match &conn {
                         mz_storage_types::connections::Connection::Postgres(pg) => {
                             // Store the connection's database in the details.
-                            details.database = pg.database.clone();
+                            details.database.clone_from(&pg.database);
                         }
                         _ => unreachable!("PG sources must use PG connections"),
                     };
@@ -642,6 +643,70 @@ fn mysql_subsources_remove_unnecessary_db_name(
         .collect();
 
     tx.update_items(updated_items)?;
+
+    Ok(())
+}
+
+/// In v0.98.x, we inverted the dependency order of sources + subsources and
+/// migrated those items, as well as their dependencies, to new IDs.
+/// Unfortunately, because of a bug, this did not place items in the correct
+/// order and it was possible that some items depend on items with IDs less than
+/// its own.
+///
+/// This PR goes back and fixes any IDs with that broken relationship.
+fn fix_dependency_order_0_99_2(
+    tx: &mut Transaction<'_>,
+    conn_catalog: &ConnCatalog,
+    now: NowFn,
+) -> Result<(), anyhow::Error> {
+    // A vector in the _new_ dependency order. Because the `vec` doesn't have
+    // any built-in de-duplication, we will need to deduplicate these values
+    // elsewhere.
+    let mut needs_new_id = vec![];
+
+    for item in conn_catalog
+        .get_items()
+        .into_iter()
+        // Only consider user items
+        .filter(|item| item.id().is_user())
+    {
+        for dependent_id in item.used_by() {
+            // If an item has a dependent with an ID less than its own, that
+            // dependent needs an ID that will be pushed forward ahead of this
+            // ID.
+            if *dependent_id < item.id() {
+                needs_new_id.push(*dependent_id);
+            }
+        }
+    }
+
+    let mut remaining_updates = std::collections::VecDeque::from_iter(needs_new_id.drain(..));
+
+    let state = conn_catalog.state();
+
+    // If this item's ID must be moved forward, so too must every item that
+    // depends on it except for its primary source ID.
+    while let Some(id) = remaining_updates.pop_front() {
+        needs_new_id.push(id);
+        // If we push this item forward, we must all push forward all IDs that
+        // refer to this ID (i.e. we need to ensure that all of an item's
+        // dependents have IDs greater than its own).
+        remaining_updates.extend(state.get_entry(&id).used_by().iter().cloned());
+    }
+
+    // Ensure that each ID is present only once and that it is in the greatest
+    // position.
+    let mut id_dedup = BTreeSet::new();
+    needs_new_id = needs_new_id
+        .into_iter()
+        .rev()
+        .filter(|id| id_dedup.insert(*id))
+        .collect();
+
+    // Flip this back around in the right order.
+    needs_new_id = needs_new_id.into_iter().rev().collect();
+
+    assign_new_user_global_ids(tx, conn_catalog, now, needs_new_id)?;
 
     Ok(())
 }

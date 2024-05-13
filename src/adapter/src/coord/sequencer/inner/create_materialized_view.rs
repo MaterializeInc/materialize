@@ -12,7 +12,6 @@ use maplit::btreemap;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
@@ -20,6 +19,7 @@ use mz_ore::soft_panic_or_log;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::Datum;
 use mz_repr::Row;
 use mz_sql::ast::ExplainStage;
@@ -291,9 +291,9 @@ impl Coordinator {
             }
         };
 
-        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
+        let row = Row::pack_slice(&[Datum::from(explain.as_str())]);
 
-        Ok(Self::send_immediate_rows(rows))
+        Ok(Self::send_immediate_rows(row))
     }
 
     #[instrument]
@@ -581,6 +581,8 @@ impl Coordinator {
             "materialized view timestamp selection",
         );
 
+        let initial_as_of = storage_as_of.clone();
+
         // Update the `create_sql` with the selected `as_of`. This is how we make sure the `as_of`
         // is persisted to the catalog and can be relied on during bootstrapping.
         // This has to be the `storage_as_of`, because bootstrapping uses this in
@@ -614,7 +616,7 @@ impl Coordinator {
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
                     refresh_schedule,
-                    initial_as_of: Some(storage_as_of.clone()),
+                    initial_as_of: Some(initial_as_of.clone()),
                 }),
                 owner_id: *session.current_role_id(),
             }),
@@ -640,6 +642,7 @@ impl Coordinator {
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 df_desc.set_as_of(dataflow_as_of.clone());
+                df_desc.set_initial_as_of(initial_as_of);
                 df_desc.until = until;
 
                 // Emit notices.

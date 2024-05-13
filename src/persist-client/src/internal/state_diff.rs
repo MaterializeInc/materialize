@@ -748,26 +748,21 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             key: ins,
             val: StateFieldValDiff::Insert(()),
         }] => {
-            if del.parts.len() == 0
-                && ins.parts.len() == 0
+            if del.is_empty()
+                && ins.is_empty()
                 && del.desc.lower() == ins.desc.lower()
                 && PartialOrder::less_than(del.desc.upper(), ins.desc.upper())
             {
                 // Ignore merge_reqs because whichever process generated this diff is
                 // assigned the work.
-                let () = trace.push_batch_no_merge_reqs(HollowBatch {
-                    desc: Description::new(
-                        del.desc.upper().clone(),
-                        ins.desc.upper().clone(),
-                        // `keys.len() == 0` for both `del` and `ins` means we
-                        // don't have to think about what the compaction
-                        // frontier is for these batches (nothing in them, so nothing could have been compacted.
-                        Antichain::from_elem(T::minimum()),
-                    ),
-                    parts: vec![],
-                    len: 0,
-                    runs: vec![],
-                });
+                let () = trace.push_batch_no_merge_reqs(HollowBatch::empty(Description::new(
+                    del.desc.upper().clone(),
+                    ins.desc.upper().clone(),
+                    // `keys.len() == 0` for both `del` and `ins` means we
+                    // don't have to think about what the compaction
+                    // frontier is for these batches (nothing in them, so nothing could have been compacted.
+                    Antichain::from_elem(T::minimum()),
+                )));
                 metrics.state.apply_spine_fast_path.inc();
                 return Ok(());
             }
@@ -992,12 +987,7 @@ fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
                 replacement.desc.lower().clone(),
                 first_overlapping_batch.desc.since().clone(),
             );
-            trace.push(HollowBatch {
-                desc,
-                parts: Vec::new(),
-                len: 0,
-                runs: Vec::new(),
-            });
+            trace.push(HollowBatch::empty(desc));
             metrics.state.apply_spine_slow_path_lenient_adjustment.inc();
         }
     }
@@ -1022,12 +1012,7 @@ fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
                 last_overlapping_batch.desc.upper().clone(),
                 last_overlapping_batch.desc.since().clone(),
             );
-            trace.push(HollowBatch {
-                desc,
-                parts: Vec::new(),
-                len: 0,
-                runs: Vec::new(),
-            });
+            trace.push(HollowBatch::empty(desc));
             metrics.state.apply_spine_slow_path_lenient_adjustment.inc();
         }
     }
@@ -1345,16 +1330,13 @@ mod tests {
                     Action::Compact { req } => {
                         if !merge_reqs.is_empty() {
                             let req = merge_reqs.remove(req.min(merge_reqs.len() - 1));
-                            let output = HollowBatch {
-                                desc: req.desc,
-                                len: req.inputs.iter().map(|p| p.batch.len).sum(),
-                                parts: req
-                                    .inputs
-                                    .into_iter()
-                                    .flat_map(|p| p.batch.parts.clone())
-                                    .collect(),
-                                runs: vec![],
-                            };
+                            let len = req.inputs.iter().map(|p| p.batch.len).sum();
+                            let parts = req
+                                .inputs
+                                .into_iter()
+                                .flat_map(|p| p.batch.parts.clone())
+                                .collect();
+                            let output = HollowBatch::new(req.desc, parts, len, vec![]);
                             leader
                                 .collections
                                 .trace
@@ -1369,10 +1351,10 @@ mod tests {
                 // Validate that the diff applies to both the previous state (also checked in
                 // debug asserts) and our follower that's only synchronized via diffs.
                 old_leader
-                    .apply_diff(&metrics, diff.clone())
+                    .apply_diff(metrics, diff.clone())
                     .expect("diff applies to the old version of the leader state");
                 follower
-                    .apply_diff(&metrics, diff.clone())
+                    .apply_diff(metrics, diff.clone())
                     .expect("diff applies to the synced version of the follower state");
 
                 // TODO: once spine structure is roundtripped through diffs, assert that the follower
@@ -1395,16 +1377,16 @@ mod tests {
     #[mz_ore::test]
     fn regression_15493_sniff_insert() {
         fn hb(lower: u64, upper: u64, len: usize) -> HollowBatch<u64> {
-            HollowBatch {
-                desc: Description::new(
+            HollowBatch::new(
+                Description::new(
                     Antichain::from_elem(lower),
                     Antichain::from_elem(upper),
                     Antichain::from_elem(0),
                 ),
-                parts: Vec::new(),
+                Vec::new(),
                 len,
-                runs: Vec::new(),
-            }
+                Vec::new(),
+            )
         }
 
         // The bug handled here is essentially a set of batches that look like
@@ -1504,12 +1486,7 @@ mod tests {
                     Antichain::from_elem(*upper),
                     Antichain::from_elem(*since),
                 );
-                HollowBatch {
-                    desc,
-                    parts: Vec::new(),
-                    len: *len,
-                    runs: Vec::new(),
-                }
+                HollowBatch::new(desc, Vec::new(), *len, Vec::new())
             }
             let replacement = batch(&replacement);
             let batches = spine.iter().map(batch).collect::<Vec<_>>();

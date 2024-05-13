@@ -78,7 +78,6 @@
 // https://app.segment.com/materializeinc/sources/cloud_dev/debugger.
 
 use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
-use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::adt::jsonb::Jsonb;
@@ -136,13 +135,13 @@ async fn report_loop(
                     .active_subscribes
                     .with_label_values(&["user"])
                     .get();
-                let rows = adapter_client.introspection_execute_one(&format!("
+                let mut rows = adapter_client.introspection_execute_one(&format!("
                     SELECT jsonb_build_object(
                         'active_aws_privatelink_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'aws-privatelink')::int4,
                         'active_clusters', (SELECT count(*) FROM mz_clusters WHERE id LIKE 'u%')::int4,
                         'active_cluster_replicas', (
                             SELECT jsonb_object_agg(base.size, coalesce(count, 0))
-                            FROM mz_internal.mz_cluster_replica_sizes base
+                            FROM mz_catalog.mz_cluster_replica_sizes base
                             LEFT JOIN (
                                 SELECT r.size, count(*)::int4
                                 FROM mz_cluster_replicas r
@@ -167,7 +166,10 @@ async fn report_loop(
                         'active_subscribes', {active_subscribes}
                     )",
                 )).await?;
-                let row = rows.into_element();
+
+                let row = rows.next().expect("expected at least one row").to_owned();
+                assert!(rows.next().is_none(), "introspection query had more than one row?");
+
                 let jsonb = Jsonb::from_row(row);
                 Ok::<_, anyhow::Error>(jsonb.as_ref().to_serde_json())
             })

@@ -571,6 +571,7 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(ARRAY) => self.parse_array(),
             Token::Keyword(LIST) => self.parse_list(),
+            Token::Keyword(MAP) => self.parse_map(),
             Token::Keyword(CASE) => self.parse_case_expr(),
             Token::Keyword(CAST) => self.parse_cast_expr(),
             Token::Keyword(COALESCE) => {
@@ -5532,6 +5533,35 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_map(&mut self) -> Result<Expr<Raw>, ParserError> {
+        if self.consume_token(&Token::LParen) {
+            let subquery = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            return Ok(Expr::MapSubquery(Box::new(subquery)));
+        }
+
+        self.expect_token(&Token::LBracket)?;
+        let mut exprs = vec![];
+        loop {
+            if let Some(Token::RBracket) = self.peek_token() {
+                break;
+            }
+            let key = self.parse_expr()?;
+            self.expect_token(&Token::Arrow)?;
+            let value = if let Some(Token::LBracket) = self.peek_token() {
+                self.parse_map()?
+            } else {
+                self.parse_expr()?
+            };
+            exprs.push(MapEntry { key, value });
+            if !self.consume_token(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect_token(&Token::RBracket)?;
+        Ok(Expr::Map(exprs))
+    }
+
     fn parse_sequence<F>(&mut self, mut f: F) -> Result<Vec<Expr<Raw>>, ParserError>
     where
         F: FnMut(&mut Self) -> Result<Expr<Raw>, ParserError>,
@@ -5714,7 +5744,7 @@ impl<'a> Parser<'a> {
 
                 // MZ "proprietary" types
                 MAP => {
-                    return self.parse_map();
+                    return self.parse_map_type();
                 }
 
                 // Misc.
@@ -5867,7 +5897,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_column_name(&mut self) -> Result<RawColumnName, ParserError> {
+    fn parse_column_name(&mut self) -> Result<ColumnName<Raw>, ParserError> {
         let start = self.peek_pos();
         let mut item_name = self.parse_raw_name()?;
         let column_name = match &mut item_name {
@@ -5886,7 +5916,7 @@ impl<'a> Parser<'a> {
             }
         };
 
-        Ok(RawColumnName {
+        Ok(ColumnName {
             relation: item_name,
             column: column_name,
         })
@@ -6046,10 +6076,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_map(&mut self) -> Result<RawDataType, ParserError> {
+    fn parse_map_type(&mut self) -> Result<RawDataType, ParserError> {
         self.expect_token(&Token::LBracket)?;
         let key_type = Box::new(self.parse_data_type()?);
-        self.expect_token(&Token::Op("=>".to_owned()))?;
+        self.expect_token(&Token::Arrow)?;
         let value_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::RBracket)?;
         Ok(RawDataType::Map {

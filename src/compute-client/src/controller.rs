@@ -45,6 +45,8 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -78,7 +80,7 @@ type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
 
 /// A composite trait for types that serve as timestamps in the Compute Controller.
 /// `Into<Datum<'a>>` is needed for writing timestamps to introspection collections.
-pub trait ComputeControllerTimestamp: TimestampManipulation + for<'a> Into<Datum<'a>> {}
+pub trait ComputeControllerTimestamp: TimestampManipulation + Into<Datum<'static>> {}
 
 impl ComputeControllerTimestamp for mz_repr::Timestamp {}
 
@@ -157,7 +159,7 @@ pub struct ComputeController<T> {
     /// Dynamic system configuration.
     ///
     /// Updated through `ComputeController::update_configuration` calls and shared with all
-    /// subcompontents of the compute controller.
+    /// subcomponents of the compute controller.
     dyncfg: Arc<ConfigSet>,
 
     /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
@@ -833,6 +835,9 @@ pub struct CollectionState<T> {
     replica_write_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
     /// The input frontiers reported by individual replicas.
     replica_input_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
+
+    /// Introspection state associated with this collection.
+    collection_introspection: CollectionIntrospection<T>,
 }
 
 impl<T> CollectionState<T> {
@@ -862,9 +867,13 @@ impl<T> CollectionState<T> {
 impl<T: ComputeControllerTimestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
     pub fn new(
+        collection_id: GlobalId,
         as_of: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
         compute_dependencies: Vec<GlobalId>,
+        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        initial_as_of: Option<Antichain<T>>,
+        refresh_schedule: Option<RefreshSchedule>,
     ) -> Self {
         // A collection is not readable before the `as_of`.
         let since = as_of.clone();
@@ -889,19 +898,228 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             read_policy: Some(ReadPolicy::ValidFrom(since)),
             storage_dependencies,
             compute_dependencies,
-            write_frontier: upper,
+            write_frontier: upper.clone(),
             replica_write_frontiers: BTreeMap::new(),
             replica_input_frontiers: BTreeMap::new(),
+            collection_introspection: CollectionIntrospection::new(
+                collection_id,
+                introspection_tx,
+                initial_as_of,
+                refresh_schedule,
+                upper,
+            ),
         }
     }
 
     /// Creates a new collection state for a log collection.
-    pub fn new_log_collection() -> Self {
+    pub fn new_log_collection(
+        id: GlobalId,
+        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    ) -> Self {
         let since = Antichain::from_elem(timely::progress::Timestamp::minimum());
-        let mut state = Self::new(since, Vec::new(), Vec::new());
+        let mut state = Self::new(
+            id,
+            since,
+            Vec::new(),
+            Vec::new(),
+            introspection_tx,
+            None,
+            None,
+        );
         state.log_collection = true;
         // Log collections are created and scheduled implicitly as part of replica initialization.
         state.scheduled = true;
         state
+    }
+}
+
+/// Manages certain introspection relations associated with a collection. Upon creation, it adds
+/// rows to introspection relations. When dropped, it retracts its managed rows.
+///
+/// TODO: `ComputeDependencies` could be moved under this.
+#[derive(Debug)]
+struct CollectionIntrospection<T> {
+    /// The ID of the compute collection.
+    collection_id: GlobalId,
+    /// A channel through which introspection updates are delivered.
+    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    /// Introspection state for `mz_materialized_view_refreshes`.
+    /// `Some` if it is a REFRESH MV.
+    refresh_introspection_state: Option<RefreshIntrospectionState<T>>,
+}
+
+impl<T> CollectionIntrospection<T> {
+    fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
+        let result = self.introspection_tx.send((introspection_type, updates));
+
+        if result.is_err() {
+            // The global controller holds on to the `introspection_rx`. So when we get here that
+            // probably means that the controller was dropped and the process is shutting down, in
+            // which case we don't care about introspection updates anymore.
+            tracing::info!(
+                ?introspection_type,
+                "discarding introspection update because the receiver disconnected"
+            );
+        }
+    }
+}
+
+impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
+    pub fn new(
+        collection_id: GlobalId,
+        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        initial_as_of: Option<Antichain<T>>,
+        refresh_schedule: Option<RefreshSchedule>,
+        upper: Antichain<T>,
+    ) -> CollectionIntrospection<T> {
+        let refresh_introspection_state = match (refresh_schedule, initial_as_of) {
+            (Some(refresh_schedule), Some(initial_as_of)) => Some(RefreshIntrospectionState::new(
+                refresh_schedule,
+                initial_as_of,
+                upper,
+            )),
+            (Some(_refresh_schedule), None) => {
+                soft_panic_or_log!("if we have a refresh_schedule, then it's an MV, so we should also have an initial_as_of");
+                None
+            }
+            _ => None,
+        };
+        let self_ = CollectionIntrospection {
+            collection_id,
+            introspection_tx,
+            refresh_introspection_state,
+        };
+
+        if let Some(refresh_introspection_state) = self_.refresh_introspection_state.as_ref() {
+            let insertion = refresh_introspection_state.row_for_collection(collection_id);
+            self_.send(
+                IntrospectionType::ComputeMaterializedViewRefreshes,
+                vec![(insertion, 1)],
+            );
+        }
+
+        self_
+    }
+
+    /// Should be called whenever the write frontier of the collection advances. It updates the
+    /// state that should be recorded in introspection relations, and sends it through the
+    /// `introspection_tx` channel.
+    pub fn frontier_update(&mut self, write_frontier: &Antichain<T>) {
+        if let Some(refresh_introspection_state) = &mut self.refresh_introspection_state {
+            // Old row to retract based on old state.
+            let retraction = refresh_introspection_state.row_for_collection(self.collection_id);
+            // Update state.
+            refresh_introspection_state.frontier_update(write_frontier);
+            // New row to insert based on new state.
+            let insertion = refresh_introspection_state.row_for_collection(self.collection_id);
+            // Send changes.
+            self.send(
+                IntrospectionType::ComputeMaterializedViewRefreshes,
+                vec![(retraction, -1), (insertion, 1)],
+            );
+        }
+    }
+}
+
+impl<T> Drop for CollectionIntrospection<T> {
+    fn drop(&mut self) {
+        self.refresh_introspection_state
+            .as_ref()
+            .map(|refresh_introspection_state| {
+                let retraction = refresh_introspection_state.row_for_collection(self.collection_id);
+                self.send(
+                    IntrospectionType::ComputeMaterializedViewRefreshes,
+                    vec![(retraction, -1)],
+                );
+            });
+    }
+}
+
+/// Information needed to compute introspection updates for a REFRESH materialized view when the
+/// write frontier advances.
+#[derive(Debug)]
+struct RefreshIntrospectionState<T> {
+    // Immutable properties of the MV
+    refresh_schedule: RefreshSchedule,
+    initial_as_of: Antichain<T>,
+    // Refresh state
+    next_refresh: Datum<'static>,           // Null or an MzTimestamp
+    last_completed_refresh: Datum<'static>, // Null or an MzTimestamp
+}
+
+impl<T> RefreshIntrospectionState<T> {
+    /// Return a `Row` reflecting the current refresh introspection state.
+    pub fn row_for_collection(&self, collection_id: GlobalId) -> Row {
+        Row::pack_slice(&[
+            Datum::String(&collection_id.to_string()),
+            self.last_completed_refresh,
+            self.next_refresh,
+        ])
+    }
+}
+
+impl<T: ComputeControllerTimestamp> RefreshIntrospectionState<T> {
+    /// Construct a new [`RefreshIntrospectionState`], and apply an initial `frontier_update()` at
+    /// the `upper`.
+    pub fn new(
+        refresh_schedule: RefreshSchedule,
+        initial_as_of: Antichain<T>,
+        upper: Antichain<T>,
+    ) -> RefreshIntrospectionState<T> {
+        let mut self_ = RefreshIntrospectionState {
+            refresh_schedule: refresh_schedule.clone(),
+            initial_as_of: initial_as_of.clone(),
+            next_refresh: Datum::Null,
+            last_completed_refresh: Datum::Null,
+        };
+        self_.frontier_update(&upper);
+        self_
+    }
+
+    /// Should be called whenever the write frontier of the collection advances. It updates the
+    /// state that should be recorded in introspection relations, but doesn't send the updates yet.
+    pub fn frontier_update(&mut self, write_frontier: &Antichain<T>) {
+        if write_frontier.is_empty() {
+            self.last_completed_refresh =
+                if let Some(last_refresh) = self.refresh_schedule.last_refresh() {
+                    last_refresh.into()
+                } else {
+                    // If there is no last refresh, then we have a `REFRESH EVERY`, in which case
+                    // the saturating roundup puts a refresh at the maximum possible timestamp.
+                    T::maximum().into()
+                };
+            self.next_refresh = Datum::Null;
+        } else {
+            if timely::PartialOrder::less_equal(write_frontier, &self.initial_as_of) {
+                // We are before the first refresh.
+                self.last_completed_refresh = Datum::Null;
+                let initial_as_of = self.initial_as_of.as_option().expect(
+                    "initial_as_of can't be [], because then there would be no refreshes at all",
+                );
+                let first_refresh = initial_as_of
+                    .round_up(&self.refresh_schedule)
+                    .expect("sequencing makes sure that REFRESH MVs always have a first refresh");
+                soft_assert_or_log!(
+                    first_refresh == *initial_as_of,
+                    "initial_as_of should be set to the first refresh"
+                );
+                self.next_refresh = first_refresh.into();
+            } else {
+                // The first refresh has already happened.
+                let write_frontier = write_frontier.as_option().expect("checked above");
+                self.last_completed_refresh = write_frontier
+                    .round_down_minus_1(&self.refresh_schedule)
+                    .map_or_else(
+                        || {
+                            soft_panic_or_log!(
+                                "rounding down should have returned the first refresh or later"
+                            );
+                            Datum::Null
+                        },
+                        |last_completed_refresh| last_completed_refresh.into(),
+                    );
+                self.next_refresh = write_frontier.clone().into();
+            }
+        }
     }
 }

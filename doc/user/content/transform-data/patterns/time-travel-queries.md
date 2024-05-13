@@ -107,8 +107,8 @@ materialized view.
 Because `SUBSCRIBE` requests happen over the network, these connections might
 get disrupted for both expected and unexpected reasons. You can adjust the
 [history retention period](#history-retention-period) for
-the objects a subscription depends on, and then use [`AS OF`](#as-of) to pick
-up where you left off on connection drops—this ensures that no data is lost
+the objects a subscription depends on, and then use [`AS OF`](/sql/subscribe#as-of)
+to pick up where you left off on connection drops—this ensures that no data is lost
 in the subscription process, and avoids the need for re-snapshotting the data.
 
 ### Implementing durable subscriptions in your application

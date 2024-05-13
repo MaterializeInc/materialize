@@ -13,7 +13,7 @@ use std::io;
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, RelationType, Row, RowArena};
+use mz_repr::{Datum, RelationType, Row, RowArena, RowRef};
 use proptest::prelude::{any, Arbitrary, Just};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::Deserialize;
@@ -24,7 +24,7 @@ static END_OF_COPY_MARKER: &[u8] = b"\\.";
 include!(concat!(env!("OUT_DIR"), "/mz_pgcopy.copy.rs"));
 
 fn encode_copy_row_binary(
-    row: &Row,
+    row: &RowRef,
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
@@ -69,7 +69,7 @@ fn encode_copy_row_binary(
 
 fn encode_copy_row_text(
     CopyTextFormatParams { null, delimiter }: &CopyTextFormatParams,
-    row: &Row,
+    row: &RowRef,
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
@@ -108,7 +108,7 @@ fn encode_copy_row_csv(
         header: _,
         null,
     }: &CopyCsvFormatParams,
-    row: &Row,
+    row: &RowRef,
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
@@ -505,7 +505,7 @@ pub fn decode_copy_format<'a>(
 /// Encodes the given `Row` into bytes based on the given `CopyFormatParams`.
 pub fn encode_copy_format<'a>(
     params: &CopyFormatParams<'a>,
-    row: &Row,
+    row: &RowRef,
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {

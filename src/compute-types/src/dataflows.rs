@@ -15,6 +15,7 @@ use std::fmt;
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_types::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
@@ -64,6 +65,11 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     /// only data is suppressed. (This is consistent with how frontier advancements can also
     /// happen before the `as_of`.)
     pub until: Antichain<T>,
+    /// The initial as_of when the collection is first created. Filled only for materialized views.
+    /// Note that this doesn't change upon restarts.
+    pub initial_storage_as_of: Option<Antichain<T>>,
+    /// The schedule of REFRESH materialized views.
+    pub refresh_schedule: Option<RefreshSchedule>,
     /// Human readable name
     pub debug_name: String,
 }
@@ -132,6 +138,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             sink_exports: Default::default(),
             as_of: Default::default(),
             until: Antichain::new(),
+            initial_storage_as_of: None,
+            refresh_schedule: None,
             debug_name: name,
         }
     }
@@ -257,7 +265,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
 }
 
 impl<P, S, T> DataflowDescription<P, S, T> {
-    /// Assigns the `as_of` frontier to the supplied argument.
+    /// Sets the `as_of` frontier to the supplied argument.
     ///
     /// This method allows the dataflow to indicate a frontier up through
     /// which all times should be advanced. This can be done for at least
@@ -282,6 +290,11 @@ impl<P, S, T> DataflowDescription<P, S, T> {
     /// computation permits.
     pub fn set_as_of(&mut self, as_of: Antichain<T>) {
         self.as_of = Some(as_of);
+    }
+
+    /// Records the initial `as_of` of the storage collection associated with a materialized view.
+    pub fn set_initial_as_of(&mut self, initial_as_of: Antichain<T>) {
+        self.initial_storage_as_of = Some(initial_as_of);
     }
 
     /// Identifiers of imported objects (indexes and sources).
@@ -520,6 +533,8 @@ where
             sink_exports,
             as_of: self.as_of.clone(),
             until: self.until.clone(),
+            initial_storage_as_of: self.initial_storage_as_of.clone(),
+            refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
         }
     }
@@ -535,6 +550,8 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
             sink_exports: self.sink_exports.into_proto(),
             as_of: self.as_of.into_proto(),
             until: Some(self.until.into_proto()),
+            initial_storage_as_of: self.initial_storage_as_of.into_proto(),
+            refresh_schedule: self.refresh_schedule.into_proto(),
             debug_name: self.debug_name.clone(),
         }
     }
@@ -552,6 +569,11 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
                 .map(|x| x.into_rust())
                 .transpose()?
                 .unwrap_or_else(Antichain::new),
+            initial_storage_as_of: proto
+                .initial_storage_as_of
+                .map(|x| x.into_rust())
+                .transpose()?,
+            refresh_schedule: proto.refresh_schedule.into_rust()?,
             debug_name: proto.debug_name,
         })
     }
@@ -684,6 +706,10 @@ proptest::prop_compose! {
         as_of_some in any::<bool>(),
         as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
         debug_name in ".*",
+        initial_storage_as_of_some in any::<bool>(),
+        initial_as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
+        refresh_schedule_some in any::<bool>(),
+        refresh_schedule in any::<RefreshSchedule>(),
     ) -> DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
@@ -699,6 +725,16 @@ proptest::prop_compose! {
                 None
             },
             until: Antichain::new(),
+            initial_storage_as_of: if initial_storage_as_of_some {
+                Some(Antichain::from(initial_as_of))
+            } else {
+                None
+            },
+            refresh_schedule: if refresh_schedule_some {
+                Some(refresh_schedule)
+            } else {
+                None
+            },
             debug_name,
         }
     }

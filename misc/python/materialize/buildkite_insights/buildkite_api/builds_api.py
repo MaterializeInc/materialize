@@ -59,6 +59,11 @@ def get_builds_of_all_pipelines(
     )
 
 
+def get_url_to_build(pipeline_slug: str, build_number: int, job_id: str | None) -> str:
+    job_id_anchor = f"#{job_id}" if job_id is not None else ""
+    return f"https://buildkite.com/materialize/{pipeline_slug}/builds/{build_number}{job_id_anchor}"
+
+
 def _get_params(
     branch: str | None,
     build_states: list[str] | None,

@@ -52,14 +52,11 @@ alter_secret ::=
 alter_source ::=
   'ALTER' 'SOURCE' 'IF EXISTS'? name (
     alter_source_add_clause
-    | alter_source_drop_clause
     | alter_source_set_retain_history_clause
     | alter_source_reset_retain_history_clause
   )
 alter_source_add_clause ::=
   'ADD' ('SUBSOURCE' | 'TABLE') table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* with_options
-alter_source_drop_clause ::=
-  'DROP' ('SUBSOURCE' | 'TABLE') subsrc_name ( ',' subsrc_name )* ('RESTRICT' | 'CASCADE')?
 alter_source_set_retain_history_clause ::=
   'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
 alter_source_reset_retain_history_clause ::=
@@ -98,7 +95,7 @@ create_cluster ::=
     'REPLICAS' '(' (replica_definition (',' replica_definition)*)? ')'
   )?
 create_managed_cluster ::=
-  'CREATE' 'CLUSTER' name '(' (',' cluster_option '=' value)* ')'
+  'CREATE' 'CLUSTER' name '(' cluster_option '=' value (',' cluster_option '=' value)* ')'
 cluster_replica_def ::=
   replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
 create_cluster_replica ::=

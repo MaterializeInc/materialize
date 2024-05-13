@@ -44,11 +44,11 @@ use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
 use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
+use crate::stats::{SnapshotPartStats, SnapshotPartsStats};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
 pub use crate::internal::encoding::LazyPartStats;
 pub use crate::internal::state::Since;
-use crate::stats::{SnapshotPartStats, SnapshotPartsStats};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

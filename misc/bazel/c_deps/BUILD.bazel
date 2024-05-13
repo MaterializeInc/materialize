@@ -18,30 +18,33 @@ load("@rules_cc//cc:defs.bzl", "cc_test")
 
 exports_files(
     [
+        "BUILD.bzip2.bazel",
+        "BUILD.jemalloc.bazel",
+        "BUILD.lz4.bazel",
         "BUILD.openssl.bazel",
+        "BUILD.zlib.bazel",
+        "BUILD.zstd.bazel",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+build_test(
+    name = "build_test",
+    targets = [
+        "@bzip2//:bzip2",
+        "@jemalloc//:jemalloc",
+        "@lz4//:lz4",
+        "@openssl//:openssl",
+        "@protobuf//:protoc",
+        "@protobuf//:protobuf",
+        "@zlib//:zlib",
+        "@zstd//:zstd",
     ],
     visibility = ["//visibility:public"],
 )
 
 cc_test(
     name = "openssl_test",
-    srcs = ["openssl_test.cc"],
+    srcs = ["openssl/test.cc"],
     deps = ["@openssl"],
-)
-
-build_test(
-    name = "build_test",
-    targets = [
-        "@openssl//:openssl",
-    ],
-    visibility = ["//:__pkg__"],
-)
-
-test_suite(
-    name = "openssl_test_suite",
-    tests = [
-        ":build_test",
-        ":openssl_test",
-    ],
-    visibility = ["//:__pkg__"],
 )

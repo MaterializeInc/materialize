@@ -298,8 +298,8 @@ impl<T: Timestamp + Lattice> Trace<T> {
                         let Some(next_batch) = legacy_batches.pop() else {
                             break;
                         };
-                        if next_batch.parts.is_empty() {
-                            new_upper = next_batch.desc.upper().clone();
+                        if next_batch.is_empty() {
+                            new_upper.clone_from(next_batch.desc.upper());
                         } else {
                             legacy_batches.push(next_batch);
                             break;
@@ -309,28 +309,18 @@ impl<T: Timestamp + Lattice> Trace<T> {
                     // If our current batch is too large, split it by the expected upper
                     // and preserve the remainder.
                     if PartialOrder::less_than(expected_desc.upper(), &new_upper) {
-                        legacy_batches.push(Arc::new(HollowBatch {
-                            desc: Description::new(
-                                expected_desc.upper().clone(),
-                                new_upper.clone(),
-                                batch.desc.since().clone(),
-                            ),
-                            parts: vec![],
-                            len: 0,
-                            runs: vec![],
-                        }));
-                        new_upper = expected_desc.upper().clone();
+                        legacy_batches.push(Arc::new(HollowBatch::empty(Description::new(
+                            expected_desc.upper().clone(),
+                            new_upper.clone(),
+                            batch.desc.since().clone(),
+                        ))));
+                        new_upper.clone_from(expected_desc.upper());
                     }
-                    batch = Arc::new(HollowBatch {
-                        desc: Description::new(
-                            batch.desc.lower().clone(),
-                            new_upper,
-                            expected_desc.since().clone(),
-                        ),
-                        parts: vec![],
-                        len: 0,
-                        runs: vec![],
-                    })
+                    batch = Arc::new(HollowBatch::empty(Description::new(
+                        batch.desc.lower().clone(),
+                        new_upper,
+                        expected_desc.since().clone(),
+                    )))
                 }
 
                 if expected_desc.upper() != batch.desc.upper() {
@@ -734,12 +724,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     ) -> Self {
         SpineBatch::Merged(IdHollowBatch {
             id,
-            batch: Arc::new(HollowBatch {
-                desc: Description::new(lower, upper, since),
-                parts: vec![],
-                len: 0,
-                runs: vec![],
-            }),
+            batch: Arc::new(HollowBatch::empty(Description::new(lower, upper, since))),
         })
     }
 
@@ -1758,7 +1743,7 @@ pub(crate) mod tests {
                         batch.desc.upper().clone(),
                         batch.desc.since().clone(),
                     );
-                    lower = batch.desc.upper().clone();
+                    lower.clone_from(batch.desc.upper());
                     let _merge_req = trace.push_batch(batch);
                 }
                 trace.roundtrip_structure = roundtrip_structure;

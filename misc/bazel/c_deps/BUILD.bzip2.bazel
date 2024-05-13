@@ -13,10 +13,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A module initialising the third party dependencies for building OpenSSL"""
+"""Builds bzip2."""
 
-load("@rules_perl//perl:deps.bzl", "perl_register_toolchains", "perl_rules_dependencies")
-
-def openssl_setup():
-    perl_rules_dependencies()
-    perl_register_toolchains()
+cc_library(
+    name = "bzip2",
+    srcs = [
+        "blocksort.c",
+        "bzlib.c",
+        "bzlib_private.h",
+        "compress.c",
+        "crctable.c",
+        "decompress.c",
+        "huffman.c",
+        "randtable.c",
+    ],
+    hdrs = ["bzlib.h"],
+    local_defines = [
+        "_FILE_OFFSET_BITS=64",
+        "BZ_NO_STDIO",
+    ],
+    copts = select({
+        "//conditions:default": [
+            "-Wno-unused-but-set-variable"
+        ],
+    }),
+    visibility = ["//visibility:public"],
+)

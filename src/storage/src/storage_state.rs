@@ -965,51 +965,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
                 StorageCommand::RunIngestions(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
-                        // Subsources can be dropped independently of their
-                        // primary source, so we evaluate them in a separate
-                        // loop.
-                        for export_id in ingestion
-                            .description
-                            .source_exports
-                            .keys()
-                            .filter(|export_id| **export_id != ingestion.id)
-                        {
-                            if drop_commands.remove(export_id)
-                                || self.storage_state.dropped_ids.contains(&ingestion.id)
-                            {
-                                self.storage_state.dropped_ids.insert(*export_id);
-                            }
-                        }
-
                         if drop_commands.remove(&ingestion.id)
                             || self.storage_state.dropped_ids.contains(&ingestion.id)
                         {
-                            // If an ingestion is dropped, so too must all of
-                            // its subsources (i.e. ingestion exports, as well
-                            // as its progress subsource).
-                            for id in ingestion.description.subsource_ids() {
-                                drop_commands.remove(&id);
-                                self.storage_state.dropped_ids.insert(id);
-                            }
+                            // Make sure that we report back that the ID was
+                            // dropped.
+                            self.storage_state.dropped_ids.insert(ingestion.id);
 
                             false
                         } else {
-                            let most_recent_defintion =
-                                seen_most_recent_definition.insert(ingestion.id);
-
-                            if most_recent_defintion {
-                                // If this is the most recent definition, this
-                                // is what we will be running when
-                                // reconciliation completes. This definition
-                                // must not include any dropped subsources.
-                                ingestion.description.source_exports.retain(|export_id, _| {
-                                    !self.storage_state.dropped_ids.contains(export_id)
-                                });
-
-                                // After clearing any dropped subsources, we can
-                                // state that we expect all of these to exist.
-                                expected_objects.extend(ingestion.description.subsource_ids());
-                            }
+                            expected_objects.extend(ingestion.description.subsource_ids());
 
                             let running_ingestion =
                                 self.storage_state.ingestions.get(&ingestion.id);
@@ -1019,7 +984,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             //   is why these commands are run in reverse.
                             // - Ingestions whose descriptions are not exactly
                             //   those that are currently running.
-                            most_recent_defintion
+                            seen_most_recent_definition.insert(ingestion.id)
                                 && running_ingestion != Some(&ingestion.description)
                         }
                     })
@@ -1072,14 +1037,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let stale_objects = self
             .storage_state
             .ingestions
-            .values()
-            .map(|i| i.subsource_ids())
-            .flatten()
-            .chain(self.storage_state.exports.keys().copied())
+            .keys()
+            .chain(self.storage_state.exports.keys())
             // Objects are considered stale if we did not see them re-created.
             .filter(|id| !expected_objects.contains(id))
             // Synthesize the drop command
-            .map(|id| (id, Antichain::new()))
+            .map(|id| (*id, Antichain::new()))
             .collect::<Vec<_>>();
 
         trace!(
@@ -1229,9 +1192,7 @@ impl StorageState {
                             // restart a sink in the future.
                             export_description.as_of.clone_from(&frontier);
                         }
-                        // reported_frontiers contains both ingestions and their
-                        // exports
-                        None if self.reported_frontiers.contains_key(&id) => (),
+                        None if self.ingestions.contains_key(&id) => (),
                         None => panic!("AllowCompaction command for non-existent {id}"),
                     }
 

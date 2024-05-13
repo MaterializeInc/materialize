@@ -93,6 +93,6 @@ impl ExprHumanizer for TestCatalog {
     }
 
     fn id_exists(&self, id: GlobalId) -> bool {
-        self.names.get(&id).is_some()
+        self.names.contains_key(&id)
     }
 }

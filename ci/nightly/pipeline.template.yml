@@ -811,6 +811,17 @@ steps:
               composition: platform-checks
               args: [--scenario=TogglePersistRoundtripSpine, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-toggle-persist-use-arrow-rs-library
+        label: "Checks toggling persist use arrow_rs library"
+        depends_on: build-aarch64
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=TogglePersistUseArrowRsLibrary, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-migrate-aarch64-x86-64
         label: "Checks migrate from aarch64 to x86-64"
         depends_on: [build-x86_64, build-aarch64]
@@ -836,20 +847,6 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_upgrade.py]
-        sanitizer: skip
-
-      - id: cloudtest-slow
-        label: "Slow Cloudtest"
-        depends_on: build-aarch64
-        timeout_in_minutes: 35
-        env:
-          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
-        agents:
-          queue: linux-aarch64
-        plugins:
-          - ./ci/plugins/scratch-aws-access: ~
-          - ./ci/plugins/cloudtest:
-              args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
         sanitizer: skip
 
   - group: "K8s node recovery cloudtest"
@@ -1487,6 +1484,20 @@ steps:
           args: ["--versions-source=git"]
     agents:
       queue: linux-aarch64-small
+
+  - id: cloudtest-slow
+    label: "Slow Cloudtest"
+    depends_on: build-aarch64
+    timeout_in_minutes: 35
+    env:
+      CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+    agents:
+      queue: linux-aarch64
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/cloudtest:
+          args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
+    sanitizer: skip
 
   - id: persist-txn-fencing
     label: Persist-txn fencing

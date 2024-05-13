@@ -125,15 +125,6 @@ use crate::source::RawSourceCreationConfig;
 /// Postgres epoch is 2000-01-01T00:00:00Z
 static PG_EPOCH: Lazy<SystemTime> = Lazy::new(|| UNIX_EPOCH + Duration::from_secs(946_684_800));
 
-/// How often a proactive standby status update message should be sent to the server.
-///
-/// The upstream will periodically request status updates by setting the keepalive's reply field to
-/// 1. However, we cannot rely on these messages arriving on time. For example, when the upstream
-/// is sending a big transaction its keepalive messages are queued and can be delayed arbitrarily.
-///
-/// See: <https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com>
-const FEEDBACK_INTERVAL: Duration = Duration::from_secs(30);
-
 // A request to rewind a snapshot taken at `snapshot_lsn` to the initial LSN of the replication
 // slot. This is accomplished by emitting `(data, 0, -diff)` for all updates `(data, lsn, diff)`
 // whose `lsn <= snapshot_lsn`. By convention the snapshot is always emitted at LSN 0.
@@ -167,16 +158,16 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (mut definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
 
     let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
-    let mut rewind_input = builder.new_input_for_many(
+    let mut rewind_input = builder.new_input_for(
         rewind_stream,
         Exchange::new(move |_| slot_reader),
-        [&data_output, &upper_output],
+        &data_output,
     );
 
     metrics.tables.set(u64::cast_from(table_info.len()));
@@ -240,7 +231,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next().await {
-                if let AsyncEvent::Data(caps, data) = event {
+                if let AsyncEvent::Data(cap, data) = event {
                     for req in data {
                         if resume_lsn > req.snapshot_lsn + 1 {
                             let err = DefiniteError::SlotCompactedPastResumePoint(
@@ -263,7 +254,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 .await;
                             return Ok(());
                         }
-                        rewinds.insert(req.oid, (caps.clone(), req));
+                        rewinds.insert(req.oid, (cap.clone(), req));
                     }
                 }
             }
@@ -359,8 +350,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 }
 
                                 let data = (oid, event);
-                                if let Some((rewind_caps, req)) = rewinds.get(&oid) {
-                                    let [data_cap, _upper_cap] = rewind_caps;
+                                if let Some((data_cap, req)) = rewinds.get(&oid) {
                                     if commit_lsn <= req.snapshot_lsn {
                                         let update = (data.clone(), MzOffset::from(0), -diff);
                                         data_output.give(data_cap, update).await;
@@ -477,14 +467,27 @@ async fn raw_stream<'a>(
         }
     }
 
-    // Configure wal_sender_timeout based on param. We want to be able to
-    // override the server value here in case it's set too low, respective to
-    // the size of the txns in the WAL.
-    set_wal_sender_timeout(
-        &replication_client,
-        config.config.parameters.pg_source_wal_sender_timeout,
-    )
-    .await?;
+    // How often a proactive standby status update message should be sent to the server.
+    //
+    // The upstream will periodically request status updates by setting the keepalive's reply field
+    // value to 1. However, we cannot rely on these messages arriving on time. For example, when
+    // the upstream is sending a big transaction its keepalive messages are queued and can be
+    // delayed arbitrarily.
+    //
+    // See: <https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com>
+    //
+    // For this reason we query the server's timeout value and proactively send a keepalive at
+    // twice the frequency to have a healthy margin from the deadline.
+    let row = simple_query_opt(&replication_client, "SHOW wal_sender_timeout;")
+        .await?
+        .unwrap();
+    let wal_sender_timeout: &str = row.get("wal_sender_timeout").unwrap();
+
+    let timeout = mz_repr::adt::interval::Interval::from_str(wal_sender_timeout)
+        .unwrap()
+        .duration()
+        .unwrap();
+    let feedback_interval = timeout.checked_div(2).unwrap();
 
     // Postgres will return all transactions that commit *at or after* after the provided LSN,
     // following the timely upper semantics.
@@ -549,7 +552,7 @@ async fn raw_stream<'a>(
                 future::Either::Left((next_message, _)) => match next_message.transpose()? {
                     Some(ReplicationMessage::XLogData(data)) => {
                         yield ReplicationMessage::XLogData(data);
-                        last_feedback.elapsed() > FEEDBACK_INTERVAL
+                        last_feedback.elapsed() > feedback_interval
                     }
                     Some(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
                         let send_feedback = keepalive.reply() == 1;
@@ -785,34 +788,4 @@ async fn ensure_replication_timeline_id(
             actual: timeline_id,
         }))
     }
-}
-
-async fn set_wal_sender_timeout(client: &Client, timeout: Duration) -> Result<(), TransientError> {
-    // Value is known to accept milliseconds w/o units.
-    // https://www.postgresql.org/docs/current/runtime-config-replication.html
-    client
-        .simple_query(&format!("SET wal_sender_timeout = {}", timeout.as_millis()))
-        .await?;
-
-    mz_ore::soft_assert_or_log! {
-        {
-            let row = simple_query_opt(client, "SHOW wal_sender_timeout;")
-                .await?
-                .unwrap();
-            let session_timeout = row.get("wal_sender_timeout").unwrap().to_owned();
-
-            // This only needs to be compatible for values we test; doesn't need to
-            // generalize all possible interval/duration mappings. This is also
-            // possible to fool if the value is set to the out-of-the-box default,
-            // so we have to ensure that our tests use a distinct value.
-            mz_repr::adt::interval::Interval::from_str(&session_timeout)
-                .map(|i| i.duration())
-                .unwrap()
-                .unwrap()
-                == timeout
-        },
-        "SET wal_sender_timeout in PG replication did not take effect"
-    };
-
-    Ok(())
 }

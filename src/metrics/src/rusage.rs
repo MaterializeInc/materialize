@@ -110,7 +110,7 @@ pub async fn register_metrics_into(metrics_registry: &MetricsRegistry) {
     let rusage = RuMetrics::new(metrics_registry);
 
     mz_ore::task::spawn(|| "rusage_stats_update", async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;

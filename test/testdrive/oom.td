@@ -14,21 +14,27 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_result_size = 128
 
-# Each inline row takes 24 bytes of memory, 23 for the inline array and 1 for the length.
+# In environmentd each Row requires 24 bytes + number of bytes to encode. But we'll also de-dupe
+# repeated values by incrementing the diff.
 
-> SELECT 1::int4 FROM generate_series(1, 5);
+> SELECT 1::int4 FROM generate_series(1, 10);
+1
+1
+1
+1
+1
 1
 1
 1
 1
 1
 
-! SELECT 1::int4 FROM generate_series(1, 6);
+! SELECT * FROM generate_series(1, 6);
 contains:result exceeds max size of 128 B
 
 > CREATE TABLE t1 (a int4)
 
-> INSERT INTO t1 SELECT 1::int4 FROM generate_series(1, 5);
+> INSERT INTO t1 SELECT * FROM generate_series(1, 5);
 
 > INSERT INTO t1 VALUES (6);
 
@@ -65,8 +71,8 @@ ALTER SYSTEM SET max_result_size = 240000;
 ! SELECT generate_series::int4 FROM generate_series(1, 10001)
 contains:result exceeds max size of 240.0 KB
 
-! SELECT 1::int4 FROM generate_series(1, 10001)
-contains:result exceeds max size of 240.0 KB
+> SELECT 1::int4 FROM generate_series(1, 10001)
+10001 values hashing to 7e844fba503f0b3f02daa3de7c80938e
 
 > CREATE TABLE t2 (a int4)
 

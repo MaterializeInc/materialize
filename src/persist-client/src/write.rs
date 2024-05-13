@@ -392,7 +392,7 @@ where
                 Err(mismatch) => {
                     // We tried to to a non-contiguous append, that won't work.
                     if PartialOrder::less_than(&mismatch.current, &lower) {
-                        self.upper = mismatch.current.clone();
+                        self.upper.clone_from(&mismatch.current);
 
                         batch.delete().await;
 
@@ -503,12 +503,7 @@ where
             let res = self
                 .machine
                 .compare_and_append(
-                    &HollowBatch {
-                        desc: desc.clone(),
-                        parts,
-                        len: num_updates,
-                        runs,
-                    },
+                    &HollowBatch::new(desc.clone(), parts, num_updates, runs),
                     &self.writer_id,
                     &self.debug_state,
                     heartbeat_timestamp,
@@ -517,7 +512,7 @@ where
 
             match res {
                 CompareAndAppendRes::Success(_seqno, maintenance) => {
-                    self.upper = desc.upper().clone();
+                    self.upper.clone_from(desc.upper());
                     for batch in batches.iter_mut() {
                         batch.mark_consumed();
                     }
@@ -527,7 +522,7 @@ where
                 CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
                     // We tried to to a compare_and_append with the wrong expected upper, that
                     // won't work. Update the cached upper to the current upper.
-                    self.upper = current_upper.clone();
+                    self.upper.clone_from(&current_upper);
                     return Ok(Err(UpperMismatch {
                         current: current_upper,
                         expected: expected_upper,

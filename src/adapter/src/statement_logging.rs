@@ -149,7 +149,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
                 // can ever actually happen.
                 ExecuteResponse::SendingRowsImmediate { rows, .. } => {
                     StatementEndedExecutionReason::Success {
-                        rows_returned: Some(u64::cast_from(rows.len())),
+                        rows_returned: Some(u64::cast_from(rows.count())),
                         execution_strategy: Some(StatementExecutionStrategy::Constant),
                     }
                 }
@@ -176,7 +176,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
 
             ExecuteResponse::SendingRowsImmediate { rows, .. } => {
                 StatementEndedExecutionReason::Success {
-                    rows_returned: Some(u64::cast_from(rows.len())),
+                    rows_returned: Some(u64::cast_from(rows.count())),
                     execution_strategy: Some(StatementExecutionStrategy::Constant),
                 }
             }

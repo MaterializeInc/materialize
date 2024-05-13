@@ -2556,7 +2556,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
 
 pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_sizes",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICA_SIZES_OID,
     desc: RelationDesc::empty()
         .with_column("size", ScalarType::String.nullable(false))
@@ -3071,6 +3071,22 @@ pub static MZ_GLOBAL_FRONTIERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 SELECT object_id, write_frontier AS time
 FROM mz_internal.mz_frontiers
 WHERE write_frontier IS NOT NULL",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_MATERIALIZED_VIEW_REFRESHES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_materialized_view_refreshes",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_MATERIALIZED_VIEW_REFRESHES_OID,
+    data_source: IntrospectionType::ComputeMaterializedViewRefreshes,
+    desc: RelationDesc::empty()
+        .with_column("materialized_view_id", ScalarType::String.nullable(false))
+        .with_column(
+            "last_completed_refresh",
+            ScalarType::MzTimestamp.nullable(true),
+        )
+        .with_column("next_refresh", ScalarType::MzTimestamp.nullable(true)),
+    is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
 
@@ -4763,7 +4779,7 @@ SELECT
     m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent
 FROM
     mz_catalog.mz_cluster_replicas AS r
-        JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
+        JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
     access: vec![PUBLIC_SELECT],
 });
@@ -6110,7 +6126,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
             creates
                 LEFT JOIN drops ON creates.replica_id = drops.replica_id
                 LEFT JOIN
-                    mz_internal.mz_cluster_replica_sizes
+                    mz_catalog.mz_cluster_replica_sizes
                     ON mz_cluster_replica_sizes.size = creates.size"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -6597,7 +6613,7 @@ pub const MZ_CLUSTER_REPLICA_SIZES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_SIZES_IND_OID,
     sql: "IN CLUSTER mz_introspection
-ON mz_internal.mz_cluster_replica_sizes (size)",
+ON mz_catalog.mz_cluster_replica_sizes (size)",
     is_retained_metrics_object: true,
 };
 
@@ -7156,6 +7172,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Source(&MZ_FRONTIERS),
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
+        Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
