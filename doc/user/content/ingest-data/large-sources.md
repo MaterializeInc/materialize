@@ -3,7 +3,7 @@ title: "Creating Large Sources"
 description: "Creating Large Sources in Materialize"
 menu:
   main:
-    name: "Overview"
+    name: "Creating Large Sources"
     identifier: ingest-overview
     parent: ingest-data
     weight: 39
