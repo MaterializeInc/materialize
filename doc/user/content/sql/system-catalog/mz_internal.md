@@ -528,25 +528,27 @@ system.
 
 ### `mz_postgres_source_tables`
 
-The `mz_postgres_source_tables` table contains a row for each PostgreSQL table ingested by a subsource.
+The `mz_postgres_source_tables` table contains the mapping between each
+subsource and the corresponding upstream PostgreSQL table being ingested.
 
 <!-- RELATION_SPEC mz_internal.mz_postgres_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
-| `schema_name`  | [`text`]         | The ingested upstream table's schema name. |
-| `table_name`  | [`text`]         | The ingested upstream table's name. |
+| `schema_name`       | [`text`]         | The schema of the upstream table being ingested. |
+| `table_name`        | [`text`]         | The name of the upstream table being ingested.   |
 
 ### `mz_mysql_source_tables`
 
-The `mz_mysql_source_tables` table contains a row for each MySQL table ingested by a subsource.
+The `mz_mysql_source_tables` table contains the mapping between each
+subsource and the corresponding upstream MySQL table being ingested.
 
 <!-- RELATION_SPEC mz_internal.mz_mysql_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
-| `schema_name`  | [`text`]         | The ingested upstream table's schema name. This is also sometimes referred to as the upstream table's database name.|
-| `table_name`  | [`text`]         | The ingested upstream table's name. |
+| `schema_name`       | [`text`]         | The schema ([or, database](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema)) of the upstream table being ingested. |
+| `table_name`        | [`text`]         | The name of the upstream table being ingested. |
 
 <!--
 ### `mz_prepared_statement_history`
