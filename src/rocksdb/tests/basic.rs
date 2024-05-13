@@ -136,12 +136,8 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
 
     // A simple merge operator that adds all merge values to the existing key
     // value, if any.
-    fn merge(
-        _key: &[u8],
-        existing_value: Option<u32>,
-        operands: ValueIterator<bincode::DefaultOptions, u32>,
-    ) -> Option<u32> {
-        let mut val = existing_value.unwrap_or(0);
+    fn merge(_key: &[u8], operands: ValueIterator<bincode::DefaultOptions, u32>) -> Option<u32> {
+        let mut val = 0;
 
         for op in operands {
             val += op;
@@ -165,16 +161,38 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
     )
     .await?;
 
-    let mut rolling_sum = 50;
+    let mut rolling_sum = 0;
     let key = "a".to_string();
-    // Set the key to an initial value using Put
-    instance
-        .multi_update(vec![(key.clone(), KeyUpdate::Put(rolling_sum))])
-        .await?;
 
     // Send a bunch of merge operations to the key, each merge transaction
-    // should add 25 million to the key value, and every 10 transactions
-    // we use a Put to set the key to a specific value.
+    // should add 25 million to the key value
+    for _ in 1..100 {
+        let merges = vec![5u32, 5_000_000];
+        rolling_sum += merges.iter().sum::<u32>();
+
+        instance
+            .multi_update(
+                merges
+                    .into_iter()
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v))),
+            )
+            .await?;
+    }
+
+    // Validate the Get operation returns the correct sum
+    let mut ret = vec![Default::default(); 1];
+    instance
+        .multi_get(vec![key.clone()], ret.iter_mut(), |value| value)
+        .await?;
+    assert_eq!(
+        ret.into_iter()
+            .map(|v| v.map(|v| v.value))
+            .collect::<Vec<_>>(),
+        vec![Some(rolling_sum)]
+    );
+
+    // Send more merge operations, this time setting the value using a Put operation
+    // in between merges every few operations (but not the last few)
     for i in 1..100 {
         let merges = vec![5u32, 5_000_000];
         rolling_sum += merges.iter().sum::<u32>();
@@ -187,7 +205,7 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             )
             .await?;
 
-        if i % 10 == 0 {
+        if i % 7 == 0 {
             rolling_sum += 3;
             instance
                 .multi_update(vec![(key.clone(), KeyUpdate::Put(rolling_sum))])
@@ -195,12 +213,11 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
         }
     }
 
+    // Validate the Get operation returns the correct sum
     let mut ret = vec![Default::default(); 1];
     instance
         .multi_get(vec![key.clone()], ret.iter_mut(), |value| value)
         .await?;
-
-    // Validate the Get operation returns the correct sum
     assert_eq!(
         ret.into_iter()
             .map(|v| v.map(|v| v.value))
@@ -208,8 +225,8 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
         vec![Some(rolling_sum)]
     );
 
-    // Send more merge/put operations, this time compacting between each transaction
-    for i in 1..100 {
+    // Send more merge operations, this time compacting between operations
+    for _ in 1..100 {
         let merges = vec![5u32, 5_000_000];
         rolling_sum += merges.iter().sum::<u32>();
 
@@ -222,21 +239,13 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .await?;
 
         instance.manual_compaction().await?;
-
-        if i % 10 == 0 {
-            rolling_sum += 3;
-            instance
-                .multi_update(vec![(key.clone(), KeyUpdate::Put(rolling_sum))])
-                .await?;
-        }
     }
 
+    // Validate the Get operation returns the correct sum
     let mut ret = vec![Default::default(); 1];
     instance
         .multi_get(vec![key.clone()], ret.iter_mut(), |value| value)
         .await?;
-
-    // Validate the Get operation returns the correct sum
     assert_eq!(
         ret.into_iter()
             .map(|v| v.map(|v| v.value))

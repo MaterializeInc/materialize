@@ -64,12 +64,14 @@ pub enum Error {
 }
 
 /// An iterator over operand values to merge for a key in RocksDB.
+/// By convention the first value will be the existing value
+/// if it was present.
 pub struct ValueIterator<'a, O, V>
 where
     O: bincode::Options + Copy + Send + Sync + 'static,
     V: DeserializeOwned + Serialize + Send + Sync + 'static,
 {
-    iter: MergeOperandsIter<'a>,
+    iter: std::iter::Chain<std::option::IntoIter<&'a [u8]>, MergeOperandsIter<'a>>,
     bincode: &'a O,
     v: std::marker::PhantomData<V>,
 }
@@ -90,11 +92,8 @@ where
 
 /// Helper type stub to satisfy generic bounds when initializing a `InstanceOptions` without a
 /// defined merge operator.
-pub type StubMergeOperator<V> = fn(
-    key: &[u8],
-    existing_value: Option<V>,
-    operands: ValueIterator<bincode::DefaultOptions, V>,
-) -> Option<V>;
+pub type StubMergeOperator<V> =
+    fn(key: &[u8], operands: ValueIterator<bincode::DefaultOptions, V>) -> Option<V>;
 
 /// Fixed options to configure a [`RocksDBInstance`]. These are not tuning parameters,
 /// see the `config` modules for tuning. These are generally fixed within the binary.
@@ -129,11 +128,7 @@ impl<O, V, F> InstanceOptions<O, V, F>
 where
     O: bincode::Options + Copy + Send + Sync + 'static,
     V: DeserializeOwned + Serialize + Send + Sync + 'static,
-    F: for<'a> Fn(&'a [u8], Option<V>, ValueIterator<'a, O, V>) -> Option<V>
-        + Copy
-        + Send
-        + Sync
-        + 'static,
+    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V> + Copy + Send + Sync + 'static,
 {
     /// A new `Options` object with reasonable defaults.
     pub fn new(
@@ -172,13 +167,12 @@ where
             // See `https://github.com/facebook/rocksdb/wiki/Merge-Operator#associativity-vs-non-associativity`
             // for more info.
             options.set_merge_operator_associative(fn_name, move |key, existing, operands| {
-                let existing = existing.map(|v| bincode.deserialize(v).unwrap());
                 let operands = ValueIterator {
-                    iter: operands.iter(),
+                    iter: existing.into_iter().chain(operands.iter()).into_iter(),
                     bincode: &bincode,
                     v: std::marker::PhantomData::<V>,
                 };
-                merge_fn(key, existing, operands).map(|result| bincode.serialize(&result).unwrap())
+                merge_fn(key, operands).map(|result| bincode.serialize(&result).unwrap())
             });
         }
 
@@ -339,7 +333,7 @@ where
         O: bincode::Options + Copy + Send + Sync + 'static,
         M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
         IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
-        F: for<'a> Fn(&'a [u8], Option<V>, ValueIterator<'a, O, V>) -> Option<V>
+        F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V>
             + Copy
             + Send
             + Sync
@@ -608,11 +602,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
-    F: for<'a> Fn(&'a [u8], Option<V>, ValueIterator<'a, O, V>) -> Option<V>
-        + Send
-        + Sync
-        + Copy
-        + 'static,
+    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V> + Send + Sync + Copy + 'static,
     IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
     let retry_max_duration = tuning_config.retry_max_duration;
