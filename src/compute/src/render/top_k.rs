@@ -197,6 +197,10 @@ where
                     // a single topk stage.
                     let (result, errs) =
                         self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
+                    // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
+                    let result = result.consolidate_named::<KeyBatcher<_, _, _>>(
+                        "Monotonic TopK final consolidate",
+                    );
                     retractions.set(&collection.concat(&result.negate()));
                     soft_assert_or_log!(
                         errs.is_none(),
@@ -322,6 +326,8 @@ where
         let (oks, errs) = self.build_topk_stage(
             collection, order_key, 1u64, offset, limit, arity, validating,
         );
+        // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
+        let oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("TopK final consolidate");
         collection = oks;
         if validating {
             err_collection = errs;
@@ -332,14 +338,40 @@ where
         )
     }
 
-    // To provide a robust incremental orderby-limit experience, we want to avoid grouping *all*
-    // records (or even large groups) and then applying the ordering and limit. Instead, a more
-    // robust approach forms groups of bounded size and applies the offset and limit to each,
-    // and then increases the sizes of the groups.
-
-    // Builds a "stage", which uses a finer grouping than is required to reduce the volume of
-    // updates, and to reduce the amount of work on the critical path for updates. The cost is
-    // a larger number of arrangements when this optimization does nothing beneficial.
+    /// To provide a robust incremental orderby-limit experience, we want to avoid grouping *all*
+    /// records (or even large groups) and then applying the ordering and limit. Instead, a more
+    /// robust approach forms groups of bounded size and applies the offset and limit to each,
+    /// and then increases the sizes of the groups.
+    ///
+    /// Builds a "stage", which uses a finer grouping than is required to reduce the volume of
+    /// updates, and to reduce the amount of work on the critical path for updates. The cost is
+    /// a larger number of arrangements when this optimization does nothing beneficial.
+    ///
+    /// The function accepts a collection of the form `(hash_key, row)`, a modulus it applies to the
+    /// `hash_key`'s hash datum, an `offset` for returning results, and a `limit` to restrict the
+    /// output size. `arity` represents the number of columns in the input data, and
+    /// if `validating` is true, we check for negative multiplicities, which indicate
+    /// an error in the input data.
+    ///
+    /// The output of this function is _not consolidated_.
+    ///
+    /// The dataflow fragment has the following shape:
+    /// ```ignore
+    ///     | input
+    ///     |
+    ///   arrange
+    ///     |\
+    ///     | \
+    ///     |  reduce
+    ///     |  |
+    ///     |  negate
+    ///     |  |
+    ///     concat
+    ///     |
+    ///     | output
+    /// ```
+    /// There are additional map/flat_map operators as well as error demuxing operators, but we're
+    /// omitting them here for the sake of simplicity.
     fn build_topk_stage<S>(
         &self,
         collection: Collection<S, (Row, Row), Diff>,
@@ -356,13 +388,18 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
+        // Form appropriate input by updating the `hash` column (first datum in `hash_key`) by
+        // applying `modulus`.
         let input = collection.map(move |(hash_key, row)| {
             let mut hash_key_iter = hash_key.iter();
             let hash = hash_key_iter.next().unwrap().unwrap_uint64() % modulus;
             let hash_key = SharedRow::pack(std::iter::once(hash.into()).chain(hash_key_iter));
             (hash_key, row)
         });
+
+        // If validating: demux errors, otherwise we cannot produce errors.
         let (input, oks, errs) = if validating {
+            // Build topk stage, produce errors for invalid multiplicities.
             let from = |v: &Result<Row, Row>| v.into_owned();
             let (input, stage) =
                 build_topk_negated_stage::<S, _, _, RowValSpine<Result<Row, Row>, _, _>>(
@@ -370,6 +407,7 @@ where
                 );
             let stage = stage.as_collection(|k, v| (SharedRow::pack(k), v.clone()));
 
+            // Demux oks and errors.
             let error_logger = self.error_logger();
             let (oks, errs) =
                 stage.map_fallible("Demuxing Errors", move |(hk, result)| match result {
@@ -385,10 +423,12 @@ where
                 });
             (input, oks, Some(errs))
         } else {
+            // Build non-validating topk stage.
             let from = |v: DatumSeq| SharedRow::pack(v);
             let (input, stage) = build_topk_negated_stage::<S, _, _, RowRowSpine<_, _>>(
                 &input, from, order_key, offset, limit, arity,
             );
+            // Turn arrangement into collection.
             let stage = stage.as_collection(|k, v| {
                 let binding = SharedRow::get();
                 let mut row_builder = binding.borrow_mut();
@@ -399,11 +439,10 @@ where
 
             (input, stage, None)
         };
-        (
-            oks.negate()
-                .concat(&input.as_collection(|k, v| (k.into_owned(), v.into_owned()))),
-            errs,
-        )
+        // Turn input into collection.
+        let intput = input.as_collection(|k, v| (k.into_owned(), v.into_owned()));
+        // Negate oks and concatenate them with the input.
+        (oks.negate().concat(&intput), errs)
     }
 
     fn render_top1_monotonic<S>(
@@ -473,6 +512,13 @@ where
     }
 }
 
+/// Build a stage of a topk reduction. Maintains the _retractions_ of the output instead of emitted
+/// rows. This has the benefit that we have to maintain state proportionally to size of the output
+/// instead of the size of the input.
+///
+/// Returns two arrangements:
+/// * The arranged input data without modifications, and
+/// * the maintained negated output data.
 fn build_topk_negated_stage<G, V, F, Tr>(
     input: &Collection<G, (Row, Row), Diff>,
     from: F,
@@ -596,18 +642,16 @@ where
                     diff -= Diff::try_from(to_skip).unwrap();
                 }
                 // We should produce at most `limit` records.
-                // TODO(benesch): avoid dangerous `as` conversion.
-                #[allow(clippy::as_conversions)]
                 if let Some(limit) = &mut limit {
-                    diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
+                    diff = std::cmp::min(diff, Diff::cast_from(*limit));
                     *limit -= diff;
                 }
                 // Output the indicated number of rows.
                 if diff > 0 {
                     // Emit retractions for the elements actually part of
                     // the set of TopK elements.
-                    row_builder.packer().extend(datums);
-                    target.push((V::ok(row_builder.clone()), -diff));
+                    let row = row_builder.pack_using(datums);
+                    target.push((V::ok(row), -diff));
                 }
             }
         }
