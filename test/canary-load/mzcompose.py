@@ -64,6 +64,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ):
             c.up("testdrive", persistent=True)
 
+            failures = []
+
             while time.time() - start_time < args.runtime:
                 try:
                     c.testdrive(
@@ -117,6 +119,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         time.sleep(60)
                     else:
                         raise
+                except FailedTestExecutionError as e:
+                    # collect, continue, and rethrow at the end
+                    failures.append(e.errors[0])
+
+            if len(failures) > 0:
+                raise FailedTestExecutionError(
+                    error_summary="SQL failures occurred",
+                    errors=failures,
+                )
 
 
 def fetch_token(user_name: str, password: str) -> str:
