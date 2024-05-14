@@ -15,9 +15,7 @@ use std::sync::Arc;
 use arrow::array::Array;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
-use crate::columnar::{
-    ColumnCfg, ColumnFinish, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData,
-};
+use crate::columnar::{ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData};
 use crate::dyn_struct::{DynStruct, ValidityRef};
 use crate::stats::{DynStats, StatsFrom};
 

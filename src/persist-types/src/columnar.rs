@@ -96,7 +96,7 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
     type Col: ColumnGet<Self>;
 
     /// The exclusive builder of columns of this type of data.
-    type Mut: ColumnPush<Self> + ColumnFinish<Self>;
+    type Mut: ColumnPush<Self>;
 
     /// The statistics type of columns of this type of data.
     type Stats: ColumnStats<Self> + StatsFrom<Self::Col>;
@@ -123,11 +123,7 @@ pub trait ColumnGet<T: Data>: ColumnRef<T::Cfg> {
 pub trait ColumnPush<T: Data>: ColumnMut<T::Cfg> {
     /// Pushes a new value into this column.
     fn push<'a>(&mut self, val: T::Ref<'a>);
-}
 
-/// A common trait implemented by `Data::Mut` types. Provides the ability to
-/// "finish" a mutable array, returning the corresponding `Data::Col`.
-pub trait ColumnFinish<T: Data>: ColumnMut<T::Cfg> {
     /// Finishes the mutable column returning the corresponding `Data::Col`.
     fn finish(self) -> T::Col;
 }

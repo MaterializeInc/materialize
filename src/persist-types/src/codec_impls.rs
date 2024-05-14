@@ -27,8 +27,8 @@ use timely::order::Product;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::{
-    ColumnCfg, ColumnFinish, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData,
-    PartDecoder, PartEncoder, Schema,
+    ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData, PartDecoder,
+    PartEncoder, Schema,
 };
 use crate::dyn_col::DynColumnMut;
 use crate::dyn_struct::{
@@ -647,9 +647,7 @@ impl ColumnPush<bool> for BooleanBufferBuilder {
     fn push<'a>(&mut self, val: bool) {
         <BooleanBufferBuilder>::append(self, val)
     }
-}
 
-impl ColumnFinish<bool> for BooleanBufferBuilder {
     fn finish(mut self) -> <bool as Data>::Col {
         <BooleanBufferBuilder>::finish(&mut self)
     }
@@ -711,15 +709,13 @@ impl ColumnMut<()> for BooleanBuilder {
     }
 }
 
-impl ColumnFinish<Option<bool>> for BooleanBuilder {
-    fn finish(mut self) -> <Option<bool> as Data>::Col {
-        <BooleanBuilder>::finish(&mut self)
-    }
-}
-
 impl ColumnPush<Option<bool>> for BooleanBuilder {
     fn push<'a>(&mut self, val: Option<bool>) {
         <BooleanBuilder>::append_option(self, val)
+    }
+
+    fn finish(mut self) -> <Option<bool> as Data>::Col {
+        <BooleanBuilder>::finish(&mut self)
     }
 }
 
@@ -735,9 +731,7 @@ macro_rules! arrowable_primitive {
             fn push<'a>(&mut self, val: $data) {
                 <PrimitiveBuilder<$arrow_type>>::append_value(self, val)
             }
-        }
 
-        impl ColumnFinish<$data> for PrimitiveBuilder<$arrow_type> {
             fn finish(mut self) -> <$data as Data>::Col {
                 <PrimitiveBuilder<$arrow_type>>::finish(&mut self)
             }
@@ -799,9 +793,7 @@ macro_rules! arrowable_primitive {
             fn push<'a>(&mut self, val: Option<$data>) {
                 <PrimitiveBuilder<$arrow_type>>::append_option(self, val)
             }
-        }
 
-        impl ColumnFinish<Option<$data>> for PrimitiveBuilder<$arrow_type> {
             fn finish(mut self) -> <Option<$data> as Data>::Col {
                 <PrimitiveBuilder<$arrow_type>>::finish(&mut self)
             }
@@ -877,9 +869,7 @@ impl ColumnPush<Vec<u8>> for BinaryBuilder {
         assert!(self.validity_slice().is_none());
         <BinaryBuilder>::append_value(self, val)
     }
-}
 
-impl ColumnFinish<Vec<u8>> for BinaryBuilder {
     fn finish(mut self) -> <Vec<u8> as Data>::Col {
         <BinaryBuilder>::finish(&mut self)
     }
@@ -889,9 +879,7 @@ impl ColumnPush<Option<Vec<u8>>> for BinaryBuilder {
     fn push<'a>(&mut self, val: Option<&'a [u8]>) {
         <BinaryBuilder>::append_option(self, val)
     }
-}
 
-impl ColumnFinish<Option<Vec<u8>>> for BinaryBuilder {
     fn finish(mut self) -> <Vec<u8> as Data>::Col {
         <BinaryBuilder>::finish(&mut self)
     }
@@ -949,28 +937,24 @@ impl ColumnMut<()> for StringBuilder {
     }
 }
 
-impl ColumnFinish<String> for StringBuilder {
-    fn finish(mut self) -> <String as Data>::Col {
-        <StringBuilder>::finish(&mut self)
-    }
-}
-
-impl ColumnFinish<Option<String>> for StringBuilder {
-    fn finish(mut self) -> <Option<String> as Data>::Col {
-        <StringBuilder>::finish(&mut self)
-    }
-}
-
 impl ColumnPush<String> for StringBuilder {
     fn push<'a>(&mut self, val: &'a str) {
         assert!(self.validity_slice().is_none());
         <StringBuilder>::append_value(self, val)
+    }
+
+    fn finish(mut self) -> <String as Data>::Col {
+        <StringBuilder>::finish(&mut self)
     }
 }
 
 impl ColumnPush<Option<String>> for StringBuilder {
     fn push<'a>(&mut self, val: Option<&'a str>) {
         <StringBuilder>::append_option(self, val)
+    }
+
+    fn finish(mut self) -> <Option<String> as Data>::Col {
+        <StringBuilder>::finish(&mut self)
     }
 }
 
@@ -999,21 +983,17 @@ impl ColumnPush<OpaqueData> for BinaryBuilder {
         assert!(self.validity_slice().is_none());
         <BinaryBuilder>::append_value(self, val)
     }
+
+    fn finish(mut self) -> <OpaqueData as Data>::Col {
+        <BinaryBuilder>::finish(&mut self)
+    }
 }
 
 impl ColumnPush<Option<OpaqueData>> for BinaryBuilder {
     fn push<'a>(&mut self, val: <Option<OpaqueData> as Data>::Ref<'a>) {
         <BinaryBuilder>::append_option(self, val)
     }
-}
 
-impl ColumnFinish<OpaqueData> for BinaryBuilder {
-    fn finish(mut self) -> <OpaqueData as Data>::Col {
-        <BinaryBuilder>::finish(&mut self)
-    }
-}
-
-impl ColumnFinish<Option<OpaqueData>> for BinaryBuilder {
     fn finish(mut self) -> <Option<OpaqueData> as Data>::Col {
         <BinaryBuilder>::finish(&mut self)
     }
