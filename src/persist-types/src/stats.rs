@@ -1665,7 +1665,7 @@ mod tests {
     use proptest::prelude::*;
 
     use crate::columnar::sealed::ColumnMut;
-    use crate::columnar::{ColumnFinish, ColumnPush};
+    use crate::columnar::ColumnPush;
     use crate::dyn_struct::ValidityRef;
 
     use super::*;

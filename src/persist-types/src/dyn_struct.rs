@@ -18,7 +18,7 @@ use arrow::buffer::NullBuffer;
 use arrow::datatypes::{Field, Fields};
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
-use crate::columnar::{ColumnFinish, ColumnGet, ColumnPush, Data, DataType};
+use crate::columnar::{ColumnGet, ColumnPush, Data, DataType};
 use crate::dyn_col::{DynColumnMut, DynColumnRef};
 use crate::stats::{OptionStats, StatsFn, StructStats};
 
@@ -314,9 +314,7 @@ impl ColumnPush<DynStruct> for DynStructMut {
         assert!(self.validity.is_none());
         self.push_cols(val);
     }
-}
 
-impl ColumnFinish<DynStruct> for DynStructMut {
     fn finish(self) -> <DynStruct as Data>::Col {
         DynStructCol::from(self)
     }
@@ -343,9 +341,7 @@ impl ColumnPush<Option<DynStruct>> for DynStructMut {
             self.push_cols(DynStructRef::Default);
         }
     }
-}
 
-impl ColumnFinish<Option<DynStruct>> for DynStructMut {
     fn finish(self) -> <Option<DynStruct> as Data>::Col {
         DynStructCol::from(self)
     }
