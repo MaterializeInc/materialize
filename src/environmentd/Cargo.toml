@@ -185,4 +185,4 @@ tokio-console = [
 
 [package.metadata.cargo-udeps.ignore]
 # sysctl is only used on macOS.
-normal = ["sysctl", "workspace-hack"]
+normal = ["mz-alloc-default", "sysctl", "workspace-hack"]

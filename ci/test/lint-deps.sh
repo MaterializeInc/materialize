@@ -47,6 +47,12 @@ crates=(
     tikv_jemalloc_sys
 )
 
+if [[ "$(uname -s)" = Darwin ]]; then
+    tac() {
+        tail -r
+    }
+fi
+
 rewrite=false
 resources="$(dirname "$0")/lint-deps"
 

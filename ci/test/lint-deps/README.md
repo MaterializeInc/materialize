@@ -28,6 +28,26 @@ However, note the specifics for `jemalloc` below.
 
 ### Specifics for `jemalloc`
 
-We enable `jemalloc` by default on all non-mac platforms, unless `--no-default-features` is enabled.
-In this case, `jemalloc` should be disabled on all platforms.
-To quickly determine the validity of changes, check that only the file `x86_64-unknown-linux-gnu-default` mentions the `tikv-jemallocator` dependency, and all others don't.
+* `--no-default-features` unequivocally disables jemalloc, regardless of platform.
+* `--features=jemalloc` unequivocally enables jemalloc, regardless of platform.
+* `--default-features` chooses the best allocator for the platform: the system allocator on macOS and jemalloc on Linux.
+
+To determine the validity of changes, ensure that the following files mention
+the tikv-jemallocator family of dependencies:
+
+  * aarch64-apple-darwin-jemalloc
+  * aarch64-unknown-linux-gnu-default
+  * aarch64-unknown-linux-gnu-jemalloc
+  * x86_64-apple-darwin-jemalloc
+  * x86_64-unknown-linux-gnu-default
+  * x86_64-unknown-linux-gnu-jemalloc
+
+And that the following files do *not* mention the tikv-jemallocator family
+of dependencies:
+
+  * aarch64-apple-darwin-default
+  * aarch64-apple-darwin-no-default-features
+  * aarch64-unknown-linux-gnu-no-default-features
+  * x86_64-apple-darwin-default
+  * x86_64-apple-darwin-no-default-features
+  * x86_64-unknown-linux-gnu-no-default-features
