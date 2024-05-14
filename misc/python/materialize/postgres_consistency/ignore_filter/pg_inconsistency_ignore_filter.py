@@ -283,7 +283,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         pg_outcome = outcome_by_strategy_id[EvaluationStrategyKey.POSTGRES]
 
         if isinstance(pg_outcome, QueryFailure):
-            return self._shall_ignore_pg_failure_where_mz_succeeds(pg_outcome)
+            return self._shall_ignore_pg_failure_where_mz_succeeds(
+                pg_outcome, query_template
+            )
 
         if isinstance(mz_outcome, QueryFailure):
             return self._shall_ignore_mz_failure_where_pg_succeeds(
@@ -295,7 +297,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         )
 
     def _shall_ignore_pg_failure_where_mz_succeeds(
-        self, pg_outcome: QueryFailure
+        self, pg_outcome: QueryFailure, query_template: QueryTemplate
     ) -> IgnoreVerdict:
         pg_error_msg = pg_outcome.error_message
 
@@ -338,6 +340,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if 'invalid input syntax for type time: ""' in pg_error_msg:
             return YesIgnore("#24736: different handling of empty time string")
+
+        if (
+            'syntax error at or near "NULL"' in pg_error_msg
+            and query_template.matches_any_expression(
+                partial(matches_op_by_pattern, pattern="EXTRACT($ FROM $)"), True
+            )
+        ):
+            return YesIgnore(
+                "#27078: different error handling when extracting from timestamp"
+            )
 
         return NoIgnore()
 
