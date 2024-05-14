@@ -421,7 +421,7 @@ generate_extracted_config!(
     (IgnoreKeys, bool),
     (Timeline, String),
     (TimestampInterval, Duration),
-    (RetainHistory, Duration)
+    (RetainHistory, OptionalDuration)
 );
 
 generate_extracted_config!(
@@ -1362,13 +1362,7 @@ pub fn plan_create_source(
         Some(timeline) => Timeline::User(timeline),
     };
 
-    let compaction_window = retain_history
-        .map(|cw| {
-            scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-            Ok::<_, PlanError>(cw.try_into()?)
-        })
-        .transpose()?;
-
+    let compaction_window = plan_retain_history_option(scx, retain_history)?;
     let source = Source {
         create_sql,
         data_source: DataSourceDesc::Ingestion(Ingestion {
@@ -2420,13 +2414,7 @@ pub fn plan_create_materialized_view(
     };
 
     let as_of = stmt.as_of.map(Timestamp::from);
-
-    let compaction_window = retain_history
-        .map(|cw| {
-            scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-            Ok::<_, PlanError>(cw.try_into()?)
-        })
-        .transpose()?;
+    let compaction_window = plan_retain_history_option(scx, retain_history)?;
     let mut non_null_assertions = assert_not_null
         .into_iter()
         .map(normalize::column_name)
@@ -2535,7 +2523,7 @@ pub fn plan_create_materialized_view(
 generate_extracted_config!(
     MaterializedViewOption,
     (AssertNotNull, Ident, AllowMultiple),
-    (RetainHistory, Duration),
+    (RetainHistory, OptionalDuration),
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
 
