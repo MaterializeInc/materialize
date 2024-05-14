@@ -44,12 +44,8 @@ setup(
     install_requires=[
         "dbt-common>=0.1.0a1,<2.0",
         "dbt-adapters>=0.1.0a1,<2.0",
+        # add dbt-core to ensure backwards compatibility of installation, this is not a functional dependency
         "dbt-core>=1.8.0",
-        "dbt-postgres~=1.8.0rc1",
+        "dbt-postgres~=1.8.0",
     ],
-    extras_require={
-        "dev": [
-            "dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git#egg=dbt-tests-adapter&subdirectory=dbt-tests-adapter"
-        ],
-    },
 )
