@@ -983,13 +983,14 @@ where
                 // We only want the first stage to perform validation of whether invalid accumulations
                 // were observed in the input. Subsequently, we will either produce an error in the error
                 // stream or produce correct data in the output stream.
-                let negated_output = if err_output.is_none() {
-                    let (oks, errs) = self
+                let (input, negated_output) = if err_output.is_none() {
+                    let (input, reduced) = self
                         .build_bucketed_negated_output::<_,_,_, RowValSpine<Result<Row, Row>, _, _>>(
                             &input,
                             |v| v.into_owned(),
                             aggr_funcs.clone(),
-                        )
+                        );
+                    let (oks, errs) = reduced
                         .as_collection(|k, v| (k.into_owned(), v.clone()))
                         .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>("Checked Invalid Accumulations", |(hash_key, result)| {
                             match result {
@@ -1007,20 +1008,21 @@ where
                             }
                         });
                     err_output = Some(errs.leave_region());
-                    oks
+                    (input, oks)
                 } else {
-                    self.build_bucketed_negated_output::<_,_,_, RowRowSpine<_, _>>(
+                    let (input, reduced) = self.build_bucketed_negated_output::<_,_,_, RowRowSpine<_, _>>(
                         &input,
                         |v| v.into_owned(),
                         aggr_funcs.clone(),
-                    )
-                    .as_collection(|k, v| (k.into_owned(), v.into_owned()) )
+                    );
+                    let oks = reduced.as_collection(|k, v| (k.into_owned(), v.into_owned()));
+                    (input, oks)
                 };
 
+                let input = input.as_collection(|k, v| (SharedRow::pack(k), SharedRow::pack(v)));
                 stage = negated_output
                     .negate()
-                    .concat(&input)
-                    .consolidate_named::<KeyBatcher<_, _, _>>("Consolidated MinsMaxesHierarchical");
+                    .concat(&input);
             }
 
             // Discard the hash from the key and return to the format of the input data.
@@ -1157,7 +1159,10 @@ where
         input: &Collection<S, (Row, Row), Diff>,
         from: F,
         aggrs: Vec<AggregateFunc>,
-    ) -> Arranged<S, TraceAgent<Tr>>
+    ) -> (
+        Arranged<S, TraceAgent<RowRowSpine<G::Timestamp, Diff>>>,
+        Arranged<S, TraceAgent<Tr>>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
         V: MaybeValidatingRow<Row, Row>,
@@ -1175,7 +1180,7 @@ where
         let arranged_input =
             input.mz_arrange::<RowRowSpine<_, _>>("Arranged MinsMaxesHierarchical input");
 
-        arranged_input.mz_reduce_abelian::<_, _, _, Tr>(
+        let reduced = arranged_input.mz_reduce_abelian::<_, _, _, Tr>(
             "Reduced Fallibly MinsMaxesHierarchical",
             from,
             move |key, source, target| {
@@ -1222,7 +1227,8 @@ where
                     target.push((V::ok(row_builder.clone()), *cnt));
                 }
             },
-        )
+        );
+        (arranged_input, reduced)
     }
 
     /// Build the dataflow to compute and arrange multiple hierarchical aggregations
