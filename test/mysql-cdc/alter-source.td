@@ -53,8 +53,6 @@ $ mysql-execute name=mysql
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (9, 'nine');
 
-# Current table_a is not new table_a. Note that this only works right now
-# because we are bad at detecting dropped tables.
 ! SELECT * FROM table_a;
 contains:table was dropped
 
