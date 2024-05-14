@@ -236,6 +236,8 @@ where
             .shrink_upsert_unused_buffers_by_ratio,
     };
 
+    let thin_input = upsert_thinning(input);
+
     if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
         let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
 
@@ -266,8 +268,6 @@ where
         let env = instance_context.rocksdb_env.clone();
 
         let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
-
-        let thin_input = upsert_thinning(input);
 
         if allow_auto_spill {
             upsert_inner(
@@ -337,7 +337,7 @@ where
             source_config.id
         );
         upsert_inner(
-            input,
+            &thin_input,
             upsert_envelope.key_indices,
             resume_upper,
             previous,
