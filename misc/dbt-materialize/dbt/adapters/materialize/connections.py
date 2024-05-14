@@ -17,13 +17,12 @@
 from dataclasses import dataclass
 from typing import Optional
 
-import psycopg2
-
-import dbt.adapters.postgres.connections
 import dbt_common.exceptions
-from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
-from dbt.adapters.events.logging import AdapterLogger
+import psycopg2
 from dbt_common.semver import versions_compatible
+
+from dbt.adapters.events.logging import AdapterLogger
+from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
 
 # If you bump this version, bump it in README.md too.
 SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"

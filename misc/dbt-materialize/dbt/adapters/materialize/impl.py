@@ -18,6 +18,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import dbt_common.exceptions
+from dbt_common.contracts.constraints import (
+    ColumnLevelConstraint,
+    ConstraintType,
+)
+from dbt_common.dataclass_schema import ValidationError, dbtClassMixin
+
 from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
 from dbt.adapters.base.meta import available
 from dbt.adapters.capability import (
@@ -32,14 +38,10 @@ from dbt.adapters.materialize.exceptions import (
     RefreshIntervalConfigNotDictError,
 )
 from dbt.adapters.materialize.relation import MaterializeRelation
-from dbt.adapters.postgres.impl import PostgresAdapter
 from dbt.adapters.postgres.column import PostgresColumn
+from dbt.adapters.postgres.impl import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
-from dbt_common.contracts.constraints import (
-    ColumnLevelConstraint,
-    ConstraintType,
-)
-from dbt_common.dataclass_schema import ValidationError, dbtClassMixin
+
 
 # types in ./misc/dbt-materialize need to import generic types from typing
 @dataclass
