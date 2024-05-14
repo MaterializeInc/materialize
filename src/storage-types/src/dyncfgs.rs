@@ -72,6 +72,22 @@ pub const MYSQL_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
     "Interval to fetch `offset_known`, from `@gtid_executed`",
 );
 
+// Postgres
+
+/// Interval to poll `confirmed_flush_lsn` to get a resumption lsn.
+pub const PG_FETCH_SLOT_RESUME_LSN_INTERVAL: Config<Duration> = Config::new(
+    "postgres_fetch_slot_resume_lsn_interval",
+    Duration::from_millis(500),
+    "Interval to poll `confirmed_flush_lsn` to get a resumption lsn.",
+);
+
+/// Interval to fetch `offset_known`, from `pg_current_wal_lsn`
+pub const PG_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
+    "pg_offset_known_interval",
+    Duration::from_secs(10),
+    "Interval to fetch `offset_known`, from `pg_current_wal_lsn`",
+);
+
 // Networking
 
 /// Whether or not to enforce that external connection addresses are global
@@ -132,6 +148,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
+        .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
+        .add(&PG_OFFSET_KNOWN_INTERVAL)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
