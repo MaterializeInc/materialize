@@ -38,6 +38,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 
+# all operations will be disabled for Postgres at the bottom
 MAP_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 MAP_OPERATION_TYPES.append(
@@ -121,3 +122,7 @@ MAP_OPERATION_TYPES.append(
 # )
 
 # TODO: map_build operates on records
+
+for operation in MAP_OPERATION_TYPES:
+    # Postgres does not support the map type
+    operation.is_pg_compatible = False

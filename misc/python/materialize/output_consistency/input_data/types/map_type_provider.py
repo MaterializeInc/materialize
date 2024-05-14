@@ -35,6 +35,7 @@ class MapDataType(DataType):
             internal_identifier,
             type_name,
             DataTypeCategory.MAP,
+            is_pg_compatible=False,
         )
         self.map_value_1 = map_value_1
         self.map_value_2 = map_value_2
