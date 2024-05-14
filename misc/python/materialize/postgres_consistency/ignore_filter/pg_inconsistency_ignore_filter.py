@@ -553,7 +553,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             ),
             True,
         ) and query_template.matches_any_expression(
-            partial(matches_fun_by_name, function_name_in_lower_case="upper"), True
+            partial(
+                matches_fun_by_any_name,
+                function_names_in_lower_case={"upper", "initcap"},
+            ),
+            True,
         ):
             return YesIgnore("#26846: eszett in upper")
 
