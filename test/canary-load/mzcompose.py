@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
+import datetime
 import os
 import ssl
 import time
@@ -18,12 +19,15 @@ import pg8000
 import requests
 from pg8000 import Connection, Cursor
 from pg8000.exceptions import InterfaceError
-from pytest import fail
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.test_result import (
+    FailedTestExecutionError,
+    TestFailureDetails,
+)
 
 SERVICES = [
     Testdrive(),  # Overridden below
@@ -59,6 +63,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ),
         ):
             c.up("testdrive", persistent=True)
+
+            failures = []
 
             while time.time() - start_time < args.runtime:
                 try:
@@ -113,6 +119,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         time.sleep(60)
                     else:
                         raise
+                except FailedTestExecutionError as e:
+                    # collect, continue, and rethrow at the end
+                    failures.append(e.errors[0])
+
+            if len(failures) > 0:
+                raise FailedTestExecutionError(
+                    error_summary="SQL failures occurred",
+                    errors=failures,
+                )
 
 
 def fetch_token(user_name: str, password: str) -> str:
@@ -139,14 +154,22 @@ def http_sql_query(host: str, query: str, token: str) -> list[list[str]]:
     assert r.status_code == 200, f"{r}\n{r.text}"
     results = r.json()["results"]
     assert len(results) == 1, results
+
     if "rows" not in results[0].keys():
-        error = None
-        notices = None
-        if "error" in results[0].keys():
-            error = results[0]["error"]
+        assert "error" in results[0].keys()
+        error = results[0]["error"]
+
+        details = f"Occurred at {datetime.datetime.now()}."
         if "notices" in results[0].keys():
             notices = results[0]["notices"]
-        fail(f"'rows' does not exist in results[0] (error={error}, notices={notices})")
+            if not (type(notices) == list and len(notices) == 0):
+                details = f"{details} Notices: {notices}"
+
+        raise FailedTestExecutionError(
+            error_summary="SQL query failed",
+            errors=[TestFailureDetails(message=error, details=details)],
+        )
+
     return results[0]["rows"]
 
 
