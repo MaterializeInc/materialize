@@ -12,6 +12,8 @@
 
 use mz_dyncfg::{Config, ConfigSet};
 
+// Flow control
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 /// Configuration for basic hydration backpressure.
 pub const DELAY_SOURCES_PAST_REHYDRATION: Config<bool> = Config::new(
@@ -22,6 +24,8 @@ pub const DELAY_SOURCES_PAST_REHYDRATION: Config<bool> = Config::new(
         (namely, upsert) till after rehydration is finished",
 );
 
+// Controller
+
 /// When enabled, force-downgrade the controller's since handle on the shard
 /// during shard finalization.
 pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::new(
@@ -31,6 +35,8 @@ pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::ne
     "When enabled, force-downgrade the controller's since handle on the shard\
     during shard finalization",
 );
+
+// Kafka
 
 /// Rules for enriching the `client.id` property of Kafka clients with
 /// additional data.
@@ -48,6 +54,8 @@ pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<fn() -> serde_json::Value> = 
     "Rules for enriching the `client.id` property of Kafka clients with additional data.",
 );
 
+// Networking
+
 /// Whether or not to enforce that external connection addresses are global
 /// (not private or local) when resolving them.
 pub const ENFORCE_EXTERNAL_ADDRESSES: Config<bool> = Config::new(
@@ -56,6 +64,8 @@ pub const ENFORCE_EXTERNAL_ADDRESSES: Config<bool> = Config::new(
     "Whether or not to enforce that external connection addresses are global \
           (not private or local) when resolving them",
 );
+
+// Upsert
 
 /// Whether or not to prevent buffering the entire _upstream_ snapshot in
 /// memory when processing it in memory. This is generally understood to reduce
@@ -86,6 +96,8 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     None,
     "Limit snapshot buffering in upsert.",
 );
+
+// RocksDB
 
 /// How many times to try to cleanup old RocksDB DB's on disk before giving up.
 pub const STORAGE_ROCKSDB_CLEANUP_TRIES: Config<usize> = Config::new(
