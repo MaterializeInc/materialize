@@ -439,11 +439,13 @@ The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`
 
 <!-- RELATION_SPEC mz_internal.mz_object_fully_qualified_names -->
 | Field          | Type       | Meaning                                                                                                                                        |
-| ---------------|------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| ---------------|------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `id`           | [`text`]   | Materialize's unique ID for the object.                                                                                                        |
 | `name`         | [`text`]   | The name of the object.                                                                                                                        |
 | `object_type`  | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
+| `schema_id`    | [`text`]   | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).                |
 | `schema_name`  | [`text`]   | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/sql/system-catalog/mz_catalog/#mz_schemas).            |
+| `database_id`  | [`text`]   | The ID of the database to which the object belongs. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_schemas).             |
 | `database_name`| [`text`]   | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/sql/system-catalog/mz_catalog/#mz_databases).      |
 
 ### `mz_object_lifetimes`
