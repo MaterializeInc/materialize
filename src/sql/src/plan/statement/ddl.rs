@@ -4489,8 +4489,18 @@ fn plan_retain_history(
                 "internal error: unexpectedly zero".to_string(),
             )),
         }),
-        Some(duration) => Ok(duration.try_into()?),
-        None => Ok(CompactionWindow::DisableCompaction),
+        Some(duration) => {
+            if duration < DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION {
+                Err(PlanError::RetainHistoryLow {
+                    limit: DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION,
+                })
+            } else {
+                Ok(duration.try_into()?)
+            }
+        }
+        // In the past `RETAIN HISTORY FOR '0'` meant disable compaction. Disabling compaction seems
+        // to be a bad choice, so prevent it.
+        None => Err(PlanError::RetainHistoryRequired),
     }
 }
 
