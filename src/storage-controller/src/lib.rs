@@ -34,6 +34,7 @@ use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -3612,7 +3613,7 @@ where
                     shard_name: id.to_string(),
                     handle_purpose: format!("snapshot {}", id),
                 },
-                false,
+                USE_CRITICAL_SINCE_SNAPSHOT.get(persist_client.dyncfgs()),
             )
             .await
             .expect("invalid persist usage");

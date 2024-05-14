@@ -186,7 +186,7 @@ impl Diagnostics {
 /// # let diagnostics = mz_persist_client::Diagnostics { shard_name: "".into(), handle_purpose: "".into() };
 /// # async {
 /// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id,
-///     Arc::new(StringSchema),Arc::new(StringSchema),diagnostics)).await
+///     Arc::new(StringSchema),Arc::new(StringSchema),diagnostics, true)).await
 /// # };
 /// ```
 #[derive(Debug, Clone)]
@@ -297,6 +297,7 @@ impl PersistClient {
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
         diagnostics: Diagnostics,
+        use_critical_since: bool,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -312,8 +313,14 @@ impl PersistClient {
                 diagnostics.clone(),
             )
             .await?,
-            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics, false)
-                .await?,
+            self.open_leased_reader(
+                shard_id,
+                key_schema,
+                val_schema,
+                diagnostics,
+                use_critical_since,
+            )
+            .await?,
         ))
     }
 
@@ -646,6 +653,7 @@ impl PersistClient {
             Arc::new(K::Schema::default()),
             Arc::new(V::Schema::default()),
             Diagnostics::for_tests(),
+            true,
         )
         .await
         .expect("codec mismatch")
@@ -836,7 +844,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
-                false,
+                true,
             )
             .await
             .expect("codec mismatch");
@@ -846,7 +854,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
-                false,
+                true,
             )
             .await
             .expect("codec mismatch");
@@ -908,6 +916,7 @@ mod tests {
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
+                        true,
                     )
                     .await
                     .unwrap_err(),
@@ -923,6 +932,7 @@ mod tests {
                         Arc::new(StringSchema),
                         Arc::new(VecU8Schema),
                         Diagnostics::for_tests(),
+                        true,
                     )
                     .await
                     .unwrap_err(),
@@ -938,6 +948,7 @@ mod tests {
                         Arc::new(StringSchema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
+                        true,
                     )
                     .await
                     .unwrap_err(),
@@ -953,6 +964,7 @@ mod tests {
                         Arc::new(StringSchema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
+                        true,
                     )
                     .await
                     .unwrap_err(),
@@ -972,7 +984,7 @@ mod tests {
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
-                        false,
+                        true,
                     )
                     .await
                     .unwrap_err(),

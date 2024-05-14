@@ -44,7 +44,7 @@ use timely::PartialOrder;
 use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
-use crate::cfg::RetryParameters;
+use crate::cfg::{RetryParameters, USE_CRITICAL_SINCE_SOURCE};
 use crate::fetch::{FetchedBlob, Lease, SerdeLeasedBatchPart};
 use crate::internal::state::BatchPart;
 use crate::project::ProjectionPushdown;
@@ -303,14 +303,14 @@ where
                 shard_name: name_owned.clone(),
             };
             async move {
+                let client = client.await;
                 client
-                    .await
                     .open_leased_reader::<K, V, G::Timestamp, D>(
                         shard_id,
                         key_schema,
                         val_schema,
                         diagnostics,
-                        false,
+                        USE_CRITICAL_SINCE_SOURCE.get(client.dyncfgs()),
                     )
                     .await
             }
@@ -738,7 +738,7 @@ mod tests {
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
                 Diagnostics::for_tests(),
-                false,
+                true,
             )
             .await
             .expect("invalid usage");
