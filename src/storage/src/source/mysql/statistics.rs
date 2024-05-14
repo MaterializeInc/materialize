@@ -87,8 +87,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             let mut offset_committed = None;
 
             let upstream_stream = async_stream::stream!({
-                // TODO(guswynn): make configurable (at the same time as the pg one).
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+                let mut interval = tokio::time::interval(
+                    mz_storage_types::dyncfgs::MYSQL_OFFSET_KNOWN_INTERVAL
+                        .get(config.config.config_set()),
+                );
                 loop {
                     interval.tick().await;
 

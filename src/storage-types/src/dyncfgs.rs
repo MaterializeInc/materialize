@@ -10,6 +10,8 @@
 //! Dyncfgs used by the storage layer. Despite their name, these can be used
 //! "statically" during rendering, or dynamically within timely operators.
 
+use std::time::Duration;
+
 use mz_dyncfg::{Config, ConfigSet};
 
 // Flow control
@@ -52,6 +54,22 @@ pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<fn() -> serde_json::Value> = 
     "kafka_client_id_enrichment_rules",
     || serde_json::json!([]),
     "Rules for enriching the `client.id` property of Kafka clients with additional data.",
+);
+
+// MySQL
+
+/// Replication heartbeat interval requested from the MySQL server.
+pub const MYSQL_REPLICATION_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
+    "mysql_replication_heartbeat_interval",
+    Duration::from_secs(30),
+    "Replication heartbeat interval requested from the MySQL server.",
+);
+
+/// Interval to fetch `offset_known`, from `@gtid_executed`
+pub const MYSQL_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
+    "mysql_offset_known_interval",
+    Duration::from_secs(10),
+    "Interval to fetch `offset_known`, from `@gtid_executed`",
 );
 
 // Networking
@@ -112,6 +130,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
+        .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
+        .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
