@@ -1,0 +1,35 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+
+rust_library(
+	name = "mz_cluster",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		"//src/build-info:mz_build_info",
+		"//src/cluster-client:mz_cluster_client",
+		"//src/ore:mz_ore",
+		"//src/persist-client:mz_persist_client",
+		"//src/persist-types:mz_persist_types",
+		"//src/pid-file:mz_pid_file",
+		"//src/repr:mz_repr",
+		"//src/service:mz_service",
+		"//src/timely-util:mz_timely_util",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+

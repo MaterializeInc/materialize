@@ -1,0 +1,34 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+
+rust_library(
+	name = "mz_balancerd",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		"//src/adapter-types:mz_adapter_types",
+		"//src/build-info:mz_build_info",
+		"//src/frontegg-auth:mz_frontegg_auth",
+		"//src/http-util:mz_http_util",
+		"//src/orchestrator-tracing:mz_orchestrator_tracing",
+		"//src/ore:mz_ore",
+		"//src/pgwire-common:mz_pgwire_common",
+		"//src/server-core:mz_server_core",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+

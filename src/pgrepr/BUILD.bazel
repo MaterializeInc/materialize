@@ -1,0 +1,30 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+
+rust_library(
+	name = "mz_pgrepr",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		"//src/ore:mz_ore",
+		"//src/pgrepr-consts:mz_pgrepr_consts",
+		"//src/pgwire-common:mz_pgwire_common",
+		"//src/repr:mz_repr",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+

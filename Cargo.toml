@@ -103,6 +103,7 @@ members = [
     "test/metabase/smoketest",
     "test/test-util",
     "src/regexp",
+    "src/build-tools",
 ]
 
 # Here we should specify our high level binaries to prevent folks from needing to take extra steps
@@ -204,7 +205,7 @@ tonic-build = { git = "https://github.com/MaterializeInc/tonic", rev = "0d86e360
 
 # Waiting on https://github.com/MaterializeInc/tracing/pull/1 to be submitted
 # upstream.
-tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opentelemetry.git" }
+tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opentelemetry.git", branch = "v0.1.x" }
 
 # Waiting on a patch release to `opentelemetry-otlp` to include
 # <https://github.com/open-telemetry/opentelemetry-rust/pull/1335#issuecomment-1907101992>
@@ -219,7 +220,7 @@ opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-ru
 # it into a release.
 # Also bumps lru to 0.12.0
 # Needs a more complex update to 2.0.0, with a custom TLS connector.
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk" }
+launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "df1440c8b93a192d50470d1b258615febe52f1f8" }
 
 # Waiting on https://github.com/AltSysrq/proptest/pull/264.
 proptest = { git = "https://github.com/MaterializeInc/proptest.git" }
@@ -234,11 +235,14 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 
 # Removes dependencies required for WASM support that create duplicated deps.
-reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
-reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
+reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git", rev = "1c44c7ddbf4954cc2d4de73a760b9a8d84827349" }
+reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git", rev = "1c44c7ddbf4954cc2d4de73a760b9a8d84827349" }
 
 # To pick up https://github.com/MaterializeInc/arrow2/commit/61e271a3f70bc993f8b7854b73e8fee099803d1c
 arrow2 = { git = "https://github.com/MaterializeInc/arrow2.git", branch = "parquet_binary_next_iter" }
+
+# For Bazel support.
+protobuf-src = { git = "https://github.com/ParkMyCar/rust-protobuf-native", rev = "b02beb98817c4cf000c5d5ae487d8c8529835083" }
 
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.

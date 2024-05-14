@@ -1,0 +1,47 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+
+rust_library(
+	name = "mz_dyncfg",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		":mz_dyncfg_build",
+		"//src/ore:mz_ore",
+		"//src/proto:mz_proto",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+filegroup(
+	name = "all_protos",
+	srcs = glob(["src/**/*.proto"]),
+)
+
+cargo_build_script(
+	name = "mz_dyncfg_build",
+	srcs = ["build.rs"],
+	deps = [
+		"//src/build-tools:mz_build_tools",
+	] + all_crate_deps(build = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	data = [
+		"//src/proto:all_protos",
+		":all_protos",
+	],
+)

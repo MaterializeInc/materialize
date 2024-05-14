@@ -1,0 +1,29 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+	name = "mz_build_tools",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		"@rules_rust//tools/runfiles"
+	] + crate_deps([
+		"cfg-if",
+	]),
+	data = [
+		"@protobuf//:protoc",
+		"@protobuf//:well_known_type_protos",
+	],
+	rustc_flags = ["--cfg=bazel"],
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)

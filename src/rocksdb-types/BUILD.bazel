@@ -1,0 +1,48 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+
+filegroup(
+	name = "all_protos",
+	srcs = glob(["src/**/*.proto"]),
+)
+
+cargo_build_script(
+    name = "mz-rocksdb_build_script",
+    srcs = ["build.rs"],
+    deps = all_crate_deps(build = True) + [
+		"//src/build-tools:mz_build_tools",
+	],
+    proc_macro_deps = all_crate_deps(build_proc_macro = True),
+    data = [
+		"//src/proto:all_protos",
+		":all_protos",
+    ],
+)
+
+rust_library(
+	name = "mz_rocksdb_types",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = all_crate_deps(normal = True) + [
+		":mz-rocksdb_build_script",
+		"//src/ore:mz_ore",
+		"//src/proto:mz_proto",
+	],
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+

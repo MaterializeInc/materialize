@@ -1991,6 +1991,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "direct-cargo-bazel-deps"
+version = "0.0.1"
+dependencies = [
+ "cxx",
+]
+
+[[package]]
 name = "dirs"
 version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3340,7 +3347,7 @@ dependencies = [
 [[package]]
 name = "launchdarkly-server-sdk"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#df1440c8b93a192d50470d1b258615febe52f1f8"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk?rev=df1440c8b93a192d50470d1b258615febe52f1f8#df1440c8b93a192d50470d1b258615febe52f1f8"
 dependencies = [
  "built",
  "chrono",
@@ -3502,7 +3509,7 @@ checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 [[package]]
 name = "librocksdb-sys"
 version = "0.11.0+8.3.2"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb#ab3684f999a5586d7a5e94bd65defd78af15d40f"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -8086,7 +8093,7 @@ dependencies = [
 [[package]]
 name = "reqwest-middleware"
 version = "0.2.3"
-source = "git+https://github.com/MaterializeInc/reqwest-middleware.git#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
+source = "git+https://github.com/MaterializeInc/reqwest-middleware.git?rev=1c44c7ddbf4954cc2d4de73a760b9a8d84827349#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8100,7 +8107,7 @@ dependencies = [
 [[package]]
 name = "reqwest-retry"
 version = "0.2.2"
-source = "git+https://github.com/MaterializeInc/reqwest-middleware.git#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
+source = "git+https://github.com/MaterializeInc/reqwest-middleware.git?rev=1c44c7ddbf4954cc2d4de73a760b9a8d84827349#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8159,7 +8166,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.21.0"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb#ab3684f999a5586d7a5e94bd65defd78af15d40f"
 dependencies = [
  "libc",
  "librocksdb-sys",
@@ -9808,7 +9815,7 @@ dependencies = [
 [[package]]
 name = "tracing-opentelemetry"
 version = "0.22.0"
-source = "git+https://github.com/MaterializeInc/tracing-opentelemetry.git#7035e641b683985cc3b8630f3b61d53c96f83695"
+source = "git+https://github.com/MaterializeInc/tracing-opentelemetry.git?branch=v0.1.x#7035e641b683985cc3b8630f3b61d53c96f83695"
 dependencies = [
  "js-sys",
  "once_cell",
@@ -10719,3 +10726,9 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "protobuf-src"
+version = "1.1.0+21.5"
+source = "git+https://github.com/ParkMyCar/rust-protobuf-native?rev=b02beb98817c4cf000c5d5ae487d8c8529835083#b02beb98817c4cf000c5d5ae487d8c8529835083"
+

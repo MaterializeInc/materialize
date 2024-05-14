@@ -41,7 +41,7 @@ pub fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn expand_logging_init() -> TokenStream2 {
     let crate_name = std::env::var("CARGO_PKG_NAME").unwrap();
-    if crate_name == "mz-ore" {
+    if crate_name == "mz-ore" || crate_name == "mz_ore" {
         quote! {
           {
             use crate::test;

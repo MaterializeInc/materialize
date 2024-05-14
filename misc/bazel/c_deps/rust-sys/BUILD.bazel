@@ -1,0 +1,55 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
+load("@bazel_skylib//rules:select_file.bzl", "select_file")
+
+# Adapter for the protobuf-src crate.
+#
+# `protobuf-src` sets the `DEP_PROTOBUF_SRC_ROOT` environment variable which
+# points to a compiled `libprotobuf` and the necessary `includes` headers. We
+# don't use `protobuf-src` and instead compile the protobuf library on our own.
+#
+# This BUILD file provides a `dep_protobuf_src_root` so any crates that rely on
+# it can continue to work.
+copy_to_directory(
+    name = "dep_protobuf_src_root",
+    srcs = [
+        ":_lib",
+        # ":_include",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+copy_to_directory(
+    name = "_lib",
+    srcs = [
+        "@protobuf//src/google/protobuf:protobuf",
+        "@com_google_absl//absl/types:bad_any_cast",
+        "@com_google_absl//absl/types:bad_optional_access",
+        "@com_google_absl//absl/types:bad_variant_access",
+        "@com_google_absl//absl/base:base",
+        "@com_google_absl//absl/hash:city",
+        "@com_google_absl//absl/time/internal/cctz:civil_time",
+    ],
+    out = "lib",
+)
+
+# copy_to_directory(
+#     name = "_include",
+#     srcs = ["@protobuf//:protobuf_headers"],
+#     out = "include",
+# )

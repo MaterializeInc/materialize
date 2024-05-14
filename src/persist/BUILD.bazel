@@ -1,0 +1,49 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+
+rust_library(
+	name = "mz_persist",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		":mz_persist-build",
+		"//src/aws-util:mz_aws_util",
+		"//src/dyncfg:mz_dyncfg",
+		"//src/ore:mz_ore",
+		"//src/persist-types:mz_persist_types",
+		"//src/postgres-client:mz_postgres_client",
+		"//src/proto:mz_proto",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+filegroup(
+    name = "all_protos",
+    srcs = [] + glob(["src/**/*.proto"]),
+)
+
+cargo_build_script(
+	name = "mz_persist-build",
+	srcs = ["build.rs"],
+	deps = [
+		"//src/build-tools:mz_build_tools",
+	] + all_crate_deps(build = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	data = [":all_protos"],
+)
+

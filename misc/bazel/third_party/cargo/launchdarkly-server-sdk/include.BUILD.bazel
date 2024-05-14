@@ -1,0 +1,15 @@
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+
+# This is a temporary hack to get around Bazel not supplying the same build info that Cargo does.
+
+genrule(
+    name = "define_built_info",
+    srcs = [],
+    outs = ["built.rs"],
+    cmd = 'echo \'pub const PKG_VERSION: &str = "1"; \' > \"$@\" ',
+)
+
+copy_to_directory(
+    name = "launchdarky_server_sdk_out_dir",
+    srcs = [":define_built_info"],
+)

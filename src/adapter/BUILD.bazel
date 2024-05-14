@@ -1,0 +1,70 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+
+rust_library(
+	name = "mz_adapter",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		"//src/adapter-types:mz_adapter_types",
+		"//src/audit-log:mz_audit_log",
+		"//src/build-info:mz_build_info",
+		"//src/catalog:mz_catalog",
+		"//src/ccsr:mz_ccsr",
+		"//src/cloud-resources:mz_cloud_resources",
+		"//src/cluster-client:mz_cluster_client",
+		"//src/compute-client:mz_compute_client",
+		"//src/compute-types:mz_compute_types",
+		"//src/controller:mz_controller",
+		"//src/controller-types:mz_controller_types",
+		"//src/expr:mz_expr",
+		"//src/kafka-util:mz_kafka_util",
+		"//src/mysql-util:mz_mysql_util",
+		"//src/orchestrator:mz_orchestrator",
+		"//src/ore:mz_ore",
+		"//src/persist-client:mz_persist_client",
+		"//src/persist-types:mz_persist_types",
+		"//src/pgcopy:mz_pgcopy",
+		"//src/pgrepr:mz_pgrepr",
+		"//src/pgwire-common:mz_pgwire_common",
+		"//src/postgres-client:mz_postgres_client",
+		"//src/postgres-util:mz_postgres_util",
+		"//src/proto:mz_proto",
+		"//src/repr:mz_repr",
+		"//src/rocksdb-types:mz_rocksdb_types",
+		"//src/secrets:mz_secrets",
+		"//src/segment:mz_segment",
+		"//src/service:mz_service",
+		"//src/sql:mz_sql",
+		"//src/sql-parser:mz_sql_parser",
+		"//src/ssh-util:mz_ssh_util",
+		"//src/storage-client:mz_storage_client",
+		"//src/storage-types:mz_storage_types",
+		"//src/timestamp-oracle:mz_timestamp_oracle",
+		"//src/tls-util:mz_tls_util",
+		"//src/tracing:mz_tracing",
+		"//src/transform:mz_transform",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+
+build_test(
+	name = "build_test",
+	targets = [":mz_adapter"],
+	visibility = ["//visibility:public"],
+)

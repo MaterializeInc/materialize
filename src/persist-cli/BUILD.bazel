@@ -1,0 +1,37 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+
+rust_library(
+	name = "persistcli",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+		"default",
+		"tokio-console",
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		"//src/http-util:mz_http_util",
+		"//src/orchestrator-tracing:mz_orchestrator_tracing",
+		"//src/ore:mz_ore",
+		"//src/persist:mz_persist",
+		"//src/persist-client:mz_persist_client",
+		"//src/persist-txn:mz_persist_txn",
+		"//src/persist-types:mz_persist_types",
+		"//src/repr:mz_repr",
+		"//src/timestamp-oracle:mz_timestamp_oracle",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+

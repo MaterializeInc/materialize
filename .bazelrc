@@ -11,3 +11,16 @@ common:macos --linkopt=-mmacosx-version-min=13.0
 
 # Config for building protobuf.
 build --copt=-Wno-error=deprecated-declarations
+
+# Zlib emits a ton of warning otherwise.
+build --copt=-Wno-deprecated-non-prototype
+
+# TODO(parkmycar): Turn off warning for int-conversions because otherwise we fail to bootstrap
+# pkg-config.
+#
+# Tracking issue: https://github.com/bazelbuild/rules_foreign_cc/issues/1065
+common --copt=-Wno-int-conversion
+common --cxxopt=-Wno-int-conversion
+
+build --cxxopt=-std=c++14
+build --host_cxxopt=-std=c++14
