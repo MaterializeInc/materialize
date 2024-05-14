@@ -546,12 +546,31 @@ impl<T: AstInfo> TableWithJoins<T> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IgnoreErrors {
+    IgnoreErrors,
+    OnlyErrors,
+}
+
+impl AstDisplay for IgnoreErrors {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        match self {
+            IgnoreErrors::IgnoreErrors => f.write_str("IGNORE ERRORS"),
+            IgnoreErrors::OnlyErrors => f.write_str("ONLY ERRORS"),
+        }
+    }
+}
+
 /// A table name or a parenthesized subquery with an optional alias
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TableFactor<T: AstInfo> {
     Table {
         name: T::ItemName,
         alias: Option<TableAlias>,
+        errors: Option<IgnoreErrors>,
     },
     Function {
         function: Function<T>,
@@ -581,7 +600,15 @@ pub enum TableFactor<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for TableFactor<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            TableFactor::Table { name, alias } => {
+            TableFactor::Table {
+                name,
+                alias,
+                errors,
+            } => {
+                if let Some(errors) = errors {
+                    f.write_node(errors);
+                    f.write_str(" ");
+                }
                 f.write_node(name);
                 if let Some(alias) = alias {
                     f.write_str(" AS ");

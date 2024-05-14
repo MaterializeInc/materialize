@@ -1915,9 +1915,14 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     ) -> mz_sql_parser::ast::TableFactor<Aug> {
         use mz_sql_parser::ast::TableFactor::*;
         match node {
-            Table { name, alias } => Table {
+            Table {
+                name,
+                alias,
+                errors,
+            } => Table {
                 name: self.fold_item_name(name),
                 alias: alias.map(|alias| self.fold_table_alias(alias)),
+                errors,
             },
             Function {
                 function,

@@ -415,8 +415,15 @@ fn doc_table_factor<T: AstInfo>(v: &TableFactor<T>) -> RcDoc {
             }
             doc
         }
-        TableFactor::Table { name, alias } => {
+        TableFactor::Table {
+            name,
+            alias,
+            errors,
+        } => {
             let mut doc = doc_display_pass(name);
+            if let Some(errors) = errors {
+                doc = RcDoc::concat([doc_display_pass(errors), RcDoc::text(" "), doc]);
+            }
             if let Some(alias) = alias {
                 doc = nest(doc, RcDoc::text(format!("AS {}", alias)));
             }

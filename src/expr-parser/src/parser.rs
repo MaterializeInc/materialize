@@ -174,11 +174,13 @@ mod relation {
                 id: Id::Global(*id),
                 typ: typ.clone(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
+                ignore_errors: false,
             }),
             None => Ok(MirRelationExpr::Get {
                 id: Id::Local(parse_local_id(ident)?),
                 typ: RelationType::empty(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
+                ignore_errors: false,
             }),
         }
     }
@@ -217,6 +219,7 @@ mod relation {
                         id: Id::Local(id),
                         typ: typ.clone(),
                         access_strategy: AccessStrategy::UnknownOrLocal,
+                        ignore_errors: false,
                     };
                     // Do not use the `union` smart constructor here!
                     MirRelationExpr::Union {

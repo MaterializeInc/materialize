@@ -2369,6 +2369,7 @@ fn generate_view_sql(
                     relation: TableFactor::Table {
                         name: RawItemName::Name(name.clone()),
                         alias: None,
+                        errors: None,
                     },
                     joins: vec![],
                 }],

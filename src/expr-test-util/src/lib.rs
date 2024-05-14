@@ -462,6 +462,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                         id,
                         typ,
                         access_strategy: AccessStrategy::UnknownOrLocal,
+                        ignore_errors: false,
                     }),
                     None => match self.catalog.get(&name) {
                         None => Err(format!("no catalog object named {}", name)),
@@ -469,6 +470,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                             id: Id::Global(*id),
                             typ: typ.clone(),
                             access_strategy: AccessStrategy::UnknownOrLocal,
+                            ignore_errors: false,
                         }),
                     },
                 }

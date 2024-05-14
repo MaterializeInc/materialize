@@ -59,11 +59,11 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     visit, AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
     CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
-    Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
-    JoinConstraint, JoinOperator, Limit, MapEntry, MutRecBlock, MutRecBlockOption,
-    MutRecBlockOptionName, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName,
-    SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor,
-    TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
+    Expr, Function, FunctionArgs, HomogenizingFunction, Ident, IgnoreErrors, InsertSource,
+    IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, MapEntry, MutRecBlock,
+    MutRecBlockOption, MutRecBlockOptionName, OrderByExpr, Query, Select, SelectItem, SelectOption,
+    SelectOptionName, SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias,
+    TableFactor, TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 use mz_sql_parser::ident;
@@ -640,7 +640,7 @@ pub fn plan_mutation_query_inner(
     }
 
     // Derive structs for operation from validated table
-    let (mut get, scope) = qcx.resolve_table_name(table_name)?;
+    let (mut get, scope) = qcx.resolve_table_name(table_name, None)?;
     let scope = plan_table_alias(scope, alias.as_ref())?;
     let desc = item.desc(&qcx.scx.catalog.resolve_full_name(item.name()))?;
     let relation_type = qcx.relation_type(&get);
@@ -1748,7 +1748,7 @@ fn plan_set_expr(
         }
         SetExpr::Values(Values(values)) => plan_values(qcx, values),
         SetExpr::Table(name) => {
-            let (expr, scope) = qcx.resolve_table_name(name.clone())?;
+            let (expr, scope) = qcx.resolve_table_name(name.clone(), None)?;
             Ok((expr, scope))
         }
         SetExpr::Query(query) => {
@@ -2695,8 +2695,12 @@ fn plan_table_factor(
     table_factor: &TableFactor<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     match table_factor {
-        TableFactor::Table { name, alias } => {
-            let (expr, scope) = qcx.resolve_table_name(name.clone())?;
+        TableFactor::Table {
+            name,
+            alias,
+            errors,
+        } => {
+            let (expr, scope) = qcx.resolve_table_name(name.clone(), errors.as_ref())?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
             Ok((expr, scope))
         }
@@ -6169,7 +6173,13 @@ impl<'a> QueryContext<'a> {
     pub fn resolve_table_name(
         &self,
         object: ResolvedItemName,
+        errors: Option<&IgnoreErrors>,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
+        let ignore_errors = match errors {
+            Some(IgnoreErrors::IgnoreErrors) => true,
+            Some(IgnoreErrors::OnlyErrors) => bail_unsupported!("ONLY ERRORS"),
+            None => false,
+        };
         match object {
             ResolvedItemName::Item { id, full_name, .. } => {
                 let name = full_name.into();
@@ -6180,6 +6190,7 @@ impl<'a> QueryContext<'a> {
                 let expr = HirRelationExpr::Get {
                     id: Id::Global(item.id()),
                     typ: desc.typ().clone(),
+                    ignore_errors,
                 };
 
                 let scope = Scope::from_source(Some(name), desc.iter_names().cloned());
@@ -6192,6 +6203,7 @@ impl<'a> QueryContext<'a> {
                 let expr = HirRelationExpr::Get {
                     id: Id::Local(id),
                     typ: cte.desc.typ().clone(),
+                    ignore_errors,
                 };
 
                 let scope = Scope::from_source(Some(name), cte.desc.iter_names());
